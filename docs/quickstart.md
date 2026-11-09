@@ -11,7 +11,7 @@ Modulo is a self-hosted Delivery Governance Platform. Govern the software develo
 | **Docker Desktop** | 24+ | PostgreSQL 16 + Redis 8 (local dev) |
 | **Python** | 3.12-3.14 | Backend runtime (the Docker images build on 3.14) |
 | **`uv`** | 0.11.13 | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)); this is the exact version the Docker images pin |
-| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.10`) rather than npm |
+| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.11`) rather than npm |
 
 ## 1. Start infrastructure
 
@@ -20,11 +20,11 @@ Modulo is a self-hosted Delivery Governance Platform. Govern the software develo
 
 # Generate the Fernet key ONCE. Every process that reads or writes a stored
 # credential must hold the SAME key, so the value you export here is reused in
-# backend/.env in step 2. A Fernet key is url-safe base64 of exactly 32 bytes –
-# a fixed placeholder cannot work, so the compose file refuses to start without
-# one rather than half-starting a stack that cannot store credentials.
-# (Windows PowerShell: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export FERNET_KEY=$(openssl rand -base64 32)
+# backend/.env in step 2. A Fernet key is URL-safe base64 of exactly 32 bytes.
+# `uv run --with cryptography` installs the package into an ephemeral
+# environment, so this works before `uv sync` in step 2 and needs no pre-setup.
+# (Windows PowerShell: uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+export FERNET_KEY=$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 
 # The backend .env below logs in with password `modulo`, so start Postgres with
 # the same password (the compose default is `changeme`).
@@ -85,10 +85,8 @@ MODULO_USERS=admin:admin
 CORS_ORIGINS=http://localhost:5173
 EOF
 
-# Fix alembic_version table width for branch migration IDs
-docker compose -f ../docker-compose.local.yml exec db-local psql -U modulo -c "CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
-
-# Run migrations
+# Run migrations. The migration environment creates or widens alembic_version
+# before applying branch migrations.
 uv run alembic upgrade heads
 ```
 
@@ -102,8 +100,17 @@ The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhos
 
 ## 3b. Start the SAQ workers (required for pipeline execution + cron)
 
-Modulo executes pipeline runs through SAQ workers. Start them in separate
-terminals:
+Modulo executes pipeline runs through SAQ workers. The local Compose file also
+contains worker services, but those services use the Compose network and are
+intended for a containerized backend. Because this quickstart runs the backend
+on the host, stop the Compose workers first and start the host workers in
+separate terminals:
+
+```bash
+docker compose -f docker-compose.local.yml stop saq-runner saq-system
+```
+
+Then start the host workers:
 
 ```bash
 # Runs worker: executes run jobs (queue: runs)
@@ -168,7 +175,7 @@ A failure names its own fix. The two signatures it catches:
 | `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` – the key only passed the `Settings` length check, not Fernet's shape check |
 
 Both mean no credential has ever been stored successfully, so the fix is to
-generate a key for real – `openssl rand -base64 32` – write it to `.env` at the
+generate a real key with `Fernet.generate_key()`, write it to `.env` at the
 repo root (and to the same `FERNET_KEY` in the backend's own `.env`, created in
 step 2), restart the backend, and recreate the compose services so they pick it
 up. On a stack that *has* stored credentials under some other key, reuse that

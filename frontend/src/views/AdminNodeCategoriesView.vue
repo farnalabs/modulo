@@ -2,15 +2,24 @@
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-wide">
-    <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines">
+    <PageHeader :title="$t('views.AdminNodeCategoriesView.title')" :subtitle="$t('views.AdminNodeCategoriesView.subtitle')">
       <template #right>
         <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-node-categories-add" @click="openAddForm">
-          Add Category
+          {{ $t('views.AdminNodeCategoriesView.add_category') }}
         </Button>
       </template>
     </PageHeader>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="6"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="admin-node-categories-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadCategories" />
 
@@ -27,7 +36,7 @@
       <div v-if="categories.length === 0 && editorMode === null" class="card p-8 text-center">
         <p class="text-lg font-medium">{{ $t('views.AdminNodeCategoriesView.no_node_categories_configured') }}</p>
         <p class="mt-1 text-sm text-muted-foreground">
-          Add a category to classify and organize nodes in your pipelines.
+          {{ $t('views.AdminNodeCategoriesView.no_node_categories_description') }}
         </p>
       </div>
 
@@ -56,13 +65,14 @@
                   <span
                     class="inline-block h-5 w-5 rounded-full border border-border"
                     :style="{ backgroundColor: cat.color || '#6366f1' }"
+                    aria-hidden="true"
                   />
                   <span class="font-mono text-xs text-muted-foreground">{{ cat.color || '#6366f1' }}</span>
                 </span>
               </td>
               <td class="px-4 py-3">
                 <span v-if="cat.icon" class="inline-flex items-center gap-1.5">
-                  <span class="h-4 w-4 text-muted-foreground" v-html="iconSvg(cat.icon)" />
+                  <span class="h-4 w-4 text-muted-foreground" v-html="iconSvg(cat.icon)" aria-hidden="true" />
                   {{ cat.icon }}
                 </span>
                 <span v-else class="text-muted-foreground">—</span>
@@ -86,18 +96,18 @@
       </div>
 
       <div v-if="deleteConfirmCategoryId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive-text">Delete "{{ deleteConfirmName }}"?</p>
+        <p class="text-sm font-medium text-destructive-text">{{ $t('views.AdminNodeCategoriesView.delete_confirm', { name: deleteConfirmName }) }}</p>
         <p class="mt-1 text-sm text-destructive-text">{{ $t('views.AdminNodeCategoriesView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-node-categories-delete-confirm" @click="deleteCategory">
-            {{ deleting ? 'Deleting...' : 'Delete' }}
+            {{ deleting ? $t('common.deleting') : $t('common.delete') }}
           </Button>
           <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-node-categories-delete-cancel"
             @click="deleteConfirmCategoryId = null"
           >
-            Cancel
+            {{ $t('common.cancel') }}
           </button>
         </div>
         <div v-if="deleteError" class="mt-2 text-sm text-destructive-text">{{ deleteError }}</div>
@@ -110,11 +120,12 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import NodeCategoryEditor from '../components/NodeCategoryEditor.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -122,6 +133,7 @@ import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface NodeCategory {
   id: string
@@ -137,9 +149,9 @@ const { data: categoriesData, loading, error, load: loadCategories } = useDataFe
   { initialValue: { items: [] as NodeCategory[] } }
 )
 
-const categories = computed(() => {
+const categories = computed<NodeCategory[]>(() => {
   const d = categoriesData.value
-  return (d as any)?.items ?? d ?? []
+  return d?.items ?? []
 })
 
 const editorMode = ref<'add' | 'edit' | null>(null)
@@ -232,12 +244,12 @@ function categoryActions(cat: NodeCategory) {
   return [
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('common.edit'),
       onClick: () => openEditForm(cat),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('common.delete'),
       onClick: () => confirmDelete(cat),
       danger: true,
     },

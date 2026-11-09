@@ -135,13 +135,86 @@ jobs:
             echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
           } >> "$GITHUB_ENV"
 
+      - name: Define verified external download helper
+        run: |
+          set -euo pipefail
+          cat > "$GITHUB_WORKSPACE/.download-verified.sh" <<'DOWNLOAD_HELPER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          download_verified() {
+            local url="$1"
+            local destination="$2"
+            local expected_sha256="$3"
+            local label="$4"
+            local max_attempts=5
+            local max_retry_delay=10
+            local attempt=1
+            local status curl_rc delay jitter retry_delay status_file
+            local temporary="${destination}.part"
+            rm -f -- "$temporary"
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+              status_file="${temporary}.status"
+              echo "download ${label}: attempt ${attempt}/${max_attempts}" >&2
+              set +e
+              curl -fsSL --proto '=https' --connect-timeout 20 --max-time 300 \
+                --retry 0 -o "$temporary" -w '%{http_code}' "$url" >"$status_file"
+              curl_rc=$?
+              set -e
+              status="$(cat "$status_file")"
+              rm -f -- "$status_file"
+
+              if [ "$curl_rc" -eq 0 ]; then
+                if ! printf '%s  %s\n' "$expected_sha256" "$temporary" | sha256sum --check --strict -; then
+                  echo "::error::download ${label}: checksum verification failed" >&2
+                  rm -f -- "$temporary"
+                  return 1
+                fi
+                mv -- "$temporary" "$destination"
+                echo "download ${label}: verified sha256 and saved ${destination}" >&2
+                return 0
+              fi
+
+              if [ "$curl_rc" -eq 22 ] && [[ "$status" =~ ^(408|425|429|500|502|503|504)$ ]]; then
+                echo "download ${label}: transient HTTP ${status} (curl exit ${curl_rc})" >&2
+              elif [[ "$curl_rc" =~ ^(6|7|18|28|52|55|56)$ ]]; then
+                echo "download ${label}: transient network failure (curl exit ${curl_rc}, HTTP ${status:-none})" >&2
+              else
+                echo "::error::download ${label}: permanent failure (curl exit ${curl_rc}, HTTP ${status:-none})" >&2
+                rm -f -- "$temporary"
+                return "$curl_rc"
+              fi
+
+              rm -f -- "$temporary"
+              if [ "$attempt" -eq "$max_attempts" ]; then
+                echo "::error::download ${label}: exhausted ${max_attempts} attempts" >&2
+                return 1
+              fi
+              delay=$((1 << (attempt - 1)))
+              jitter=$((RANDOM % 3))
+              retry_delay=$((delay + jitter))
+              if [ "$retry_delay" -gt "$max_retry_delay" ]; then
+                retry_delay="$max_retry_delay"
+              fi
+              echo "download ${label}: retrying in ${retry_delay}s" >&2
+              sleep "$retry_delay"
+              attempt=$((attempt + 1))
+            done
+          }
+          DOWNLOAD_HELPER
+          chmod 755 "$GITHUB_WORKSPACE/.download-verified.sh"
+
       - name: Download and sha256-verify python-build-standalone
         run: |
           set -euo pipefail
+          source "$GITHUB_WORKSPACE/.download-verified.sh"
           mkdir -p downloads
-          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${PBS_TARBALL}" \
-            "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
-          echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
+          download_verified \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}" \
+            "downloads/${PBS_TARBALL}" \
+            "${PBS_SHA256}" \
+            "python-build-standalone"
 
       - name: Install pinned PostgreSQL source-build dependencies
         run: |
@@ -165,9 +238,13 @@ jobs:
       - name: Download and sha256-verify pinned PostgreSQL source
         run: |
           set -euo pipefail
+          source "$GITHUB_WORKSPACE/.download-verified.sh"
           mkdir -p downloads
-          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/postgresql-${PG_VERSION}.tar.gz" "${PG_SOURCE_URL}"
-          echo "${PG_SOURCE_SHA256}  postgresql-${PG_VERSION}.tar.gz" | (cd downloads && sha256sum --check --strict -)
+          download_verified \
+            "${PG_SOURCE_URL}" \
+            "downloads/postgresql-${PG_VERSION}.tar.gz" \
+            "${PG_SOURCE_SHA256}" \
+            "PostgreSQL source"
           test -s "downloads/postgresql-${PG_VERSION}.tar.gz"
 
       - name: Verify PostgreSQL extension inventory before source build
@@ -247,9 +324,14 @@ jobs:
       - name: Build and sha256-verify Redis from pinned upstream source
         run: |
           set -euo pipefail
+          source "$GITHUB_WORKSPACE/.download-verified.sh"
           source scripts/bundle-versions.env
           mkdir -p downloads
-          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/redis-src.tar.gz" "${REDIS_SOURCE_URL}"
+          download_verified \
+            "${REDIS_SOURCE_URL}" \
+            "downloads/redis-src.tar.gz" \
+            "${REDIS_SOURCE_SHA256}" \
+            "Redis source"
           if [ ! -s downloads/redis-src.tar.gz ]; then
             echo "::error::Redis source tarball is missing or empty after download: downloads/redis-src.tar.gz"
             exit 1
@@ -581,7 +663,7 @@ jobs:
       - name: Set up Node + pnpm (pinned to match frontend/package.json)
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

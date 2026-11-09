@@ -80,6 +80,61 @@ def test_compute_token_costs_treats_null_counters_as_zero():
     }
 
 
+def _split_sandbox_envelope(**overrides: Any) -> dict[str, Any]:
+    """The REAL production split envelope (``output`` + ``telemetry`` +
+    ``artifacts``), built by the same builder the runner uses. NOT the legacy
+    shape — the executor's new-format branches must be exercised against this.
+    """
+    fields: dict[str, Any] = {
+        "status": "completed",
+        "summary": "did the thing",
+        "exit_code": 0,
+        "wall_clock_time_ms": 100,
+        "cost_estimate_usd": 0.0,
+        "output_json": {"summary": "did the thing"},
+        "attempt_key": "attempt-1",
+    }
+    fields.update(overrides)
+    return _build_sandbox_node_envelope(node_id="node-x", output=_SandboxNodeOutput(**fields))
+
+
+def test_split_sandbox_envelope_fixture_is_the_production_shape():
+    """The fixture IS the three-channel split envelope (guards the tests below
+    from silently degrading to the legacy shape)."""
+    envelope = _split_sandbox_envelope()
+    assert set(envelope) == {"output", "telemetry", "artifacts"}
+    assert isinstance(envelope["telemetry"], dict)
+    assert "telemetry" not in envelope["telemetry"]
+
+
+def test_aggregate_sandbox_cost_sums_split_envelope_telemetry():
+    """FAR-130 review: the per-node cost is read from the NEW telemetry
+    channel, and a legacy envelope still contributes through the fallback."""
+    completed_node_outputs: dict[str, Any] = {
+        "node-a": _split_sandbox_envelope(cost_estimate_usd=0.5),
+        "node-b": _split_sandbox_envelope(cost_estimate_usd=0.25),
+        # Non-positive / absent estimates contribute zero.
+        "node-c": _split_sandbox_envelope(cost_estimate_usd=0.0),
+        # Legacy fallback still works alongside the new format.
+        "node-d": {"artifacts": [], "output": {"status": "completed", "cost_estimate_usd": 1.0}},
+        "node-e": "garbage",
+    }
+
+    total = PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs)
+
+    assert total == Decimal("1.75")
+
+
+def test_node_output_stall_reason_reads_split_envelope_telemetry():
+    """FAR-130 review: the stall reason lives on the NEW telemetry channel."""
+    stalled = _split_sandbox_envelope(status="failed", stall_reason="agent produced no output for 60s")
+    assert _node_output_stall_reason(stalled) == "agent produced no output for 60s"
+    assert _node_output_stall_reason(_split_sandbox_envelope()) is None
+    # Legacy fallback still works.
+    legacy = {"output": {"status": "failed", "stall_reason": "legacy reason"}}
+    assert _node_output_stall_reason(legacy) == "legacy reason"
+
+
 def test_aggregate_sandbox_cost_sums_positive_estimates():
     """Only positive numeric cost_estimate_usd values inside node output dicts count."""
     completed_node_outputs: dict[str, Any] = {
@@ -4538,6 +4593,7 @@ def _generic_exception_envelope(node_id: str = "node-x") -> dict[str, Any]:
             modulo_synthetic_failure=True,
         ),
         exclude_from_output=frozenset({"error_type", "error_message"}),
+        legacy_format=True,
     )
 
 
@@ -4558,6 +4614,7 @@ def _schema_validation_envelope(node_id: str = "node-x", business_json: dict[str
             attempt_key="attempt-1",
             modulo_synthetic_failure=True,
         ),
+        legacy_format=True,
     )
 
 
@@ -4816,6 +4873,7 @@ async def test_finalize_keeps_complete_for_failed_status_without_synthetic_marke
             output_json={"status": "failed", "summary": "genuinely failed differently"},
             attempt_key="attempt-1",
         ),
+        legacy_format=True,
     )
     return_value, telemetry = _split_stored_columns(honest)
     stored_run = _stored_run_with_outputs({"node-x": return_value}, {"node-x": telemetry})

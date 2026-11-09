@@ -4931,15 +4931,11 @@ export interface paths {
          * Get Run Io Endpoint
          * @description Return per-node IO for a completed run, plus generated fixture_map.
          *
-         *     The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
-         *     holds each node's pure return and ``node_telemetry`` holds its exhaustive
-         *     telemetry. Both are resolved through the legacy-safe accessors
-         *     (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
-         *     column) are byte-identical to today's envelope shape, and P1+ runs expose
-         *     the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
-         *     markers without an ``outputs_json`` entry) still appear under
-         *     ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
-         *     are masked for secrets.
+         *     ``outputs_json`` holds each node's pure return and ``node_telemetry`` holds
+         *     its exhaustive telemetry, exactly as stored. Telemetry-only nodes (e.g.
+         *     ``skipped`` recovery markers without an ``outputs_json`` entry) appear
+         *     under ``node_telemetry`` only. All surfaces — input payload, outputs,
+         *     telemetry — are masked for secrets.
          */
         get: operations["get_run_io_endpoint_api_v1_runs__run_id__io_get"];
         put?: never;
@@ -5069,7 +5065,7 @@ export interface paths {
          *     *password*, *key*, *credential*) in the output are masked with
          *     bullet characters.
          *
-         *     For P1+ (split) rows this returns the node's PURE return. When a node
+         *     For split rows this returns the node's PURE return. When a node
          *     has no return (skipped / recovered / failed-no-return) but exists in
          *     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
          *     returned instead of a 404 — never the raw telemetry (no stdout / log
@@ -8152,6 +8148,39 @@ export interface paths {
          *     No changes are made to any connected system.
          */
         post: operations["create_determination_draft_api_v1_determination_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/determination/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Determination Proposal
+         * @description Record a reviewer decision on a determination proposal.
+         *
+         *     Accepts the proposal contract (validated on the way in), a decision
+         *     (``approve`` / ``reject`` / ``needs_review``), optional corrections to
+         *     derived elements, and optional acknowledgements of unresolved assumptions
+         *     by id. A reject requires a reason; an approve is refused while the proposal
+         *     carries low or unknown confidence assumptions the caller has not
+         *     acknowledged.
+         *
+         *     Reviewing a proposal never activates it: no pipeline is created, no trigger
+         *     is enabled and nothing is written to a connected tool - the returned and
+         *     recorded ``activation_status`` stays ``not_activated``. The decision, its
+         *     reason, the acknowledged assumption ids and the corrected
+         *     derived-element ids are recorded as one audit event.
+         */
+        post: operations["review_determination_proposal_api_v1_determination_review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14658,6 +14687,24 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * DerivedElementEdit
+         * @description A correction to one derived element of a proposal.
+         *
+         *     At least one of ``statement`` / ``confidence`` must be supplied; a no-op
+         *     correction is rejected rather than silently accepted.
+         */
+        DerivedElementEdit: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement?: string | null;
+            /** Confidence */
+            confidence?: ("high" | "medium" | "low" | "unknown") | null;
+        };
         /** DetectParamsRequest */
         DetectParamsRequest: {
             /** Node Ids */
@@ -14671,6 +14718,24 @@ export interface components {
         DetectParamsResponse: {
             /** Ports */
             ports?: components["schemas"]["ParameterPort"][];
+        };
+        /**
+         * DeterminationAttempt
+         * @description One read-only determination attempt and its bounded source inventory.
+         */
+        DeterminationAttempt: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "completed_with_gaps";
+            /** Source Inventory */
+            source_inventory: components["schemas"]["SourceInventoryItem"][];
         };
         /** DeterminationResponse */
         DeterminationResponse: {
@@ -14752,6 +14817,7 @@ export interface components {
             automation_suggestions: components["schemas"]["AutomationSuggestion"][];
             /** Summary */
             summary: string;
+            proposal: components["schemas"]["ProposalContract"];
         };
         /**
          * EditorGraphResponse
@@ -15296,6 +15362,23 @@ export interface components {
             missing_artifact_types: string[];
             /** Artifacts */
             artifacts: components["schemas"]["ArtifactEntry"][];
+        };
+        /**
+         * EvidenceReference
+         * @description A reference to evidence without copying or upgrading the source claim.
+         */
+        EvidenceReference: {
+            /** Reference Id */
+            reference_id: string;
+            /** Source Id */
+            source_id: string;
+            /** Locator */
+            locator: string;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "observed" | "derived" | "inferred" | "unavailable";
         };
         /**
          * EvidenceRetentionPolicyResponse
@@ -19848,6 +19931,145 @@ export interface components {
             /** Optimized From */
             optimized_from?: string | null;
         };
+        /**
+         * ProposalContract
+         * @description The Alpha contract for an editable draft; it never activates a pipeline.
+         */
+        ProposalContract: {
+            /**
+             * Contract Version
+             * @default alpha.determination-proposal.v1
+             * @constant
+             */
+            contract_version: "alpha.determination-proposal.v1";
+            /**
+             * Proposal Id
+             * Format: uuid
+             */
+            proposal_id: string;
+            attempt: components["schemas"]["DeterminationAttempt"];
+            /**
+             * Review State
+             * @default needs_review
+             * @enum {string}
+             */
+            review_state: "draft" | "needs_review" | "approved" | "rejected";
+            /**
+             * Activation Status
+             * @default not_activated
+             * @constant
+             */
+            activation_status: "not_activated";
+            /** Observed Facts */
+            observed_facts?: components["schemas"]["ProposalFact"][];
+            /** Derived Elements */
+            derived_elements?: components["schemas"]["ProposalFact"][];
+            /** Unresolved Assumptions */
+            unresolved_assumptions?: components["schemas"]["UnresolvedAssumption"][];
+            /** Unavailable Evidence */
+            unavailable_evidence?: components["schemas"]["UnavailableEvidence"][];
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Uncertainty */
+            uncertainty?: string[];
+            /** Provenance */
+            provenance?: components["schemas"]["EvidenceReference"][];
+        };
+        /**
+         * ProposalFact
+         * @description An observed or derived statement used by a proposal.
+         */
+        ProposalFact: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "observed" | "derived";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Evidence Refs */
+            evidence_refs?: components["schemas"]["EvidenceReference"][];
+        };
+        /**
+         * ProposalReviewRequest
+         * @description A reviewer's decision on a determination proposal.
+         */
+        ProposalReviewRequest: {
+            /**
+             * Proposal Id
+             * Format: uuid
+             */
+            proposal_id: string;
+            proposal: components["schemas"]["ProposalContract"];
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject" | "needs_review";
+            /** Reason */
+            reason?: string | null;
+            /** Corrected Derived Elements */
+            corrected_derived_elements?: components["schemas"]["DerivedElementEdit"][];
+            /** Removed Derived Element Ids */
+            removed_derived_element_ids?: string[];
+            /** Acknowledged Assumption Ids */
+            acknowledged_assumption_ids?: string[];
+        };
+        /**
+         * ProposalReviewResponse
+         * @description A recorded review decision; the proposal remains ``not_activated``.
+         */
+        ProposalReviewResponse: {
+            proposal: components["schemas"]["ProposalContract"];
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject" | "needs_review";
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "draft" | "needs_review" | "approved" | "rejected";
+            /**
+             * Activation Status
+             * @constant
+             */
+            activation_status: "not_activated";
+            /**
+             * Actor Id
+             * Format: uuid
+             */
+            actor_id: string;
+            /** Actor Username */
+            actor_username: string;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /** Reason */
+            reason?: string | null;
+            /** Acknowledged Assumption Ids */
+            acknowledged_assumption_ids: string[];
+            /** Corrected Derived Element Ids */
+            corrected_derived_element_ids: string[];
+            /** Removed Derived Element Ids */
+            removed_derived_element_ids: string[];
+        };
         /** ProposeGuardrailConfigRequest */
         ProposeGuardrailConfigRequest: {
             /** Config Yaml */
@@ -20871,6 +21093,8 @@ export interface components {
             } | null;
             /** Seam Coverage */
             seam_coverage?: components["schemas"]["SeamCoverageStatement"][] | null;
+            /** Legacy Agent Verdict */
+            legacy_agent_verdict?: string | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */
@@ -22077,6 +22301,27 @@ export interface components {
             tag?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /**
+         * SourceInventoryItem
+         * @description Inventory of every source sampled for this proposal.
+         */
+        SourceInventoryItem: {
+            /** Source Id */
+            source_id: string;
+            /** Connector Type */
+            connector_type: string;
+            /** Resource */
+            resource: string;
+            /** Sample Count */
+            sample_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable";
+            /** Error */
+            error?: string | null;
         };
         /** SpendCeilingResponse */
         SpendCeilingResponse: {
@@ -23470,6 +23715,41 @@ export interface components {
             passed: number;
             /** Failed */
             failed: number;
+        };
+        /**
+         * UnavailableEvidence
+         * @description A missing evidence source that limits the determination.
+         */
+        UnavailableEvidence: {
+            /** Source Id */
+            source_id: string;
+            /** Reason */
+            reason: string;
+            /** Requested Resource */
+            requested_resource: string;
+        };
+        /**
+         * UnresolvedAssumption
+         * @description A condition that must be reviewed before a draft can be activated.
+         */
+        UnresolvedAssumption: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Statement */
+            statement: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Confidence
+             * @default low
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Evidence Refs */
+            evidence_refs?: components["schemas"]["EvidenceReference"][];
         };
         /** UpdateCommunityObjectsRequest */
         UpdateCommunityObjectsRequest: {
@@ -41115,6 +41395,67 @@ export interface operations {
             };
             /** @description Bad Gateway */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    review_determination_proposal_api_v1_determination_review_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposalReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalReviewResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Review decision rejected */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -340,8 +340,8 @@ class TestWorkspaceInputsKillswitchDispatch:
         # Gate fired: dispatch short-circuited with the disabled error code and
         # never created a sandbox (pre-claim, re-dispatch safe).
         create_mock.assert_not_called()
-        assert result["output"]["status"] == "failed"
-        assert "disabled" in (result["output"].get("error_message") or "").lower()
+        assert result["telemetry"]["status"] == "failed"
+        assert "disabled" in (result["telemetry"].get("error_message") or "").lower()
 
     async def test_enabled_passes_gate_and_resolves_inputs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MWI ON: the gate does not fire — host-side resolution runs and a sandbox
@@ -366,4 +366,4 @@ class TestWorkspaceInputsKillswitchDispatch:
         # Gate not tripped: resolution ran and the sandbox was created.
         resolve_mock.assert_awaited_once()
         create_mock.assert_awaited_once()
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"

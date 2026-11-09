@@ -2841,21 +2841,53 @@ async def _load_installed_entities(
     return [{"entity_type": row.entity_type, "entity_id": str(row.entity_id)} for row in rows]
 
 
-async def _install_response(
-    session: AsyncSession,
-    install: CollectionInstall,
-    installed_entities: list[dict[str, Any]],
-) -> CollectionInstallResponse:
-    """Build the standard install response (runnability + update surfacing).
+@dataclass(frozen=True)
+class _InstallFacts:
+    """The DB-derived facts every install response carries (FAR-1782)."""
 
-    ``installed_entities`` is loaded by the CALLER inside the endpoint's org-RLS
-    transaction (via :func:`_load_installed_entities`) and threaded in — the
-    entity table's fail-closed RLS policy hides every row from a
-    post-transaction query, so deriving it here would silently return ``[]``
-    on Postgres.
+    runnable: bool
+    update_available: bool
+    available_version: str | None
+
+
+async def _load_install_facts(session: AsyncSession, install: CollectionInstall) -> _InstallFacts:
+    """Compute an install's runnability + update-availability facts.
+
+    FAR-1782: EVERY read behind these facts is org-RLS'd — ``compute_runnable``
+    touches ``model_backends`` and ``_update_info`` reads ``library_primitives``
+    — and the org GUC is set with ``set_config(..., is_local=true)``, i.e. it
+    expires with the transaction that set it. This helper therefore MUST be
+    called INSIDE the endpoint's ``async with session.begin():`` block, while
+    :func:`_set_rls_context` is live: a post-transaction call silently sees
+    zero rows on Postgres (``runnable`` always ``False``, ``update_available``
+    always ``None``) and never errors or logs. The response builder
+    (:func:`_install_response`) is pure precisely so it cannot re-introduce
+    that read.
     """
     runnable = await compute_runnable(session, install.install_id)
     update_available, available_version = await _update_info(session, install)
+    return _InstallFacts(
+        runnable=runnable,
+        update_available=update_available,
+        available_version=available_version,
+    )
+
+
+def _install_response(
+    install: CollectionInstall,
+    installed_entities: list[dict[str, Any]],
+    facts: _InstallFacts,
+) -> CollectionInstallResponse:
+    """Build the standard install response (runnability + update surfacing).
+
+    Pure builder: ``installed_entities`` and ``facts`` are both derived by the
+    CALLER inside the endpoint's org-RLS transaction (via
+    :func:`_load_installed_entities` / :func:`_load_install_facts`) and
+    threaded in — the entity/model-backend/primitive tables' fail-closed RLS
+    policies hide every row from a post-transaction query, so deriving any of
+    them here would silently return zero rows / ``False`` on Postgres
+    (FAR-1754, FAR-1782).
+    """
     return CollectionInstallResponse(
         install_id=install.install_id,
         collection_id=install.collection_id,
@@ -2867,9 +2899,9 @@ async def _install_response(
         resolved_manifest=install.resolved_manifest,
         connector_checklist=install.connector_checklist,
         installed_entities=installed_entities,
-        runnable=runnable,
-        update_available=update_available,
-        available_version=available_version,
+        runnable=facts.runnable,
+        update_available=facts.update_available,
+        available_version=facts.available_version,
         created_at=install.created_at,
     )
 
@@ -2879,12 +2911,13 @@ async def _install_collection_in_transaction(
     principal: TenantPrincipal,
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
-) -> tuple[CollectionInstall, list[dict[str, Any]]]:
+) -> tuple[CollectionInstall, list[dict[str, Any]], _InstallFacts]:
     """Install a collection and run the post-install gates in one transaction.
 
     Extracted from :func:`install_collection_endpoint` so the route keeps a
     flat failure-mapping ``except`` chain while the transaction body — the
-    connector-team gate and the RLS-scoped entity load — stays in one place.
+    connector-team gate, the RLS-scoped entity load and the RLS-scoped
+    response facts — stays in one place.
     """
     async with session.begin():
         await _set_rls_context(session, principal)
@@ -2937,7 +2970,11 @@ async def _install_collection_in_transaction(
         # still live — the child table's policy fails CLOSED outside the
         # transaction, so a post-transaction load would silently return [].
         installed_entities = await _load_installed_entities(session, install.install_id)
-    return install, installed_entities
+        # FAR-1782: same rule for the runnability / update-available reads —
+        # they touch org-RLS'd tables and must be evaluated in this
+        # transaction, never after it.
+        facts = await _load_install_facts(session, install)
+    return install, installed_entities, facts
 
 
 @router.post(
@@ -2961,7 +2998,7 @@ async def install_collection_endpoint(
     org_id = _require_organisation_id(principal)
     await _require_library_collection_flag(org_id)
     try:
-        install, installed_entities = await _install_collection_in_transaction(
+        install, installed_entities, facts = await _install_collection_in_transaction(
             session,
             principal,
             org_id,
@@ -3014,8 +3051,9 @@ async def install_collection_endpoint(
         _log.exception("library.install_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    # Compute runnability on read + update-available surfacing (FAR-759).
-    return await _install_response(session, install, installed_entities)
+    # Compute runnability on read + update-available surfacing (FAR-759); both
+    # were derived inside the transaction above (FAR-1782).
+    return _install_response(install, installed_entities, facts)
 
 
 @router.post(
@@ -3108,6 +3146,11 @@ async def list_collection_installs_endpoint(
             entities_by_install: dict[uuid.UUID, list[dict[str, Any]]] = {
                 install.install_id: await _load_installed_entities(session, install.install_id) for install in installs
             }
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # too, so they are evaluated here, inside the same transaction.
+            facts_by_install: dict[uuid.UUID, _InstallFacts] = {
+                install.install_id: await _load_install_facts(session, install) for install in installs
+            }
     except ProgrammingError:
         _log.exception("library.list_collection_installs_endpoint")
         raise _not_implemented_error() from None
@@ -3116,7 +3159,8 @@ async def list_collection_installs_endpoint(
         raise _unavailable_error() from None
 
     items: list[CollectionInstallResponse] = [
-        await _install_response(session, install, entities_by_install[install.install_id]) for install in installs
+        _install_response(install, entities_by_install[install.install_id], facts_by_install[install.install_id])
+        for install in installs
     ]
 
     return CollectionInstallListResponse(items=items)
@@ -3160,6 +3204,9 @@ async def grant_collection_agents_endpoint(
             # still live (the child policy fails closed outside the
             # transaction); thread it into the response below.
             installed_entities = await _load_installed_entities(session, install.install_id)
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # as well, so they are evaluated in this same transaction.
+            facts = await _load_install_facts(session, install)
     except GrantInstallNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3190,7 +3237,7 @@ async def grant_collection_agents_endpoint(
         _log.exception("library.grant_collection_agents_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    return await _install_response(session, install, installed_entities)
+    return _install_response(install, installed_entities, facts)
 
 
 @router.get(
@@ -3229,6 +3276,9 @@ async def get_collection_install_endpoint(
             # still live (the child policy fails closed outside the
             # transaction); thread it into the response below.
             installed_entities = await _load_installed_entities(session, install.install_id)
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # as well, so they are evaluated in this same transaction.
+            facts = await _load_install_facts(session, install)
     except HTTPException:
         raise
     except ProgrammingError:
@@ -3238,7 +3288,7 @@ async def get_collection_install_endpoint(
         _log.exception("library.get_collection_install_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    return await _install_response(session, install, installed_entities)
+    return _install_response(install, installed_entities, facts)
 
 
 # ---------------------------------------------------------------------------

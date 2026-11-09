@@ -149,17 +149,17 @@ async def test_workspace_inputs_resolved_provisioned_and_drift_checked() -> None
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     resolve_mock.assert_awaited_once()
     provision_mock.assert_awaited_once()
     drift_mock.assert_awaited_once()
 
-    drift = result["output"]["workspace_drift"]
+    drift = result["telemetry"]["workspace_drift"]
     assert isinstance(drift, list)
     assert len(drift) == 1
     assert drift[0]["dest"] == "/home/user/repo"
     assert drift[0]["drift_detected"] is False
-    assert result["output"]["workspace_drift_detected"] is False
+    assert result["telemetry"]["workspace_drift_detected"] is False
 
 
 async def test_workspace_resolution_failure_raises_sandbox_node_failed() -> None:
@@ -240,7 +240,7 @@ async def test_workspace_drift_detection_error_is_best_effort() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_workspace_drift_detected_sets_run_flag() -> None:
@@ -274,8 +274,8 @@ async def test_workspace_drift_detected_sets_run_flag() -> None:
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
-    assert result["output"]["workspace_drift_detected"] is True
+    assert result["telemetry"]["status"] == "completed"
+    assert result["telemetry"]["workspace_drift_detected"] is True
 
 
 async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
@@ -310,9 +310,9 @@ async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
         result = await fn(_run_state())
 
     # The node fails (not completes) with the disablement surfaced on the envelope.
-    assert result["output"]["status"] == "failed"
-    assert result["output"]["error_type"] == "ProvisioningError"
-    assert "workspace inputs are disabled" in result["output"]["error_message"]
+    assert result["telemetry"]["status"] == "failed"
+    assert result["telemetry"]["error_type"] == "ProvisioningError"
+    assert "workspace inputs are disabled" in result["telemetry"]["error_message"]
     # Gate fires pre-claim: no sandbox created, no host-side resolution attempted.
     create_mock.assert_not_called()
     resolve_mock.assert_not_called()
@@ -349,5 +349,5 @@ async def test_killswitch_enabled_allows_workspace_inputs() -> None:
         result = await fn(_run_state())
 
     # Enabled gate: no disabled error, resolution proceeds to completion.
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     resolve_mock.assert_awaited_once()

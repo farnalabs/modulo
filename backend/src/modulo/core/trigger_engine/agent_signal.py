@@ -22,7 +22,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
-from modulo.core.node_output_split import DEFAULT_NODE_TYPE, SPLITTABLE_NODE_TYPES, split_node_output
+from modulo.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    SPLITTABLE_NODE_TYPES,
+    is_split_envelope,
+    split_node_output,
+)
 from modulo.core.run_admission import (
     count_trigger_slot_occupancy,
 )
@@ -43,6 +48,14 @@ def _resolve_child_node_output(
     node_id: str | None = None,
 ) -> Any:
     """Resolve the value a child pipeline receives under ``node_output`` (FAR-131).
+
+    NEW FORMAT (split envelope): node_output carries ``output`` (pure return),
+    a dict-valued ``telemetry``, and the ``artifacts`` state accumulator --
+    detected by the canonical ``is_split_envelope`` predicate. For splittable
+    types, return ``node_output["output"]`` directly.
+
+    LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys. Uses
+    ``split_node_output`` to extract the pure return.
 
     A child pipeline receives the completed node's PURE RETURN rather than the
     legacy mixed envelope. The pure return is derived with the SAME
@@ -72,6 +85,17 @@ def _resolve_child_node_output(
     resolved_type = node_type or DEFAULT_NODE_TYPE
     if resolved_type not in SPLITTABLE_NODE_TYPES:
         return node_output
+
+    # Detect the new split format through the ONE canonical predicate (the
+    # production envelope ALWAYS carries ``artifacts`` alongside ``output`` and
+    # ``telemetry``; an earlier inline predicate wrongly required its ABSENCE,
+    # so it never fired in production and the split was only recovered by
+    # ``split_node_output``'s own detection — a drift waiting to break).
+    if is_split_envelope(node_output):
+        # New split format: pure return is directly in "output"
+        return node_output["output"]
+
+    # Legacy format: use split_node_output to extract pure return
     pure_return, _telemetry = split_node_output(node_output, resolved_type, None)
     if pure_return is None:
         # Mirror ``_resolve_post_node_eval_target``: a splittable type with no
@@ -99,13 +123,14 @@ async def fire_agent_signal(
     ``config_json->>'source_pipeline_id'`` + ``source_node_id`` match the
     completed pipeline + node. Creates a child pipeline run for each match.
 
-    ``node_output`` is the completed node's RAW legacy envelope; ``node_type``
-    is the node's resolved type. For a SPLITTABLE type the child run's
-    ``input_payload["node_output"]`` carries the node's PURE RETURN (FAR-131) --
-    never the legacy mixed envelope -- whatever the return's shape (a scalar, a
-    list, a dict, or absent). For an unknown/unsplittable type, or when
-    ``node_type`` is omitted, the value is embedded VERBATIM (pre-split legacy
-    behaviour).
+    ``node_output`` is the completed node's envelope -- either the NEW split
+    format (with ``output`` and ``telemetry`` keys) or the LEGACY format (with
+    ``artifacts`` and ``output`` keys). ``node_type`` is the node's resolved
+    type. For a SPLITTABLE type the child run's ``input_payload["node_output"]``
+    carries the node's PURE RETURN (FAR-131) -- never the legacy mixed envelope
+    -- whatever the return's shape (a scalar, a list, a dict, or absent). For an
+    unknown/unsplittable type, or when ``node_type`` is omitted, the value is
+    embedded VERBATIM (pre-split legacy behaviour).
 
     Returns a list of ``{trigger_id, run_id, status}`` dicts describing each
     attempted fire.

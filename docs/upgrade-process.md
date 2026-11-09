@@ -136,18 +136,56 @@ keys-in-vault operations tracked as needs-human.
 
 ### Docker Compose
 
+The production compose file pins the image through `TAG`; never upgrade by
+silently changing a floating tag. Before touching a real deployment, rehearse
+the complete matrix on a disposable host with the same release compose asset.
+Run the harness from a Modulo checkout, pointing it at the extracted
+`docker-compose.prod.yml` and its generated `.env`:
+
 ```bash
-# 1. Pull the latest image
-docker compose -f deploy/compose/docker-compose.prod.yml pull
+python3 scripts/verify_compose_upgrade_rollback.py \
+  --compose-file /path/to/compose-bundle/docker-compose.prod.yml \
+  --env-file /path/to/compose-bundle/.env \
+  --old-tag v0.4.0 \
+  --new-tag v0.5.0 \
+  --evidence-dir evidence/compose-upgrade
+```
 
-# 2. Restart with new image (runs migrations on startup)
-docker compose -f deploy/compose/docker-compose.prod.yml up -d
+The harness records host/OS/Python versions, every command and exit code,
+stdout/stderr, image tags, readiness assertions, and final `RESULT`. It owns a
+unique Compose project name and always runs `down --volumes --remove-orphans`
+in a `finally` block. The release workflow runs this same command against the
+extracted RC compose asset after the clean-host check, using the previous
+published `bundle-v*` release as `--old-tag`; it uploads the evidence directory
+as a workflow artifact and fails closed when no previous release exists. The
+matrix is:
 
-# 3. Verify migration completed
-docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep alembic
+1. clean install with the old immutable image tag;
+2. upgrade to the new immutable image tag and readiness check;
+3. intentionally failed upgrade by replacing the app with an invalid
+   `SECRET_KEY`, asserting readiness is no longer HTTP 200 and retaining the
+   app logs;
+4. rollback to the old immutable image tag; and
+5. rollback verification with readiness and app logs.
 
-# 4. Check application health
-curl http://localhost:8000/healthz
+The failed-upgrade leg is deliberately a real container replacement, not a
+mocked command. A run is not evidence unless the evidence directory contains
+`metadata.json`, `commands.jsonl`, the referenced stdout/stderr files, and a
+`RESULT` line. Do not report Windows or macOS coverage from this Linux/Docker
+matrix; macOS validation is recorded separately and Windows remains deferred.
+
+For the operator upgrade itself:
+
+```bash
+# 1. Pull the exact new image named by TAG.
+TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml pull modulo
+
+# 2. Restart with that immutable image (runs migrations on startup).
+TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d modulo
+
+# 3. Verify migration completed and readiness is healthy.
+TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep -i alembic
+curl http://localhost:80/healthz/ready
 ```
 
 ### Self-Hosted (Bare Metal / VM)

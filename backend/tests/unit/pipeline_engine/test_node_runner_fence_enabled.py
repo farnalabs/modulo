@@ -259,7 +259,7 @@ async def test_dispatch_failure_clears_marker_so_successor_can_acquire():
 
     result = await _run_fence(node_fn, create_mock)
 
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
     # Teardown cleared the marker for the owning token.
     assert state["sandbox_dispatch_state"] is None
     assert state["sandbox_id"] is None
@@ -293,7 +293,7 @@ async def test_success_marker_holds_sandbox_id_then_cleared_at_teardown():
 
     result = await _run_fence(node_fn, create_mock)
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     # While the agent command ran the marker carried the real sandbox id AND the
     # structured attempt-key marker (D5).
     assert json.loads(state_at_run.get("sandbox_dispatch_state"))["state"] == "dispatching"
@@ -315,7 +315,7 @@ async def test_reclaimed_run_produces_different_attempt_key():
             row=row, sandbox=_make_sandbox_mock(sandbox_id=f"sbx-{claim_count}")
         )
         result = await _run_fence(node_fn, create_mock)
-        keys.append(result["output"]["attempt_key"])
+        keys.append(result["telemetry"]["attempt_key"])
 
     assert keys[0] == "run:run-1:node:n1:1"
     assert keys[1] == "run:run-1:node:n1:2"
@@ -332,7 +332,7 @@ async def test_same_claim_attempt_key_stable_across_invocations():
             row=row, sandbox=_make_sandbox_mock(sandbox_id="sbx-x")
         )
         result = await _run_fence(node_fn, create_mock)
-        keys.append(result["output"]["attempt_key"])
+        keys.append(result["telemetry"]["attempt_key"])
 
     assert keys[0] == "run:run-1:node:n1:4"
     assert keys[1] == "run:run-1:node:n1:4"
@@ -356,8 +356,7 @@ async def test_marker_carries_attempt_key():
 
     result = await _run_fence(node_fn, create_mock)
 
-    assert result["output"]["attempt_key"] == "run:run-1:node:n1:7"
-    assert result["artifacts"][0]["output"]["attempt_key"] == "run:run-1:node:n1:7"
+    assert result["telemetry"]["attempt_key"] == "run:run-1:node:n1:7"
     marker = json.loads(state_at_run["sandbox_dispatch_state"])
     assert marker["state"] == "dispatching"
     assert marker["attempt_key"] == "run:run-1:node:n1:7"

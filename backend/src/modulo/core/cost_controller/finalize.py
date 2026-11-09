@@ -379,26 +379,13 @@ def _split_merge_outputs(
     *,
     run_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Split-then-merge a segment into the two LOCKSTEP output columns.
+    """Split-then-merge a segment into the two lockstep output columns.
 
-    For EVERY node in *segment* the value is routed through
-    ``node_output_split.split_node_output``:
-      - an already-pure node (a stored telemetry entry exists) is an
-        IDEMPOTENT NO-OP — the return and the stored telemetry pass through
-        unchanged (``stored_telemetry`` is the P1 split signal);
-      - a legacy row is RE-SPLIT (logged with run_id + node_id) into its pure
-        return + exhaustive telemetry.
-
-    The pure returns land in the ``outputs_json`` merge and the telemetry in
-    the parallel ``node_telemetry_json`` merge — LOCKSTEP: every
-    ``outputs_json`` key is guaranteed a telemetry key (``{}`` at minimum). A
-    skipped recovery marker is the sole exception: its ``outputs_json`` key is
-    OMITTED (the telemetry entry is the sole record). Stored rows absent from
-    the segment carry over verbatim (legacy stored rows re-split so lockstep
-    holds). Segment collisions are segment-wins, never summed.
-
-    NEVER raises: ``split_node_output`` is never-raises and malformed rows
-    degrade to best-effort splits.
+    A stored telemetry entry is the explicit signal that a node value is already
+    split and can pass through unchanged. Values without that signal are sent
+    through the write-side splitter so the persisted columns remain separate.
+    Segment collisions are segment-wins, never summed; skipped recovery markers
+    remain telemetry-only.
     """
     merged_outputs: dict[str, Any] = {}
     merged_telemetry: dict[str, Any] = {}
@@ -511,14 +498,7 @@ def _merge_segment_output(
 
 
 def _node_output_dict(merged_outputs: Any, node_id: str, merged_telemetry: Any = None) -> dict[str, Any] | None:
-    """The inner ``output`` dict of a completed node (or ``None``).
-
-    Routes through ``node_output_split.node_telemetry`` so the legacy
-    extraction is SHARED and identical everywhere (FAR-124 P0). When a split
-    telemetry entry exists (FAR-125 P1 rows) it is returned verbatim; ``None``
-    here means "no telemetry entry", which selects the legacy-row branch that
-    mirrors the historical implementation exactly.
-    """
+    """Return the stored telemetry dict for a completed node, if present."""
     value = node_telemetry(merged_telemetry, merged_outputs, node_id)
     return value if isinstance(value, dict) else None
 
@@ -626,21 +606,10 @@ def _stamp_rejected_zero(node_dict: dict[str, Any], *presented: Any) -> None:
 
 
 def _presented_zero_values(raw_output: Any) -> tuple[Any, ...]:
-    """The cost values a node's raw output PRESENTS, for ``_stamp_rejected_zero``.
-
-    Handles both stored shapes: the pure return of a split (P1) row — the
-    producer's raw ``output.json``, keys at top level — and a still-nested
-    legacy envelope, whose keys live under ``output`` (mirroring
-    ``_legacy_inner_output``). A non-dict (absent / skipped-recovery marker)
-    presents nothing.
-    """
+    """Return cost values explicitly presented by a pure node return."""
     if not isinstance(raw_output, dict):
         return ()
-    values: list[Any] = [raw_output.get("model_cost_usd"), raw_output.get("model_cost_raw_usd")]
-    nested = raw_output.get("output")
-    if isinstance(nested, dict):
-        values.extend((nested.get("model_cost_usd"), nested.get("model_cost_raw_usd")))
-    return tuple(values)
+    return raw_output.get("model_cost_usd"), raw_output.get("model_cost_raw_usd")
 
 
 def _rejection_reasons(enriched: dict[str, dict[str, Any]]) -> dict[str, str]:
@@ -815,14 +784,11 @@ _UNION_PROVENANCE_DATUM_KEYS: dict[str, tuple[str, ...]] = {
 
 
 def _fold_datum_provenance(node_dict: dict[str, Any], output_obj: dict[str, Any] | None) -> None:
-    """Propagate the output envelope's per-datum ``reported`` map into the union.
+    """Propagate the per-datum ``reported`` map from separated telemetry.
 
-    FAR-1780: the sandbox envelope's ``provenance`` key (built by
-    node_runner's ``_sandbox_reported_datum_provenance``) names the datums
-    that carry the PRODUCER'S OWN report. Sparse per-node telemetry now
-    carries the same key through ``node_telemetry()`` (split rows) or the
-    legacy envelope's inner output, so the union (the run-output/API shape
-    and the persisted sparse entry) can render the same classes.
+    FAR-1780: the sandbox telemetry ``provenance`` key names the datums that
+    carry the producer's own report. The union and persisted sparse entry render
+    the same classes from that telemetry value.
 
     Engine-assigned, never self-asserted (ADR-034 / ADR-042): the stored
     union entry NEVER names a provenance class that survived from a previous
@@ -927,10 +893,7 @@ def _enrich_union(
     may reference them). The SPLIT sandbox signal is set from the
     run-frozen node-type map, NOT field presence.
 
-    Per-node telemetry is read from the split ``node_telemetry_json`` column
-    when present (FAR-125 P1b); legacy rows fall back to the shared
-    ``node_telemetry`` extraction so the enriched shape is identical either
-    way.
+    Per-node telemetry is read from the split ``node_telemetry_json`` column.
 
     The SCHEMA-DRIFT counter increment happens here (the frozen map is in
     scope) and is TERMINAL-ONLY, gated on ``pin_failed == false`` AND the node
@@ -1250,13 +1213,10 @@ def _token_cost(merged_usage: dict[str, Any]) -> Decimal:
 
 
 def _legacy_sandbox_cost(merged_outputs: dict[str, Any], merged_telemetry: Any = None) -> Decimal:
-    """Legacy-fallback sandbox cost — SERVER-VERIFIED WALL-CLOCK ONLY.
+    """Return server-verified sandbox wall-clock cost from separated telemetry.
 
-    ``elapsed/3600 * E2B_SANDBOX_USD_PER_HOUR`` over all completed sandbox
-    nodes. The fallback DE-TRUSTS agent ``cost_estimate_usd`` (§1.5) — a hostile
-    legacy ``cost_estimate_usd`` can no longer inflate the fallback total.
-    Per-node telemetry is read from the split ``node_telemetry_json`` column
-    when present (FAR-125 P1b) with the legacy extraction fallback.
+    ``elapsed/3600 * E2B_SANDBOX_USD_PER_HOUR`` is applied to completed nodes;
+    producer-reported cost fields are never consulted.
     """
     if not isinstance(merged_outputs, dict):
         return Decimal(0)
@@ -1287,16 +1247,12 @@ async def _fallback_write(
     is_terminal: bool = False,
     claim_token: str | None = None,
 ) -> Decimal:
-    """The LEGACY FALLBACK write (never-fail envelope, §1.5).
+    """The fallback write (never-fail envelope, §1.5).
 
-    Persists the UN-ENRICHED merged set (so the cumulative write-back invariant
-    survives a cost-path exception) with ``total = token_cost +
-    legacy_sandbox_cost`` — wall-clock ONLY, flat-clamped with the shared
-    ``total_clamped`` marker. The two output columns are written SHAPE-IDENTICAL
-    to the main path (FAR-125 P1b): ``outputs_json`` holds the PURE returns and
-    ``node_telemetry_json`` the split telemetry — never an un-split envelope.
-    On a terminal write the analytics fact is recorded in the SAME transaction
-    (fail-open, ADR 020).
+    Persists the un-enriched merged set with ``total = token_cost +
+    sandbox_wall_clock_cost`` and writes pure returns and separated telemetry
+    to their respective columns. On a terminal write the analytics fact is
+    recorded in the same transaction (fail-open, ADR 020).
     """
     total_tokens = _derive_total_tokens(merged.usage)
     token_cost = _token_cost(merged.usage)
@@ -1332,7 +1288,7 @@ async def _fallback_write(
 
 
 def _fallback_wall_hours(merged_outputs: dict[str, Any], merged_telemetry: Any) -> float:
-    """Server-verified wall-clock hours across completed nodes (legacy fallback)."""
+    """Server-verified wall-clock hours across completed nodes."""
     wall_hours = 0.0
     if isinstance(merged_outputs, dict):
         for node_id in merged_outputs:

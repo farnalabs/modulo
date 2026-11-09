@@ -67,7 +67,13 @@ async def _seed_agent(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uui
     return agent_id
 
 
-async def _seed_connector(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
+async def _seed_connector(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    *,
+    allowed_operations: list[str] | None = None,
+) -> uuid.UUID:
     """An ORG-visibility GitHub connector (the binding's existence/team gates pass)."""
     from modulo.db.crud.connector_instance import create_connector_instance
 
@@ -82,6 +88,7 @@ async def _seed_connector(db_engine: AsyncEngine, org_id: uuid.UUID, account_id:
             account_id=account_id,
             credentials_ciphertext=b"ciphertext",
             visibility="org",
+            allowed_operations=allowed_operations,
         )
         return connector.id
 
@@ -113,7 +120,7 @@ async def _cleanup(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-    agent_id: uuid.UUID,
+    agent_id: uuid.UUID | None,
     connector_id: uuid.UUID,
 ) -> None:
     async with db_engine.begin() as conn:
@@ -124,7 +131,8 @@ async def _cleanup(
         await conn.execute(text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
         await conn.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
         await conn.execute(text("DELETE FROM connector_instances WHERE id = :id"), {"id": str(connector_id)})
-        await conn.execute(text("DELETE FROM agents WHERE id = :id"), {"id": str(agent_id)})
+        if agent_id is not None:
+            await conn.execute(text("DELETE FROM agents WHERE id = :id"), {"id": str(agent_id)})
 
 
 async def test_binding_resource_filters_data_survive_a_graph_round_trip(
@@ -278,3 +286,127 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
         assert data == {}
     finally:
         await _cleanup(db_engine, test_org, pipeline_id, agent_id, connector_id)
+
+
+def _connector_node(connector_id: uuid.UUID) -> dict:
+    """A first-class ``connector`` node issuing a GitHub query (FAR-1395)."""
+    return {
+        "id": str(uuid.uuid4()),
+        "node_type": "connector",
+        "position": {"x": 0, "y": 0},
+        "connector_binding": {
+            "type": _GITHUB,
+            "instance_id": str(connector_id),
+            "operation": "query",
+            "resource": "pr_files",
+            "filters": {"owner_repo": "x/y", "pull_number": 7},
+            "data": {"note": "authored"},
+        },
+    }
+
+
+async def test_connector_node_query_round_trips_through_rest(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1395: a ``connector`` query is authorable through the SUPPORTED surface.
+
+    Drives the real ``PUT /pipelines/{id}/graph`` + ``GET`` against the migrated
+    testcontainer: the node type, the routed verb and the query payload
+    (``resource`` / ``filters`` / ``data``) all survive, and the persisted row —
+    the shape ``node_runner._connector_inputs`` consumes — carries them.
+    """
+    headers = _auth_headers(test_org, test_user)
+    connector_id = await _seed_connector(db_engine, test_org, test_user)
+    node = _connector_node(connector_id)
+    from modulo.core.pipeline_engine.node_runner import _connector_inputs
+
+    create = await integration_client.post(
+        "/api/v1/pipelines",
+        headers=headers,
+        json={"name": f"connector-query-roundtrip-{uuid.uuid4().hex[:8]}"},
+    )
+    assert create.status_code == 201, create.text
+    pipeline_id = uuid.UUID(create.json()["id"])
+
+    try:
+        put = await integration_client.put(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            json={"nodes": [node], "edges": []},
+            headers=headers,
+            timeout=30.0,
+        )
+        assert put.status_code == 200, put.text
+
+        got = await integration_client.get(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            headers=headers,
+            timeout=30.0,
+        )
+        assert got.status_code == 200, got.text
+        returned = got.json()["nodes"][0]
+        assert returned["node_type"] == "connector"
+        binding = returned["connector_binding"]
+        assert binding["operation"] == "query"
+        assert binding["resource"] == "pr_files"
+        assert binding["filters"] == {"owner_repo": "x/y", "pull_number": 7}
+        assert binding["data"] == {"note": "authored"}
+
+        stored = await _persisted_binding(db_engine, test_org, pipeline_id)
+        resource, filters, _data = _connector_inputs(stored, {"run_context": {"input": {}}})
+        assert resource == "pr_files"
+        # ``_connector_inputs`` also stamps the shell connector's provider_ref
+        # default, so assert the AUTHORED keys rather than whole-dict equality.
+        assert filters["owner_repo"] == "x/y"
+        assert filters["pull_number"] == 7
+    finally:
+        await _cleanup(db_engine, test_org, pipeline_id, None, connector_id)
+
+
+async def test_a_query_outside_the_connector_allowlist_is_refused_at_save(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1395: ``allowed_operations`` actually gates authoring.
+
+    The connector allows ``write`` only, so the routed ``query`` (``read``) must
+    be refused with 422 ``CONNECTOR_MISSING_OPERATIONS`` — the save-time mirror
+    of the run-time ``ConnectorACL``. Before the fix this issue was advisory and
+    the graph persisted a binding every run would then deny.
+    """
+    headers = _auth_headers(test_org, test_user)
+    connector_id = await _seed_connector(db_engine, test_org, test_user, allowed_operations=["write"])
+    node = _connector_node(connector_id)
+    node["connector_binding"]["resource"] = "issue"
+
+    create = await integration_client.post(
+        "/api/v1/pipelines",
+        headers=headers,
+        json={"name": f"connector-allowlist-{uuid.uuid4().hex[:8]}"},
+    )
+    assert create.status_code == 201, create.text
+    pipeline_id = uuid.UUID(create.json()["id"])
+
+    try:
+        put = await integration_client.put(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            json={"nodes": [node], "edges": []},
+            headers=headers,
+            timeout=30.0,
+        )
+        assert put.status_code == 422, put.text
+        assert "does not allow 'read'" in put.text
+
+        got = await integration_client.get(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            headers=headers,
+            timeout=30.0,
+        )
+        assert got.status_code == 200, got.text
+        assert not got.json()["nodes"]
+    finally:
+        await _cleanup(db_engine, test_org, pipeline_id, None, connector_id)

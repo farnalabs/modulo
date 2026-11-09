@@ -148,6 +148,7 @@ vi.mock('../lib/api/client', () => ({
 import { api, getAccessToken } from '../lib/api/client'
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
+import { spotlight } from '../composables/useSpotlight'
 import { usePlanStore } from '../stores/planStore'
 
 // FAR-1588: archive/unarchive moved off the legacy untyped `useApi().post`
@@ -1107,7 +1108,7 @@ describe('PipelineEditorView — toolbar rendering', () => {
     wrapper.unmount()
   })
 
-  it('shows the empty-state overlay for a graph-less pipeline and adds a node from it', async () => {
+  it('shows progressive onboarding actions for a graph-less pipeline', async () => {
     ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('/pipelines/{pipeline_id}/graph')) {
         return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
@@ -1119,11 +1120,66 @@ describe('PipelineEditorView — toolbar rendering', () => {
     const wrapper = await mountEditorLoaded()
     ;(wrapper.vm as any).pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
     await nextTick()
-    expect(wrapper.text()).toContain('Test Pipeline')
-    // add node appends to both the flow and the raw graph
-    const addBtns = wrapper.findAll('[data-testid="pipeline-editor-add-node"]')
-    expect(addBtns.length).toBeGreaterThan(0)
-    await addBtns[0].trigger('click')
+
+    expect(wrapper.text()).toContain('Pipelines are made of nodes')
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-show-me"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-template"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-empty-add-node"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('routes Start from template to the pipeline-template library filter', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const pushSpy = vi.spyOn(router, 'push')
+    await wrapper.find('[data-testid="pipeline-editor-empty-template"]').trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'library', query: { type: 'pipeline_template' } })
+    wrapper.unmount()
+  })
+
+  it('starts the three-step walkthrough from the empty state', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    await wrapper.find('[data-testid="pipeline-editor-empty-show-me"]').trigger('click')
+
+    expect(spotlight.active.value).toBe(true)
+    expect(spotlight.target.value).toBe('pipeline-editor-empty-add-node')
+    expect(spotlight.hasNext.value).toBe(true)
+    spotlight.next()
+    expect(spotlight.target.value).toBe('pipeline-editor-canvas')
+    spotlight.next()
+    expect(spotlight.target.value).toBe('pipeline-editor-arrange-graph')
+    spotlight.next()
+    expect(spotlight.active.value).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('adds a node from the empty-state action', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    await wrapper.find('[data-testid="pipeline-editor-empty-add-node"]').trigger('click')
     await nextTick()
     const vm = wrapper.vm as any
     expect(vm.flowNodes.length).toBe(1)
@@ -4202,6 +4258,105 @@ describe('PipelineEditorView — FAR-2410 canvas layout & edge direction', () =>
     expect(body.nodes[0].position).toEqual({ x: 333, y: 444 })
     expect(body.nodes[0].description).toBe('')
     expect(JSON.parse(localStorage.getItem('modulo.pipeline.layoutOwnership') ?? '{}')['test-pipeline-id']).toBe('user')
+    wrapper.unmount()
+  })
+
+  it('records user provenance only for nodes whose position actually changed', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'x-changed', node_type: 'agent', label: 'X', position: { x: 0, y: 0 } },
+      { id: 'y-only', node_type: 'agent', label: 'Y', position: { x: 10, y: 10 } },
+      { id: 'no-move', node_type: 'agent', label: 'N', position: { x: 5, y: 5 } },
+      { id: 'no-prev-pos', node_type: 'agent', label: 'P' },
+    ]
+    vm.flowNodes = [
+      { id: 'x-changed', position: { x: 1, y: 1 }, data: {} },
+      { id: 'y-only', position: { x: 10, y: 50 }, data: {} },
+      { id: 'no-move', position: { x: 5, y: 5 }, data: {} },
+      { id: 'no-prev-pos', position: { x: 9, y: 9 }, data: {} },
+    ]
+    vm.nodeProvenance = {}
+
+    vm.onNodeDragStop()
+
+    expect(vm.nodeProvenance).toEqual({ 'x-changed': 'user', 'y-only': 'user' })
+    expect(vm.nodeProvenance['no-move']).toBeUndefined()
+    expect(vm.nodeProvenance['no-prev-pos']).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('preserves user provenance through an incremental Arrange', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The manual offset survives the fresh layout, so provenance stays 'user'.
+    expect(byId.a.position).toEqual({ x: 50, y: 25 })
+    expect(vm.nodeProvenance).toEqual({ a: 'user', b: 'generated' })
+    wrapper.unmount()
+  })
+
+  it('preserves user offsets across two consecutive Arranges with no intervening drag', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    // The user offset measured against the generated BASELINE survives the
+    // second Arrange instead of collapsing to a zero delta.
+    expect(byId.a.position).toEqual({ x: 50, y: 25 })
+    expect(byId.b.position).toEqual({ x: 240, y: 0 })
+    // The stored baseline stays pre-delta so the next Arrange can still measure.
+    expect(vm.lastGeneratedLayout.a).toEqual({ x: 0, y: 0 })
+    expect(vm.nodeProvenance).toEqual({ a: 'user', b: 'generated' })
+    wrapper.unmount()
+  })
+
+  it('keeps a drag between Arranges while preserving the generated baseline', async () => {
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      { id: 'a', node_type: 'agent', label: 'A', position: { x: 50, y: 25 } },
+      { id: 'b', node_type: 'agent', label: 'B', position: { x: 240, y: 0 } },
+    ]
+    vm.flowNodes = vm.rawNodes.map((node: any) => ({ ...node }))
+    vm.rawEdges = [{ id: 'e1', source_node_id: 'a', target_node_id: 'b', edge_type: 'normal' }]
+    vm.lastGeneratedLayout = { a: { x: 0, y: 0 }, b: { x: 240, y: 0 } }
+    vm.nodeProvenance = { a: 'user', b: 'generated' }
+
+    await vm.arrangeGraph()
+    // Simulate a fresh manual drag of node-a after the first Arrange.
+    vm.flowNodes = vm.flowNodes.map((node: any) =>
+      node.id === 'a' ? { ...node, position: { x: 80, y: 40 } } : node,
+    )
+    vm.onNodeDragStop()
+    await vm.arrangeGraph()
+
+    const byId = Object.fromEntries(vm.rawNodes.map((node: any) => [node.id, node]))
+    expect(byId.a.position).toEqual({ x: 80, y: 40 })
+    expect(vm.nodeProvenance.a).toBe('user')
+    expect(vm.lastGeneratedLayout.a).toEqual({ x: 0, y: 0 })
     wrapper.unmount()
   })
 

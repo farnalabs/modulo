@@ -78,7 +78,7 @@ without a valid `FERNET_KEY` (compose prints
 Generate the key once and put it in `.env` at the repo root:
 
 ```bash
-printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+printf 'FERNET_KEY=%s\n' "$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" > .env
 docker compose -f docker-compose.local.yml --profile observability up -d
 ```
 
@@ -424,7 +424,7 @@ app refuses to start without them:
 |----------|---------|-----------------|
 | `DATABASE_URL` | SQLAlchemy async DB URL for the application database | `sqlite+aiosqlite:///./modulo.db` for the local SQLite file below |
 | `SECRET_KEY` | 32+ byte random string used to sign JWTs | `$(openssl rand -base64 48)` |
-| `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(openssl rand -base64 32)` (base64-encoded 32-byte key) |
+| `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")` (URL-safe base64 of exactly 32 bytes) |
 
 The SAQ **system** worker needs one more variable: `MODULO_SYSTEM_DATABASE_URL`.
 Its system-engine crons (the jobs that run on the `modulo_system` role,
@@ -448,7 +448,7 @@ uv sync
 DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
   MODULO_SYSTEM_DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
   SECRET_KEY=$(openssl rand -base64 48) \
-  FERNET_KEY=$(openssl rand -base64 32) \
+  FERNET_KEY=$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
   MODULO_USERS=admin:changeme \
   MODULO_DB=sqlite \
   uv run uvicorn modulo.api.main:app --port 8000

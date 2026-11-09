@@ -163,7 +163,9 @@ jobs:
     name: Build and smoke-test macOS ${{ needs.normalize-inputs.outputs.architecture }} bundle
     needs: normalize-inputs
     runs-on: ${{ needs.normalize-inputs.outputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
-    timeout-minutes: 90
+    # Worst-case retry sleeps are 62m55s with +25% jitter, plus the 30m
+    # notarytool wait, so 90m leaves no budget for build/sign/smoke work.
+    timeout-minutes: 120
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
       MODE: ${{ needs.normalize-inputs.outputs.mode }}
@@ -180,8 +182,40 @@ jobs:
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         run: |
           set -euo pipefail
-          brew update
-          brew install shellcheck
+          printf 'build tools: runner_arch=%s target_arch=%s\n' "$(uname -m)" "$MACOS_ARCH"
+          # Intel macOS is a Homebrew Tier-3 configuration: Homebrew no longer
+          # builds bottles for x86_64 Darwin, so `brew install` on this runner
+          # either fails at the bottle fetch or falls back to an unbounded source
+          # build. Record that state up front and make a failure actionable
+          # instead of leaving a deterministic, opaque error (FAR-2479).
+          if [[ "$MACOS_ARCH" == x86_64 ]]; then
+            printf '::warning::Homebrew no longer builds bottles for the Intel (x86_64) macOS configuration; build tools on this runner must come from a preinstalled binary or a source build.\n'
+          fi
+          install_build_tool_with_homebrew() {
+            local formula="$1"
+            if brew install "$formula"; then
+              return 0
+            fi
+            if [[ "$MACOS_ARCH" == x86_64 ]]; then
+              printf '::error::Homebrew could not install %s on Intel (x86_64) macOS. Homebrew no longer builds bottles for this configuration, so this workflow needs a non-Homebrew %s (preinstalled binary, pinned release download or source build) before the Intel installer can be built; product behaviour is unchanged (FAR-2479).\n' "$formula" "$formula" >&2
+            else
+              printf '::error::Homebrew could not install %s on %s macOS (see the brew output above).\n' "$formula" "$MACOS_ARCH" >&2
+            fi
+            return 1
+          }
+          if ! brew update; then
+            if [[ "$MACOS_ARCH" == x86_64 ]]; then
+              printf '::error::brew update failed on Intel (x86_64) macOS, a Homebrew Tier-3 configuration that no longer receives bottles; refresh or replace this toolchain before rebuilding the Intel installer (FAR-2479).\n' >&2
+            else
+              printf '::error::brew update failed on %s macOS (see the brew output above).\n' "$MACOS_ARCH" >&2
+            fi
+            exit 1
+          fi
+          install_build_tool_with_homebrew shellcheck
+          command -v shellcheck >/dev/null 2>&1 || {
+            printf '::error::shellcheck is not on PATH after installation (arch=%s)\n' "$MACOS_ARCH" >&2
+            exit 1
+          }
           shellcheck --version
           clang --version
           sw_vers
@@ -224,7 +258,7 @@ jobs:
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
@@ -351,7 +385,7 @@ jobs:
           # files and downloaded tarballs are not needed once the .app exists:
           # signing, DMG creation and the smoke suite all read the bundle only.
           # Removing them here is worth roughly a gigabyte before the largest
-          # copies in the job (DMG, DMG-with-spaces duplicate, installed app).
+          # copies in the job (DMG, DMG-with-spaces, installed app).
           reclaim_build_sources() {
             local path free_before free_after
             free_before="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
@@ -443,6 +477,117 @@ jobs:
 
           OWNED_PIDS="$DATA/owned-pids"
 
+          # Teardown for the processes THIS smoke install started. The installed
+          # launcher starts bundled Postgres and Redis as children in their own
+          # sessions; `launchctl unload` stops the launcher but not always its
+          # child tree, and Postgres answers SIGTERM with a "smart" shutdown that
+          # waits for connected clients indefinitely. Stop them with a bounded
+          # escalation (TERM, bounded grace, then SIGKILL) and never signal a
+          # process this run does not own (FAR-2478).
+          #
+          # BEGIN stop_owned_processes (extracted verbatim by test_macos_installer_normalize)
+          owned_pid_is_alive() {
+            local pid="$1" state=''
+            [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+            # /proc (Linux and MSYS) exposes the process state, so a zombie -
+            # already stopped, merely not yet reaped - is not "alive".
+            if [[ -r "/proc/$pid/stat" ]]; then
+              state="$(sed -n 's/^[0-9]* (.*) \([A-Za-z]\).*/\1/p' "/proc/$pid/stat" 2>/dev/null || true)"
+              case "$state" in
+                ''|Z|z) return 1 ;;
+                *) return 0 ;;
+              esac
+            fi
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [[ -n "$state" ]]; then
+              case "$state" in
+                Z*|z*) return 1 ;;
+                *) return 0 ;;
+              esac
+            fi
+            kill -0 "$pid" 2>/dev/null
+          }
+
+          list_owned_processes() {
+            local data_dir="$1"
+            # Same ownership predicate the no_owned_postgres_redis gate asserts:
+            # a process belongs to this smoke install only when its command line
+            # references this run's data directory.
+            command -v pgrep >/dev/null 2>&1 || return 0
+            {
+              pgrep -f "$data_dir/pgdata" 2>/dev/null || true
+              pgrep -f "$data_dir/.*redis" 2>/dev/null || true
+            } | sort -u
+          }
+
+          signal_owned_process() {
+            local pid="$1" signame="$2" pgid=''
+            # The launcher starts each child in its own session, so a child that
+            # is its own process-group leader takes its descendants with it. Only
+            # signal the group when ps proves that relationship; otherwise signal
+            # the single PID.
+            pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [[ "$pgid" =~ ^[0-9]+$ && "$pgid" == "$pid" ]]; then
+              kill -s "$signame" -- "-$pgid" 2>/dev/null || true
+            fi
+            kill -s "$signame" "$pid" 2>/dev/null || true
+          }
+
+          stop_owned_processes() {
+            local pid_file="$1" data_dir="$2" grace_seconds="${3:-5}"
+            local pid attempt survivors=0
+            local -a owned=()
+            # shellcheck disable=SC2046 # word splitting over both PID sources is intended
+            for pid in $(cat "$pid_file" 2>/dev/null || true) $(list_owned_processes "$data_dir"); do
+              [[ "$pid" =~ ^[0-9]+$ ]] || continue
+              [[ "$pid" == "$$" || "$pid" == "$PPID" ]] && continue
+              owned+=("$pid")
+            done
+            [[ "${#owned[@]}" -gt 0 ]] || return 0
+
+            for pid in "${owned[@]}"; do
+              owned_pid_is_alive "$pid" || continue
+              signal_owned_process "$pid" TERM
+            done
+            attempt=0
+            while [[ "$attempt" -lt "$grace_seconds" ]]; do
+              survivors=0
+              for pid in "${owned[@]}"; do
+                owned_pid_is_alive "$pid" && survivors=1
+              done
+              [[ "$survivors" -eq 0 ]] && break
+              sleep 1
+              attempt=$((attempt + 1))
+            done
+            # Escalate: Postgres' SIGTERM shutdown is "smart" and can wait for an
+            # open client forever, so anything still alive after the grace window
+            # is SIGKILLed (its owned session first, when it is the leader).
+            for pid in "${owned[@]}"; do
+              owned_pid_is_alive "$pid" || continue
+              printf 'stop_owned_processes: escalating to SIGKILL pid=%s\n' "$pid" >&2
+              signal_owned_process "$pid" KILL
+            done
+            attempt=0
+            while [[ "$attempt" -lt 5 ]]; do
+              survivors=0
+              for pid in "${owned[@]}"; do
+                owned_pid_is_alive "$pid" && survivors=1
+              done
+              [[ "$survivors" -eq 0 ]] && break
+              sleep 1
+              attempt=$((attempt + 1))
+            done
+            survivors=0
+            for pid in "${owned[@]}"; do
+              if owned_pid_is_alive "$pid"; then
+                printf '::error::stop_owned_processes could not stop owned PID %s (data_dir=%s)\n' "$pid" "$data_dir" >&2
+                survivors=$((survivors + 1))
+              fi
+            done
+            [[ "$survivors" -eq 0 ]]
+          }
+          # END stop_owned_processes
+
           cleanup() {
 
             local original_status="${1:-0}"
@@ -491,31 +636,8 @@ jobs:
               rm -f "$PLIST" 2>/dev/null || true
 
               owned_processes_ok=1
-              if [[ -s "$OWNED_PIDS" ]]; then
-                while IFS= read -r owned_pid; do
-                  if [[ ! "$owned_pid" =~ ^[0-9]+$ ]]; then
-                    echo "::error::cleanup found invalid owned process PID: $owned_pid" >&2
-                    owned_processes_ok=0
-                    continue
-                  fi
-                  kill -TERM "$owned_pid" >/dev/null 2>&1 || true
-                done < "$OWNED_PIDS"
-                for _attempt in 1 2 3 4 5 6 7 8 9 10; do
-                  still_running=0
-                  while IFS= read -r owned_pid; do
-                    [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
-                    if kill -0 "$owned_pid" >/dev/null 2>&1; then still_running=1; fi
-                  done < "$OWNED_PIDS"
-                  [[ "$still_running" -eq 0 ]] && break
-                  sleep 1
-                done
-                while IFS= read -r owned_pid; do
-                  [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
-                  if kill -0 "$owned_pid" >/dev/null 2>&1; then
-                    echo "::error::cleanup could not stop owned Modulo child PID $owned_pid" >&2
-                    owned_processes_ok=0
-                  fi
-                done < "$OWNED_PIDS"
+              if ! stop_owned_processes "$OWNED_PIDS" "$DATA" 5; then
+                owned_processes_ok=0
               fi
               if [[ "$owned_processes_ok" -eq 1 ]]; then
                 cleanup_result owned_processes ok
@@ -728,6 +850,34 @@ jobs:
                 return "$exit_code"
               fi
             }
+
+          # BEGIN spa_root_html_ready (extracted verbatim by test_macos_installer_normalize)
+          # The launcher serves the API before the built SPA assets finish
+          # loading, so a single request right after /healthz can receive the API
+          # root body (`{"status":"ok"}`) instead of index.html. Poll until the
+          # SPA entry document is actually served; the API root is NOT evidence
+          # the SPA works, so it never satisfies this gate (FAR-2479).
+          spa_root_html_ready() {
+            local url="$1" attempts="${2:-60}" interval="${3:-1}"
+            local attempt=1 body=''
+            while [[ "$attempt" -le "$attempts" ]]; do
+              body="$(curl --fail --silent --show-error --max-time 2 "$url" 2>/dev/null || true)"
+              if grep -Fq '<div id="app">' <<< "$body"; then
+                printf 'spa_root_html: served after %d attempt(s)\n' "$attempt"
+                return 0
+              fi
+              if [[ -n "$body" ]]; then
+                printf 'spa_root_html: attempt %d/%d is not the SPA entry document (body starts: %.60s)\n' \
+                  "$attempt" "$attempts" "$body" >&2
+              fi
+              attempt=$((attempt + 1))
+              [[ "$attempt" -le "$attempts" ]] || break
+              [[ "$interval" == "0" ]] || sleep "$interval"
+            done
+            printf 'spa_root_html: SPA entry document not served after %d attempt(s)\n' "$attempts" >&2
+            return 1
+          }
+          # END spa_root_html_ready
 
           # shellcheck disable=SC2016
           run_pre_smoke data_directory_create prepare_data_directory
@@ -1076,20 +1226,32 @@ jobs:
           # Apple's notarization ticket can take time to propagate to CloudKit after
           # notarytool accepts the submission. Run 41127149139 observed "Record not found"
           # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
-          # DMG stapling is best-effort: up to 6 retries, 20s delay. Failure is logged but
-          # does not fail the build when stapler reports only ticket propagation/network trouble.
+          # DMG stapling is best-effort: exponential backoff (20s, 40s, 80s, 160s, 320s, 600s cap),
+          # max 10 attempts with +/-25% jitter. Failure is logged but does not fail the build
+          # when stapler reports only ticket propagation/network trouble.
           staple_dmg_with_retry() {
-            local attempt
-            for attempt in 1 2 3 4 5 6; do
+            local attempt=1 max_attempts=10 base_delay=20 max_delay=600
+            local wait_time jitter
+            while [[ "$attempt" -le "$max_attempts" ]]; do
               if xcrun stapler staple "$DMG"; then
+                printf 'staple_dmg_with_retry: attempt=%d success\n' "$attempt"
                 return 0
               fi
-              if [[ "$attempt" -lt 6 ]]; then
-                sleep 20
+              printf 'staple_dmg_with_retry: attempt=%d failed\n' "$attempt"
+              if [[ "$attempt" -lt "$max_attempts" ]]; then
+                wait_time=$(( base_delay * (2 ** (attempt - 1)) ))
+                [[ "$wait_time" -gt "$max_delay" ]] && wait_time="$max_delay"
+                # Add +/-25% jitter
+                jitter=$(( wait_time / 4 ))
+                wait_time=$(( wait_time + RANDOM % (2 * jitter + 1) - jitter ))
+                printf 'staple_dmg_with_retry: waiting %ds before retry (attempt %d/%d)\n' "$wait_time" "$attempt" "$max_attempts"
+                sleep "$wait_time"
               fi
+              attempt=$((attempt + 1))
             done
             return 1
           }
+
           dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
           dmg_staple_ticket_unavailable=0
           rm -f "$dmg_staple_output_file"
@@ -1319,8 +1481,11 @@ jobs:
            run_assertion "healthz_endpoint" \
              curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" || exit 1
 
-           run_assertion "spa_root_html" \
-             bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\''' || exit 1
+            # Readiness poll (not a single request): the API can answer before
+            # the SPA build is served, and a bare API-root body must never pass
+            # this gate (FAR-2479).
+            run_assertion "spa_root_html" \
+              spa_root_html_ready "http://127.0.0.1:${API_PORT}/" 60 1 || exit 1
 
            # Service PID / binary identity
            # shellcheck disable=SC2016
@@ -1411,24 +1576,32 @@ jobs:
            run_assertion "launchctl_unload" \
              launchctl unload -w "$PLIST" || exit 1
 
-           # shellcheck disable=SC2016
-           run_assertion "launchagent_gone_after_unload" bash -c '
+            # shellcheck disable=SC2016
+            run_assertion "launchagent_gone_after_unload" bash -c '
+              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
+            ' || exit 1
+
+            # Stop the Postgres/Redis children the installed launcher started
+            # BEFORE asserting they are gone. `launchctl unload` stops the
+            # launcher but not necessarily its child tree, and Postgres' SIGTERM
+            # shutdown can wait indefinitely on an open client. This is a hard
+            # gate: the no_owned_postgres_redis assertion below still re-checks
+            # the real end state (FAR-2478).
+            run_assertion "stop_owned_processes" \
+              stop_owned_processes "$OWNED_PIDS" "$DATA" 5 || exit 1
+
+            # shellcheck disable=SC2016
+            run_assertion "launchagent_gone_after_cleanup" bash -c '
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
            ' || exit 1
 
-           # shellcheck disable=SC2016
-           run_assertion "launchagent_gone_after_cleanup" bash -c '
-             ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
-           ' || exit 1
+            run_assertion "no_owned_modulo_processes" bash -c '
+              ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
+            ' || exit 1
 
-           run_assertion "no_owned_modulo_processes" bash -c '
-             ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
-           ' || exit 1
-
-           run_assertion "no_owned_postgres_redis" bash -c '
-             ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
-           ' || exit 1
-
+            run_assertion "no_owned_postgres_redis" bash -c '
+              ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
+            ' || exit 1
 
       - name: Upload real macOS installer
         if: ${{ env.RUN_NATIVE_BUILD == 'true' }}

@@ -7,100 +7,28 @@ Verifies all 12 SCIM route handlers return correct error status codes:
 """
 
 import uuid
-from collections.abc import AsyncGenerator, Generator
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Callable
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.routes.scim import get_scim_audit_principal
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
-
-_NOW = datetime(2025, 1, 1, tzinfo=UTC)
-
-_VALID_32 = "a" * 32
-_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
-_SCIM_TOKEN = "test-scim-token-12345"
-
-
-@pytest.fixture(autouse=True)
-def stub_scim_audit() -> Generator[None, None, None]:
-    """FAR-1472: stub the fresh ``audit_session`` (no DB in the unit tier) and the
-    SCIM actor resolver the fail-closed ``audited(...)`` dependency needs; the
-    dependency itself still runs."""
-    from modulo.api.main import app
-
-    async def _audit_session() -> AsyncGenerator[AsyncMock, None]:
-        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
-        yield session
-
-    async def _audit_principal() -> TenantPrincipal:
-        return TenantPrincipal(
-            username="scim",
-            organisation_id=_ORG_ID,
-            account_id=_USER_ID,
-            org_role="admin",
-        )
-
-    app.dependency_overrides[audit_session] = _audit_session
-    app.dependency_overrides[get_scim_audit_principal] = _audit_principal
-    yield
-    app.dependency_overrides.pop(audit_session, None)
-    app.dependency_overrides.pop(get_scim_audit_principal, None)
-
-
-_MOCK_USER = MagicMock()
-_MOCK_USER.id = _USER_ID
-_MOCK_USER.organisation_id = _ORG_ID
-_MOCK_USER.email = "jane@example.com"
-_MOCK_USER.display_name = "Jane Doe"
-_MOCK_USER.active = True
-_MOCK_USER.org_role = "runner"
-_MOCK_USER.auth_provider = "scim"
-_MOCK_USER.created_at = _NOW
-_MOCK_USER.updated_at = _NOW
+from tests.unit.scim.helpers import (
+    AUTH_HEADERS,
+    GROUP_CREATE_BODY,
+    PATCH_USER_BODY,
+    TEAM_ID,
+    USER_CREATE_BODY,
+    USER_ID,
+    make_settings,
+    make_user,
+)
 
 _PROGRAMMING_ERROR = ProgrammingError("mock statement", [], Exception("mock table does not exist"))
 _SQLALCHEMY_ERROR = SQLAlchemyError("mock", "connection error", Exception("mock connection failure"))
 
-
-def _make_settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key=_VALID_32,
-        fernet_key=_VALID_32,
-        modulo_admin_password="testpass",
-        modulo_license_key="team-license",
-        modulo_scim_token=_SCIM_TOKEN,
-        modulo_public_url="http://localhost:8000",
-    )
-
-
-def _make_mock_session() -> MagicMock:
-    session = MagicMock()
-    session.execute = AsyncMock(return_value=MagicMock())
-    session.flush = AsyncMock()
-    session.delete = AsyncMock()
-    session.rollback = AsyncMock()
-    session.refresh = AsyncMock()
-    begin_cm = MagicMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-    return session
+_MOCK_USER = make_user()
 
 
 class _AllFeatures:
@@ -122,70 +50,38 @@ async def _override_plan_context() -> _AllFeatures:
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    from modulo.api.main import app
+def client(scim_client: Callable[..., TestClient]) -> TestClient:
+    return scim_client(plan_context=_override_plan_context)
 
-    mock_session = _make_mock_session()
-
-    async def override_session() -> AsyncGenerator[MagicMock, None]:
-        yield mock_session
-
-    app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-    app.dependency_overrides[get_scim_plan_context] = _override_plan_context
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-_USER_CREATE_BODY = {
-    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
-    "userName": "jane@example.com",
-    "name": {"givenName": "Jane", "familyName": "Doe"},
-    "emails": [{"value": "jane@example.com", "primary": True}],
-    "active": True,
-}
-
-_GROUP_CREATE_BODY = {
-    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
-    "displayName": "Engineering",
-    "members": [{"value": str(_USER_ID), "type": "User"}],
-}
-
-_PATCH_BODY = {
-    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-    "Operations": [{"op": "replace", "path": "active", "value": False}],
-}
 
 _SCIM_ROUTES: list[tuple[str, str, str, str | None, object]] = [
     ("list_users", "GET", "/scim/v2/Users", "modulo.api.routes.scim.scim_list_users", None),
-    ("create_user", "POST", "/scim/v2/Users", "modulo.db.crud.account.get_account_by_email", _USER_CREATE_BODY),
+    ("create_user", "POST", "/scim/v2/Users", "modulo.db.crud.account.get_account_by_email", USER_CREATE_BODY),
     ("get_user", "GET", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", None),
-    ("replace_user", "PUT", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", _USER_CREATE_BODY),
-    ("patch_user", "PATCH", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", _PATCH_BODY),
+    ("replace_user", "PUT", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", USER_CREATE_BODY),
+    ("patch_user", "PATCH", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", PATCH_USER_BODY),
     ("delete_user", "DELETE", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_delete_user_by_id", None),
     ("list_groups", "GET", "/scim/v2/Groups", "modulo.api.routes.scim.scim_list_groups", None),
-    ("create_group", "POST", "/scim/v2/Groups", "modulo.db.crud.team.get_team_by_name", _GROUP_CREATE_BODY),
+    ("create_group", "POST", "/scim/v2/Groups", "modulo.db.crud.team.get_team_by_name", GROUP_CREATE_BODY),
     ("get_group", "GET", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", None),
-    ("replace_group", "PUT", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", _GROUP_CREATE_BODY),
-    ("patch_group", "PATCH", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", _PATCH_BODY),
+    ("replace_group", "PUT", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", GROUP_CREATE_BODY),
+    ("patch_group", "PATCH", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", PATCH_USER_BODY),
     ("delete_group", "DELETE", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_delete_group_by_id", None),
 ]
 
 _ENTITY_IDS: dict[str, uuid.UUID | None] = {
     "list_users": None,
     "create_user": None,
-    "get_user": _USER_ID,
-    "replace_user": _USER_ID,
-    "patch_user": _USER_ID,
-    "delete_user": _USER_ID,
+    "get_user": USER_ID,
+    "replace_user": USER_ID,
+    "patch_user": USER_ID,
+    "delete_user": USER_ID,
     "list_groups": None,
     "create_group": None,
-    "get_group": _TEAM_ID,
-    "replace_group": _TEAM_ID,
-    "patch_group": _TEAM_ID,
-    "delete_group": _TEAM_ID,
+    "get_group": TEAM_ID,
+    "replace_group": TEAM_ID,
+    "patch_group": TEAM_ID,
+    "delete_group": TEAM_ID,
 }
 
 
@@ -226,19 +122,19 @@ class TestScimDatabaseErrors:
             patch(
                 "modulo.api.routes.scim._resolve_scim_admin_caller",
                 new_callable=AsyncMock,
-                return_value=_USER_ID,
+                return_value=USER_ID,
             ),
         ):
             if method == "GET":
-                resp = client.get(url, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+                resp = client.get(url, headers=AUTH_HEADERS)
             elif method == "POST":
-                resp = client.post(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+                resp = client.post(url, json=body, headers=AUTH_HEADERS)
             elif method == "PUT":
-                resp = client.put(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+                resp = client.put(url, json=body, headers=AUTH_HEADERS)
             elif method == "PATCH":
-                resp = client.patch(url, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+                resp = client.patch(url, json=body, headers=AUTH_HEADERS)
             elif method == "DELETE":
-                resp = client.delete(url, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+                resp = client.delete(url, headers=AUTH_HEADERS)
 
         assert resp.status_code == expected_status, f"Expected {expected_status}, got {resp.status_code}"
         if detail_check:
@@ -246,57 +142,33 @@ class TestScimDatabaseErrors:
             assert detail_check in detail.lower(), f"Expected detail mentioning '{detail_check}', got: {detail}"
 
 
-# ── _get_base_url tests (unique setup — no scim token configured) ─────────
-
-
-def _make_settings_no_public_url() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key=_VALID_32,
-        fernet_key=_VALID_32,
-        modulo_admin_password="testpass",
-        modulo_license_key="team-license",
-        modulo_scim_token=_SCIM_TOKEN,
-        modulo_public_url="",
-    )
+# ── _get_base_url tests (unique setup — no public URL configured) ─────────
 
 
 class TestGetBaseUrl:
     """_get_base_url raises 500 when modulo_public_url is not configured."""
 
-    def _setup(self) -> TestClient:
-        from modulo.api.main import app
+    @pytest.fixture
+    def client(self, scim_client: Callable[..., TestClient]) -> TestClient:
+        return scim_client(
+            settings=lambda: make_settings(modulo_public_url=""),
+            plan_context=_override_plan_context,
+        )
 
-        app.dependency_overrides[get_settings] = _make_settings_no_public_url
-        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
-        app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_scim_plan_context] = _override_plan_context
-        return TestClient(app)
-
-    def _teardown(self) -> None:
-        from modulo.api.main import app
-
-        app.dependency_overrides.clear()
-
-    def test_list_users_returns_500(self) -> None:
-        client = self._setup()
+    def test_list_users_returns_500(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        self._teardown()
+            resp = client.get("/scim/v2/Users", headers=AUTH_HEADERS)
         assert resp.status_code == 500
         assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")
 
-    def test_get_user_returns_500(self) -> None:
-        client = self._setup()
+    def test_get_user_returns_500(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.get(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        self._teardown()
+            resp = client.get(f"/scim/v2/Users/{USER_ID}", headers=AUTH_HEADERS)
         assert resp.status_code == 500
         assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")

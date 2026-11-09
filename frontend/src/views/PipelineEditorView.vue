@@ -117,6 +117,12 @@
               {{ $t('views.PipelineEditorView.version_chip_unavailable') }}
             </button>
           </div>
+          <!-- FAR-2463: read-only governance state derived from the pipeline
+               record this view already loads: the autonomy ceiling, the
+               configured concurrency cap and the spend circuit-breaker
+               threshold. Live run counts and current spend are NOT loaded
+               here, so neither is ever rendered. -->
+          <PipelineGovernanceVisibility :pipeline="pipeline" mode="toolbar" />
           <span :class="groupDividerClass" />
           <!-- Group: graph file actions -->
           <div class="flex items-center gap-1.5" role="group" :aria-label="$t('views.PipelineEditorView.toolbar_primary_actions')" data-testid="pipeline-editor-toolbar-group-file">
@@ -886,12 +892,16 @@
              `tabindex="-1"` makes it the focus-restore fallback for a properties
              sheet whose trigger (a VueFlow node/edge wrapper) is not focusable
              (FAR-1861). -->
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- canvas keyboard region: focus owner for arrow navigation, nudge and the command palette -->
         <div
           v-show="!compareMode"
           ref="canvasRef"
           class="relative min-h-[8rem] flex-1"
-          tabindex="-1"
+          tabindex="0"
+          role="group"
+          :aria-label="$t('views.PipelineEditorView.canvas_keyboard_label')"
           data-testid="pipeline-editor-canvas"
+          @keydown="onCanvasKeydown"
         >
         <!-- Empty-state overlay on top of the canvas (latest mode only — its
              rename/archive/delete/add-node row is all write affordances, so a
@@ -900,9 +910,13 @@
           <div class="text-center">
             <h2 class="text-xl font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_fallback_title') }}</h2>
             <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
-            <p class="mt-4 text-sm italic text-muted-foreground select-none">{{ $t('views.PipelineEditorView.empty_state_hint') }}</p>
+            <p class="mt-4 max-w-xl text-sm text-muted-foreground">{{ $t('views.PipelineEditorView.empty_state_onboarding') }}</p>
+            <div class="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+              <span class="rounded-full border border-input bg-background px-2.5 py-1">{{ $t('views.PipelineEditorView.empty_state_manual_hint') }}</span>
+              <span class="rounded-full border border-input bg-background px-2.5 py-1">{{ $t('views.PipelineEditorView.empty_state_agent_hint') }}</span>
+            </div>
           </div>
-          <div class="flex items-center gap-2 pointer-events-auto">
+          <div class="flex flex-wrap items-center justify-center gap-2 pointer-events-auto">
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
@@ -917,8 +931,51 @@
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
               data-testid="pipeline-editor-empty-node-type-select"
             />
-            <Button severity="secondary" outlined size="small" type="button" class="text-xs" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <Button severity="secondary" outlined size="small" type="button" class="text-xs" data-testid="pipeline-editor-empty-add-node" @click="addNode()">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-show-me" @click="startEmptyStateWalkthrough">{{ $t('views.PipelineEditorView.empty_state_show_me') }}</button>
+            <button type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-template" @click="openTemplateLibrary">{{ $t('views.PipelineEditorView.empty_state_start_from_template') }}</button>
           </div>
+        </div>
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- palette keyboard region: Escape works from any palette control, including the option buttons -->
+        <div
+          v-if="canvasPaletteOpen"
+          class="absolute left-4 top-4 z-30 w-80 rounded-lg border border-border bg-card p-3 shadow-xl"
+          role="dialog"
+          aria-modal="false"
+          :aria-label="$t('views.PipelineEditorView.canvas_command_palette')"
+          data-testid="pipeline-editor-command-palette"
+          @keydown="onCanvasPaletteKeydown"
+        >
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.canvas_command_palette') }}</h2>
+            <kbd class="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ $t('views.PipelineEditorView.canvas_command_escape_key') }}</kbd>
+          </div>
+          <input
+            ref="canvasPaletteInputRef"
+            v-model="canvasPaletteQuery"
+            type="search"
+            class="mb-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+            :aria-label="$t('views.PipelineEditorView.canvas_command_search')"
+            :placeholder="$t('views.PipelineEditorView.canvas_command_search')"
+            data-testid="pipeline-editor-command-palette-input"
+          />
+          <ul role="listbox" class="max-h-56 overflow-y-auto" data-testid="pipeline-editor-command-palette-list">
+            <li v-for="(command, index) in filteredCanvasCommands" :key="command.id">
+              <button
+                type="button"
+                class="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                :class="{ 'bg-accent': index === canvasPaletteIndex }"
+                :aria-selected="index === canvasPaletteIndex"
+                role="option"
+                :data-testid="'pipeline-editor-command-option-' + command.id"
+                @click="runCanvasCommand(command.id)"
+              >
+                <span>{{ command.label }}</span>
+                <kbd class="text-[10px] text-muted-foreground">{{ command.shortcut }}</kbd>
+              </button>
+            </li>
+            <li v-if="filteredCanvasCommands.length === 0" class="px-2 py-4 text-center text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.canvas_command_no_results') }}</li>
+          </ul>
         </div>
         <!-- Run dialog modal -->
         <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- modal backdrop: needs keyboard Escape handler for accessible dismissal -->
@@ -1004,8 +1061,9 @@
           v-model:edges="displayEdges"
           :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
-          :fit-view-on-init="false"
-          :source-position="Position.Right"
+           :fit-view-on-init="false"
+           :only-render-visible-elements="displayNodes.length >= PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD"
+           :source-position="Position.Right"
           :target-position="Position.Left"
           :nodes-draggable="!isViewing"
           :nodes-connectable="!isViewing"
@@ -1020,67 +1078,18 @@
         >
           <Background :gap="20" :size="1" />
           <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-connection-announcement">{{ connectionAnnouncement }}</output>
+          <output class="sr-only" aria-live="polite" data-testid="pipeline-editor-canvas-announcement">{{ canvasAnnouncement }}</output>
           <FlowControls :show-interactive="false" />
-          <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                  </div></template>
-          <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary-text">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                    <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
-                  </div></template>
-          <!-- Router/HITL cards carry a non-colour affordance too: a dashed
-               border + branch glyph and a double border + gate glyph. The
-               badges already name the kind, so the shape survives greyscale
-               and colour-vision differences. -->
-          <template #node-router="nodeProps"><div class="rounded-lg rounded-r-3xl border-2 border-dashed border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-router">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M6 8v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8M12 13v3" /></svg>
-                      {{ $t('views.PipelineEditorView.node_router_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
-                  </div></template>
-          <template #node-hitl="nodeProps"><div class="rounded-lg border-4 border-double border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description" data-testid="pipeline-node-hitl">
-                    <div class="flex items-center gap-1.5 font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">
-                      <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 10-4-2.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
-                      {{ $t('views.PipelineEditorView.node_hitl_badge') }}
-                    </div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
-                  </div></template>
-          <!-- FAR-1141: dispatch nodes render with their own badge/colour.
-               Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
-               to this canvas type; without that entry the node would be
-               emitted as an `agent` node and this slot would never render.
-               Display only — no config panel or palette entry in this slice. -->
-          <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
-                  </div></template>
-          <!-- FAR-2089: connector nodes render with their own badge/colour
-               instead of the generic `agent` card. Reachable because
-               CANVAS_TYPE_BY_BACKEND_TYPE maps 'connector' to this canvas
-               type; without that entry the node would be emitted as an
-               `agent` node and this slot would never render. Display only —
-               no config panel or palette entry in this slice. -->
-          <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
-                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
-                  </div></template>
+          <template #node-default="nodeProps">
+            <component
+              :is="nodeComponent(nodeProps.type)"
+              :data="nodeProps.data"
+              :selected="nodeProps.selected"
+              :id="nodeProps.id"
+            />
+          </template>
           <template #edge-default="edgeProps">
-            <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                {{ $t('views.PipelineEditorView.loop') }}{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
-              </span>
-            </div>
-            <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
-              <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
-                {{ $t('views.PipelineEditorView.llm_badge') }}{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
-              </span>
-            </div>
+            <EdgeBadges :data="edgeProps.data" />
           </template>
         </VueFlow>
         </div>
@@ -1178,6 +1187,78 @@
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
             <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
+          <!-- FAR-1395: connector query/write authoring. A connector node's whole
+               job is its binding, so the instance, verb, resource and
+               filters/data are first-class controls here — the same shape
+               ConnectorBinding validates on REST and MCP. -->
+          <template v-if="selectedNodeData.node_type === 'connector'">
+            <div>
+              <label for="pipeline-editor-connector-node-instance" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</label>
+              <select
+                id="pipeline-editor-connector-node-instance"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.instance_id || ''"
+                data-testid="pipeline-editor-connector-node-instance"
+                @change="onConnectorNodeInstanceChange"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.connector_node_select_connector') }}</option>
+                <option v-for="c in connectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-operation" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_operation') }}</label>
+              <select
+                id="pipeline-editor-connector-node-operation"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :disabled="isViewing"
+                :value="selectedNodeData.connector_binding?.operation || 'query'"
+                data-testid="pipeline-editor-connector-node-operation"
+                @change="onConnectorNodeOperationChange"
+              >
+                <option value="query">{{ $t('views.PipelineEditorView.connector_node_operation_query') }}</option>
+                <option value="write">{{ $t('views.PipelineEditorView.connector_node_operation_write') }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-resource" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_resource') }}</label>
+              <input
+                id="pipeline-editor-connector-node-resource"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                :readonly="isViewing"
+                :value="selectedNodeData.connector_binding?.resource || ''"
+                :placeholder="$t('views.PipelineEditorView.connector_node_resource_placeholder')"
+                data-testid="pipeline-editor-connector-node-resource"
+                @input="onConnectorNodeResourceInput"
+              />
+              <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.connector_node_resource_hint') }}</p>
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-filters" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_filters') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-filters"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeFiltersText"
+                data-testid="pipeline-editor-connector-node-filters"
+                @input="onConnectorNodeJsonInput('filters', $event)"
+              />
+            </div>
+            <div>
+              <label for="pipeline-editor-connector-node-data" class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector_node_data') }}</label>
+              <textarea
+                id="pipeline-editor-connector-node-data"
+                class="mt-1 w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                rows="3"
+                :readonly="isViewing"
+                :value="connectorNodeDataText"
+                data-testid="pipeline-editor-connector-node-data"
+                @input="onConnectorNodeJsonInput('data', $event)"
+              />
+            </div>
+            <p v-if="connectorNodeJsonError" role="alert" class="text-[11px] text-destructive" data-testid="pipeline-editor-connector-node-json-error">{{ connectorNodeJsonError }}</p>
+          </template>
           <!-- Agent node: Agent details -->
           <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
             <div>
@@ -2147,7 +2228,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, markRaw, provide, type Component } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -2156,7 +2237,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
-import { trapTabInElement } from '../composables/useFocusTrap'
+import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
@@ -2171,7 +2252,17 @@ import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
+import ManualNode from '../components/pipeline/nodes/ManualNode.vue'
+import AgentNode from '../components/pipeline/nodes/AgentNode.vue'
+import RouterNode from '../components/pipeline/nodes/RouterNode.vue'
+import HitlNode from '../components/pipeline/nodes/HitlNode.vue'
+import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
+import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
+import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
+import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
+import { projectGraphNode } from '../types/pipeline-graph-projection'
 import { shortId } from '../utils/format'
+import { doesNodeHaveCapabilityScope } from '../utils/pipeline-graph'
 import {
   isBlockingSeverity,
   readBreakingChanges,
@@ -2184,8 +2275,12 @@ import {
 import { formatDateShort } from '../lib/formatDate'
 import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
-import { CANVAS_EDGE_STROKE } from '../constants/canvas'
-import { layoutNodes } from '../utils/graph-layout'
+import { CANVAS_EDGE_STROKE, PIPELINE_EDITOR_VIRTUALIZATION_THRESHOLD } from '../constants/canvas'
+import {
+  layoutNodes,
+  layoutNodesIncrementalWithBaseline,
+  type ProvenanceMap,
+} from '../utils/graph-layout'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { validateCanonicalGraph, type CanonicalPipelineGraphUpdate } from '../types/pipeline-graph'
@@ -2194,6 +2289,7 @@ import type { LocationQueryRaw } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { spotlight } from '../composables/useSpotlight'
 import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
@@ -2201,6 +2297,7 @@ import { currentSubstantiveVersion, NON_VERSION_CREATED_KINDS, SNAPSHOT_PAGE_SIZ
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon } from '@lucide/vue'
+import PipelineGovernanceVisibility from '../components/pipeline/PipelineGovernanceVisibility.vue'
 
 // The legacy useApi `post` helper aborted every request after 30s; the typed
 // client has no deadline of its own, so the archive/pause toggles keep the
@@ -2255,12 +2352,64 @@ const singlePrPerRun = computed<boolean>({
   },
 })
 const selectedEdgeData = ref<any>(null)
+const canvasPaletteOpen = ref(false)
+const canvasPaletteQuery = ref('')
+const canvasPaletteIndex = ref(0)
+const canvasPaletteInputRef = ref<HTMLInputElement | null>(null)
+const keyboardConnectSourceId = ref<string | null>(null)
+// Only read actions survive in the historic (read-only) view: every write
+// command is a mutation of the live graph, which that view must never offer.
+const canvasCommands = computed(() => {
+  const writeCommands = [
+    { id: 'add-node', label: t('views.PipelineEditorView.canvas_command_add_node'), shortcut: 'A' },
+    { id: 'connect', label: t('views.PipelineEditorView.canvas_command_connect'), shortcut: 'E' },
+    { id: 'arrange', label: t('views.PipelineEditorView.canvas_command_arrange'), shortcut: '' },
+    { id: 'toggle-hitl', label: t('views.PipelineEditorView.canvas_command_toggle_hitl'), shortcut: '' },
+  ]
+  const readCommands = [
+    { id: 'fit', label: t('views.PipelineEditorView.canvas_command_fit'), shortcut: '' },
+    { id: 'timeline', label: t('views.PipelineEditorView.canvas_command_timeline'), shortcut: '' },
+  ]
+  return isViewing.value ? readCommands : [...writeCommands, ...readCommands]
+})
+const filteredCanvasCommands = computed(() => {
+  const query = canvasPaletteQuery.value.trim().toLowerCase()
+  return query ? canvasCommands.value.filter((command) => command.label.toLowerCase().includes(query)) : canvasCommands.value
+})
+// Filtering shrinks the list, so a selection made before typing can point at a
+// command that no longer exists (or at a different one). Reset the selection
+// whenever the query changes so Enter always runs the highlighted command.
+watch(canvasPaletteQuery, () => {
+  canvasPaletteIndex.value = 0
+})
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownRef = ref<HTMLElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
-const { fitView, onPaneReady } = useVueFlow()
+// markRaw keeps the component objects out of Vue's reactivity system: VueFlow
+// stores `nodeTypes` in reactive state, and a proxied component triggers a
+// "Vue received a Component that was made a reactive object" render loop.
+const NODE_COMPONENTS: Record<string, Component> = {
+  manual: markRaw(ManualNode),
+  agent: markRaw(AgentNode),
+  router: markRaw(RouterNode),
+  hitl: markRaw(HitlNode),
+  dispatch: markRaw(DispatchNode),
+  connector: markRaw(ConnectorNode),
+}
+
+// VueFlow resolves each node's `type` through this object before rendering it.
+// Keep the editor's registry component-valued: the extracted node components
+// still own the shared card markup, badges, handles and selection state.
+const nodeTypes = Object.fromEntries(
+  Object.keys(NODE_REGISTRY).map((nodeType) => [nodeType, nodeComponent(nodeType)]),
+) as Record<string, Component>
+
+function nodeComponent(nodeType: string) {
+  return NODE_COMPONENTS[nodeType] ?? AgentNode
+}
+
+const { fitView, onPaneReady, addEdges } = useVueFlow()
 
 // Vue Flow renders edge geometry from these presentation options; semantic
 // edge metadata lives on each edge's `data` and is never affected.
@@ -2324,10 +2473,19 @@ interface ArrangeUndoSnapshot {
   flow: Record<string, PositionSnapshot>
   userOwned: boolean
   ownership: LayoutOwnership | undefined
+  /** The generated layout BEFORE the Arrange action (for incremental undo). */
+  generatedLayout: Record<string, PositionSnapshot>
+  /** Provenance of each node before the Arrange action. */
+  provenance: ProvenanceMap
 }
 
 const arrangeUndo = ref<ArrangeUndoSnapshot | null>(null)
+/** The last computed generated layout (before user drags). */
+const lastGeneratedLayout = ref<Record<string, PositionSnapshot>>({})
+/** Provenance of each node's current position: 'user' for manual drags, 'generated' for layout. */
+const nodeProvenance = ref<ProvenanceMap>({})
 const connectionAnnouncement = ref('')
+const canvasAnnouncement = ref('')
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
 // menu bar reads as one consistent control set (presentation only).
@@ -3418,6 +3576,83 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+// FAR-1395: connector-node authoring — the binding's query/write payload.
+// ``node_runner._connector_inputs`` reads ``resource`` / ``filters`` / ``data``
+// off the node's ``connector_binding``; without them a query falls back to
+// ``resource="command"``, which connectors do not serve, so a connector node
+// authored without these inputs could never complete a real run. The JSON
+// fields are edited as TEXT and only a parseable JSON object is committed to
+// the node, so a transiently-invalid draft never corrupts the graph.
+const connectorNodeFiltersText = ref('')
+const connectorNodeDataText = ref('')
+const connectorNodeJsonError = ref<string | null>(null)
+
+function loadConnectorNodeFields(node: any | null): void {
+  connectorNodeJsonError.value = null
+  const binding = node?.connector_binding
+  connectorNodeFiltersText.value = JSON.stringify(binding?.filters ?? {}, null, 2)
+  connectorNodeDataText.value = JSON.stringify(binding?.data ?? {}, null, 2)
+}
+
+function ensureConnectorNodeBinding(): any | null {
+  const node = selectedNodeData.value
+  if (!node) return null
+  if (!node.connector_binding || typeof node.connector_binding !== 'object') {
+    node.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  return node.connector_binding
+}
+
+function onConnectorNodeInstanceChange(event: Event): void {
+  if (isViewing.value) return
+  const id = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  const connector = connectors.value.find((c: any) => c.id === id)
+  binding.instance_id = id
+  binding.type = connector?.connector_type_id ?? ''
+  connectorNodeJsonError.value = null
+}
+
+function onConnectorNodeOperationChange(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLSelectElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding.operation = value === 'write' ? 'write' : 'query'
+}
+
+function onConnectorNodeResourceInput(event: Event): void {
+  if (isViewing.value) return
+  const value = (event.target as HTMLInputElement).value
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  if (value.trim()) binding.resource = value
+  else delete binding.resource
+}
+
+function onConnectorNodeJsonInput(field: 'filters' | 'data', event: Event): void {
+  if (isViewing.value) return
+  const text = (event.target as HTMLTextAreaElement).value
+  if (field === 'filters') connectorNodeFiltersText.value = text
+  else connectorNodeDataText.value = text
+  let parsed: unknown
+  try {
+    parsed = text.trim() === '' ? {} : JSON.parse(text)
+  } catch {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_invalid', { field })
+    return
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    connectorNodeJsonError.value = t('views.PipelineEditorView.connector_node_json_must_be_object', { field })
+    return
+  }
+  connectorNodeJsonError.value = null
+  const binding = ensureConnectorNodeBinding()
+  if (!binding) return
+  binding[field] = parsed
+}
+
 // FAR-437: node-level capability_scope authoring (narrow-not-widen)
 const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_tools: string[]; context_scope: string[] }>({
   allowed_connectors: [],
@@ -3426,13 +3661,6 @@ const nodeCapabilityScope = reactive<{ allowed_connectors: string[]; allowed_too
 })
 const capabilityToolInput = ref('')
 const capabilityContextInput = ref('')
-
-function doesNodeHaveCapabilityScope(node: any): boolean {
-  const cs = node?.capability_scope
-  if (!cs || typeof cs !== 'object') return false
-  return [cs.allowed_connectors, cs.allowed_tools, cs.context_scope]
-    .some((arr) => Array.isArray(arr) && arr.length > 0)
-}
 
 function nodeAgent(node: any): any {
   return agents.value.find((a: any) => a.id === node?.agent_id)
@@ -3598,39 +3826,23 @@ async function loadParamSets() {
 
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
-// Backend node types that map 1:1 onto their canvas type. Everything else
-// (including 'agent') collapses into the generic agent node — except dispatch
-// (FAR-1141) and connector (FAR-2089), which are first-class canvas types with
-// their own `#node-<type>` slot and must never be collapsed. Every canvas
-// node originates here — both loadGraph() and loadViewedSnapshot() map through
-// convertBackendNode — so this map is the single place that decides which
-// card a node renders as.
-// A Map (not an object literal) so an unknown node_type such as 'constructor'
-// or 'toString' cannot resolve to an inherited Object.prototype member — it
-// must fall through to 'agent', matching the original ternary chain.
-const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
-  ['manual', 'manual'],
-  ['router', 'router'],
-  ['hitl', 'hitl'],
-  ['dispatch', 'dispatch'],
-  ['connector', 'connector'],
-])
-
+// Backend node types map onto their canvas card through the shared projection
+// adapter (FAR-2475/FAR-2481) - the adapter delegates to the editor's node
+// registry, where dispatch (FAR-1141) and connector (FAR-2089) are first-class
+// card types that must never collapse into a generic agent node. Every canvas
+// node originates here - both loadGraph() and loadViewedSnapshot() map through
+// convertBackendNode.
 function convertBackendNode(n: any): any {
-  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE.get(n.node_type) ?? 'agent'
-  return {
-    id: n.id,
-    type: nodeType,
-    position: n.position || { x: 0, y: 0 },
-    data: {
-      label: n.label || 'Node ' + shortId(n.id),
-      description: n.description || '',
-      node_type: n.node_type,
-      parameter_set_id: n.parameter_set_id,
-      parameter_overrides: n.parameter_overrides,
-      hasCapabilityScope: doesNodeHaveCapabilityScope(n),
-    },
-  }
+  // The adapter consumes the typed wire contract; `n` is untyped at this
+  // boundary, so normalise the fields it reads strictly onto this view's
+  // long-standing fallbacks: a missing position defaults to the origin, and an
+  // empty-string label/description falls back exactly as it always has.
+  return projectGraphNode({
+    ...n,
+    position: n.position ?? { x: 0, y: 0 },
+    label: n.label || undefined,
+    description: n.description || undefined,
+  })
 }
 
 function convertBackendEdge(e: any, i: number): any {
@@ -3814,21 +4026,61 @@ function applyGeneratedLayoutIfUnplaced(): void {
     layoutUserOwned.value = true
     return
   }
-  applyGraphPositions(computeGraphLayout())
+  const generatedPositions = computeGraphLayout()
+  applyGraphPositions(generatedPositions)
+  // Store the generated layout and mark all nodes as generated provenance
+  lastGeneratedLayout.value = generatedPositions
+  nodeProvenance.value = Object.fromEntries(
+    rawNodes.value.map((node: any) => [node.id, 'generated' as const]),
+  )
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
 }
 
 /** Explicit Arrange graph: replace the arrangement and restore generated ownership. */
-function arrangeGraph(): void {
+async function arrangeGraph(): Promise<void> {
   if (isViewing.value || rawNodes.value.length === 0) return
+  // Capture the pre-Arrange generated layout and provenance for incremental undo
+  const preArrangeGeneratedLayout = { ...lastGeneratedLayout.value }
+  const preArrangeProvenance = { ...nodeProvenance.value }
   const undo: ArrangeUndoSnapshot = {
     raw: snapshotPositions(rawNodes.value),
     flow: snapshotPositions(flowNodes.value),
     userOwned: layoutUserOwned.value,
     ownership: getLayoutOwnership(),
+    generatedLayout: preArrangeGeneratedLayout,
+    provenance: preArrangeProvenance,
   }
-  applyGraphPositions(computeGraphLayout())
+  // Build nodes input for layoutNodesIncremental
+  const nodesInput = rawNodes.value.map((node: any) => ({
+    id: node.id,
+    node_type: node.node_type,
+    label: node.label,
+    width: node.width,
+    height: node.height,
+    position: node.position,
+  }))
+  const edgesInput = rawEdges.value.map((edge: any) => ({
+    source: edge.source_node_id,
+    target: edge.target_node_id,
+    edge_type: edge.edge_type,
+  }))
+  const { nodes: laidOut, freshPositions } = layoutNodesIncrementalWithBaseline(
+    nodesInput,
+    edgesInput,
+    preArrangeGeneratedLayout,
+    preArrangeProvenance,
+  )
+  const newPositions = Object.fromEntries(laidOut.map((node) => [node.id, { ...node.position }]))
+  applyGraphPositions(newPositions)
+  // Store the PRE-delta generated baseline, not the positions with user offsets
+  // baked in: a later Arrange measures its delta against this baseline, so
+  // storing post-delta positions would collapse the delta to zero and snap
+  // user-offset nodes back onto the generated layout.
+  lastGeneratedLayout.value = freshPositions
+  nodeProvenance.value = Object.fromEntries(
+    laidOut.map((node) => [node.id, preArrangeProvenance[node.id] === 'user' ? 'user' as const : 'generated' as const]),
+  )
   arrangeUndo.value = undo
   layoutUserOwned.value = false
   setDraftLayoutOwnership('generated')
@@ -3847,6 +4099,9 @@ function undoArrangeGraph(): void {
   flowNodes.value = restorePositions(flowNodes.value, undo.flow)
   layoutUserOwned.value = undo.userOwned
   setDraftLayoutOwnership(undo.ownership)
+  // Restore the pre-Arrange generated layout and provenance
+  lastGeneratedLayout.value = undo.generatedLayout
+  nodeProvenance.value = undo.provenance
   arrangeUndo.value = null
 }
 
@@ -3864,7 +4119,15 @@ function syncNodePositionsFromFlow(): void {
 
 function onNodeDragStop(): void {
   if (isViewing.value) return
+  const beforeDrag = snapshotPositions(rawNodes.value)
   syncNodePositionsFromFlow()
+  // Mark dragged nodes as user provenance
+  for (const node of rawNodes.value) {
+    const previous = beforeDrag[node.id]
+    if (previous && node.position && (node.position.x !== previous.x || node.position.y !== previous.y)) {
+      nodeProvenance.value = { ...nodeProvenance.value, [node.id]: 'user' }
+    }
+  }
   layoutUserOwned.value = true
   setDraftLayoutOwnership('user')
   arrangeUndo.value = null
@@ -4027,10 +4290,15 @@ function onNodeClick(event: any) {
   connectionAnnouncement.value = ''
   const node = event.node
   if (!node) return
+  if (keyboardConnectSourceId.value && keyboardConnectSourceId.value !== node.id && !isViewing.value) {
+    connectNodes(keyboardConnectSourceId.value, node.id)
+    keyboardConnectSourceId.value = null
+  }
   // FAR-1812: the inspector reads the graph the canvas is SHOWING — the
   // frozen snapshot while viewing, the live graph otherwise.
   const backendNode = inspectSourceNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
+  loadConnectorNodeFields(backendNode || null)
   // Populate capability scope (narrow-not-widen)
   const scope = backendNode?.capability_scope
   nodeCapabilityScope.allowed_connectors = Array.isArray(scope?.allowed_connectors) ? [...scope.allowed_connectors] : []
@@ -4192,6 +4460,8 @@ async function saveEdgeConfig() {
 }
 
 function onPaneClick() {
+  canvasPaletteOpen.value = false
+  keyboardConnectSourceId.value = null
   selectedNodeData.value = null
   selectedEdgeData.value = null
   connectionAnnouncement.value = ''
@@ -4203,6 +4473,299 @@ function onPaneClick() {
   nodeCapabilityScope.context_scope = []
   capabilityToolInput.value = ''
   capabilityContextInput.value = ''
+  loadConnectorNodeFields(null)
+}
+
+// --- Canvas keyboard operation (FAR-2464) ---------------------------------
+// Keyboard equivalents for the canvas's mouse-only operations. Everything is
+// scoped to the canvas element (it is the focus owner), so a global shortcut
+// never fires while the user is typing in a toolbar input, the inspector or a
+// dialog. Historic (read-only) view keeps its existing semantics: the palette
+// only offers read actions (Fit view, Open version timeline), arrow keys move
+// focus only, and nudge/connect/add are early-returned.
+const NODE_NUDGE_STEP = 20
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function canvasNodeElement(id: string): HTMLElement | null {
+  const root = canvasRef.value
+  if (!root) return null
+  return Array.from(root.querySelectorAll<HTMLElement>('.vue-flow__node')).find(
+    (el) => el.getAttribute('data-id') === id,
+  ) ?? null
+}
+
+function focusedGraphNodeId(): string | null {
+  const active = document.activeElement as HTMLElement | null
+  return active?.closest<HTMLElement>('.vue-flow__node')?.getAttribute('data-id') ?? null
+}
+
+function focusGraphNode(id: string): void {
+  canvasNodeElement(id)?.focus({ preventScroll: true })
+}
+
+/** Nearest node in the pressed direction, by flow position (geometry only). */
+function nodeIdInDirection(fromId: string, key: string): string | null {
+  const nodes = displayNodes.value
+  const from = nodes.find((node: any) => node.id === fromId)
+  if (!from?.position) return null
+  const dx = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0
+  const dy = key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0
+  let best: { id: string; distance: number } | null = null
+  for (const node of nodes as any[]) {
+    if (node.id === fromId || !node.position) continue
+    const nx = node.position.x - from.position.x
+    const ny = node.position.y - from.position.y
+    // Must make real progress along the pressed axis.
+    const along = nx * dx + ny * dy
+    if (along <= 0) continue
+    // Perpendicular offset is weighted so a straight-line neighbour wins.
+    const across = Math.abs(nx * dy) + Math.abs(ny * dx)
+    const distance = along + across * 2
+    if (!best || distance < best.distance) best = { id: node.id, distance }
+  }
+  return best?.id ?? null
+}
+
+function announceCanvas(message: string): void {
+  canvasAnnouncement.value = message
+}
+
+function startKeyboardConnect(): void {
+  if (isViewing.value) return
+  const sourceId = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!sourceId) {
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_no_source'))
+    return
+  }
+  keyboardConnectSourceId.value = sourceId
+  announceCanvas(t('views.PipelineEditorView.canvas_connect_started'))
+}
+
+/** Create the edge through the same raw/flow model a mouse connection uses. */
+function connectNodes(sourceId: string, targetId: string): void {
+  if (isViewing.value || sourceId === targetId) return
+  const duplicate = rawEdges.value.some(
+    (edge: any) => edge.source_node_id === sourceId && edge.target_node_id === targetId,
+  )
+  if (duplicate) {
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_duplicate'))
+    return
+  }
+  const id = `edge-${Date.now()}`
+  const edge = {
+    id,
+    source_node_id: sourceId,
+    target_node_id: targetId,
+    edge_type: 'normal',
+    condition_expression: null,
+    max_iterations: 0,
+    routing_label: '',
+    hitl_review_config: null,
+    source_port: 'out',
+    target_port: 'in',
+  }
+  rawEdges.value = [...rawEdges.value, edge]
+  addEdges({ source: sourceId, target: targetId })
+  // The flow store owns the canonical visual edge after addEdges; retain the
+  // backend metadata on the raw graph for the existing save path.
+  flowEdges.value = flowEdges.value.some((flowEdge: any) => flowEdge.source === sourceId && flowEdge.target === targetId)
+    ? flowEdges.value
+    : [...flowEdges.value, convertBackendEdge(edge, flowEdges.value.length)]
+  announceCanvas(t('views.PipelineEditorView.canvas_connect_done'))
+}
+
+/** Shift+Arrow keyboard nudge; a normal arrow moves focus between nodes. */
+function nudgeFocusedNode(key: string): void {
+  if (isViewing.value) return
+  const id = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!id) return
+  const dx = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0
+  const dy = key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0
+  let movedAny = false
+  const nudge = (nodes: any[]): any[] =>
+    nodes.map((node) => {
+      if (node.id !== id || !node.position) return node
+      movedAny = true
+      return {
+        ...node,
+        position: {
+          x: node.position.x + dx * NODE_NUDGE_STEP,
+          y: node.position.y + dy * NODE_NUDGE_STEP,
+        },
+      }
+    })
+  rawNodes.value = nudge(rawNodes.value)
+  flowNodes.value = nudge(flowNodes.value)
+  if (!movedAny) return
+  layoutUserOwned.value = true
+  setDraftLayoutOwnership('user')
+  rebindSelectedNode()
+  announceCanvas(t('views.PipelineEditorView.canvas_node_nudged'))
+}
+
+function toggleSelectedEdgeHitl(): void {
+  if (isViewing.value) return
+  if (!selectedEdgeData.value) {
+    announceCanvas(t('views.PipelineEditorView.canvas_toggle_hitl_no_edge'))
+    return
+  }
+  edgeForm.hitl_enabled = !edgeForm.hitl_enabled
+  announceCanvas(
+    edgeForm.hitl_enabled
+      ? t('views.PipelineEditorView.canvas_toggle_hitl_on')
+      : t('views.PipelineEditorView.canvas_toggle_hitl_off'),
+  )
+}
+
+function openCanvasPalette(): void {
+  canvasPaletteOpen.value = true
+  canvasPaletteQuery.value = ''
+  canvasPaletteIndex.value = 0
+  void nextTick(() => canvasPaletteInputRef.value?.focus())
+}
+
+function closeCanvasPalette(): void {
+  canvasPaletteOpen.value = false
+  canvasRef.value?.focus({ preventScroll: true })
+}
+
+function runCanvasCommand(commandId: string): void {
+  canvasPaletteOpen.value = false
+  switch (commandId) {
+    case 'add-node':
+      addNode('agent')
+      break
+    case 'connect':
+      startKeyboardConnect()
+      break
+    case 'arrange':
+      void arrangeGraph()
+      announceCanvas(t('views.PipelineEditorView.canvas_arranged'))
+      break
+    case 'fit':
+      void fitView({ padding: 0.1 })
+      announceCanvas(t('views.PipelineEditorView.canvas_fit_done'))
+      break
+    case 'toggle-hitl':
+      toggleSelectedEdgeHitl()
+      break
+    case 'timeline':
+      openVersionTimeline()
+      break
+  }
+  canvasRef.value?.focus({ preventScroll: true })
+}
+
+function onCanvasPaletteKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeCanvasPalette()
+    return
+  }
+  const count = filteredCanvasCommands.value.length
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    canvasPaletteIndex.value = count === 0 ? 0 : (canvasPaletteIndex.value + 1) % count
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    canvasPaletteIndex.value = count === 0 ? 0 : (canvasPaletteIndex.value - 1 + count) % count
+    return
+  }
+  if (event.key === 'Enter') {
+    // A focused option button runs its command through its own click handler.
+    if ((event.target as HTMLElement | null)?.tagName === 'BUTTON') return
+    event.preventDefault()
+    const command = filteredCanvasCommands.value[canvasPaletteIndex.value]
+    if (command) runCanvasCommand(command.id)
+  }
+}
+
+/** Escape: cancel an in-progress keyboard connect, else clear the selection. */
+function handleCanvasEscape(event: KeyboardEvent): void {
+  if (keyboardConnectSourceId.value) {
+    keyboardConnectSourceId.value = null
+    announceCanvas(t('views.PipelineEditorView.canvas_connect_cancelled'))
+    return
+  }
+  if (selectedNodeData.value || selectedEdgeData.value) {
+    event.preventDefault()
+    onPaneClick()
+    canvasRef.value?.focus({ preventScroll: true })
+  }
+}
+
+/** Enter: complete a pending keyboard connect against the focused node. */
+function handleCanvasConnectConfirm(event: KeyboardEvent): void {
+  const sourceId = keyboardConnectSourceId.value
+  if (!sourceId) return
+  const targetId = focusedGraphNodeId()
+  if (!targetId) return
+  event.preventDefault()
+  connectNodes(sourceId, targetId)
+  keyboardConnectSourceId.value = null
+}
+
+/** Arrow keys: Shift nudges the focused node, otherwise move focus. */
+function handleCanvasArrow(event: KeyboardEvent): void {
+  event.preventDefault()
+  if (event.shiftKey) {
+    nudgeFocusedNode(event.key)
+    return
+  }
+  const currentId = focusedGraphNodeId() ?? selectedNodeData.value?.id ?? null
+  if (!currentId) {
+    const first = displayNodes.value[0]?.id
+    if (first) focusGraphNode(first)
+    return
+  }
+  const nextId = nodeIdInDirection(currentId, event.key)
+  if (nextId) focusGraphNode(nextId)
+}
+
+/**
+ * Canvas-scoped key handling. Deliberately ignores events originating in an
+ * editable control (the palette input has its own handler) so typing a node
+ * label can never trigger a shortcut.
+ */
+function onCanvasKeydown(event: KeyboardEvent): void {
+  if (canvasPaletteOpen.value || isTypingTarget(event.target)) return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    event.stopPropagation()
+    openCanvasPalette()
+    return
+  }
+  // Modified key presses belong to the browser/OS (Ctrl+A, Cmd+E, ...), not the
+  // canvas shortcuts below.
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  switch (event.key) {
+    case 'Escape':
+      handleCanvasEscape(event)
+      return
+    case 'a':
+    case 'A':
+      event.preventDefault()
+      addNode('agent')
+      return
+    case 'e':
+    case 'E':
+      event.preventDefault()
+      startKeyboardConnect()
+      return
+    case 'Enter':
+      handleCanvasConnectConfirm(event)
+      return
+  }
+  if (event.key.startsWith('Arrow')) handleCanvasArrow(event)
 }
 
 // --- Editor viewport fit (FAR-1841 mobile, FAR-1851 desktop) --------------
@@ -4337,6 +4900,9 @@ const nodePanelRef = ref<HTMLElement | null>(null)
 const edgePanelRef = ref<HTMLElement | null>(null)
 // The element focus is returned to when the sheet closes — captured at open.
 let sheetReturnFocus: HTMLElement | null = null
+// FAR-2464: the graph node the sheet was opened from, so Escape/close returns
+// keyboard focus to that node rather than to the canvas container.
+let sheetReturnNodeId: string | null = null
 
 // Spread onto a properties aside: the mobile sheet is a labelled modal dialog;
 // the desktop docked panel gets no dialog attrs (and stays out of the tab
@@ -4379,8 +4945,18 @@ watch([selectedNodeData, selectedEdgeData], () => {
   if (!isMobileSheet.value) return
   const panel = activeSheetElement()
   if (!panel) {
-    sheetReturnFocus?.focus()
+    // FAR-2464: return focus to the graph node the sheet was opened from when
+    // the keyboard was driving the canvas — a canvas-node trigger is the
+    // desktop/mobile equivalent of the pointer trigger the sheet remembers.
+    const nodeId = sheetReturnNodeId
+    const nodeEl = nodeId ? canvasNodeElement(nodeId) : null
+    if (nodeEl?.isConnected) {
+      nodeEl.focus({ preventScroll: true })
+    } else {
+      sheetReturnFocus?.focus()
+    }
     sheetReturnFocus = null
+    sheetReturnNodeId = null
     return
   }
   // Focus already inside the sheet (e.g. the selection changed while it was
@@ -4392,7 +4968,12 @@ watch([selectedNodeData, selectedEdgeData], () => {
     // somewhere sensible when the sheet closes (FAR-1861).
     const active = document.activeElement as HTMLElement | null
     sheetReturnFocus = active && active !== document.body ? active : canvasRef.value
-    panel.focus()
+    sheetReturnNodeId = selectedNodeData.value?.id ?? null
+    // far-2464: the modal sheet's first interactive control is its focus entry
+    // point, so a keyboard user lands inside the form rather than on the
+    // dialog's own container with nothing announced.
+    const firstControl = panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    ;(firstControl ?? panel).focus()
   }
 }, { flush: 'post' })
 
@@ -4409,16 +4990,33 @@ onBeforeUnmount(() => {
   if (refitFrame) window.cancelAnimationFrame(refitFrame)
 })
 
-const newNodeType = ref<'agent' | 'router' | 'hitl'>('agent')
+const newNodeType = ref<'agent' | 'router' | 'hitl' | 'connector'>('agent')
 const nodeTypeOptions = [
   { value: 'agent', label: t('views.PipelineEditorView.node_type_agent') },
+  // FAR-1395: connector query/write nodes are authorable from the palette. A
+  // connector node's whole job is its binding (instance + verb + resource +
+  // filters/data), which the inspector below edits; without that surface the
+  // engine could support the node while no authoring path could express it.
+  { value: 'connector', label: t('views.PipelineEditorView.node_connector_label') },
   // Router/HITL authoring is deferred: addNode cannot yet emit the mandatory
   // router_config/hitl_config the backend requires, so exposing them here
   // produces unsavable (422) nodes. Imported router/HITL graphs still render
   // correctly via convertBackendNode. Re-add once a config editor lands.
 ]
 
-function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
+function startEmptyStateWalkthrough() {
+  spotlight.start([
+    { targetTestId: 'pipeline-editor-empty-add-node', message: t('views.PipelineEditorView.empty_state_walkthrough_add_node') },
+    { targetTestId: 'pipeline-editor-canvas', message: t('views.PipelineEditorView.empty_state_walkthrough_canvas') },
+    { targetTestId: 'pipeline-editor-arrange-graph', message: t('views.PipelineEditorView.empty_state_walkthrough_arrange') },
+  ])
+}
+
+function openTemplateLibrary() {
+  void router.push({ name: 'library', query: { type: 'pipeline_template' } })
+}
+
+function addNode(nodeType: 'agent' | 'router' | 'hitl' | 'connector' = newNodeType.value) {
   if (isViewing.value) return
   const id = `node-${Date.now()}`
   const newNode = {
@@ -4428,13 +5026,21 @@ function addNode(nodeType: 'agent' | 'router' | 'hitl' = newNodeType.value) {
     data: { label: t('views.PipelineEditorView.new_node_label'), description: '', node_type: nodeType },
   }
   flowNodes.value = [...flowNodes.value, newNode]
-  rawNodes.value = [...rawNodes.value, {
+  const rawNode: any = {
     id,
     node_type: nodeType,
     label: t('views.PipelineEditorView.new_node_label'),
     description: '',
     position: { x: 250, y: 100 },
-  }]
+  }
+  if (nodeType === 'connector') {
+    // The binding skeleton lets the inspector render its controls immediately;
+    // the author must still choose an instance and a resource before the save
+    // is accepted (the backend rejects an incomplete connector binding).
+    rawNode.connector_binding = { type: '', instance_id: '', operation: 'query' }
+  }
+  rawNodes.value = [...rawNodes.value, rawNode]
+  canvasAnnouncement.value = t('views.PipelineEditorView.canvas_node_added')
 }
 
 function openAgentPicker() {
@@ -4764,6 +5370,18 @@ const ownerTeamOptions = computed(() => {
   }
   return rows
 })
+
+// Resolves a HITL gate's team ID to the name only from teams this editor has
+// already loaded, so a node's gate pill never invents or fetches a team name.
+const teamNamesById = computed<Record<string, string>>(() =>
+  Object.fromEntries(ownerTeams.value.map((tm) => [tm.id, tm.name])),
+)
+// Vue Flow renders node cards through `nodeTypes`, which cannot forward
+// arbitrary props, so the extracted cards inject this map instead.
+provide(PIPELINE_TEAM_NAMES_KEY, teamNamesById)
+// The node cards also inject the editor's loaded connectors so a bound node's
+// semantic badge can resolve the connector's allowed operations.
+provide(PIPELINE_CONNECTORS_KEY, connectors)
 
 const ownerTeamError = computed(() => {
   if (ownerTeamUpdateError.value) return ownerTeamUpdateError.value
@@ -5414,26 +6032,59 @@ const viewRawEdges = ref<any[]>([])
 const viewFlowNodes = ref<any[]>([])
 const viewFlowEdges = ref<any[]>([])
 
+const HISTORIC_SECRET_FIELDS = [
+  'env_vars',
+  'context_files',
+  'composite_parameter_values',
+  'parameter_overrides',
+] as const
+
+function stripHistoricNodeSecrets(node: any): any {
+  if (!node || typeof node !== 'object') return node
+  const stripped = { ...node }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
+function stripHistoricEdgeSecrets(edge: any): any {
+  if (!edge || typeof edge !== 'object') return edge
+  const stripped = { ...edge }
+  for (const field of HISTORIC_SECRET_FIELDS) delete stripped[field]
+  if (stripped.data && typeof stripped.data === 'object') {
+    stripped.data = { ...stripped.data }
+    for (const field of HISTORIC_SECRET_FIELDS) delete stripped.data[field]
+  }
+  return stripped
+}
+
 /** VueFlow's v-model: the frozen snapshot graph while viewing, live otherwise. */
 const displayNodes = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowNodes.value : flowNodes.value),
+  get: () => (isViewing.value ? viewFlowNodes.value.map(stripHistoricNodeSecrets) : flowNodes.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowNodes.value = value
+    if (isViewing.value) viewFlowNodes.value = value.map(stripHistoricNodeSecrets)
     else flowNodes.value = value
   },
 })
 
 const displayEdges = computed<any[]>({
-  get: () => (isViewing.value ? viewFlowEdges.value : flowEdges.value),
+  get: () => (isViewing.value ? viewFlowEdges.value.map(stripHistoricEdgeSecrets) : flowEdges.value),
   set: (value: any[]) => {
-    if (isViewing.value) viewFlowEdges.value = value
+    if (isViewing.value) viewFlowEdges.value = value.map(stripHistoricEdgeSecrets)
     else flowEdges.value = value
   },
 })
 
 /** What the inspector reads: the graph the canvas is showing. */
-const inspectSourceNodes = computed(() => (isViewing.value ? viewRawNodes.value : rawNodes.value))
-const inspectSourceEdges = computed(() => (isViewing.value ? viewRawEdges.value : rawEdges.value))
+const inspectSourceNodes = computed(() =>
+  isViewing.value ? viewRawNodes.value.map(stripHistoricNodeSecrets) : rawNodes.value,
+)
+const inspectSourceEdges = computed(() =>
+  isViewing.value ? viewRawEdges.value.map(stripHistoricEdgeSecrets) : rawEdges.value,
+)
 
 const isViewing = computed(
   () =>

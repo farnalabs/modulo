@@ -12,6 +12,7 @@
         "test:e2e:coverage": "cross-env VITE_COVERAGE=true playwright test",
         "test:all": "npm run test:unit && npm run test:e2e:smoke",
         "test:e2e:smoke": "playwright test --grep \"@smoke\"",
+        "test:e2e:visual": "playwright test --grep \"@visual\" --workers=1",
         "test:e2e:mobile": "playwright test tests/e2e/mobile-layout.spec.ts --workers=1",
         "test:mutation": "stryker run",
         "test:unit": "vitest run src --pool=threads --maxWorkers=4",
@@ -79,6 +80,7 @@
         "eslint": "^10.10.0",
         "eslint-plugin-vue": "^10.9.2",
         "eslint-plugin-vuejs-accessibility": "^2.5.0",
+        "fast-check": "^4.10.2",
         "globals": "^15.15.0",
         "istanbul-lib-coverage": "^3.2.2",
         "istanbul-lib-instrument": "^6.0.3",
@@ -98,5 +100,5 @@
         "vitest": "^4.0.0",
         "vue-tsc": "^3.3.7"
     },
-    "packageManager": "pnpm@11.28.10"
+    "packageManager": "pnpm@11.28.11"
 }

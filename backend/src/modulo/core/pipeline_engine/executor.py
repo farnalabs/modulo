@@ -1028,13 +1028,23 @@ def _resolve_post_node_eval_target(
 def _node_output_stall_reason(node_output: Any) -> str | None:
     """Return the stall_reason carried by a captured sandbox-agent node output.
 
-    Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
-    the inner ``output`` dict carries ``stall_reason`` when the idle watchdog
-    fired. Returns None for non-dict / garbage output and for nodes
-    that did not stall, so non-sandbox node outputs are never misread.
+    NEW FORMAT (split envelope): node_output has ``telemetry`` key with
+    ``stall_reason`` directly.
+
+    LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys; the
+    inner ``output`` dict carries ``stall_reason``.
+
+    Returns None for non-dict / garbage output and for nodes that did not stall,
+    so non-sandbox node outputs are never misread.
     """
     if not isinstance(node_output, dict):
         return None
+    # New split format: telemetry channel carries stall_reason
+    telemetry = node_output.get("telemetry")
+    if isinstance(telemetry, dict):
+        reason = telemetry.get("stall_reason")
+        return reason if isinstance(reason, str) and reason else None
+    # Legacy format fallback: inner output dict carries stall_reason
     inner = node_output.get("output")
     if not isinstance(inner, dict):
         return None
@@ -1045,16 +1055,29 @@ def _node_output_stall_reason(node_output: Any) -> str | None:
 def _node_output_agent_failure(node_output: Any) -> str | None:
     """Return a reason string when a captured node output self-reported failure.
 
-    Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
-    the inner ``output`` dict carries ``agent_status``/``agent_outcome`` —
-    the agent's RAW verdict surfaced verbatim from output.json. A1 elevation
-    fires when ``agent_status == "failed"`` OR ``outcome == "failed"``: a
-    self-declared failure must NEVER land the run ``complete``, regardless of
+    NEW FORMAT (split envelope): node_output has ``telemetry`` key with
+    ``agent_status``/``agent_outcome`` directly.
+
+    LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys; the
+    inner ``output`` dict carries ``agent_status``/``agent_outcome``.
+
+    A1 elevation fires when ``agent_status == "failed"`` OR ``outcome == "failed"``:
+    a self-declared failure must NEVER land the run ``complete``, regardless of
     the exit code (§15.4). Returns None for non-dict / non-failed output, so
     non-sandbox node outputs are never misread.
     """
     if not isinstance(node_output, dict):
         return None
+    # New split format: telemetry channel carries agent_status/agent_outcome
+    telemetry = node_output.get("telemetry")
+    if isinstance(telemetry, dict):
+        if telemetry.get("agent_status") != "failed" and telemetry.get("agent_outcome") != "failed":
+            return None
+        reason = telemetry.get("error") or telemetry.get("summary")
+        if not isinstance(reason, str) or not reason:
+            return "agent self-reported failure"
+        return reason
+    # Legacy format fallback
     inner = node_output.get("output")
     if not isinstance(inner, dict):
         return None
@@ -1196,6 +1219,12 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     """Return a reason string when a captured node output carries the
     session-lost marker.
 
+    NEW FORMAT (split envelope): node_output has ``telemetry`` key with
+    ``sandbox_session_lost`` directly.
+
+    LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys; the
+    inner ``output`` dict carries ``sandbox_session_lost``.
+
     node_runner stamps ``sandbox_session_lost: True`` on the output dict ONLY
     for the E2B wrapper's fallback echo (a dead opencode session). It is NOT an
     agent verdict — the agent never wrote output.json — so it must be routed to
@@ -1205,6 +1234,16 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     """
     if not isinstance(node_output, dict):
         return None
+    # New split format: telemetry channel
+    telemetry = node_output.get("telemetry")
+    if isinstance(telemetry, dict):
+        if telemetry.get("sandbox_session_lost") is not True:
+            return None
+        reason = telemetry.get("error") or telemetry.get("summary")
+        if not isinstance(reason, str) or not reason:
+            return "No output from agent - session interrupted"
+        return reason
+    # Legacy format fallback
     inner = node_output.get("output")
     if not isinstance(inner, dict):
         return None
@@ -1216,8 +1255,30 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_text_surfaces(inner: dict[str, Any]) -> list[str]:
+    """Top-level retained text surfaces of one envelope view.
+
+    Scans the wrapper's text keys and the STRING members of ``output_json`` only
+    (the wrapper's shape, and bounded by the stdout retention cap).
+    """
+    parts: list[str] = []
+    for key in ("error", "summary", "error_message", "no_output_reason", "agent_stdout", "agent_stderr"):
+        value = inner.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    output_json = inner.get("output_json")
+    if isinstance(output_json, dict):
+        parts.extend(v for v in output_json.values() if isinstance(v, str) and v)
+    return parts
+
+
 def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
     """The retained text surfaces of a session-lost envelope.
+
+    NEW FORMAT (split envelope): node_output has ``output`` (pure return) and
+    ``telemetry`` keys. The ``telemetry`` carries the text surfaces.
+
+    LEGACY FORMAT: node_output has ``artifacts`` and ``output`` keys.
 
     ``_node_output_sandbox_session_lost`` returns the marker REASON, which for
     the E2B wrapper's dead-session echo is the fixed PLACEHOLDER ("No output
@@ -1231,31 +1292,29 @@ def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
     real cause instead of masking a non-retryable billing fault as the
     retryable ``sandbox.no_output_json``.
 
-    Walks BOTH envelope views — the top-level telemetry ``output`` and each
-    artifact's ``output`` — exactly like ``_node_output_has_idempotency_gate``:
-    the top-level view omits ``output_json``, so the artifact view is the only
-    place ``no_output_reason`` survives. Only top-level STRING members of
-    ``output_json`` are scanned (the wrapper's shape, and bounded by the
-    stdout retention cap). Returns "" for any shape that carries no text, so
-    the caller falls back to the marker reason.
+    Walks both envelope views — the telemetry channel and artifacts (legacy).
+    Only top-level STRING members of ``output_json`` are scanned (the wrapper's
+    shape, and bounded by the stdout retention cap). Returns "" for any shape
+    that carries no text, so the caller falls back to the marker reason.
     """
     if not isinstance(node_output, dict):
         return ""
-    candidates: list[Any] = [node_output.get("output")]
+    candidates: list[Any] = []
+    # New split format: telemetry channel
+    telemetry = node_output.get("telemetry")
+    if isinstance(telemetry, dict):
+        candidates.append(telemetry)
+    # Legacy format: artifacts and output
     artifacts = node_output.get("artifacts")
     if isinstance(artifacts, list):
         candidates.extend(a.get("output") for a in artifacts if isinstance(a, dict))
+    legacy_output = node_output.get("output")
+    if isinstance(legacy_output, dict):
+        candidates.append(legacy_output)
     parts: list[str] = []
     for inner in candidates:
-        if not isinstance(inner, dict):
-            continue
-        for key in ("error", "summary", "error_message", "no_output_reason", "agent_stdout", "agent_stderr"):
-            value = inner.get(key)
-            if isinstance(value, str) and value:
-                parts.append(value)
-        output_json = inner.get("output_json")
-        if isinstance(output_json, dict):
-            parts.extend(v for v in output_json.values() if isinstance(v, str) and v)
+        if isinstance(inner, dict):
+            parts.extend(_node_output_text_surfaces(inner))
     return "\n".join(parts)
 
 
@@ -4254,10 +4313,13 @@ class PipelineExecutor:
     def _aggregate_sandbox_cost(completed_node_outputs: dict[str, Any] | None) -> Decimal:
         """Sum per-node sandbox-agent cost estimates into a single Decimal.
 
-        Each completed node's captured output is ``{"artifacts": [...],
+        NEW FORMAT (split envelope): each node_output has ``telemetry`` key with
+        ``cost_estimate_usd`` directly.
+
+        LEGACY FORMAT: each completed node's captured output is ``{"artifacts": [...],
         "output": {...}}``; the inner ``output`` dict carries the numeric
-        ``cost_estimate_usd`` attached by
-        :func:`modulo.core.pipeline_engine.node_runner._compute_sandbox_cost`.
+        ``cost_estimate_usd``.
+
         Non-dict outputs, missing estimates, non-positive, and non-finite
         values (NaN/inf, which would otherwise corrupt the run total) contribute
         zero. Kept as a small pure helper so cost parity is testable and shared
@@ -4269,10 +4331,16 @@ class PipelineExecutor:
         for node_output in completed_node_outputs.values():
             if not isinstance(node_output, dict):
                 continue
-            out = node_output.get("output")
-            if not isinstance(out, dict):
-                continue
-            est = out.get("cost_estimate_usd")
+            # New split format: telemetry channel carries cost_estimate_usd
+            telemetry = node_output.get("telemetry")
+            est = None
+            if isinstance(telemetry, dict):
+                est = telemetry.get("cost_estimate_usd")
+            else:
+                # Legacy format fallback
+                out = node_output.get("output")
+                if isinstance(out, dict):
+                    est = out.get("cost_estimate_usd")
             if isinstance(est, (int, float)) and est > 0 and math.isfinite(est):
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
@@ -5371,16 +5439,26 @@ class PipelineExecutor:
         """FAR-510 — the dict views of one per-node output value that may carry
         the sandbox envelope fields (``status`` / the synthetic-failure marker).
 
-        A full runner envelope ``{artifacts, output}`` yields the value itself
-        (flat / legacy mixed bodies), the outer ``output`` telemetry view, and
-        the first artifact's inner ``output``. A post-P1b stored
-        ``outputs_json`` value is the PURE agent return (``None`` or
-        agent-authored business JSON) — scanned top-level only; the marker
-        requirement in the predicate keeps agent-authored JSON collision-free.
+        NEW FORMAT (split envelope): value has ``output`` (pure return) and
+        ``telemetry`` keys. The telemetry view carries the envelope fields.
+
+        LEGACY FORMAT: A full runner envelope ``{artifacts, output}`` yields the
+        value itself (flat / legacy mixed bodies), the outer ``output`` telemetry
+        view, and the first artifact's inner ``output``.
+
+        A post-P1b stored ``outputs_json`` value is the PURE agent return
+        (``None`` or agent-authored business JSON) — scanned top-level only; the
+        marker requirement in the predicate keeps agent-authored JSON
+        collision-free.
         """
         views: list[dict[str, Any]] = []
         if not isinstance(value, dict):
             return views
+        # New split format: telemetry channel
+        telemetry = value.get("telemetry")
+        if isinstance(telemetry, dict):
+            views.append(telemetry)
+        # Legacy format: artifacts and output
         views.append(value)
         outer = value.get("output")
         if isinstance(outer, dict):

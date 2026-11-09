@@ -219,7 +219,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - run: uv run --no-build --no-sync ruff check .
       - name: Ruff format check
         run: uv run --no-build --no-sync ruff format --check .
@@ -545,7 +545,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Run unit tests with coverage (shard ${{ matrix.shard }}/3)
         shell: bash
         run: ../.github/scripts/coverage-thresholds.sh 2 shard
@@ -595,7 +595,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Download unit coverage shards
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -651,7 +651,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
         if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run architecture tests
         if: needs.changes.outputs.backend_heavy != 'false'
@@ -732,7 +732,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Detect changed integration test files
         id: changed
         shell: bash
@@ -923,7 +923,7 @@ jobs:
       # wheel) and ibm-cos-sdk is sdist-only, so `--no-build` hard-fails the sync on
       # a cold uv cache. `--frozen` locks the exact revisions, so the builds are
       # deterministic and trusted (no untrusted setup scripts execute).
-      - run: uv sync --frozen  # NOSONAR
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR
         if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run Tier 1b light connector + model-server suites
         if: needs.changes.outputs.backend_heavy != 'false'
@@ -970,7 +970,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -1043,6 +1043,16 @@ jobs:
           read -r -a FILES <<< "$(node scripts/e2e-visual-slice.mjs --list)"
           echo "visual/token e2e slice: ${FILES[*]}"
           pnpm exec playwright test "${FILES[@]}" --grep "@regression" --workers=1 --reporter=line
+      # FAR-2461: the canvas visual snapshots are tagged @visual, which the
+      # @regression slice above never selects. Without this step the visual
+      # regression coverage ran in no gate at all (PR #3024 review finding).
+      # The baselines under tests/e2e/canvas.visual.spec.ts-snapshots/ are
+      # committed per platform, including the Linux set this job runs on.
+      - name: Run canvas visual regression snapshots
+        if: needs.changes.outputs.frontend == 'true'
+        env:
+          E2E_TARGET: local
+        run: pnpm exec playwright test --grep "@visual" --workers=1 --reporter=line
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),
@@ -1203,7 +1213,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -1738,7 +1748,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -1746,7 +1756,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install backend deps
         working-directory: backend
-        run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         shell: bash
@@ -1822,7 +1832,7 @@ jobs:
       - name: Sync backend dependencies
         working-directory: backend
         shell: bash
-        run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
       - name: Verify single migration head
         working-directory: backend
         shell: bash
@@ -1934,7 +1944,7 @@ jobs:
         # `--no-build` hard-fails this sync on a cold uv cache. `--frozen`
         # pins the exact revisions, so the builds are deterministic and
         # trusted (no untrusted setup scripts execute).
-        run: uv sync --frozen  # NOSONAR
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR
       - name: Check E2E HTTP calls match live API routes
         # Step-level gate (never job-level): a docs-only PR skips the check
         # while the job still reports success, matching the other path-gated
@@ -1987,7 +1997,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
+      - run: bash ../scripts/uv_sync_with_retry.sh --frozen  # NOSONAR githubactions:S8541: backend lockfile pins source-archive deps (pytest-bdd, ibm-cos-sdk); --frozen pins exact revisions so builds are deterministic.
         if: github.event_name != 'pull_request'
       - name: Break-glass boot allow-list + connectivity smoke
         if: github.event_name != 'pull_request'

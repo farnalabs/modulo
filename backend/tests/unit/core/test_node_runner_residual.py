@@ -2995,7 +2995,11 @@ def test_build_sandbox_node_envelope_includes_truthy_stall_reason():
     envelope = nr._build_sandbox_node_envelope(node_id="n1", output=output)
     assert envelope["artifacts"][0]["output"]["stall_reason"] == "idle 300s"
     assert "output_json" not in envelope["artifacts"][0]["output"]
-    assert "exit_code" not in envelope["output"]
+    # New split format: ``output`` is the pure agent return (absent here) and
+    # the exhaustive telemetry channel carries exit_code + stall_reason.
+    assert envelope["output"] is None
+    assert envelope["telemetry"]["stall_reason"] == "idle 300s"
+    assert envelope["telemetry"]["exit_code"] == 1
 
 
 def test_configure_stall_detector_enables_opt_in_channels():
@@ -3059,7 +3063,7 @@ async def test_sandbox_input_payload_truncated_beyond_10k():
     sandbox = _make_sandbox_mock()
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn({**_run_state(), "run_context": {"input": {"task": "x" * 20000}}})
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["MODULO_INPUT_PAYLOAD"] == '{"_truncated": true, "_key_count": 1}'
 
@@ -3094,7 +3098,7 @@ async def test_sandbox_e2b_create_passes_resolved_api_key(monkeypatch: pytest.Mo
         sandbox = _make_sandbox_mock()
         with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create:
             result = await fn(_run_state())
-        assert result["output"]["status"] == "completed"
+        assert result["telemetry"]["status"] == "completed"
         assert create.call_args.kwargs["api_key"] == "hot-rotated-key"
     finally:
         store.clear_override("MODULO_E2B_API_KEY")
@@ -3109,7 +3113,7 @@ async def test_sandbox_invalid_stall_timeout_falls_back_with_warning(caplog):
         caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("stall_timeout_invalid_fallback" in m for m in caplog.messages)
 
 
@@ -3122,7 +3126,7 @@ async def test_sandbox_teardown_kill_failure_is_logged_not_raised(caplog):
         caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("sandbox_agent.kill_failed" in m for m in caplog.messages)
 
 
@@ -3145,7 +3149,7 @@ async def test_sandbox_success_delivery_marker_persist_failure_is_isolated(caplo
         caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("success_delivery_marker_persist_failed" in m for m in caplog.messages)
 
 
@@ -3196,7 +3200,7 @@ async def test_sandbox_success_delivery_marker_prefers_drained_stdout():
         patch("modulo.db.crud.run_node_outputs.write_run_markers", _mirror_legacy_write),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     marker = next(iter(row.raw_output_markers.values()))
     assert marker["delivery_done"] is True
     assert marker["raw_output"].startswith("drained agent output")
@@ -3244,7 +3248,7 @@ async def test_sandbox_gate_killswitch_read_failure_fails_open(monkeypatch: pyte
         caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("idempotency_gate_killswitch_check_failed" in m for m in caplog.messages)
 
 
@@ -3273,7 +3277,7 @@ async def test_sandbox_dispatch_marker_clear_failure_is_logged(caplog):
         caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(state)
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("dispatch_marker_clear_failed" in m for m in caplog.messages)
 
 
@@ -3330,7 +3334,7 @@ async def test_sandbox_context_files_written_verbatim():
     sandbox = _make_sandbox_mock()
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     writes = {call.args[0]: call.args[1] for call in sandbox.files.write.await_args_list}
     assert writes["ctx/notes.txt"] == "note content"
 
@@ -3351,9 +3355,9 @@ async def test_sandbox_context_file_write_failure_returns_synthetic_failure_enve
     sandbox.files.write = AsyncMock(side_effect=_write)
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "failed"
-    assert result["output"]["error_type"] == "RuntimeError"
-    assert result["output"]["modulo_synthetic_failure"] is True
+    assert result["telemetry"]["status"] == "failed"
+    assert result["telemetry"]["error_type"] == "RuntimeError"
+    assert result["telemetry"]["modulo_synthetic_failure"] is True
     span.add_event.assert_called()
 
 
@@ -3372,7 +3376,7 @@ async def test_sandbox_loop_intercept_setup_failure_falls_back_to_plain_command(
         caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("loop_intercept_setup_failed" in m for m in caplog.messages)
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "modulo_bridge.py" not in wrapped
@@ -3777,7 +3781,7 @@ async def test_sandbox_loop_intercept_bridge_wires_files_env_and_wrapped_command
         patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     written = {call.args[0]: call.args[1] for call in sandbox.files.write.call_args_list}
     assert "/home/user/modulo_bridge.py" in written
     assert written["/home/user/modulo_bridge.py"]
@@ -3826,7 +3830,7 @@ async def test_sandbox_loop_intercept_teardown_failure_is_isolated(caplog):
         caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("loop_intercept_teardown_failed" in m for m in caplog.messages)
 
 
@@ -3877,7 +3881,7 @@ async def test_sandbox_script_capacity_gate_skips_unparseable_org(monkeypatch: p
         patch("modulo.db.crud.run.get_sandbox_concurrency_limit", new=counts),
     ):
         result = await fn({**_run_state(), "_org_id": "not-a-uuid"})
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert not counts.await_count
 
 
@@ -3903,7 +3907,7 @@ async def test_sandbox_script_capacity_check_failure_fails_open(caplog, monkeypa
         caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
     ):
         result = await fn({**_run_state(), "_claim_lease": "tok"})
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("runner.capacity.gate_error" in m for m in caplog.messages)
 
 
@@ -3998,7 +4002,7 @@ async def test_sandbox_schema_enforcement_record_persisted(monkeypatch: pytest.M
         patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
     ):
         result = await fn(_SANDBOX_SCHEMA_STATE)
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     persist.assert_awaited_once()
 
 
@@ -4017,7 +4021,7 @@ async def test_sandbox_schema_enforcement_persist_failure_is_swallowed(monkeypat
         patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
     ):
         result = await fn(_SANDBOX_SCHEMA_STATE)
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     persist.assert_awaited_once()
 
 

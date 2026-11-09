@@ -1,0 +1,899 @@
+name: "macOS: Retry notarization stapling"
+
+# FAR-2480 - Apple CloudKit ticket delivery lags notarization.
+#
+# `notarytool submit` permanently records a successful notarization, but the
+# ticket does not exist on demand: CloudKit can take minutes to hours to make it
+# fetchable. The in-run staple retry in macos-installer.yml can exhaust first
+# (observed Error 65 "Record not found" and Error 68 "network connection was
+# lost" against api.apple-cloudkit.com on both architectures).
+#
+# This workflow is the out-of-band retry. It downloads the persisted signed +
+# notarized DMG (a workflow artefact, or the published release asset), staples
+# it from Apple's ticket store (CloudKit resolves the ticket from the DMG's
+# code-signing identity, so the notarytool submission id is not required),
+# re-verifies every hard gate, and republishes the stapled DMG.
+#
+# It is idempotent: an already-stapled DMG validates offline and the run is a
+# no-op success, so the schedule can run every 30 minutes safely.
+#
+# Republishing is CONSISTENCY-DRIVEN, not staple-state-driven. The publish job
+# hashes the release's actual asset bytes and compares them with the published
+# SHA256SUMS and signed RELEASE_MANIFEST.json; whenever they disagree - including
+# a partial upload from an earlier run that published a stapled DMG while the
+# metadata still hashed the pre-staple bytes - it regenerates and re-uploads the
+# metadata, then re-downloads it from the release and verifies it against the
+# published asset digests. A no-op staple therefore never strands an
+# inconsistent release: the next scheduled run repairs it.
+#
+# A verified-complete release carries a tiny `MACOS_STAPLED.json` marker asset
+# recording, per DMG, its digest and an explicit `staple_verified` flag. The
+# marker is written only after the post-upload verification passes, so the Linux
+# resolve job can short-circuit the whole run only when EVERY published DMG is
+# staple-verified and its recorded digest still matches the live asset. A
+# single-architecture dispatch records just the DMG it verified and leaves the
+# other explicitly unverified, so the next tick still completes it - the marker
+# never claims an artefact this job did not staple. That keeps a normal,
+# already-stapled release from spawning a paid macOS runner every 30 minutes,
+# while a genuinely deferred staple (no marker, or one artefact still unverified)
+# is still retried - bounded by the existing 24-hour propagation window.
+#
+# This workflow does not touch product code and does not carry a build: it only
+# operates on bytes produced by a completed notarized build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version in X.Y.Z form (release tag defaults to bundle-v<version>)"
+        type: string
+        required: true
+      architecture:
+        description: "Which DMG(s) to staple"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - arm64
+          - x86_64
+      release_tag:
+        description: "Release tag to attach the stapled DMG to (blank derives bundle-v<version>)"
+        type: string
+        required: false
+        default: ""
+      run_id:
+        description: "Run id holding the macos-installer-<version>-<arch> artefact (blank downloads from the release)"
+        type: string
+        required: false
+        default: ""
+      force:
+        description: "Re-staple even when the DMG already validates"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    # Backstop for a release whose in-run staple was deferred. The ticket
+    # propagation window is minutes-to-hours, so poll every 30 minutes. Once a
+    # run staples and verifies the release it records a MACOS_STAPLED.json
+    # marker, and resolve-target short-circuits on it - so a post-success tick
+    # is a no-op on a Linux runner, not another paid macOS job.
+    - cron: "*/30 * * * *"
+
+# One retry at a time: a second run must never clobber a release asset while the
+# first is regenerating the checksums and signed manifest.
+concurrency:
+  group: macos-staple-retry
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve what to staple
+  # ---------------------------------------------------------------------------
+  resolve-target:
+    name: Resolve staple target
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      architectures: ${{ steps.resolve.outputs.architectures }}
+      run_id: ${{ steps.resolve.outputs.run_id }}
+      completed: ${{ steps.resolve.outputs.completed }}
+    steps:
+      - name: Resolve version, release tag and architectures
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_ARCHITECTURE: ${{ github.event.inputs.architecture }}
+          DISPATCH_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          DISPATCH_RUN_ID: ${{ github.event.inputs.run_id }}
+          DISPATCH_FORCE: ${{ github.event.inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          version=""
+          release_tag=""
+          architectures=""
+          run_id=""
+          completed="false"
+
+          # A release whose stapling has already been completed AND verified
+          # carries a MACOS_STAPLED.json marker naming each DMG's digest and an
+          # explicit `staple_verified` flag. The publish job writes it only after
+          # its post-upload verification passed, so the marker means "the
+          # release's DMGs and metadata were consistent at that moment". It is
+          # only treated as complete when EVERY published DMG is staple-verified
+          # and its recorded digest still matches the live asset - a single-
+          # architecture run leaves the other DMG explicitly unverified, so there
+          # is still work left and the target is not blanked.
+          #
+          # Echoes exactly one status line on stdout: `complete`, `absent`, or
+          # `stale: <reason>`.
+          check_staple_marker() {
+            local tag="$1" version="$2" dir state
+            dir="$(mktemp -d)"
+            if ! gh release download "$tag" --repo "$REPO" \
+              --pattern 'MACOS_STAPLED.json' --dir "$dir" --clobber >/dev/null 2>&1; then
+              rm -rf "$dir"
+              printf 'absent\n'
+              return 0
+            fi
+            gh api "repos/${REPO}/releases/tags/${tag}" >"$dir/release.json"
+            if state="$(python3 - "$dir/MACOS_STAPLED.json" "$dir/release.json" "$version" <<'PY'
+          import json
+          import sys
+
+          marker = json.load(open(sys.argv[1], encoding="utf-8"))
+          release = json.load(open(sys.argv[2], encoding="utf-8"))
+          version = sys.argv[3]
+          live = {asset["name"]: asset for asset in release.get("assets", [])}
+          recorded = {artefact.get("name"): artefact for artefact in (marker.get("artifacts") or [])}
+
+          expected = [
+              f"Modulo-{version}-macos-arm64.dmg",
+              f"Modulo-{version}-macos-x86_64.dmg",
+          ]
+          stale = []
+          for name in expected:
+              artefact = recorded.get(name)
+              if artefact is None:
+                  stale.append(f"{name} is not recorded in the marker")
+                  continue
+              # A marker that names an artefact without an explicit verification
+              # flag (an older marker, or one written by a run that never touched
+              # it) must never be read as complete.
+              if artefact.get("staple_verified") is not True:
+                  stale.append(f"{name} was never staple-verified")
+                  continue
+              asset = live.get(name)
+              if asset is None:
+                  stale.append(f"{name} is not on the release")
+                  continue
+              digest = asset.get("digest") or ""
+              if digest.startswith("sha256:"):
+                  if digest.split(":", 1)[1] != artefact.get("sha256"):
+                      stale.append(f"{name} digest no longer matches the marker")
+              elif asset.get("size") != artefact.get("size"):
+                  stale.append(f"{name} size no longer matches the marker")
+              else:
+                  print(
+                      f"::notice::{name}: GitHub reports no asset digest; matched the recorded size instead",
+                      file=sys.stderr,
+                  )
+          print("stale: " + "; ".join(stale) if stale else "complete")
+          PY
+            )"; then
+              rm -rf "$dir"
+              printf '%s\n' "$state"
+              return 0
+            fi
+            rm -rf "$dir"
+            printf 'stale: could not evaluate MACOS_STAPLED.json\n'
+            return 0
+          }
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$version'"
+              exit 1
+            fi
+            release_tag="${DISPATCH_RELEASE_TAG:-bundle-v${version}}"
+            case "$DISPATCH_ARCHITECTURE" in
+              all) architectures="arm64 x86_64" ;;
+              arm64 | x86_64) architectures="$DISPATCH_ARCHITECTURE" ;;
+              *)
+                echo "::error::architecture must be all, arm64 or x86_64; got '$DISPATCH_ARCHITECTURE'"
+                exit 1
+                ;;
+            esac
+            run_id="$DISPATCH_RUN_ID"
+          else
+            # Scheduled backstop: only the newest bundle-v* release within the
+            # ticket-propagation window is worth polling. Older releases are not
+            # re-stapled by the schedule - a manual dispatch can target them.
+            release_json="$(gh api "repos/${REPO}/releases?per_page=30")"
+            latest="$(printf '%s' "$release_json" |
+              jq -c '[.[] | select(.draft == false) | select(.prerelease == false) | select(.tag_name | startswith("bundle-v"))] | sort_by(.published_at) | reverse | first // empty')"
+            if [[ -z "$latest" ]]; then
+              echo "No published bundle-v* release found; nothing to staple."
+              {
+                printf 'version=%s\n' ""
+                printf 'release_tag=%s\n' ""
+                printf 'architectures=%s\n' ""
+                printf 'run_id=%s\n' ""
+                printf 'completed=%s\n' "false"
+              } >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            release_tag="$(printf '%s' "$latest" | jq -r '.tag_name')"
+            published_at="$(printf '%s' "$latest" | jq -r '.published_at')"
+            published_epoch="$(date -u -d "$published_at" +%s)"
+            now_epoch="$(date -u +%s)"
+            age_seconds=$((now_epoch - published_epoch))
+            if [[ "$age_seconds" -gt 86400 ]]; then
+              echo "Newest bundle release ${release_tag} is ${age_seconds}s old (>24h); the ticket-propagation window has passed. Skipping the scheduled backstop; dispatch manually to override."
+              {
+                printf 'version=%s\n' ""
+                printf 'release_tag=%s\n' ""
+                printf 'architectures=%s\n' ""
+                printf 'run_id=%s\n' ""
+                printf 'completed=%s\n' "false"
+              } >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version="${release_tag#bundle-v}"
+            architectures="arm64 x86_64"
+          fi
+
+          # Short-circuit a verified-complete release. `force` (dispatch only)
+          # deliberately bypasses the marker so an operator can re-staple and
+          # re-verify on demand.
+          if [[ -n "$release_tag" && "${DISPATCH_FORCE:-false}" != "true" ]]; then
+            marker_state="$(check_staple_marker "$release_tag" "$version")"
+            if [[ "$marker_state" == "complete" ]]; then
+              echo "Release ${release_tag} records every DMG as staple-verified (MACOS_STAPLED.json); nothing to staple."
+              completed="true"
+              version=""
+              release_tag=""
+              architectures=""
+              run_id=""
+            elif [[ "$marker_state" != "absent" ]]; then
+              echo "::notice::Ignoring a stale MACOS_STAPLED.json on ${release_tag} (${marker_state}); re-stapling and re-verifying."
+            fi
+          fi
+
+          {
+            printf 'version=%s\n' "$version"
+            printf 'release_tag=%s\n' "$release_tag"
+            printf 'architectures=%s\n' "$architectures"
+            printf 'run_id=%s\n' "$run_id"
+            printf 'completed=%s\n' "$completed"
+          } >>"$GITHUB_OUTPUT"
+          echo "Staple target: version=${version} release_tag=${release_tag} architectures='${architectures}' run_id='${run_id}' completed=${completed}"
+
+  # ---------------------------------------------------------------------------
+  # Staple and verify on a macOS runner
+  # ---------------------------------------------------------------------------
+  staple:
+    name: Staple and verify DMG(s)
+    needs: [resolve-target]
+    # Two independent guards: `completed` is the load-bearing short-circuit (a
+    # verified-complete release starts no paid macOS job at all), and a blank
+    # `architectures` is the defence-in-depth target reset.
+    if: needs.resolve-target.outputs.completed != 'true' && needs.resolve-target.outputs.architectures != ''
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.collect.outputs.changed }}
+      # The architectures this job actually ran the helper against (both
+      # `stapled` and `unchanged` mean the ticket validated). The record step
+      # may only claim staple verification for these.
+      verified_arches: ${{ steps.collect.outputs.verified_arches }}
+    env:
+      VERSION: ${{ needs.resolve-target.outputs.version }}
+      RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+      RUN_ID: ${{ needs.resolve-target.outputs.run_id }}
+      ARCHITECTURES: ${{ needs.resolve-target.outputs.architectures }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - name: Check out the staple helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Staple each requested DMG
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          rm -rf incoming stapled
+          mkdir -p incoming stapled
+          : >staple-results.txt
+          : >stapled-arches.txt
+          : >verified-arches.txt
+
+          read -r -a arches <<<"$ARCHITECTURES"
+          for arch in "${arches[@]}"; do
+            dmg_name="Modulo-${VERSION}-macos-${arch}.dmg"
+            rm -rf incoming
+            mkdir -p incoming
+            if [[ -n "$RUN_ID" ]]; then
+              echo "Downloading ${dmg_name} from run ${RUN_ID} (macos-installer-${VERSION}-${arch})"
+              gh run download "$RUN_ID" --repo "$REPO" \
+                --name "macos-installer-${VERSION}-${arch}" --dir incoming
+            else
+              echo "Downloading ${dmg_name} from release ${RELEASE_TAG}"
+              gh release download "$RELEASE_TAG" --repo "$REPO" \
+                --pattern "$dmg_name" --dir incoming --clobber
+            fi
+            dmg="$(find incoming -type f -name "$dmg_name" | sed -n '1p')"
+            if [[ -z "$dmg" ]]; then
+              echo "::error::DMG ${dmg_name} was not found in the downloaded artefact/asset"
+              exit 1
+            fi
+
+            result_log="$RUNNER_TEMP/staple-${arch}.log"
+            if [[ "$FORCE" == "true" ]]; then
+              bash scripts/macos/staple-and-verify.sh --dmg "$dmg" --force | tee "$result_log"
+            else
+              bash scripts/macos/staple-and-verify.sh --dmg "$dmg" | tee "$result_log"
+            fi
+            if grep -q 'staple_result=stapled' "$result_log"; then
+              result=stapled
+            elif grep -q 'staple_result=unchanged' "$result_log"; then
+              result=unchanged
+            else
+              echo "::error::staple helper did not report a staple_result for ${dmg_name}"
+              exit 1
+            fi
+
+            if [[ "$result" == "stapled" ]]; then
+              cp "$dmg" "stapled/${dmg_name}"
+              printf '%s\n' "$arch" >>stapled-arches.txt
+            fi
+            # `stapled` and `unchanged` both mean the helper ran its full gate
+            # set on this DMG and the ticket validated.
+            printf '%s\n' "$arch" >>verified-arches.txt
+            printf '%s: %s\n' "$arch" "$result" >>staple-results.txt
+          done
+
+          cat staple-results.txt
+
+      - name: Collect staple results
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -s stapled-arches.txt ]]; then
+            changed="true"
+          else
+            changed="false"
+          fi
+          verified_arches="$(tr '\n' ' ' <verified-arches.txt)"
+          {
+            printf 'changed=%s\n' "$changed"
+            printf 'verified_arches=%s\n' "$verified_arches"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo '### macOS notarization staple retry'
+            echo ''
+            echo '```'
+            cat staple-results.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload stapled DMGs
+        if: steps.collect.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-installer-stapled-${{ needs.resolve-target.outputs.version }}
+          path: stapled/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Republish the stapled DMG(s)
+  #
+  # Stapling appends Apple's ticket to the DMG, which changes its bytes. The
+  # release's SHA256SUMS and signed RELEASE_MANIFEST.json hash the original
+  # bytes, so replacing an asset without regenerating them would publish a
+  # release that lies about its own contents. This job regenerates both, re-signs
+  # the manifest with the release signing key, re-attests the new DMG bytes, and
+  # only then uploads - fail-closed, and only after every artefact is consistent.
+  #
+  # The job is gate-driven by CONSISTENCY, never by the staple result. `gh release
+  # upload` issues one API call per asset, so a mid-sequence failure can publish
+  # the stapled DMG while SHA256SUMS / the manifest still hash the pre-staple
+  # bytes. Gating this job on `staple_result=changed` would then strand that
+  # release forever (the next run's staple is a no-op `unchanged`). Instead the
+  # job always runs for a resolved release, hashes the release's actual bytes,
+  # and repairs the metadata whenever it disagrees - then re-downloads the
+  # published metadata and verifies it against the published asset digests.
+  # ---------------------------------------------------------------------------
+  publish-stapled:
+    name: Republish the stapled DMG(s)
+    needs: [resolve-target, staple]
+    if: >-
+      always() &&
+      needs.resolve-target.outputs.release_tag != ''
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.resolve-target.outputs.release_tag }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Download stapled DMGs from this run
+        if: needs.staple.outputs.changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-stapled-${{ needs.resolve-target.outputs.version }}
+          path: stapled
+
+      - name: Download the published release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir release-assets --clobber
+          ls -l release-assets
+
+      - name: Replace the DMGs with the stapled bytes
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Empty when this run stapled nothing: the job then only repairs stale
+          # release metadata and the release assets are used as they are.
+          stapled=(stapled/*.dmg)
+          for dmg in "${stapled[@]}"; do
+            name="$(basename "$dmg")"
+            if [[ ! -f "release-assets/${name}" ]]; then
+              echo "::error::release is missing ${name}; cannot replace it"
+              exit 1
+            fi
+            cp -f "$dmg" "release-assets/${name}"
+            echo "Replaced release-assets/${name} with the stapled DMG"
+          done
+          if [[ "${#stapled[@]}" -eq 0 ]]; then
+            echo "No stapled DMG was produced by this run; repairing release metadata only."
+          fi
+          # Both native DMGs are mandatory release inputs; confirm the DGL still
+          # covers the full Alpha scope after replacement.
+          for name in "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg"; do
+            test -s "release-assets/${name}"
+          done
+
+      - name: Sync backend dependencies
+        working-directory: backend
+        # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep
+        # (no wheel), so `--no-build` hard-fails the sync on a cold uv cache.
+        # `--frozen` locks the exact revisions, so the builds are deterministic
+        # and trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
+
+      - name: Detect whether the release metadata matches its artefacts
+        id: consistency
+        env:
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project backend --no-build --no-sync python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+
+          root = Path("release-assets")
+          version = os.environ["VERSION"]
+          required = [
+              f"modulo-{version}-linux-amd64.tar.gz",
+              f"Modulo-{version}-macos-arm64.dmg",
+              f"Modulo-{version}-macos-x86_64.dmg",
+          ]
+          if (root / f"modulo-{version}-windows-amd64.exe").is_file():
+              required.append(f"modulo-{version}-windows-amd64.exe")
+          required.append(f"modulo-{version}-compose.tar.gz")
+
+          problems: list[str] = []
+          actual: dict[str, str] = {}
+          for name in required:
+              path = root / name
+              if not path.is_file():
+                  problems.append(f"asset {name} is missing")
+                  continue
+              actual[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          sums_path = root / "SHA256SUMS"
+          declared: dict[str, str] = {}
+          if not sums_path.is_file():
+              problems.append("SHA256SUMS is missing from the release")
+          else:
+              for line in sums_path.read_text(encoding="utf-8").splitlines():
+                  if not line.strip():
+                      continue
+                  digest, filename = line.split(None, 1)
+                  declared[filename.strip()] = digest.strip()
+              if set(declared) != set(required):
+                  problems.append(
+                      f"SHA256SUMS covers {sorted(declared)} but the release carries {sorted(required)}"
+                  )
+              for name, digest in declared.items():
+                  if name in actual and actual[name] != digest:
+                      problems.append(f"SHA256SUMS hash for {name} does not match the asset bytes")
+
+          manifest_path = root / "RELEASE_MANIFEST.json"
+          sig_path = root / "RELEASE_MANIFEST.json.sig"
+          if not manifest_path.is_file():
+              problems.append("RELEASE_MANIFEST.json is missing from the release")
+          elif not sig_path.is_file():
+              problems.append("RELEASE_MANIFEST.json.sig is missing from the release")
+          else:
+              payload = manifest_path.read_bytes()
+              try:
+                  signature = json.loads(sig_path.read_text(encoding="utf-8"))
+                  m.verify_signature(payload, signature)
+              except (m.ManifestSecurityError, ValueError, KeyError) as exc:
+                  problems.append(f"RELEASE_MANIFEST.json signature did not verify: {exc}")
+              else:
+                  body = json.loads(payload)
+                  artefacts = {a["name"]: a["sha256"] for a in body.get("artifacts", [])}
+                  if set(artefacts) != set(required):
+                      problems.append(
+                          f"manifest covers {sorted(artefacts)} but the release carries {sorted(required)}"
+                      )
+                  for name, digest in artefacts.items():
+                      if name in actual and actual[name] != digest:
+                          problems.append(f"manifest hash for {name} does not match the asset bytes")
+
+          republish = "true" if problems else "false"
+          reason = "; ".join(problems)
+          if problems:
+              print(f"Release metadata is INCONSISTENT with its artefacts: {reason}")
+          else:
+              print("Release metadata matches its artefact bytes; nothing to republish.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"needs_republish={republish}\n")
+              out.write(f"reason={reason}\n")
+          PY
+
+      - name: Regenerate SHA256SUMS and the signed release manifest
+        if: success() && steps.consistency.outputs.needs_republish == 'true'
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required to republish a stapled DMG'; exit 1; }
+
+          cd release-assets
+          if [ -f "modulo-${VERSION}-windows-amd64.exe" ]; then
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+          else
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+          fi
+          cd ..
+
+          uv run --project backend --no-build --no-sync python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+
+          root = Path("release-assets")
+          version = os.environ["VERSION"]
+          include_windows = (root / f"modulo-{version}-windows-amd64.exe").is_file()
+          names = [
+              f"modulo-{version}-linux-amd64.tar.gz",
+              f"Modulo-{version}-macos-arm64.dmg",
+              f"Modulo-{version}-macos-x86_64.dmg",
+          ]
+          components = {"linux": "amd64", "macos": "native"}
+          if include_windows:
+              names.append(f"modulo-{version}-windows-amd64.exe")
+              components["windows"] = "amd64"
+          names.append(f"modulo-{version}-compose.tar.gz")
+          body = m.build_release_manifest(
+              release=f"bundle-v{version}",
+              platform="multi-platform",
+              generated_at=os.environ.get("GITHUB_SHA", ""),
+              components=components,
+              artifacts=[
+                  {"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version}
+                  for n in names
+              ],
+          )
+          payload = json.dumps(body, indent=2, sort_keys=True).encode()
+          signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+          if len(signing_key) != 64:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+          try:
+              int(signing_key, 16)
+          except ValueError as exc:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
+          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=signing_key)
+          if sig["key_id"] != m._KEY_ID_CURRENT:
+              raise SystemExit("regenerated manifest signature used an unexpected key_id")
+          try:
+              verified_key_id = m.verify_signature(payload, sig)
+          except m.ManifestSecurityError as exc:
+              raise SystemExit(f"regenerated manifest signature failed trust-store verification: {exc}") from exc
+          if verified_key_id != m._KEY_ID_CURRENT:
+              raise SystemExit("regenerated manifest signature did not verify under the expected current key_id")
+          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+          print("regenerated manifest covers: " + ", ".join(names))
+          PY
+
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+      - name: Re-attest the stapled DMGs
+        if: success() && needs.staple.outputs.changed == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/Modulo-*-macos-*.dmg
+
+      - name: Publish the stapled DMG(s) and refreshed manifest
+        if: success() && steps.consistency.outputs.needs_republish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(release-assets/Modulo-"${VERSION}"-macos-*.dmg)
+          if [[ "${#dmgs[@]}" -eq 0 ]]; then
+            echo "::error::no macOS DMG to publish"
+            exit 1
+          fi
+          # --clobber is deliberate here: the stapled bytes replace the unstapled
+          # asset, and SHA256SUMS + the signed manifest were regenerated above to
+          # match them. Publication in release-unified.yml never clobbers.
+          gh release upload "$RELEASE_TAG" \
+            "${dmgs[@]}" \
+            release-assets/SHA256SUMS \
+            release-assets/RELEASE_MANIFEST.json \
+            release-assets/RELEASE_MANIFEST.json.sig \
+            --repo "$REPO" \
+            --clobber
+          echo "Republished stapled DMG(s) and refreshed SHA256SUMS + signed manifest for ${RELEASE_TAG}"
+
+      # `gh release upload` is one API call per asset, so an upload can stop
+      # half-way. This re-reads the metadata FROM the release (never the local
+      # copies) and checks it against the published asset digests, so the job
+      # fails rather than leaving a release whose advertised hashes do not match
+      # its artefacts.
+      - name: Verify the published release metadata
+        if: success() && steps.consistency.outputs.needs_republish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rm -rf verify
+          mkdir -p verify
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir verify --clobber \
+            --pattern SHA256SUMS \
+            --pattern 'RELEASE_MANIFEST.json' \
+            --pattern 'RELEASE_MANIFEST.json.sig'
+          uv run --project backend --no-build --no-sync python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+
+          tag = os.environ["RELEASE_TAG"]
+          repo = os.environ["REPO"]
+          verify = Path("verify")
+
+          published = json.loads(
+              subprocess.check_output(["gh", "api", f"repos/{repo}/releases/tags/{tag}"], text=True)
+          )
+          live = {asset["name"]: asset for asset in published.get("assets", [])}
+
+          sums = (verify / "SHA256SUMS").read_text(encoding="utf-8")
+          declared: dict[str, str] = {}
+          for line in sums.splitlines():
+              if line.strip():
+                  digest, filename = line.split(None, 1)
+                  declared[filename.strip()] = digest.strip()
+
+          manifest_bytes = (verify / "RELEASE_MANIFEST.json").read_bytes()
+          signature = json.loads((verify / "RELEASE_MANIFEST.json.sig").read_text(encoding="utf-8"))
+          try:
+              m.verify_signature(manifest_bytes, signature)
+          except m.ManifestSecurityError as exc:
+              raise SystemExit(f"published RELEASE_MANIFEST.json signature did not verify: {exc}") from exc
+          body = json.loads(manifest_bytes)
+          manifest_hashes = {a["name"]: a["sha256"] for a in body.get("artifacts", [])}
+
+          errors: list[str] = []
+          if set(declared) != set(manifest_hashes):
+              errors.append(
+                  f"SHA256SUMS covers {sorted(declared)} but the manifest covers {sorted(manifest_hashes)}"
+              )
+
+          def remote_digest(name: str) -> str:
+              asset = live.get(name)
+              if asset is None:
+                  raise SystemExit(f"published release is missing the asset {name}")
+              digest = asset.get("digest") or ""
+              if digest.startswith("sha256:"):
+                  return str(digest.split(":", 1)[1])
+              # GitHub reports no digest for the asset: hash the published bytes.
+              target = verify / "assets"
+              target.mkdir(exist_ok=True)
+              subprocess.run(
+                  ["gh", "release", "download", tag, "--repo", repo, "--pattern", name,
+                   "--dir", str(target), "--clobber"],
+                  check=True,
+              )
+              return hashlib.sha256((target / name).read_bytes()).hexdigest()
+
+          for name, expected in sorted(manifest_hashes.items()):
+              actual = remote_digest(name)
+              if actual != expected:
+                  errors.append(f"{name}: manifest declares {expected} but the published asset hashes to {actual}")
+              if declared.get(name) != actual:
+                  errors.append(f"{name}: SHA256SUMS declares {declared.get(name)} but the published asset hashes to {actual}")
+
+          if errors:
+              raise SystemExit("published release metadata does not match its artefacts: " + "; ".join(errors))
+          print(f"Verified SHA256SUMS and the signed RELEASE_MANIFEST for {tag} against the published asset digests.")
+          PY
+
+      # Records which DMGs are staple-verified, per artefact, so the 30-minute
+      # backstop short-circuits only when there is genuinely nothing left to do.
+      # Written last: the marker's presence is a claim that the post-upload
+      # verification above passed (or that the metadata was already consistent).
+      # An artefact is recorded `staple_verified: true` only when THIS run's
+      # staple job ran the helper against it (stapled or unchanged both mean the
+      # ticket validated) or when a prior marker recorded the same bytes as
+      # verified - never for an artefact the run did not touch. So a single-
+      # architecture dispatch writes an honest partial marker and the next tick
+      # completes the other DMG instead of being skipped forever.
+      #
+      # Deliberately not recorded when the staple job failed - the ticket is
+      # still propagating, and the next tick must retry. `success()` is explicit
+      # because an explicit `if:` replaces a step's implicit success() guard: a
+      # failed verification above must not record a completion claim.
+      - name: Record the verified staple state on the release
+        if: success() && needs.staple.result == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+          VERIFIED_ARCHES: ${{ needs.staple.outputs.verified_arches }}
+        run: |
+          set -euo pipefail
+          marker_dir="$(mktemp -d)"
+          marker="${marker_dir}/MACOS_STAPLED.json"
+          prior_dir="${marker_dir}/prior"
+          mkdir -p "$prior_dir"
+          # Carry forward a previous run's verified entry - but only while its
+          # recorded digest still matches the live asset bytes - so a later
+          # single-architecture run neither discards verified state nor claims an
+          # artefact it did not verify.
+          if ! gh release download "$RELEASE_TAG" --repo "$REPO" \
+            --pattern 'MACOS_STAPLED.json' --dir "$prior_dir" --clobber >/dev/null 2>&1; then
+            rm -rf "$prior_dir"
+          fi
+          python3 - "$marker" "${prior_dir}/MACOS_STAPLED.json" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          verified = set(os.environ.get("VERIFIED_ARCHES", "").split())
+          root = Path("release-assets")
+
+          prior = {}
+          prior_path = Path(sys.argv[2])
+          if prior_path.is_file():
+              try:
+                  body = json.loads(prior_path.read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  body = {}
+              for artefact in body.get("artifacts") or []:
+                  if isinstance(artefact, dict) and artefact.get("name"):
+                      prior[artefact["name"]] = artefact
+
+          artefacts = []
+          for arch in ("arm64", "x86_64"):
+              name = f"Modulo-{version}-macos-{arch}.dmg"
+              data = (root / name).read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              if arch in verified:
+                  staple_verified = True
+              else:
+                  # This run did not touch the artefact: carry forward a prior
+                  # verification only for these exact bytes.
+                  previous = prior.get(name) or {}
+                  staple_verified = (
+                      bool(previous.get("staple_verified")) and previous.get("sha256") == digest
+                  )
+              artefacts.append(
+                  {
+                      "name": name,
+                      "sha256": digest,
+                      "size": len(data),
+                      "staple_verified": staple_verified,
+                  }
+              )
+
+          payload = {"version": version, "artifacts": artefacts}
+          Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+          pending = [a["name"] for a in artefacts if not a["staple_verified"]]
+          print("staple-verified this marker: " + ", ".join(a["name"] for a in artefacts if a["staple_verified"]))
+          if pending:
+              print("awaiting staple verification: " + ", ".join(pending))
+          PY
+          gh release upload "$RELEASE_TAG" "$marker" --repo "$REPO" --clobber
+          if grep -q '"staple_verified": false' "$marker"; then
+            echo "Recorded MACOS_STAPLED.json for ${RELEASE_TAG} with DMGs still awaiting staple verification; the scheduled backstop will keep retrying."
+          else
+            echo "Recorded MACOS_STAPLED.json for ${RELEASE_TAG}; every DMG is staple-verified, so the scheduled backstop will now no-op."
+          fi
+          rm -rf "$marker_dir"

@@ -9913,21 +9913,35 @@ def _build_sandbox_node_envelope(
     provider: str = "",
     via_provider: bool = False,
     sandbox_mode: str = "",
+    legacy_format: bool = False,
 ) -> dict[str, Any]:
     """Assemble a sandbox_agent node envelope from grouped output fields.
-    The envelope shape is ``{artifacts: [{node_id, status, output}], output}``.
-    The artifact's inner ``output`` carries the FULL field set; the top-level
-    ``output`` is the reduced telemetry view that omits ``output_json`` and
-    ``exit_code`` plus any caller-supplied artifact-only keys (e.g. the
-    success path's ``changed_files``/``pr_url``, the generic-exception path's
-    ``error_type``/``error_message``). Optional fields are omitted when left at
-    the ``_UNSET`` sentinel so each path emits exactly the key set it did
-    before this extraction. The FAR-510 synthetic-failure marker
-    (``MODULO_SYNTHETIC_FAILURE_MARKER``) is stamped into BOTH views only when
-    ``output.modulo_synthetic_failure`` is True — honest envelopes carry no
-    marker key at all, and the marker is deliberately NOT in
-    ``exclude_from_output`` so it survives into the persisted telemetry view
-    (and, after the P1b split, into ``node_telemetry_json``).
+
+    NEW FORMAT (default, legacy_format=False): Returns a split envelope with
+    three top-level keys:
+      - ``output``: the PURE agent return (``output_json`` for sandbox_agent)
+      - ``telemetry``: exhaustive telemetry (what ``split_node_output`` extracts
+        as telemetry for sandbox_agent)
+      - ``artifacts``: the ``[{node_id, status, output}]`` accumulator entry.
+        This is NOT the split channel — it is the LangGraph state channel the
+        ``_pipeline_state_reducer`` CONCATENATES into ``state["artifacts"]`` so
+        the state readers that resolve a node by id keep working: HITL
+        gate-eval resolution (``_resolve_gate_eval_target`` / FAR-311),
+        DAG-ancestor work-item-ref folding (``_fold_ancestor_emission_refs`` /
+        FAR-795) and the evidence probes. Dropping it from the return silently
+        emptied those for every graph downstream of a sandbox node (FAR-130).
+        Its ``output`` carries the FULL inner field set; ``split_node_output``
+        keys on the ``output``+``telemetry`` channels, never on the artifact,
+        so the accumulator is never re-split or double-counted.
+
+    LEGACY FORMAT (``legacy_format=True``): Returns the legacy envelope shape
+    ``{artifacts: [{node_id, status, output}], output}``. TEST-SUPPORT ONLY —
+    production callers never pass ``legacy_format=True``; it exists so the
+    executor/finalize tests can build pre-split legacy envelopes to exercise
+    the read-side fallbacks. The artifact's inner ``output`` carries the FULL
+    field set; the top-level ``output`` is the reduced telemetry view that
+    omits ``output_json`` and ``exit_code`` plus any caller-supplied
+    artifact-only keys.
 
     FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
     ``provider`` stamps BOTH the resolved tier and the provider-routing
@@ -9948,6 +9962,7 @@ def _build_sandbox_node_envelope(
     Callers that pass no mode get no stamp (builder-level tests construct
     partial envelopes that way); the production paths always pass it.
     """
+    # Build the full inner dict (same as before)
     inner: dict[str, Any] = {
         "status": output.status,
         "summary": output.summary,
@@ -10001,11 +10016,37 @@ def _build_sandbox_node_envelope(
     reported = _sandbox_reported_datum_provenance(inner, output, sandbox_mode=sandbox_mode)
     if reported:
         inner[PROVENANCE_KEY] = reported
+
+    # The pure return for sandbox_agent is output_json (from the artifact)
+    pure_return = output.output_json if output.output_json is not _UNSET else None
+
+    # The new-format telemetry channel is the exhaustive ``inner`` field set
+    # minus the pure return (``output_json``). The comprehension already
+    # carries every other key — including the ``excluded`` ones — so no
+    # follow-up ``telemetry.update`` is needed (an earlier one re-added the
+    # same values as a dead no-op).
+    telemetry = {k: v for k, v in inner.items() if k != "output_json"}
+
+    # ``excluded`` names the keys the LEGACY outer view omits; it is unused by
+    # the new-format return below.
     excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
-    outer = {key: value for key, value in inner.items() if key not in excluded}
+
+    if legacy_format:
+        # Legacy format: {artifacts: [...], output: outer}
+        outer = {key: value for key, value in inner.items() if key not in excluded}
+        return {
+            "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
+            "output": outer,
+        }
+
+    # New split format: {output: pure_return, telemetry: telemetry}. The
+    # ``artifacts`` accumulator rides alongside so LangGraph's state reducer
+    # still concatenates this node into ``state["artifacts"]`` (gate-eval
+    # resolution, ancestor ref folding, evidence probes) — see the docstring.
     return {
+        "output": pure_return,
+        "telemetry": telemetry,
         "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
-        "output": outer,
     }
 
 

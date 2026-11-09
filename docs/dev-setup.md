@@ -14,7 +14,7 @@ See [Deployment](deployment.md) for production deployment.
 ## Required Tools
 
 - Python 3.12-3.14 (the Docker images build on 3.14)
-- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.10` in
+- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.11` in
   `frontend/package.json` (`packageManager`), so use pnpm rather than npm
 - Docker Desktop (for local Postgres/Redis)
 - UV package manager, 0.11.13 to match the Docker image pin
@@ -66,6 +66,24 @@ Deliberately staging-only (with reasons in the script): `mobile-layout.spec.ts`
 `dialog-select-overlay.spec.ts` (a pre-existing local-only focus failure),
 and `wcag-contrast.spec.ts` (already runs as its own earlier step in the same
 job).
+
+Snapshot-based visual regression is a separate gate: `canvas.visual.spec.ts`
+is tagged `@visual` and runs in the same `frontend` CI job via
+`pnpm run test:e2e:visual` (equivalently
+`pnpm exec playwright test --grep "@visual"`). Its baselines live in
+`frontend/tests/e2e/canvas.visual.spec.ts-snapshots/` and are committed per
+platform — Playwright appends the platform suffix, so a Linux baseline (the
+platform CI runs on) must exist alongside any developer-captured one.
+
+Each `(state, viewport)` is captured in both light and dark. The theme is
+applied **after boot** through the app's real toggle: `index.html` ships
+`class="dark"` and the parser re-applies that attribute over anything an init
+script sets at `document_start`, so a pre-boot theme override silently renders
+dark for both runs. `canvas-visual-baseline-guard.spec.ts` (also `@visual`)
+fails when the light and dark PNGs for the same `(state, viewport, platform)`
+are byte-identical, so a vacuous theme axis can never be committed again. Only
+Linux baselines are committed; regenerate another platform's on that platform
+with `pnpm exec playwright test --grep "@visual" --update-snapshots`.
 
 ## Docs validity sweep
 

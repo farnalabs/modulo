@@ -137,7 +137,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
 
     // FAR-2089: registered on the canvas alongside the other node types, so it
     // renders its own card instead of VueFlow's unstyled default box.
-    expect(vm.nodeTypes.connector).toBe('connector')
+    expect(vm.nodeTypes.connector).toBeTruthy()
 
     wrapper.unmount()
   })
@@ -1234,16 +1234,20 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
-  // -- nodeTypeOptions: only agent available --
-  it('nodeTypeOptions only contains agent', async () => {
+  // -- nodeTypeOptions: agent + connector; router/hitl authoring stays deferred --
+  it('nodeTypeOptions exposes agent and connector, not the deferred types', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
 
-    expect(vm.nodeTypeOptions.length).toBe(1)
-    expect(vm.nodeTypeOptions[0].value).toBe('agent')
+    const values = (vm.nodeTypeOptions as Array<{ value: string }>).map((o) => o.value)
+    // FAR-1395: a connector query node is authorable from the palette.
+    expect(values).toEqual(['agent', 'connector'])
+    // Router/HITL still cannot emit the config the backend requires.
+    expect(values).not.toContain('router')
+    expect(values).not.toContain('hitl')
     wrapper.unmount()
   })
 
@@ -1787,6 +1791,7 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1798,6 +1803,51 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     // the pipeline toolbar now legitimately also carries a "HITL ..." label.
     const gateBadges = wrapper.findAll('span').filter((s) => s.text() === 'HITL')
     expect(gateBadges).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('renders the human-only and eval-condition edge badges from the gate config', async () => {
+    // FAR-2462: the edge card states the gate's real mode. Both the
+    // human-only marker and the eval-condition badge are additive, so each
+    // needs a config that actually declares it.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['edge-default']
+              return h('div', [
+                slot?.({
+                  data: {
+                    hitl_review_config: {
+                      label: 'Gate',
+                      human_only: true,
+                      eval_condition: { eval_name: 'quality', threshold: 0.8, operator: 'gte' },
+                    },
+                    edge_type: 'normal',
+                  },
+                }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-edge-semantic-hitl"]').text()).toContain('human-only')
+    expect(wrapper.find('[data-testid="pipeline-edge-semantic-eval"]').text()).toContain('quality')
     wrapper.unmount()
   })
 
@@ -1859,16 +1909,18 @@ describe('PipelineEditorView — coverage: connector node slot', () => {
         plugins: [pinia, router],
         stubs: {
           VueFlow: {
-            render(this: { $slots: Record<string, any> }) {
-              const slot = this.$slots['node-connector']
+            props: ['nodeTypes'],
+            render(this: { nodeTypes: Record<string, any> }) {
+              const connector = this.nodeTypes.connector
               return h('div', [
-                slot?.({ data: { label: 'Slack', description: 'Send a message' } }),
-                slot?.({ data: { label: '', description: 'No authored label' } }),
+                h(connector, { id: 'connector-authored', data: { label: 'Slack', description: 'Send a message', node_type: 'connector' } }),
+                h(connector, { id: 'connector-default', data: { label: '', description: 'No authored label', node_type: 'connector' } }),
               ])
             },
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1913,6 +1965,7 @@ describe('PipelineEditorView - agent reference is not a dead link', () => {
           VueFlow: { template: '<div><slot /></div>' },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1967,19 +2020,21 @@ describe('PipelineEditorView — FAR-2410 router/HITL node cards', () => {
         plugins: [pinia, router],
         stubs: {
           VueFlow: {
-            render(this: { $slots: Record<string, any> }) {
-              const routerSlot = this.$slots['node-router']
-              const hitlSlot = this.$slots['node-hitl']
+            props: ['nodeTypes'],
+            render(this: { nodeTypes: Record<string, any> }) {
+              const router = this.nodeTypes.router
+              const hitl = this.nodeTypes.hitl
               return h('div', [
-                routerSlot?.({ data: { label: 'Choose path', description: 'route' } }),
-                routerSlot?.({ data: { label: '', description: 'route default' } }),
-                hitlSlot?.({ data: { label: 'Approve', description: 'gate' } }),
-                hitlSlot?.({ data: { label: '', description: 'gate default' } }),
+                h(router, { id: 'router-authored', data: { label: 'Choose path', description: 'route', node_type: 'router' } }),
+                h(router, { id: 'router-default', data: { label: '', description: 'route default', node_type: 'router' } }),
+                h(hitl, { id: 'hitl-authored', data: { label: 'Approve', description: 'gate', node_type: 'hitl' } }),
+                h(hitl, { id: 'hitl-default', data: { label: '', description: 'gate default', node_type: 'hitl' } }),
               ])
             },
           },
           Background: true,
           Controls: true,
+          Handle: { template: '<span />' },
         },
       },
     })
@@ -1992,6 +2047,57 @@ describe('PipelineEditorView — FAR-2410 router/HITL node cards', () => {
     expect(wrapper.text()).toContain('Router')
     expect(wrapper.text()).toContain('Approve')
     expect(wrapper.text()).toContain('Human-in-the-loop')
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — default node slot fallback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('resolves registered node types and falls back to the agent card for unknown types', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            props: ['nodeTypes'],
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['node-default']
+              return h('div', [
+                slot?.({ type: 'agent', id: 'known', selected: false, data: { label: 'Known', node_type: 'agent' } }),
+                slot?.({ type: 'mystery', id: 'unknown', selected: true, data: { label: 'Mystery', node_type: 'mystery' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+          Handle: { template: '<span />' },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Known')
+    expect(wrapper.text()).toContain('Mystery')
+    expect(wrapper.find('[data-testid="pipeline-node-agent"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

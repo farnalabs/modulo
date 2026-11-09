@@ -202,7 +202,8 @@ def test_envelope_with_no_reports_carries_no_provenance_key() -> None:
     envelope = _build_sandbox_node_envelope(node_id="n1", output=output)
     inner = envelope["artifacts"][0]["output"]
     assert PROVENANCE_KEY not in inner
-    assert PROVENANCE_KEY not in envelope["output"]
+    # New split format: the exhaustive telemetry channel mirrors ``inner``.
+    assert PROVENANCE_KEY not in envelope["telemetry"]
 
 
 def test_no_caller_stamp_argument_is_accepted() -> None:

@@ -37,6 +37,23 @@ _log = logging.getLogger(__name__)
 _LOG_IDENTITY = "product_analytics.get_identity"
 _LOG_ROTATE = "product_analytics.rotate_secret"
 
+# ── Error-backstop decision registry (FAR-1912) ─────────────────────────────
+# Per-route decision for every route on this router that reaches the database.
+# Enforced by tests/unit/api/test_db_backstop_decisions.py.
+#
+#   local_contract — the hand-written arms reproduce the standard contract:
+#                    CancelledError re-raise, HTTPException passthrough,
+#                    ProgrammingError -> 501, `raise_session_contract_error`
+#                    then SQLAlchemyError -> 503 (the rotate route additionally
+#                    classifies SQLSTATE 55P03 as 409 and a corrupt-sequence
+#                    state as 500), Exception -> 500. NOT wrapped in
+#                    @handle_db_errors: the local ``except Exception`` arm
+#                    shadows the decorator, so adding it would be inert.
+_DB_BACKSTOP_DECISION: dict[str, str] = {
+    "get_identity": "local_contract",
+    "rotate_identity_secret": "local_contract",
+}
+
 router = APIRouter(
     prefix="/api/v1/product-analytics",
     tags=["product-analytics-identity"],

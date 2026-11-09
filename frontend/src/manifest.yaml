@@ -212,6 +212,19 @@ routes:
         <<: *community
         deprecated: false
 
+    /determination:
+        name: determination
+        breadcrumb: Determination
+        parent: /
+        product_map: [feat-determination]
+        sidebar_group: build
+        sidebar_order: 6
+        type: page
+        <<: *community
+        required_permissions: [determination.scan]
+        deprecated: false
+        exact: true
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff
@@ -1159,6 +1172,12 @@ elements:
         dynamic_testid: false
       - testid: spotlight-overlay
         type: element
+        dynamic_testid: false
+      - testid: spotlight-backdrop
+        type: button
+        dynamic_testid: false
+      - testid: spotlight-next
+        type: button
         dynamic_testid: false
       - testid: page-header-right
         type: element
@@ -2341,6 +2360,9 @@ elements:
       - testid: admin-node-categories-add
         type: button
         dynamic_testid: false
+      - testid: admin-node-categories-loading
+        type: element
+        dynamic_testid: false
       - testid: admin-node-categories-delete-confirm
         type: button
         dynamic_testid: false
@@ -3225,6 +3247,250 @@ elements:
         dynamic_testid: false
       - testid: risk-assessment-empty
         type: element
+        dynamic_testid: false
+    /determination:
+      - testid: determination-view
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: determination-run-scan
+        type: button
+        dynamic_testid: false
+      - testid: determination-generate-draft
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-summary
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-loading
+        type: element
+        dynamic_testid: false
+      - testid: determination-scan-empty
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: determination-samples
+        type: element
+        dynamic_testid: false
+      - testid: determination-samples-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-sample-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-findings
+        type: element
+        dynamic_testid: false
+      - testid: determination-findings-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-finding-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-loading
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-not-activated
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-confidence
+        type: element
+        dynamic_testid: false
+      - testid: determination-proposal-uncertainty
+        type: element
+        dynamic_testid: false
+      - testid: determination-observed-facts
+        type: element
+        dynamic_testid: false
+      - testid: determination-observed-fact
+        type: element
+        dynamic_testid: false
+      - testid: determination-derived-elements
+        type: element
+        dynamic_testid: false
+      - testid: determination-derived-element
+        type: element
+        dynamic_testid: false
+      - testid: determination-assumptions
+        type: element
+        dynamic_testid: false
+      - testid: determination-assumption
+        type: element
+        dynamic_testid: false
+      - testid: determination-unavailable-evidence
+        type: element
+        dynamic_testid: false
+      - testid: determination-unavailable-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-source-inventory
+        type: element
+        dynamic_testid: false
+      - testid: determination-source-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-refs
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-ref
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-provenance
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-withheld
+        type: element
+        dynamic_testid: false
+      - testid: determination-element-kind
+        type: element
+        dynamic_testid: false
+      - testid: determination-element-evidence
+        type: button
+        dynamic_testid: false
+      - testid: determination-evidence-panel
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-close
+        type: button
+        dynamic_testid: false
+      - testid: determination-evidence-panel-kind
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-confidence
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-statement
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-uncertainty
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-uncertainty-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-evidence-panel-uncertainty-withheld
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-trail
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-attempt-id
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-attempt-status
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-contract-version
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-decision
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-decision-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-decision-state
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-decision-actor
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-decision-decided-at
+        type: element
+        dynamic_testid: false
+      - testid: determination-provenance-row-provenance
+        type: element
+        dynamic_testid: false
+      - testid: determination-source-error
+        type: element
+        dynamic_testid: false
+      - testid: determination-review
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-state
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-actor
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-decided-at
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-result-reason
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-not-activated
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-error
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-derived-row
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-statements-invalid
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-blocking
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-blocking-empty
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-approve-blocked
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-reason
+        type: textarea
+        dynamic_testid: false
+      - testid: determination-review-reason-required
+        type: element
+        dynamic_testid: false
+      - testid: determination-review-approve
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-reject
+        type: button
+        dynamic_testid: false
+      - testid: determination-review-needs-review
+        type: button
         dynamic_testid: false
     /admin/evidence-redaction:
       - testid: page-header-right
@@ -4697,10 +4963,40 @@ elements:
       - testid: pipeline-editor-connector-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-connector-node-instance
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-operation
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-resource
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-filters
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-data
+        type: textarea
+        dynamic_testid: false
+      - testid: pipeline-editor-connector-node-json-error
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-snapshot-select
         type: select
         dynamic_testid: false
       - testid: pipeline-editor-toolbar
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-governance-visibility
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-governance-autonomy
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-governance-capacity
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-governance-breaker
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-toolbar-group-identity
@@ -4757,6 +5053,15 @@ elements:
       - testid: pipeline-editor-empty-node-type-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-empty-add-node
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-show-me
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-template
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-add-node
         type: button
         dynamic_testid: false
@@ -4778,6 +5083,24 @@ elements:
       - testid: pipeline-node-hitl
         type: element
         dynamic_testid: false
+      - testid: pipeline-node-governance
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-governance-human-only
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-governance-agent-approval
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-governance-team
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-governance-expiry
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-governance-guardrail
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-root
         type: element
         dynamic_testid: false
@@ -4787,6 +5110,18 @@ elements:
       - testid: pipeline-editor-canvas
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-canvas-announcement
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-command-palette
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-command-palette-input
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-command-palette-list
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-node-props-close
         type: button
         dynamic_testid: false
@@ -4794,6 +5129,18 @@ elements:
         type: button
         dynamic_testid: false
       - testid: pipeline-node-scope-badge
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-semantic-badges
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-node-semantic-allowed-operations
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-edge-semantic-hitl
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-edge-semantic-eval
         type: element
         dynamic_testid: false
       - testid: pipeline-editor-capability-scope
@@ -7366,6 +7713,22 @@ features:
             - "[x] Facet filters (key prefix, pipeline, time window, action) drive server-side filtering through the risk assessment store and update URL query params for deep-linking, and deep-link hydration accepts ONLY values the facet vocabulary can express and the wire contract parses — the time window must be one of the offered RISK_WINDOW_CHOICES, the action must be in the gate-action list, and pipeline_id must be a canonical UUID (key_prefix stays free text, as the API treats it as a LIKE prefix) — so an out-of-contract value is a malformed link that degrades to the default instead of being sent, because the backend answers it 422 and the error alert's Retry re-applies the same filters, turning a stale or hand-tampered link into an error the retry can never clear; the select renders the SAME RISK_WINDOW_CHOICES the hydration accepts, so the facet and the deep-link contract cannot drift (frontend/src/lib/riskAssessment.ts, frontend/src/views/RiskAssessmentView.vue, frontend/src/components/risk-assessment/RiskAssessmentFacets.vue, frontend/src/__tests__/RiskAssessmentView.spec.ts, frontend/src/__tests__/RiskAssessmentComponents.spec.ts)"
             - "[x] Summary card displays total rows and per-action counts (block, warn, continue, escalate) with facet degradation indicator and time window note (frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue)"
             - "[x] Sortable table renders evidence rows with timestamp, key, action badge, subject, and formatted value columns; empty state handled (frontend/src/components/risk-assessment/RiskAssessmentTable.vue)"
+    feat-determination:
+        description: Read-only SDLC determination scan, evidence-backed proposal review, and a recorded review decision that never activates a pipeline
+        status: covered
+        behaviours:
+            - "[x] The /determination route runs GET /api/v1/determination and renders every sampled source (connector type, resource, record count, connector id, error) and every inferred finding (category, finding, evidence, confidence, uncertainty) with a polite live loading region and a retry-able error alert (frontend/src/views/DeterminationView.vue, frontend/src/components/determination/DeterminationScanPanel.vue)"
+            - "[x] Generate draft calls POST /api/v1/determination/draft and renders the returned ProposalContract: contract version, attempt status, overall confidence, review state, the uncertainty list, observed facts, derived elements, unresolved assumptions, unavailable evidence, provenance references and the attempt source inventory; every fact, derived element and assumption lists its own evidence references (reference id, source id, locator, provenance) (frontend/src/components/determination/DeterminationProposalPanel.vue, frontend/src/components/determination/DeterminationEvidenceRefs.vue)"
+            - "[x] The review panel records approve, reject or needs_review through POST /api/v1/determination/review; a reject is refused client-side while the reason is blank, and a refused decision surfaces the server's 422 ProblemDetail detail verbatim in an assertive live region rather than a generic message (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] Approval is blocked while any low or unknown-confidence unresolved assumption is unacknowledged: each blocking assumption renders an acknowledgement checkbox, the approve control stays disabled until all are acknowledged, and the remaining count is announced politely (frontend/src/components/determination/DeterminationReviewPanel.vue)"
+            - "[x] Derived elements are correctable before submission: the statement and confidence are editable in place, an element can be removed and restored, and only actual changes are sent as corrected_derived_elements alongside removed_derived_element_ids; a blank statement blocks every decision (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] A recorded decision shows review_state, the deciding actor, decided_at and an explicit not-activated statement; generating a new draft clears the previous result because the proposal id changed (frontend/src/components/determination/DeterminationReviewPanel.vue, frontend/src/composables/useDetermination.ts)"
+            - "[x] The route is registered in the router and the product map behind the determination.scan permission (operator floor), every user-facing string is i18n-backed under views.DeterminationView, and the surface's static data-testids are registered in the route's elements inventory (frontend/src/router/index.ts, frontend/src/manifest.yaml, frontend/src/locales/en-US.js)"
+            - "[x] Per-element evidence drill-down (FAR-2472): selecting an observed fact, derived element or unresolved assumption opens a modal panel naming the element kind, its statement, its confidence and (for an assumption) its own uncertainty, and listing every evidence reference with its reference id, source id, locator and provenance; an element with no references states that explicitly instead of showing an empty panel. The panel is a native modal dialog (focus-contained, accessible name, Escape and a Close button both dismiss it) and is keyed by element id, so removing or correcting one element never renumbers another's references (frontend/src/components/determination/DeterminationEvidencePanel.vue, frontend/src/components/determination/DeterminationEvidenceRefs.vue, frontend/src/components/determination/evidencePresentation.ts)"
+            - "[x] The proposal carries a provenance trail for the proposal as a whole (FAR-2472): the determination attempt id and status, the contract version, the overall confidence and uncertainty, the proposal-level provenance references, the full source inventory (source id, connector type, resource, sample count, available/unavailable plus the connector error) and, once a review decision exists, the decision record (decision, deciding actor, decided_at) - with an explicit no-decision state before one is recorded (frontend/src/components/determination/DeterminationProvenanceTrail.vue)"
+            - "[x] Observed and derived content are never collapsed (FAR-2472): every proposal element renders its kind badge (Observed / Derived / Unresolved assumption) and every evidence reference renders its own provenance badge, with observed, derived/inferred and unavailable styled distinctly; unavailable evidence stays a first-class section with its requested resource and reason. Locators, reasons and connector errors are rendered as text (never v-html) and a value that looks like a credential is replaced with an explicit withheld notice rather than displayed (frontend/src/components/determination/evidencePresentation.ts)"
+        deferrals:
+            - "Proposal activation (creating or enabling a pipeline from an approved proposal) is deliberately out of scope: the contract and the review response pin activation_status to not_activated"
     feat-governance-stack:
         description: Read-only governance-hierarchy taxonomy readout (/governance)
         status: covered
@@ -7673,8 +8036,11 @@ features:
             - "[x] A pipeline graph can DISPATCH work to an external CI substrate and witness it (FAR-1141, ADR-042): the `dispatch` node type plus any node whose connector_binding routes the `dispatch` verb (the shared connector_binding_operation predicate reads the strict dispatch routing — an `agent` node carrying an agent_id or a sandbox_agent binding is inert and never dispatches, so a graph that fires nothing can never be stamped dispatched) fires a governed connector operation on a CI-runner-type connector — dispatch_action trigger_run (default) / get_run_status / get_run_logs / list_runs — with the run-id round-trip contract enforced per provider (trigger_run's CIRun.id is exactly what get_run_status/get_run_logs consume, else trigger_run raises); the CI-runner capability contract (Capability.TRIGGER_RUN/get_run_status/get_run_logs/list_runs) is enforced at graph save time by connector_type_supports_dispatch (fail-closed — an unknown or plugin type that cannot be proven to implement the four ops is rejected, never discovered as an AttributeError mid-run), AND at dispatch time the engine runs the ACL/guardrail/conformance checks on the write path with traced/ACL parity to the connector hub. A triggered external job is only OBSERVED, not driven: with await_completion=true the node node_runner.poll loop waits on a monotonic deadline (wait_timeout, default 300, hard-capped 3600) polling get_run_status until a terminal status, and the wait window expiring terminalizes the node with the typed never-retryable `dispatch.wait_timeout` code — dispatch terminal failures are NON-RETRYABLE structurally (a retry would fire a second external job); the node timeout budget folds in a poll-retry slack (the deadline reserves wait_timeout AND the poll budget) so a wait that times out is never misreported as an engine error. Dispatch connectors ship for the CI-runner type: github_actions_ci / gitlab_ci (hub-native), circleci, buildkite, jenkins, teamcity, azure_pipelines (ConnectorType-ci-runner capabilities), with per-provider id schemes (owner/repo/run_id, project_id/pipeline_id, job_name/build_number with the job_name/queue/queue_id terminalizing queue form, ...) and the PARITY hard rule that the produced id round-trips into the connector's own readers; Jenkins trigger_run POSTs build parameters in the request BODY (never the URL query string) so variable values cannot leak into access logs (backend/src/modulo/core/pipeline_engine/node_runner.py _run_connector_dispatch/_await_dispatch_terminal, backend/src/modulo/core/graph_validator/__init__.py _check_dispatch_binding_capabilities, backend/src/modulo/connectors/base.py connector_type_supports_dispatch/connector_binding_operation/node_fires_dispatch_job, backend/src/modulo/connectors/ci_runner/base.py, backend/src/modulo/connectors/{jenkins,circleci,buildkite,teamcity,azure_pipelines}/__init__.py, backend/src/modulo/connectors/{github,gitlab}/__init__.py (hub-native github_actions_ci / gitlab_ci arms), backend/src/modulo/api/mcp_server.py, backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py, backend/tests/unit/pipeline_engine/test_dispatch_guards.py + test_dispatch_composed_e2e.py, backend/tests/unit/connectors/{test_ci_runner,test_jenkins,test_buildkite}.py, backend/tests/unit/graph_validator/test_graph_validator.py)"
             - "[x] The pipeline editor opens a saved version READ-ONLY via ?snapshot=<uuid> (canonical deep link) or ?version=<n> (alias resolved against the server's version-descending snapshot list by a bounded client-side search — one request at page_size=100, then a capped page search for deeper versions, so a deep link into a long-lived pipeline's history resolves correctly instead of falsely reporting the version missing; snapshot wins when both are present) — FAR-1812. While viewing, the FROZEN snapshot graph renders on the canvas and the editable editor state keeps holding the LIVE graph (rawNodes/flowNodes are never hydrated from the snapshot), so a stray Save could only rewrite live with live; the write affordances are UNMOUNTED rather than disabled (Save, Save as template, Run, the pipeline-settings group, the node palette/Add node, rename, archive/pause/delete, snapshot-lock card and the empty-state action row are absent; the inspector's inputs render read-only and its action buttons are hidden; the sandbox inspector's runner-binding panel is unmounted outright (it writes the LIVE agent via PUT and shows live rows — state the snapshot does not freeze, so it must be absent, not read-only); node drag, edge connect/update and keyboard delete are off at the canvas level) and every write function additionally early-returns while viewing. Still interactive: pan/zoom, node/edge inspection of the frozen config, the version timeline (FAR-1817: primary rows are SUBSTANTIVE versions only — created_kind initial/edit/rollback; run snapshots are NOT rows but annotate the version they executed as an expandable \"ran Nx\" grouping (aria-expanded/aria-controls) listing the individual run snapshots on demand, while runs older than EVERY substantive version render in an explicit \"ran Nx on earlier versions\" bucket instead of being falsely attributed to the oldest row; history is windowed at page_size=100 with a truthful truncation notice (\"showing the most recent N of M versions\") and a Load more action, and a failed history load is a retryable error state, never a false \"no snapshots\"; a row click, or a run-snapshot click once expanded, opens that version READ-ONLY via the editor deep link; a per-version radio selects the snapshot the diff/restore actions operate on, and a selection plus its Restore this version action opens the shared restore dialog; a pipeline whose history predates edit boundaries renders an explicit \"no version in the loaded history\" state instead of fabricating an `initial` anchor from a run snapshot, and its runs are shown unattributed in their own bucket, never labelled \"earlier\" — a version-DESC all-run window holds the NEWEST runs, so an \"earlier\" claim would assert a provenance (and a direction) the rows do not have; a run streak merely LONGER than the loaded window is a different case and does NOT show that state: when a substantive version exists but sits below the window, the chip resolves it through the server-filtered substantive query and the timeline anchors on that same resolved `currentVersion`, rendering it as a real version row with the window's runs attributed to it (\"ran Nx\"), so the two surfaces agree — the explicit unattributed state is reached only when the loaded window has no substantive row AND no `currentVersion` was resolved (the chip's filtered query failed, or the pipeline has no substantive version at all)), diff, Copy link, Restore this version and View latest. A persistent amber banner (role=status) carries Restore this version / View latest / Copy link. FAR-1816: Restore this version (banner AND timeline) opens ONE shared FormDialog that embeds the old-vs-latest change summary (POST /snapshots/diff — nodes restored, nodes or connections modified, nodes dropped, connections added/removed, downstream impact, breaking port changes; \"no differences\" is asserted only when every change class the endpoint reports is empty, so a config-only edit is never mislabelled as no change; a comparison that cannot be computed — the target IS the current version, or the current version is unavailable — is stated explicitly rather than left blank, with a retry) and names the real consequences of restoring: it replaces the pipeline's current configuration, new runs use the restored version, edits made since stop being used, history is NOT deleted (restoring creates a NEW version, so you can always restore again), and runs already in progress are unaffected (they keep the version they started on). It is blocked if it would remove a HITL gate, strip a node-bound guardrail, or use another team's connector. There is NO typed confirmation — restore is reversible because history is preserved; typed confirmation stays reserved for irreversible destructive actions such as pipeline delete. A server-side guard refusal is surfaced as plain-language copy, never the raw error string. On success the editor navigates back to the latest version (the historic banner is gone), the new version appears in the timeline as a rollback entry, and a role=status notice names the outcome (Restored v{n}. Created v{m}.). A `v{n}` version chip (no content hash) sits in the toolbar beside the pipeline name and labels the pipeline's current SUBSTANTIVE version (created_kind initial/edit/rollback — run snapshots are not versions), resolved by a server-side FILTERED substantive query (exclude_created_kind of the non-version kinds plus exclude_drafts, backed by a supporting partial index) that no unbounded run streak can starve, with the shared predicate still re-validating the returned row; when that filtered query FAILS the loader clears the stale filtered list and the chip falls back to the newest substantive version in the already-loaded catalog page — the pre-FAR-1895 behaviour — so a rollback whose chip re-query fails can never keep showing the pre-rollback version, and the failure surfaces with a retry rather than silently degrading to \"no version yet\"; it opens a hover/focus popover with created date, created_kind, author, tag and notes plus Open in timeline. Entering a version while the live graph has unsaved changes prompts before navigating (never silently discards), and an unknown/deleted version — or a version alias that resolves to nothing — degrades to a 'This version is no longer available' state with a link back to the latest editor, never a raw error (an alias search that cannot COMPLETE — network/server failure — shows a retryable load error instead, never a false 'no longer available') (frontend/src/views/PipelineEditorView.vue, frontend/src/components/pipeline/PipelineVersionChip.vue, frontend/src/components/pipeline/PipelineSnapshotTimeline.vue view action; frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts, frontend/src/__tests__/components/PipelineSnapshotTimeline.spec.ts)"
             - "[x] The pipeline editor opens a SEMANTIC-LED version compare mode (FAR-1818): the route query `?snapshot=<base>&compare=<other>` selects it (the compare KEY's presence selects the mode once a base snapshot is resolved — a compare id alone, with no `?snapshot=`, is inert until a version is viewed; an empty id, or the banner's one-click 'Compare with latest' entry point, resolves to the latest version, and snapshot wins when both are present) and it stays READ-ONLY (the FAR-1812 write-affordance guard holds because the historic view is still active). It binds to the EXISTING POST /api/v1/pipelines/{pipeline_id}/snapshots/diff response, whose backend endpoint was extended for the compare contract, and presents, in this order: (1) the semantic layer first — breaking_changes (block/warning, each with the backend's reason) and the impacted downstream node list, under a one-line narrative summary ('N nodes added, M removed, port signature changed on K nodes · these J downstream nodes are impacted'); (2) structural changes grouped per node (added/removed/modified with per-field old→new and port deltas) with unchanged nodes collapsed into a details count — the compared field set covers behaviour-bearing config, not just identity: a node-level HITL gate, node timeout, template, model class, the one-PR-per-run isolation flag, and an edge's routing expression, so a version pair that only reconfigures a node is never presented as 'no changes' (labels: field_hitl_config / field_hitl_review_config / field_timeout_seconds / field_template_id / field_model_class / field_single_pr_per_run / field_condition_expression); (3) the raw JSON diff LAST, behind a 'Show raw JSON' toggle that is OFF by default (its aria-controls target is an always-present region, populated only when expanded). The pair pickers keep the route query authoritative (deep-linkable), the banner's Copy link carries the compare id while comparing, offer the WHOLE version history (the component pages the snapshot list itself, bounded, rather than only the host catalog's first page) and render a meaningful fallback label for a deep-linked id the loaded history does not carry, so a Select is never blank/mismatched. Each diff request carries a monotonic token AND an AbortController (shared with the 15s deadline helper in frontend/src/lib/requestTimeout.ts), so a superseded pair change — or leaving compare mode — aborts the in-flight request and a stale response can never overwrite a newer one; a stalled request times out into the same assertive error region with a Retry rather than spinning forever. The narrative summary is fully pluralised ('1 node added' / 'K nodes added') and counts a 'port signature changed' node only for a `node_signature` entry naming a node present in BOTH versions (FAR-1894's `kind` discriminator separates a genuine signature delta from an `edge_port` binding; an added node is reported under `nodes_added` and never produces a signature change). Both this view and the version timeline read the diff through ONE shared interpretation module (`frontend/src/lib/pipelineSnapshotDiff.ts`, FAR-1893). Comparing a version against itself reports truthfully that the two selected versions are the same rather than presenting an all-zero diff, and the banner's one-click compare entry point is hidden while the latest version is being viewed. The unchanged-nodes collapse lists the unchanged nodes rather than revealing an empty body. A backend error (including a malformed id-less node the diff indexer cannot tolerate, or a 404/422 deep-linked id) surfaces in the shared ErrorAlert (compact variant) as an assertive region with a Retry — never a crash or a blank view (frontend/src/components/pipeline/PipelineSnapshotCompare.vue, frontend/src/views/PipelineEditorView.vue, frontend/src/lib/requestTimeout.ts, frontend/src/lib/pipelineSnapshotDiff.ts; frontend/src/__tests__/components/PipelineSnapshotCompare.spec.ts, frontend/src/__tests__/PipelineEditorCompare.spec.ts, frontend/src/__tests__/lib/pipelineSnapshotDiff.spec.ts)"
+            - "[x] The pipeline editor canvas is keyboard-operable (FAR-2464), scoped so no shortcut fires while typing in an input, textarea, select or contenteditable control: Cmd/Ctrl+K on the focused canvas opens an in-canvas command palette (searchable, Arrow Up/Down, Enter runs, Escape closes and returns focus) offering Add agent node / Connect selected nodes / Arrange graph / Fit view / Toggle HITL on edge / Open version timeline, with the write commands absent in the read-only historic view; Arrow keys move focus to the nearest node in that direction and Shift+Arrow nudges the focused or selected node by 20px (marking user layout ownership, the same persistence model as a drag); E starts a keyboard connection from the focused or selected node, Enter on the target node (or a node click) creates the edge through the same raw/flow model as a mouse connection and refuses a duplicate pair, Escape cancels; Escape also clears a node/edge selection and returns focus to the canvas; the properties sheet's focus entry point is its first interactive control, and closing it returns focus to the originating graph node when there is one, otherwise the canvas; every canvas mutation is announced through a polite aria-live region (PipelineEditorKeyboard.spec.ts)"
+            - "[x] The pipeline editor surfaces governance state from data it ALREADY loads, with no live-usage claims (FAR-2463): the toolbar shows an autonomy-ceiling chip (the pipeline's max_autonomy_level, or the default level it inherits, labelled with the same autonomy vocabulary), a capacity chip for the configured max_concurrent_runs, and a monthly-spend circuit-breaker chip only when circuit_breaker_threshold is set - each a native <output> with an explicit aria-label and an explanatory title; canvas node cards carry HITL gate pills from the node's hitl_config (Human-only / Agent may approve from human_only, Team: <name> resolving required_team_id/claim_team_id ONLY against the teams the editor already fetched, and Expiry: <duration> from claim_expiry_minutes) plus a Guardrail shield when the node declares a policy_gate - the existing graph contract, since guardrail_pins_json is not exposed on the pipeline graph. Live run counts and current spend are NOT loaded by this view, so neither is ever rendered, and every pill is absent when its source field is missing rather than defaulted (PipelineGovernanceVisibility.vue, PipelineGovernanceVisibility.spec.ts, PipelineEditorGovernanceVisibility.spec.ts)"
         deferrals:
-            - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
+            - "There is no pipeline-level batch recovery endpoint - recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
+            - "The editor's governance chips show the pipeline's CONFIGURED limits (concurrency cap, breaker threshold) - live concurrency usage and current calendar-month spend are not part of any payload this view loads, so no usage gauge is shown"
     feat-plugins:
         description: Plugin registry
         status: partial
@@ -7786,7 +8152,11 @@ features:
             # Schema CRUD
             - "[x] Schemas are created (POST /api/v1/schemas), listed (GET /api/v1/schemas, cursor-paginated), read (GET /api/v1/schemas/{id}), and deleted (DELETE /api/v1/schemas/{id}, 422 when in use by a pipeline)"
             - "[x] Schema versions are created (POST /api/v1/schemas/{id}/versions), listed (GET /api/v1/schemas/{id}/versions), and a version can be published or deprecated; deprecated versions emit graph-validator warnings but do not block existing pipeline runs"
-            - "[x] Schema inference from sample data (POST /api/v1/schemas/infer) and from natural language (POST /api/v1/schemas/generate)"
+            # Schema inference (connector sampling -> LLM-assisted draft -> publish)
+            - "[x] POST /api/v1/schemas/infer drafts a JSON Schema from a connector instance's sampled records: the sample window defaults to 200 records and is bounded 1-200, the sample_query resource and filters are forwarded to the connector, and connector-type-aware prompt guidance asks the model to infer field types from the sampled values and to suggest enums for constrained fields whose values repeat (no deterministic/heuristic fallback - draft generation requires a configured model backend)"
+            - "[x] The inference response returns definition_json plus sample_count, suggestion_name/suggestion_description and rare_fields (top-level fields present in fewer than 10% of the samples, excluded from the draft by default); raw sampled records are never persisted or echoed back, sensitive-keyed sample values are masked before the prompt, and a successful inference records a schema_inference_completed audit event carrying the connector name/type, resource, sample count and model backend id"
+            - "[x] Inference is operator-gated (schema.infer, so a viewer is denied 403) and org-scoped (the connector read runs under the caller's org + user RLS context); failure states map to 404 (connector not found), 400 (connector type not admitted for inference / no model backend), 502 (connector sampling or LLM inference failed), 504 (sampling exceeded 30s), 501 (table missing) and 503 (database unavailable)"
+            - "[x] A returned draft can be published from /schemas/infer as a schema envelope plus a published version, and inference from natural language is served separately by POST /api/v1/schemas/generate"
             - "[x] Abstract schemas (abstract_name set) can be bound as input/output without a concrete definition; they act as type constraints satisfied at pipeline publish time"
             - "[x] Agent input/output schema bindings are (re)assignable and detachable via PATCH /api/v1/agents/{id}: an omitted version resolves to the org's latest placeholder version, an explicit null clears both id and version, a version sent without an id is dropped, and a (id, version) pair that does not resolve to an org-owned schema version is a 422"
             - "[x] Schemas support collection installs (collection_install_id FK) and folder organisation (folder_id FK)"

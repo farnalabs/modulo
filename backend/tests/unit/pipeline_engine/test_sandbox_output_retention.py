@@ -44,7 +44,8 @@ _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 # Fail-open attempt key derived when the test state carries no claim lease:
 # ``run:{run_id}:node:{node_id}:claim-unknown``.
-_ATTEMPT_KEY = "run:run-1:node:n1:claim-unknown"
+_RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_ATTEMPT_KEY = f"run:{_RUN_ID}:node:n1:claim-unknown"
 _PR_1 = "https://github.com/farnalabs/modulo/pull/1"
 _PR_456 = "https://github.com/farnalabs/modulo/pull/456"
 _PR_777 = "https://github.com/farnalabs/modulo/pull/777"
@@ -64,7 +65,7 @@ def _base_node_def(**overrides) -> dict:
 def _run_state() -> dict:
     return {
         "run_context": {"input": {"task": "x"}},
-        "_run_id": "run-1",
+        "_run_id": _RUN_ID,
         "_pipeline_id": "pipe-1",
         "_org_id": _ORG_ID,
     }
@@ -101,7 +102,7 @@ class _FakeRunRow:
     present so tests can PROVE retention no longer leaks into them (FIX 1).
     """
 
-    def __init__(self, run_id: str = "run-1") -> None:
+    def __init__(self, run_id: str = _RUN_ID) -> None:
         self.id = run_id
         self.outputs_json: dict | None = None
         self.node_telemetry_json: dict | None = None
@@ -465,7 +466,7 @@ async def test_successful_parse_does_not_write_retention_marker():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert row.raw_output_markers is None
     assert row.outputs_json is None
     assert row.node_telemetry_json is None
@@ -481,8 +482,8 @@ async def test_multi_attempt_retention_preserves_first_pr_url():
     def _factory() -> _RetentionSession:
         return _RetentionSession(row)
 
-    attempt_1 = "run:run-1:node:n1:1"
-    attempt_2 = "run:run-1:node:n1:2"
+    attempt_1 = f"run:{_RUN_ID}:node:n1:1"
+    attempt_2 = f"run:{_RUN_ID}:node:n1:2"
 
     def _marker(pr_url: str) -> dict:
         return {
@@ -495,15 +496,15 @@ async def test_multi_attempt_retention_preserves_first_pr_url():
 
     # Attempt 1 persists with a pr_url.
     await _persist_raw_output_marker(
-        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(_PR_1)
+        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(_PR_1)
     )
     # A retry re-executes the same node under the SAME attempt key with an empty pr_url.
     await _persist_raw_output_marker(
-        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker("")
+        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker("")
     )
     # A DIFFERENT attempt key is a separate attempt — its marker survives alongside.
     await _persist_raw_output_marker(
-        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_2, marker=_marker("")
+        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_2, marker=_marker("")
     )
 
     assert row.raw_output_markers is not None
@@ -521,8 +522,13 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
 
     class _HangSession(_RetentionSession):
         async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
-            await asyncio.Event().wait()  # never resolves
-            return _RetentionResult(None)
+            stmt_text = str(stmt)
+            # Only hang on the raw output marker persistence write
+            if "run_node_outputs" in stmt_text and "raw_output_markers" in stmt_text:
+                await asyncio.Event().wait()  # never resolves
+                return _RetentionResult(None)
+            # For all other queries, use the parent implementation
+            return await super().execute(stmt, params)
 
     def _hang_factory() -> _HangSession:
         return _HangSession(row)
@@ -563,8 +569,7 @@ async def test_non_dict_output_json_retains_marker_and_completes(non_dict):
     assert marker["_modulo_marker"] is True
     # The node did NOT raise: it completed via the existing path, and no
     # agent_status is fabricated from the non-dict output.
-    assert result["output"]["agent_status"] is None
-    assert result["artifacts"][0]["output"]["agent_status"] is None
+    assert result["telemetry"]["agent_status"] is None
 
 
 async def test_json_null_output_retains_and_raises():
@@ -603,7 +608,7 @@ async def test_non_dict_output_with_stdout_pr_url_extracts_and_completes():
     marker = _single_marker(row)
     assert marker["pr_url"] == _PR_777
     assert _PR_777 in marker["raw_output"]
-    assert result["output"]["agent_status"] is None
+    assert result["telemetry"]["agent_status"] is None
 
 
 async def test_pr_url_echoed_to_stdout_found_when_output_json_malformed():
@@ -672,7 +677,7 @@ async def test_silent_early_returns_are_logged(caplog):
         _factory, run_id="", org_id_raw=_ORG_ID, node_id="n1", attempt_key=None, marker={"x": 1}
     )
     await _persist_raw_output_marker(
-        _factory, run_id="run-1", org_id_raw="not-a-uuid", node_id="n1", attempt_key=None, marker={"x": 1}
+        _factory, run_id=_RUN_ID, org_id_raw="not-a-uuid", node_id="n1", attempt_key=None, marker={"x": 1}
     )
 
     messages = {r.message for r in caplog.records}
@@ -729,7 +734,7 @@ async def test_raw_output_redacts_bare_token_patterns():
         result = await fn(_run_state())
 
     marker = _single_marker(row)
-    assert result["output"]["agent_status"] is None
+    assert result["telemetry"]["agent_status"] is None
     assert "gho_secret789" not in marker["raw_output"]
     assert "github_pat_11AAABBBCC" not in marker["raw_output"]
     assert "ghp_zzzzzz" not in marker["raw_output"]
@@ -781,7 +786,7 @@ async def _retain(row: _FakeRunRow, *, source: str, sentinel: str | None, summar
     await _retain_raw_output_marker(
         _factory,
         _RawOutputMarkerRequest(
-            run_id="run-1",
+            run_id=_RUN_ID,
             org_id_raw=_ORG_ID,
             node_id="n1",
             attempt_key=_ATTEMPT_KEY,
@@ -1333,7 +1338,7 @@ async def test_guard_a_skips_after_success_persisted_marker():
     ):
         first = await fn(state)
 
-    assert first["output"]["status"] == "completed"
+    assert first["telemetry"]["status"] == "completed"
     assert _single_marker(row)["delivery_done"] is True
     assert _marker_delivery_done_for_node(row.raw_output_markers, state["_run_id"], "n1") is True
 
@@ -1356,10 +1361,10 @@ async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
     normally even when a prior marker carries delivery_done."""
     row = _FakeRunRow()
     row.raw_output_markers = {
-        "run:run-1:node:n1:1": {
+        f"run:{_RUN_ID}:node:n1:1": {
             "_modulo_marker": True,
             "delivery_done": True,
-            "attempt_key": "run:run-1:node:n1:1",
+            "attempt_key": f"run:{_RUN_ID}:node:n1:1",
         }
     }
     sandbox = _make_sandbox_mock()
@@ -1382,7 +1387,7 @@ async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
         result = await fn(state)
 
     sandbox.commands.run.assert_awaited_once(), "kill-switch off -> provision normally"
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 async def test_success_path_persists_delivery_done_marker_when_sentinel_in_stdout():
@@ -1407,12 +1412,12 @@ async def test_success_path_persists_delivery_done_marker_when_sentinel_in_stdou
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     marker = _single_marker(row)
     assert marker["delivery_done"] is True
     assert marker["status"] == "completed"
     assert marker["summary"] == "Sandbox agent completed with delivery sentinel observed (idempotency gate)"
-    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
+    assert _marker_delivery_done_for_node(row.raw_output_markers, _RUN_ID, "n1") is True
 
 
 async def test_success_path_no_sentinel_no_stamp():
@@ -1432,8 +1437,7 @@ async def test_success_path_no_sentinel_no_stamp():
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 
-    assert result["output"].get("delivery_done") is None
-    assert result["artifacts"][0]["output"].get("delivery_done") is None
+    assert result["telemetry"].get("delivery_done") is None
     assert row.raw_output_markers is None, "no sentinel -> no success marker persisted"
 
 
@@ -1514,10 +1518,10 @@ async def test_guard_a_inert_when_multi_node():
     not skip a node in a pipeline with other sandbox nodes)."""
     row = _FakeRunRow()
     row.raw_output_markers = {
-        "run:run-1:node:n1:1": {
+        f"run:{_RUN_ID}:node:n1:1": {
             "_modulo_marker": True,
             "delivery_done": True,
-            "attempt_key": "run:run-1:node:n1:1",
+            "attempt_key": f"run:{_RUN_ID}:node:n1:1",
         }
     }
     sandbox = _make_sandbox_mock()
@@ -1533,6 +1537,7 @@ async def test_guard_a_inert_when_multi_node():
     settings = MagicMock(modulo_idempotency_gate_enabled=True)
     state = _run_state()
     state["_claim_lease"] = "tok-claim"
+    state["_run_id"] = _RUN_ID
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.settings.get_settings", return_value=settings),
@@ -1540,7 +1545,7 @@ async def test_guard_a_inert_when_multi_node():
         result = await fn(state)
 
     sandbox.commands.run.assert_awaited_once(), "multi-node -> guard A must not skip, sandbox is provisioned"
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -1699,14 +1704,14 @@ async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_pat
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
     # The drain captured content from the log file (not from cmd_result.stdout).
-    assert output["agent_stdout"] == over_cap_content[:cap]
-    assert "stdout_truncated" not in output  # drain_window == cap in full mode
+    assert telemetry["agent_stdout"] == over_cap_content[:cap]
+    assert "stdout_truncated" not in telemetry  # drain_window == cap in full mode
     # No stdout_artifact on success path when not truncated — the stall path
     # produces the pointer (tested in test_stall_over_cap_stdout_emits_...).
-    assert "stdout_artifact" not in output
+    assert "stdout_artifact" not in telemetry
 
 
 async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_path):
@@ -1771,12 +1776,12 @@ async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_pa
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["stdout_truncated"] is True
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["stdout_truncated"] is True
     # The streaming writer is uncapped: it captured the FULL transcript, not a
     # 2048-byte truncated head.
-    pointer = output.get("stdout_artifact")
+    pointer = telemetry.get("stdout_artifact")
     assert pointer is not None, "over-cap success path must emit stdout_artifact via the streaming writer"
     assert pointer["size_bytes"] == 4096, "streaming writer must store the full transcript (not capped)"
     assert pointer["truncated"] is False, "uncapped writer stores full content -> not truncated"
@@ -1829,10 +1834,10 @@ async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["agent_stdout"] == under_cap_content
-    assert "stdout_artifact" not in output, "under-cap success must not emit stdout_artifact"
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["agent_stdout"] == under_cap_content
+    assert "stdout_artifact" not in telemetry, "under-cap success must not emit stdout_artifact"
 
 
 async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_fix(tmp_path):
@@ -1910,10 +1915,10 @@ async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_
     ):
         result = await fn(_run_state())
 
-    output = result["output"]
-    assert output["status"] == "completed"
-    assert output["stdout_truncated"] is True
-    pointer = output.get("stdout_artifact")
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "completed"
+    assert telemetry["stdout_truncated"] is True
+    pointer = telemetry.get("stdout_artifact")
     assert pointer is not None, "over-cap success path must emit stdout_artifact"
 
     # PROVE the streaming path ran: the writer finalized and its return became
@@ -2027,9 +2032,9 @@ async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path)
     ):
         result = await fn(_run_state())
 
-    artifacts = result["artifacts"]
-    assert artifacts[0]["output"]["status"] == "failed"
-    pointer = artifacts[0]["output"].get("stdout_artifact")
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "failed"
+    pointer = telemetry.get("stdout_artifact")
     assert pointer is not None, "exc path must attach streaming writer pointer"
     assert pointer["truncated"] is False
     assert pointer["redacted"] is True
@@ -2063,9 +2068,9 @@ async def test_far844_streaming_writer_init_failure_logs_and_falls_back(tmp_path
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     # fallback still produced a pointer
-    assert result["output"].get("stdout_artifact") is not None
+    assert result["telemetry"].get("stdout_artifact") is not None
 
 
 async def test_far844_drain_write_failure_logs(tmp_path):
@@ -2089,8 +2094,8 @@ async def test_far844_drain_write_failure_logs(tmp_path):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
-    assert result["output"].get("stdout_artifact") is not None
+    assert result["telemetry"]["status"] == "completed"
+    assert result["telemetry"].get("stdout_artifact") is not None
 
 
 async def test_far844_success_finalize_failure_logs_and_falls_back(tmp_path):
@@ -2114,8 +2119,8 @@ async def test_far844_success_finalize_failure_logs_and_falls_back(tmp_path):
     ):
         result = await fn(_run_state())
 
-    assert result["output"]["status"] == "completed"
-    assert result["output"].get("stdout_artifact") is not None
+    assert result["telemetry"]["status"] == "completed"
+    assert result["telemetry"].get("stdout_artifact") is not None
 
 
 async def test_far844_exc_finalize_and_teardown_cleanup_failure_logs(tmp_path):
@@ -2146,8 +2151,9 @@ async def test_far844_exc_finalize_and_teardown_cleanup_failure_logs(tmp_path):
     ):
         result = await fn(_run_state())
 
-    assert result["artifacts"][0]["output"]["status"] == "failed"
-    assert result["artifacts"][0]["output"].get("stdout_artifact") is not None
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "failed"
+    assert telemetry.get("stdout_artifact") is not None
 
 
 async def test_far844_stall_cleanup_failure_logs(tmp_path):
@@ -2223,9 +2229,9 @@ async def test_far879_exc_path_over_cap_stderr_emits_pointer(tmp_path):
     ):
         result = await fn(_run_state())
 
-    output = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    pointer = output.get("stderr_artifact")
+    telemetry = result["telemetry"]
+    assert telemetry["status"] == "failed"
+    pointer = telemetry.get("stderr_artifact")
     assert pointer is not None, "over-cap stderr on the exc path must attach a stderr_artifact pointer"
     assert pointer["stream"] == "stderr"
     assert pointer["size_bytes"] == len(big_stderr)
@@ -2243,7 +2249,7 @@ async def test_marker_carries_both_stream_artifact_pointers_when_present():
     await _retain_raw_output_marker(
         lambda: _RetentionSession(row),
         _RawOutputMarkerRequest(
-            run_id="run-1",
+            run_id=_RUN_ID,
             org_id_raw=_ORG_ID,
             node_id="n1",
             attempt_key=_ATTEMPT_KEY,

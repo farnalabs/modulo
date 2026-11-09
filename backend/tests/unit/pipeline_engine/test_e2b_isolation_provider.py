@@ -1239,7 +1239,7 @@ async def test_flagged_dispatch_skips_the_harvest_without_a_sandbox_id(
         result = await fn(state)
     finally:
         reset_run_pr_guard_claims()
-    assert result["artifacts"][0]["output"]["status"] == "failed"
+    assert result["telemetry"]["status"] == "failed"
 
 
 async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(

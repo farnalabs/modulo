@@ -55,7 +55,7 @@ function mountView(categories: unknown[] = []) {
   return mount(AdminNodeCategoriesView, {
     global: {
       stubs: {
-        LoadingSpinner: true,
+        TableSkeleton: true,
         ErrorAlert: {
           template: '<div data-testid="error-alert">{{ message }}</div>',
           props: ['message', 'onRetry'],
@@ -88,7 +88,7 @@ describe('AdminNodeCategoriesView', () => {
     const wrapper = mount(AdminNodeCategoriesView, {
       global: {
         stubs: {
-          LoadingSpinner: true,
+          TableSkeleton: true,
           ErrorAlert: true,
           NodeCategoryEditor: true,
           FeatureGate: { template: '<div><slot /></div>' },
@@ -118,14 +118,26 @@ describe('AdminNodeCategoriesView', () => {
     expect(wrapper.text()).not.toContain('No node categories configured')
   })
 
+  it('falls back to an empty list when the response omits items', async () => {
+    mockGet.mockResolvedValueOnce({ data: {}, error: null })
+    const wrapper = mountView([])
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No node categories configured')
+  })
+
   // ─── Loading state ────────────────────────────────────────────────────
 
-  it('shows loading spinner while fetching', async () => {
+  it('shows a table skeleton while fetching', async () => {
     mockGet.mockReturnValue(new Promise(() => {}))
     const wrapper = mount(AdminNodeCategoriesView, {
       global: {
         stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner">loading</div>' },
+          TableSkeleton: {
+            template: '<div data-testid="admin-node-categories-loading">loading</div>',
+            props: ['columns', 'rows', 'ariaLabel'],
+          },
           ErrorAlert: true,
           NodeCategoryEditor: true,
           FeatureGate: { template: '<div><slot /></div>' },
@@ -133,7 +145,7 @@ describe('AdminNodeCategoriesView', () => {
       },
     })
     await nextTick()
-    expect(wrapper.find('[data-testid="loading-spinner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-node-categories-loading"]').exists()).toBe(true)
   })
 
   // ─── Error state ──────────────────────────────────────────────────────
@@ -320,6 +332,25 @@ describe('AdminNodeCategoriesView', () => {
         params: { path: { category_id: 'cat-del-ok' } },
       }),
     )
+  })
+
+  it('disables the confirm button and shows the deleting label while the request is pending', async () => {
+    const cat = makeCategory({ id: 'cat-pending', name: 'Pending Delete' })
+    mockGet.mockResolvedValueOnce({ data: { items: [cat] }, error: null })
+    mockDelete.mockReturnValueOnce(new Promise(() => {}))
+    const wrapper = mountView([cat])
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="action-delete"]').trigger('click')
+    await nextTick()
+
+    const confirmButton = wrapper.find('[data-testid="admin-node-categories-delete-confirm"]')
+    await confirmButton.trigger('click')
+    await nextTick()
+
+    expect(confirmButton.text()).toBe('Deleting...')
+    expect(confirmButton.attributes('disabled')).toBeDefined()
   })
 
   it('shows error message when delete fails', async () => {

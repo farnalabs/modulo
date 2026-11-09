@@ -64,13 +64,19 @@ Modulo is a self-hosted Delivery Governance Platform: govern the software develo
 | **Database** | PostgreSQL 16 | Primary data store |
 | **Cache/queue** | Redis 8 | SAQ broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
-| **Orchestration** | Docker Compose + Fly.io | Managed hosting (app.modulo.run) / self-hosted single-server |
+| **Orchestration** | Docker Compose + Fly.io | Fly.io deployment path for the Modulo app and staging infrastructure; self-hosted deployments use Docker Compose or the native bundle |
 
 ## Key Components
 
 ### API Layer (`modulo/api/`)
 
-FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern – every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
+FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern: every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
+
+`POST /api/v1/determination/draft` returns an editable, read-only proposal contract (`proposal`) alongside the draft graph. The versioned `alpha.determination-proposal.v1` contract (`backend/src/modulo/determination/models.py`) keeps observed facts separate from derived elements, records confidence and uncertainty, preserves evidence references and a complete source inventory, names unavailable evidence and unresolved assumptions, and records the determination attempt and review state. Its activation status is always `not_activated`: producing a proposal never publishes or executes a pipeline, so the endpoint's existing read-only semantics and audit event are unchanged.
+
+`POST /api/v1/determination/review` records a reviewer's decision on such a proposal (`backend/src/modulo/determination/review.py`). It accepts the proposal contract, a `decision` of `approve`, `reject` or `needs_review`, an optional reason, optional corrections to derived elements (`corrected_derived_elements` edits a derived element's statement and/or confidence, `removed_derived_element_ids` removes one), and optional `acknowledged_assumption_ids`. Reject requires a non-blank reason. Approval is refused (422) while any unresolved assumption has `low` or `unknown` confidence and is not acknowledged by id; every acknowledged id must belong to the proposal, and corrections may only name the proposal's derived elements (an observed fact or an unknown id is refused). Corrections are applied to a copy and the result is revalidated as a full `ProposalContract`, which is returned with its `review_state` set from the decision.
+
+Review never activates a proposal: `activation_status` stays `not_activated`, no pipeline is created, no trigger is enabled and nothing is written to a connected tool; the response carries the reviewed contract plus the actor, timestamp and applied correction ids. The decision is recorded as one audit-chain event (`determination.proposal_review_decided`, resource type `determination_proposal`) carrying the decision, reason, acknowledged assumption ids, corrected and removed derived-element ids, `decided_at` and the actor, with the coarse `api_access_post` event from `audited()`. There is no review table and no migration: the audit event is the record of the decision (the reviewed proposal document itself is returned to the caller, not stored). The route reuses the `determination.scan` permission (operator scope) rather than adding a new permission key.
 
 Includes:
 - CORS middleware (configurable via `CORS_ORIGINS`)
@@ -1134,6 +1140,109 @@ The eight contracts in `backend/.importlinter`, all `forbidden` type. Each has e
 | Integration | testcontainers | <2m | Real Postgres |
 | BDD | pytest-bdd | <5m | Real Postgres |
 | E2E | Playwright | <10m | Real Postgres + Frontend |
+
+## Graph Contract Direction and Boundaries
+
+**Authoritative path: Pydantic → FastAPI OpenAPI → generated TypeScript.**
+
+The pipeline graph contract has a single source of truth:
+
+1. **Pydantic models** (`backend/src/modulo/api/routes/pipelines.py`):
+   `PipelineGraphNode`, `PipelineGraphEdge`, `PipelineGraphUpdate`, `PipelineGraphResponse`
+   and their nested types (`GraphPosition`, `ConnectorBinding`, `FanOutConfig`, etc.)
+   are the *only* authoritative definitions. They carry field constraints, enums,
+   validators, and serialisation logic (e.g. `strip_unset_connector_binding_inputs`).
+
+2. **FastAPI OpenAPI** (auto-generated): The route handlers
+   `GET /api/v1/pipelines/{pipeline_id}/graph` (response_model=`PipelineGraphResponse`)
+   and `PUT /api/v1/pipelines/{pipeline_id}/graph` (request_body=`PipelineGraphUpdate`,
+   response_model=`PipelineGraphResponse`) cause FastAPI to emit the full graph
+   contract into `openapi.json`. No manual schema authoring is required or permitted.
+
+3. **Generated TypeScript** (`frontend/src/lib/api/schema.ts`): The pinned
+   generator `pnpm dlx openapi-typescript@7.13.0` consumes the OpenAPI document
+   and produces `components['schemas']` with exact field names, nullability,
+   enums, defaults, and nested `$ref` structure. This file is **committed** and
+   updated only by the pinned generator (the `schema-freshness` CI gate fails on
+   drift). Hand-edits are forbidden.
+
+**What is explicitly NOT part of this contract:**
+- A parallel JSON Schema file (`graph.schema.json` or similar). No second
+  validation artifact is added; the Pydantic → OpenAPI → TypeScript pipeline
+  is the complete contract.
+- A separate "graph-schema" workflow or CI step. The existing `schema-freshness`
+  and `vue-tsc` gates are sufficient.
+
+**Boundaries enforced by tests (FAR-2475):**
+- `backend/tests/architecture/test_graph_openapi_contract.py` asserts the
+  published OpenAPI components (required/optional/nullable fields, enums,
+  defaults, pattern vs enum for `edge_type`, additionalProperties behaviour,
+  write-vs-response differences) against **literal pinned expectations**. A
+  drift in the Pydantic model fails the test, not the implementation.
+- `backend/tests/unit/api/test_pipeline_graph_roundtrip.py` drives the REAL
+  REST write/read handlers (`replace_pipeline_graph_endpoint` /
+  `get_pipeline_graph_endpoint`) against an in-memory SQLite database,
+  asserting semantic field preservation from payload → response → persisted
+  JSON → edit snapshot. Includes connector binding write-vs-response parity,
+  env-var masking, and MCP/REST equivalence (both funnel through
+  `replace_pipeline_graph`).
+- `backend/tests/integration/api/test_pipeline_graph_contract.py` (Docker-only)
+  mirrors the unit assertions against real Postgres with native advisory locks
+  and RLS.
+- `frontend/src/types/pipeline-graph-projection.ts` + spec
+  (`frontend/src/__tests__/pipeline-graph-projection.spec.ts`) consume the
+  generated `components['schemas']` and map to smaller canvas/layout types,
+  keeping UI-only layout fields (`selected`, `dragging`, `width`, `height`,
+  `zIndex`, edge styling) **strictly separate** from the semantic projection.
+  The spec proves the adapter omits UI-only fields and rejects unknown wire
+  keys.
+
+**Write-vs-Response differences (intentional):**
+- `PipelineGraphUpdate` (request) and `PipelineGraphResponse` (response)
+  share identical `nodes`/`edges` `$ref`s, but the response adds
+  `validation_issues` and `schema_translation_report` arrays. The response
+  serializer strips unset connector binding inputs (`filters`, `data`) that the
+  write path persists as ABSENT, so a GET→edit→PUT round-trip is stable.
+- Sensitive env vars / context files / parameter overrides are masked on
+  every read (`mask_pipeline_graph_node` with `SENSITIVE_VALUE_MASK`) but
+  persisted as the real values. A round-tripping masked read does NOT
+  overwrite secrets (resolved by `merge_masked_graph_nodes` before write).
+
+**MCP/REST equivalence:**
+Both the REST `PUT /graph` and MCP `update_pipeline_graph` validate via
+`PipelineGraphUpdate`, serialise via `strip_unset_connector_binding_inputs`,
+and persist via `replace_pipeline_graph` (same service layer). The unit test
+`test_mcp_and_rest_persist_identical_graph` asserts persisted JSON equivalence
+for non-masked fields (and runs whenever the unit suite runs).
+
+**Frontend consumption:**
+The editor never uses the full wire types directly. Instead,
+`projectGraph` / `projectGraphNode` / `projectGraphEdge` in
+`frontend/src/types/pipeline-graph-projection.ts` project the generated
+types to smaller `CanvasNodeProjection` / `CanvasEdgeProjection` types.
+UI-only state (`selected`, `dragging`, `width`, `height`, `zIndex`,
+edge animation/style) lives in separate `CanvasNodeUiState` /
+`CanvasEdgeUiState` interfaces and is NEVER sourced from the API payload.
+The adapter is pure (constructs new objects), so extra wire keys are dropped.
+
+| Layer | Artifact | Purpose |
+|-------|----------|---------|
+| Pydantic | `PipelineGraphNode`, `PipelineGraphEdge`, ... | Authoritative definition |
+| OpenAPI | `components.schemas.PipelineGraphNode`, ... | Published contract |
+| TypeScript | `components['schemas']['PipelineGraphNode']` | Frontend type safety |
+| Adapter | `projectGraph*` | Canvas projection (semantic only) |
+| UI state | `CanvasNodeUiState` | Editor-owned layout only |
+
+**Adding a new graph field:**
+1. Add the field to the relevant Pydantic model with constraints.
+2. If it is a write-only or response-only field, document the difference
+   in the model docstring and the table above.
+3. Run the architecture test; it will fail until the pinned expectation
+   is updated (intentional drift detection).
+4. Regenerate `frontend/src/lib/api/schema.ts` via `pnpm dlx openapi-typescript@7.13.0`.
+5. If the field is UI-relevant, add it to `projectGraphNode`/`projectGraphEdge`.
+6. If the field is UI-only (layout, styling), add it to `CanvasNodeUiState`
+   instead — it does not belong in the wire contract.
 
 Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
 (not just line coverage) over `src/modulo`, and `[tool.coverage.report]` sets

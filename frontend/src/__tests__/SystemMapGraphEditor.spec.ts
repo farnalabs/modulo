@@ -54,4 +54,67 @@ describe('SystemMapGraphEditor', () => {
 
     expect(wrapper.find('[data-testid="system-map-node-pipeline-5"]').exists()).toBe(true)
   })
+
+  it('marks the clicked node as selected and clears the previous selection', async () => {
+    const wrapper = mount(SystemMapGraphEditor, {
+      props: { nodes: [node('pipeline-1'), node('pipeline-2')], relationships: [], loopConfigs: [], nodeTypes: NODE_TYPES, relationshipTypes: RELATIONSHIP_TYPES },
+      global: { plugins: [i18n] },
+    })
+
+    const first = wrapper.get('[data-testid="system-map-node-pipeline-1"]')
+    const second = wrapper.get('[data-testid="system-map-node-pipeline-2"]')
+    expect(first.attributes('data-selected')).toBe('false')
+    expect(second.attributes('data-selected')).toBe('false')
+
+    await first.trigger('click')
+    expect(first.attributes('data-selected')).toBe('true')
+    expect(second.attributes('data-selected')).toBe('false')
+
+    await second.trigger('click')
+    expect(first.attributes('data-selected')).toBe('false')
+    expect(second.attributes('data-selected')).toBe('true')
+  })
+
+  it('makes each node card keyboard-reachable and selects it on focus', async () => {
+    const wrapper = mount(SystemMapGraphEditor, {
+      props: { nodes: [node('pipeline-1'), node('pipeline-2')], relationships: [], loopConfigs: [], nodeTypes: NODE_TYPES, relationshipTypes: RELATIONSHIP_TYPES },
+      global: { plugins: [i18n] },
+    })
+
+    const first = wrapper.get('[data-testid="system-map-node-pipeline-1"]')
+    const second = wrapper.get('[data-testid="system-map-node-pipeline-2"]')
+
+    expect(first.attributes('tabindex')).toBe('0')
+    expect(second.attributes('tabindex')).toBe('0')
+
+    await first.trigger('focusin')
+    expect(first.attributes('data-selected')).toBe('true')
+    expect(first.attributes('aria-current')).toBe('true')
+    expect(second.attributes('data-selected')).toBe('false')
+
+    await second.trigger('focusin')
+    expect(first.attributes('data-selected')).toBe('false')
+    expect(second.attributes('data-selected')).toBe('true')
+    expect(second.attributes('aria-current')).toBe('true')
+  })
+
+  it('selects the focused node with Enter and Space', async () => {
+    const wrapper = mount(SystemMapGraphEditor, {
+      props: { nodes: [node('pipeline-1'), node('pipeline-2')], relationships: [], loopConfigs: [], nodeTypes: NODE_TYPES, relationshipTypes: RELATIONSHIP_TYPES },
+      global: { plugins: [i18n] },
+    })
+
+    const first = wrapper.get('[data-testid="system-map-node-pipeline-1"]')
+    const second = wrapper.get('[data-testid="system-map-node-pipeline-2"]')
+    expect(first.attributes('tabindex')).toBe('0')
+    expect(second.attributes('tabindex')).toBe('0')
+
+    await first.trigger('keydown', { key: 'Enter' })
+    expect(first.attributes('data-selected')).toBe('true')
+    expect(second.attributes('data-selected')).toBe('false')
+
+    await second.trigger('keydown', { key: ' ' })
+    expect(first.attributes('data-selected')).toBe('false')
+    expect(second.attributes('data-selected')).toBe('true')
+  })
 })

@@ -15,6 +15,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+def _print_stdout(msg: str) -> None:
+    sys.stdout.write(msg + "\n")
+
+
+def _print_stderr(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+
+
 _TAG_RE = re.compile(
     r"bundle-v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)",
     re.ASCII,
@@ -93,6 +102,84 @@ def resolve_n_minus_1(release_pages: Any, current: str) -> str | None:
     return ordered[index - 1] if index else None
 
 
+def resolve_previous_release(release_pages: Any, current: str) -> str | None:
+    """Resolve the greatest published bundle tag strictly below *current*.
+
+    Unlike :func:`resolve_n_minus_1`, *current* need not be published.  The RC
+    validation gate resolves its rollback target when the RC is cut, before
+    ``release-unified.yml`` publishes the current ``bundle-v*`` release, so the
+    current version is excluded from the candidate set rather than required in
+    the release history.
+    """
+    current_version = _version(current)
+    predecessors = [tag for tag in published_tags(release_pages) if _version(tag) < current_version]
+    return predecessors[-1] if predecessors else None
+
+
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+_PINNED_IMAGE = "ghcr.io/farnalabs/modulo"
+
+
+def _subject_digests(subject: Any) -> set[str]:
+    """Extract valid SHA-256 digests from an attestation's image subjects."""
+    if not isinstance(subject, list):
+        return set()
+    digests: set[str] = set()
+    for entry in subject:
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("digest")
+        if not isinstance(digest, dict):
+            continue
+        value = digest.get("sha256")
+        if isinstance(value, str) and _DIGEST_RE.fullmatch(f"sha256:{value}"):
+            digests.add(f"sha256:{value}")
+    return digests
+
+
+def _attested_digests(payload: Any) -> set[str]:
+    """Collect digests only from verified in-toto statement subject fields.
+
+    ``gh attestation verify --format json`` emits one object per verified
+    attestation shaped ``{"attestation": ..., "verificationResult": {...}}``,
+    and the in-toto statement carrying the ``subject`` array lives at
+    ``verificationResult.statement``.  The unverified bundle under
+    ``attestation`` is deliberately never read: its contents are
+    workflow-controlled metadata, not the verified statement.  A bare in-toto
+    statement is also accepted at the top level.
+    """
+    if isinstance(payload, list):
+        digests: set[str] = set()
+        for item in payload:
+            digests.update(_attested_digests(item))
+        return digests
+    if not isinstance(payload, dict):
+        return set()
+
+    digests = _subject_digests(payload.get("subject"))
+    verification_result = payload.get("verificationResult")
+    if isinstance(verification_result, dict):
+        statement = verification_result.get("statement")
+        if isinstance(statement, dict):
+            digests.update(_subject_digests(statement.get("subject")))
+    return digests
+
+
+def verify_image_digest(image: str, resolved_digest: str, attestation: Any) -> str:
+    """Return the digest only when it is covered by published provenance."""
+    pinned_references = (f"{_PINNED_IMAGE}:", f"{_PINNED_IMAGE}@")
+    if image != _PINNED_IMAGE and not image.startswith(pinned_references):
+        raise ReleaseValidationError(f"image must be this project's GHCR reference ({_PINNED_IMAGE}): {image}")
+    if _DIGEST_RE.fullmatch(resolved_digest) is None:
+        raise ReleaseValidationError(f"resolved image digest is invalid: {resolved_digest}")
+    attested = _attested_digests(attestation)
+    if resolved_digest not in attested:
+        raise ReleaseValidationError(
+            f"published provenance for {image} does not contain resolved digest {resolved_digest}"
+        )
+    return resolved_digest
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -107,24 +194,44 @@ def _parser() -> argparse.ArgumentParser:
     predecessor = subparsers.add_parser("resolve-n-minus-1", help="resolve a release predecessor")
     predecessor.add_argument("--current", required=True)
     predecessor.add_argument("--release-json", type=Path, required=True)
+
+    previous = subparsers.add_parser(
+        "resolve-previous",
+        help="resolve the published predecessor of a not-yet-published release",
+    )
+    previous.add_argument("--current", required=True)
+    previous.add_argument("--release-json", type=Path, required=True)
+
+    image = subparsers.add_parser("verify-image-digest", help="verify an image digest against provenance")
+    image.add_argument("--image", required=True)
+    image.add_argument("--digest", required=True)
+    image.add_argument("--attestation-json", type=Path, required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        payload = _load_json(args.release_json)
-        if args.command == "validate":
-            print(validate_published_release(args.tag, payload))
-        elif args.command == "published-tags":
-            print("\n".join(published_tags(payload)))
+        if args.command == "verify-image-digest":
+            payload = _load_json(args.attestation_json)
+            _print_stdout(verify_image_digest(args.image, args.digest, payload))
         else:
-            predecessor = resolve_n_minus_1(payload, args.current)
-            if predecessor is not None:
-                print(predecessor)
+            payload = _load_json(args.release_json)
+            if args.command == "validate":
+                _print_stdout(validate_published_release(args.tag, payload))
+            elif args.command == "published-tags":
+                _print_stdout("\n".join(published_tags(payload)))
+            elif args.command == "resolve-n-minus-1":
+                predecessor = resolve_n_minus_1(payload, args.current)
+                if predecessor is not None:
+                    _print_stdout(predecessor)
+            else:
+                previous = resolve_previous_release(payload, args.current)
+                if previous is not None:
+                    _print_stdout(previous)
         return 0
     except ReleaseValidationError as exc:
-        print(f"release validation failed: {exc}", file=sys.stderr)
+        _print_stderr(f"release validation failed: {exc}")
         return 1
 
 

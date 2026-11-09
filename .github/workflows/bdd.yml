@@ -128,7 +128,7 @@ jobs:
         if: steps.detect.outputs.bdd == 'true'
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.10
+          version: 11.28.11
 
       - name: Set up Node
         if: steps.detect.outputs.bdd == 'true'
@@ -184,7 +184,10 @@ jobs:
       - name: Install backend deps
         if: steps.detect.outputs.bdd == 'true'
         working-directory: backend
-        run: uv sync --frozen
+        # Route through the shared retry wrapper: the lockfile pins pytest-bdd
+        # to a GitHub source archive and a transient codeload 5xx/timeout used
+        # to fail this job before a single scenario ran (run 42477715006).
+        run: bash ../scripts/uv_sync_with_retry.sh --frozen
 
       - name: Install Playwright browsers
         if: steps.detect.outputs.bdd == 'true'

@@ -304,6 +304,88 @@ describe('useSystemMapsStore CRUD', () => {
     await expect(store.saveDraft('map-1', [], [], 'notes')).rejects.toThrow('Could not save draft revision')
   })
 
+  it('carries existing loop configs into the new draft revision', async () => {
+    mockPost.mockResolvedValue({ data: { id: 'rev-2', revision_number: 2 } })
+    mockGet.mockResolvedValue({ data: { revision: { id: 'rev-2', revision_number: 2 }, nodes: [], relationships: [], loop_configs: [] } })
+    const store = useSystemMapsStore()
+    store.graph = {
+      revision: { id: 'rev-1', revision_number: 1, status: 'draft' },
+      nodes: [],
+      relationships: [],
+      loop_configs: [{
+        id: 'loop-1',
+        organisation_id: 'org-1',
+        revision_id: 'rev-1',
+        node_key: 'loop-node',
+        target_signal: 'failure_rate',
+        observation_window_seconds: 3600,
+        action_pipeline_id: 'pipeline-1',
+        budget_limit_usd: '25.00',
+        cooldown_seconds: 900,
+        outcome_metric: 'success_rate',
+        deleted_at: null,
+        deleted_by: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      }],
+    } as never
+
+    await store.saveDraft(
+      'map-1',
+      [{ node_key: 'loop-node', node_type: 'improvement_loop', display_name: 'Loop', position_x: 0, position_y: 0 }],
+      [],
+      'Manual save',
+    )
+
+    const body = (mockPost.mock.calls[0][1] as any).body
+    expect(body.loop_configs).toEqual([{
+      node_key: 'loop-node',
+      target_signal: 'failure_rate',
+      observation_window_seconds: 3600,
+      action_pipeline_id: 'pipeline-1',
+      budget_limit_usd: '25.00',
+      cooldown_seconds: 900,
+      outcome_metric: 'success_rate',
+    }])
+  })
+
+  it('drops loop configs whose improvement_loop node was removed or retyped', async () => {
+    mockPost.mockResolvedValue({ data: { id: 'rev-2', revision_number: 2 } })
+    mockGet.mockResolvedValue({ data: { revision: { id: 'rev-2', revision_number: 2 }, nodes: [], relationships: [], loop_configs: [] } })
+    const store = useSystemMapsStore()
+    const loopConfig = {
+      id: 'loop-1',
+      organisation_id: 'org-1',
+      revision_id: 'rev-1',
+      node_key: 'loop-node',
+      target_signal: 'failure_rate',
+      observation_window_seconds: 3600,
+      action_pipeline_id: 'pipeline-1',
+      budget_limit_usd: '25.00',
+      cooldown_seconds: 900,
+      outcome_metric: 'success_rate',
+      deleted_at: null,
+      deleted_by: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    store.graph = {
+      revision: { id: 'rev-1', revision_number: 1, status: 'draft' },
+      nodes: [],
+      relationships: [],
+      loop_configs: [loopConfig],
+    } as never
+
+    await store.saveDraft(
+      'map-1',
+      [{ node_key: 'loop-node', node_type: 'agent', display_name: 'Now an agent', position_x: 0, position_y: 0 }],
+      [],
+      'Manual save',
+    )
+
+    expect((mockPost.mock.calls[0][1] as any).body.loop_configs).toEqual([])
+  })
+
   it('publishes a revision and reloads the map', async () => {
     mockPost.mockResolvedValue({ data: undefined })
     mockGet.mockResolvedValue({ data: { id: 'map-1', published_revision_id: null } })

@@ -99,7 +99,7 @@ async def test_bridge_handoff_command_file_writes_single_line_command():
     with ExitStack() as stack:
         _bridge_patches(stack, sandbox, server)
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     written = {call.args[0]: call.args[1] for call in sandbox.files.write.call_args_list}
     assert written[_BRIDGE_CMD_PATH] == _SINGLE_LINE_COMMAND
     expected_wrapped = f"(\n{_BRIDGE_HANDOFF_COMMAND}\n) > {_SANDBOX_LOG_PATH} 2>&1"
@@ -122,7 +122,7 @@ async def test_bridge_handoff_command_file_holds_multiline_command_verbatim():
     with ExitStack() as stack:
         _bridge_patches(stack, sandbox, server)
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     written = {call.args[0]: call.args[1] for call in sandbox.files.write.call_args_list}
     assert written[_BRIDGE_CMD_PATH] == _MULTI_LINE_COMMAND
     expected_wrapped = f"(\n{_BRIDGE_HANDOFF_COMMAND}\n) > {_SANDBOX_LOG_PATH} 2>&1"
@@ -147,7 +147,7 @@ async def test_bridge_cmd_file_write_failure_falls_back_to_plain_command(caplog)
         _bridge_patches(stack, sandbox, server)
         stack.enter_context(caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"))
         result = await fn(_run_state())
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert any("loop_intercept_setup_failed" in m for m in caplog.messages)
     expected_wrapped = f"(\n{_SINGLE_LINE_COMMAND}\n) > {_SANDBOX_LOG_PATH} 2>&1"
     wrapped = sandbox.commands.run.call_args.args[0]
