@@ -1,11 +1,14 @@
 """FAR-2327: the macOS installer normalize step must honour reusable-workflow call inputs
 even when the caller (release-unified) was itself started by workflow_dispatch."""
 
+import hashlib
 import http.server
+import io
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import threading
 from pathlib import Path
 
@@ -468,14 +471,165 @@ def test_macos_spa_root_gate_uses_the_readiness_poller() -> None:
     assert "# BEGIN spa_root_html_ready" in build_run
 
 
-def test_macos_intel_homebrew_withdrawal_is_explicit_and_actionable() -> None:
-    """FAR-2479: an Intel Homebrew failure must name its cause, not fail opaquely."""
+def _build_tools_step() -> str:
     workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "macos-installer.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["build"]["steps"]
     step = next(step for step in steps if step.get("name") == "Install build tools")
     run = step.get("run")
     assert isinstance(run, str)
-    assert "Homebrew no longer builds bottles for the Intel (x86_64) macOS configuration" in run
-    assert "::error::Homebrew could not install %s on Intel (x86_64) macOS" in run
-    assert "::error::brew update failed on Intel (x86_64) macOS" in run
+    return run
+
+
+def test_macos_intel_homebrew_withdrawal_is_explicit_and_actionable() -> None:
+    """FAR-2479: the Intel build must state why it no longer uses Homebrew."""
+    run = _build_tools_step()
+    assert "Intel (x86_64) macOS is a Homebrew Tier-3 configuration with no bottles" in run
+    assert "FAR-2486" in run
     assert 'test "$(uname -m)" =' in run
+
+
+# ---------------------------------------------------------------------------
+# FAR-2486: the Intel macOS installer must not depend on Homebrew at all.
+# The only Homebrew-installed build tool was shellcheck, so the Intel branch
+# installs a pinned, SHA-256-verified upstream release instead. arm64 keeps the
+# existing Homebrew path unchanged.
+# ---------------------------------------------------------------------------
+
+_X86_64_SHELLCHECK_SHA256 = "c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51"
+_ARM64_SHELLCHECK_SHA256 = "339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f"
+
+
+def test_macos_intel_build_tools_use_pinned_download_and_never_homebrew() -> None:
+    """FAR-2486: the x86_64 branch installs a pinned release, not a brew formula."""
+    run = _build_tools_step()
+    lines = [line.strip() for line in run.splitlines()]
+
+    x86_branch = next(index for index, line in enumerate(lines) if 'if [[ "$MACOS_ARCH" == x86_64 ]]; then' in line)
+    arm64_else = next(index for index, line in enumerate(lines) if line == "else" and index > x86_branch)
+    intel_branch = "\n".join(lines[x86_branch:arm64_else])
+
+    assert "bash scripts/macos/install-pinned-shellcheck.sh" in intel_branch
+    assert '"$MACOS_ARCH" "$SHELLCHECK_BIN_DIR"' in intel_branch
+    assert "$GITHUB_PATH" in intel_branch
+    assert "brew install" not in intel_branch
+    assert "brew update" not in intel_branch
+
+
+def test_macos_arm64_build_tools_keep_the_homebrew_path() -> None:
+    """FAR-2486: arm64 behaviour is unchanged - Homebrew still installs shellcheck."""
+    run = _build_tools_step()
+    arm64_section = run.split("else\n", 2)[1]
+    assert "brew update" in arm64_section
+    assert "brew install shellcheck" in arm64_section
+
+
+def _pinned_shellcheck_script() -> str:
+    script_path = REPO_ROOT / "scripts" / "macos" / "install-pinned-shellcheck.sh"
+    assert script_path.is_file()
+    return script_path.read_text(encoding="utf-8")
+
+
+def test_pinned_shellcheck_manifest_pins_a_verified_asset_per_architecture() -> None:
+    """FAR-2486: each architecture resolves a pinned tarball and a pinned SHA-256."""
+    script = _pinned_shellcheck_script()
+    assert "https://github.com/koalaman/shellcheck/releases/download" in script
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.x86_64.tar.gz" in script
+    assert "shellcheck-${SHELLCHECK_VERSION}.darwin.aarch64.tar.gz" in script
+    assert _X86_64_SHELLCHECK_SHA256 in script
+    assert _ARM64_SHELLCHECK_SHA256 in script
+    assert _X86_64_SHELLCHECK_SHA256 != _ARM64_SHELLCHECK_SHA256
+    assert "set -euo pipefail" in script
+    # The transport stays HTTPS-only by default; nothing here may downgrade it.
+    assert "${SHELLCHECK_DOWNLOAD_PROTOCOLS:-https}" in script
+
+
+def _pinned_shellcheck_driver(tmp_path: Path) -> Path:
+    """Write a driver that runs the workflow script's verify+install block verbatim."""
+    script = _pinned_shellcheck_script()
+    marked = _extract_marked_bash(script, "shellcheck_verify_install")
+    driver = tmp_path / "shellcheck_verify_driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        + marked
+        + """
+status=0
+verify_and_install_shellcheck "$1" "$2" "$3" "v0.11.0" "$4" || status=$?
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+    return driver
+
+
+def _write_shellcheck_tarball(path: Path, payload: str) -> str:
+    """Create a release-shaped tar.gz containing shellcheck-v0.11.0/shellcheck."""
+    data = payload.encode("utf-8")
+    with tarfile.open(path, "w:gz") as archive:
+        info = tarfile.TarInfo("shellcheck-v0.11.0/shellcheck")
+        info.size = len(data)
+        info.mode = 0o755
+        archive.addfile(info, io.BytesIO(data))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_pinned_shellcheck_installs_only_a_checksum_verified_archive(tmp_path: Path) -> None:
+    """FAR-2486: a matching digest installs the binary and runs shellcheck --version."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    tarball = tmp_path / "shellcheck-v0.11.0.darwin.x86_64.tar.gz"
+    digest = _write_shellcheck_tarball(
+        tarball,
+        "#!/usr/bin/env bash\nprintf 'ShellCheck - shell script analysis tool\\nversion: 0.11.0\\n'\n",
+    )
+    prefix = tmp_path / "install"
+
+    # Relative paths: GNU tar treats "C:/..." in `-C` as a remote host spec.
+    result = _run_bash_file(
+        driver,
+        [tarball.name, digest, "install", "work"],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (prefix / "shellcheck").is_file()
+    assert "verified sha256 of" in result.stderr
+    assert "version: 0.11.0" in result.stderr
+
+
+def test_pinned_shellcheck_refuses_a_tampered_archive(tmp_path: Path) -> None:
+    """FAR-2486: a digest mismatch fails closed and installs nothing."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    tarball = tmp_path / "shellcheck-v0.11.0.darwin.x86_64.tar.gz"
+    digest = _write_shellcheck_tarball(tarball, "#!/usr/bin/env bash\nexit 0\n")
+    tarball.write_bytes(tarball.read_bytes() + b"tampered")
+    prefix = tmp_path / "install"
+
+    result = _run_bash_file(
+        driver,
+        [tarball.as_posix(), digest, prefix.as_posix(), (tmp_path / "work").as_posix()],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "checksum verification failed" in result.stderr
+    assert not (prefix / "shellcheck").exists()
+
+
+def test_pinned_shellcheck_refuses_a_missing_archive(tmp_path: Path) -> None:
+    """FAR-2486: an absent download is a hard failure, never a skipped check."""
+    driver = _pinned_shellcheck_driver(tmp_path)
+    prefix = tmp_path / "install"
+
+    result = _run_bash_file(
+        driver,
+        [
+            (tmp_path / "absent.tar.gz").as_posix(),
+            _X86_64_SHELLCHECK_SHA256,
+            prefix.as_posix(),
+            (tmp_path / "work").as_posix(),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "missing or empty" in result.stderr
+    assert not prefix.exists()
