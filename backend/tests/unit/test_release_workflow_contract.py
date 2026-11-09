@@ -613,16 +613,149 @@ def test_macos_staple_helper_keeps_every_hard_gate() -> None:
     assert "set -euo pipefail" in helper
 
 
-def test_macos_staple_retry_republishes_with_clobber() -> None:
-    text = STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8")
+def _step(workflow: dict[str, Any], job_id: str, step_name: str) -> dict[str, Any]:
+    for step in workflow["jobs"][job_id].get("steps", []):
+        if step.get("name") == step_name:
+            return step
+    raise AssertionError(f"job {job_id!r} has no step named {step_name!r}")
 
-    assert "gh release upload" in text, "the retry must attach the stapled DMG to the release"
-    assert "--clobber" in text, "replacing the unstapled asset requires --clobber"
+
+def _release_upload_command(workflow: dict[str, Any], job_id: str, step_name: str) -> str:
+    """Return the full `gh release upload` invocation, continuations joined.
+
+    Scoped to the named step on purpose: `gh release download ... --clobber`
+    also appears in these workflows, and the completion marker has its own
+    `gh release upload`, so a whole-file `"--clobber" in text` check passes even
+    when `--clobber` is removed from the DMG upload.
+    """
+    script = _step(workflow, job_id, step_name)["run"]
+    lines = script[script.index("gh release upload") :].splitlines()
+    command: list[str] = []
+    for line in lines:
+        command.append(line.strip())
+        if not line.rstrip().endswith("\\"):
+            break
+    return " ".join(command)
+
+
+def test_macos_staple_retry_republishes_with_clobber() -> None:
+    workflow = _staple_retry_workflow()
+    upload = _release_upload_command(workflow, "publish-stapled", "Publish the stapled DMG(s) and refreshed manifest")
+
+    assert "gh release upload" in upload, "the retry must attach the stapled DMG to the release"
+    assert "--clobber" in upload.split(), "replacing the unstapled asset requires --clobber on the upload"
     # The retry regenerates the checksum file and signed manifest in the same job
     # as the clobber, so replacement never publishes stale hashes.
+    text = STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8")
     assert "SHA256SUMS" in text
     assert "RELEASE_MANIFEST.json" in text
     assert "sha256sum --check SHA256SUMS" in text
+
+
+def test_macos_staple_retry_republish_is_consistency_driven() -> None:
+    workflow = _staple_retry_workflow()
+    publish = workflow["jobs"]["publish-stapled"]
+    condition = " ".join(str(publish["if"]).split())
+
+    assert "needs.resolve-target.outputs.release_tag != ''" in condition
+    # Regression pin: gating the publish job on the staple result is what left a
+    # partial upload permanently unrepaired - the next run's staple is a no-op
+    # `unchanged`, so nothing ever regenerated the stale metadata.
+    assert "needs.staple.outputs.changed" not in condition, (
+        "publication must be driven by metadata consistency, not by whether this run stapled"
+    )
+
+    detect = _step(workflow, "publish-stapled", "Detect whether the release metadata matches its artefacts")
+    script = detect["run"]
+    assert "needs_republish" in script
+    assert "SHA256SUMS" in script
+    assert "RELEASE_MANIFEST.json" in script
+    # The decision is made from the release's ACTUAL bytes, not from the staple log.
+    assert "sha256" in script
+    for step_name in (
+        "Regenerate SHA256SUMS and the signed release manifest",
+        "Publish the stapled DMG(s) and refreshed manifest",
+    ):
+        step = _step(workflow, "publish-stapled", step_name)
+        assert "needs_republish == 'true'" in str(step.get("if", "")), (
+            f"{step_name!r} must only run when the metadata disagrees with the artefacts"
+        )
+
+
+def test_macos_staple_retry_verifies_the_published_metadata() -> None:
+    workflow = _staple_retry_workflow()
+    verify = _step(workflow, "publish-stapled", "Verify the published release metadata")
+    script = verify["run"]
+
+    assert "needs_republish == 'true'" in str(verify.get("if", ""))
+    # Re-reads the metadata FROM the release - the local copies prove nothing
+    # about what was published.
+    assert "gh release download" in script
+    assert "SHA256SUMS" in script
+    assert "RELEASE_MANIFEST.json" in script
+    # ...and compares it against the published asset digests, failing on mismatch.
+    assert "releases/tags" in script
+    assert "verify_signature" in script
+    assert "raise SystemExit" in script
+
+
+def test_macos_staple_retry_records_and_honours_a_completion_marker() -> None:
+    workflow = _staple_retry_workflow()
+    resolve = _step(workflow, "resolve-target", "Resolve version, release tag and architectures")
+    resolve_script = resolve["run"]
+
+    # The marker is honoured in the LINUX resolve job, so a completed release
+    # never spawns a paid macOS runner on the 30-minute schedule.
+    assert workflow["jobs"]["resolve-target"]["runs-on"] == "ubuntu-latest"
+    assert "MACOS_STAPLED.json" in resolve_script
+    assert 'completed="true"' in resolve_script
+    assert "completed=%s" in resolve_script
+    completed_output = workflow["jobs"]["resolve-target"].get("outputs", {}).get("completed")
+    assert completed_output == "${{ steps.resolve.outputs.completed }}"
+    # Short-circuiting blanks the target so the staple job's `architectures != ''`
+    # guard cannot start it.
+    assert 'architectures="' in resolve_script
+    assert workflow["jobs"]["staple"]["if"] == "needs.resolve-target.outputs.architectures != ''"
+
+    record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
+    assert "gh release upload" in record["run"]
+    assert "MACOS_STAPLED.json" in record["run"]
+    # Only a successful staple may claim completion - otherwise a still-
+    # propagating ticket would be recorded as finished - and the marker must
+    # never be written after a failed verification (an explicit `if:` replaces a
+    # step's implicit success() guard, so it is spelled out).
+    record_condition = " ".join(str(record["if"]).split())
+    assert "needs.staple.result == 'success'" in record_condition
+    assert "success()" in record_condition
+
+
+def test_release_unified_staple_dispatch_is_non_fatal() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+    job = workflow["jobs"]["dispatch-staple-retry"]
+    step = next(s for s in job["steps"] if "gh workflow run macos-staple-retry.yml" in str(s.get("run", "")))
+    script = step["run"]
+
+    assert "for attempt in 1 2 3" in script, "the dispatch must retry"
+    assert "::warning::" in script, "a final dispatch failure must be reported, not silent"
+    assert script.rstrip().endswith("exit 0"), "a dispatch failure must not fail a published release"
+    # A failed post-publication dispatch must never be masked with a banned
+    # `continue-on-error` (structural check - the script comments name the ban).
+    assert not job.get("continue-on-error")
+    for job_step in job["steps"]:
+        assert not job_step.get("continue-on-error")
+
+
+def test_macos_staple_retry_python_heredocs_compile() -> None:
+    workflow = _staple_retry_workflow()
+    scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str) and "<<'PY'" in step["run"]
+    ]
+    assert scripts, "the staple retry workflow must embed its Python logic"
+    for script in scripts:
+        compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
 
 
 def test_macos_staple_retry_manifest_heredoc_compiles_as_python() -> None:

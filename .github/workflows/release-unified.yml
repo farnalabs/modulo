@@ -2243,17 +2243,28 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="bundle-v${VERSION}"
-          # `gh workflow run` needs actions:write on the workflow token. The
-          # dispatch is fail-loud: if it cannot be queued, the release is
-          # already published, and the operator sees the failure rather than a
-          # silently unstapled release.
-          gh workflow run macos-staple-retry.yml \
-            --repo "$REPO" \
-            --ref main \
-            -f version="$VERSION" \
-            -f architecture=all \
-            -f release_tag="$RELEASE_TAG"
-          echo "Dispatched macos-staple-retry.yml for ${RELEASE_TAG}"
+          # The release is ALREADY published at this point, so a failed dispatch
+          # must never fail the run or roll it back. Retry a few times, then
+          # report a non-fatal outcome explicitly: `continue-on-error` is banned
+          # by .semgrep/continue-on-error-in-ci.yaml, and the 30-minute scheduled
+          # backstop in macos-staple-retry.yml staples the release regardless.
+          for attempt in 1 2 3; do
+            if gh workflow run macos-staple-retry.yml \
+              --repo "$REPO" \
+              --ref main \
+              -f version="$VERSION" \
+              -f architecture=all \
+              -f release_tag="$RELEASE_TAG"; then
+              echo "Dispatched macos-staple-retry.yml for ${RELEASE_TAG} (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Dispatch attempt ${attempt} failed."
+            if [ "$attempt" -lt 3 ]; then
+              sleep 10
+            fi
+          done
+          echo "::warning::Could not dispatch macos-staple-retry.yml for ${RELEASE_TAG} after 3 attempts - the release is unaffected; the scheduled backstop will staple it."
+          exit 0
 
   # ---------------------------------------------------------------------------
   # Final GA compose asset (promote only)
