@@ -1909,6 +1909,21 @@ elements:
       - testid: admin-spend-limits-ceiling-save
         type: button
         dynamic_testid: false
+      - testid: admin-spend-limits-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-spend-limits-ceiling-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-spend-limits-costs-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-spend-limits-teams-empty
+        type: element
+        dynamic_testid: false
+      - testid: admin-spend-limits-costs-empty
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
