@@ -1683,7 +1683,7 @@
   append-to="body"
   :placeholder="$t('views.PipelineEditorView.normal')"
   class="w-full"
-  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
+  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }]"
   option-label="label"
   option-value="value"
 >
@@ -4443,7 +4443,7 @@ async function saveEdgeConfig() {
     })
     await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: graphPayload as any,
+      body: graphPayload as unknown as components['schemas']['PipelineGraphUpdate'],
       signal,
     }))
     await loadGraph()
@@ -5716,7 +5716,7 @@ async function saveGraph() {
     })
     const saveResponse = await withTimeout((signal) => api.PUT('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-      body: graphPayload as any,
+      body: graphPayload as unknown as components['schemas']['PipelineGraphUpdate'],
       signal,
     }))
     // openapi-fetch returns HTTP failures in `error` without rejecting. Treat

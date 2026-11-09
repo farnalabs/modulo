@@ -33,7 +33,8 @@ const routingEdges = [
   {
     ...edge,
     id: '00000000-0000-0000-0000-000000000004',
-    edge_type: 'llm',
+    edge_type: 'conditional',
+    condition_expression: 'status == "ok"',
     routing_label: 'retry',
   },
 ]
@@ -63,7 +64,7 @@ describe('canonical pipeline graph schema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('accepts loop and LLM routing edge fields', () => {
+  it('accepts loop and conditional routing edge fields', () => {
     const parsed = validateCanonicalGraph({
       nodes: [
         {
@@ -82,7 +83,22 @@ describe('canonical pipeline graph schema', () => {
 
     expect(parsed.edges[0].max_iterations).toBe(3)
     expect(parsed.edges[1].routing_label).toBe('retry')
-    expect(parsed.edges[1].edge_type).toBe('llm')
+    expect(parsed.edges[1].edge_type).toBe('conditional')
+  })
+
+  it("rejects 'llm' as an edge_type because it is a node routing_mode, not an edge kind", () => {
+    // The backend PipelineGraphEdge write model constrains edge_type to
+    // normal|reject|conditional|loop; an 'llm' edge is a 422. The compiler
+    // derives LLM branching from the source node's routing_mode.
+    const result = safeValidateCanonicalGraph({
+      nodes: [node],
+      edges: [{ ...edge, edge_type: 'llm' }],
+    })
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.message).toContain('invalid edge_type')
+    }
   })
 
   it('validates complete graph payloads for save requests', () => {

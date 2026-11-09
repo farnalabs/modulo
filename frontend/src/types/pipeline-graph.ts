@@ -31,7 +31,10 @@ const EDGE_FIELDS = new Set([
   'source', 'target', 'type',
 ])
 const NODE_TYPES = new Set(['agent', 'manual', 'composite', 'sandbox_agent', 'router', 'hitl', 'join', 'dispatch', 'connector'])
-const EDGE_TYPES = new Set(['normal', 'reject', 'conditional', 'loop', 'llm'])
+// Edge types mirror the backend write model exactly. 'llm' is a node
+// routing_mode, not an edge type: the compiler derives LLM branching from the
+// source node and the API rejects an edge_type of 'llm' with a 422.
+const EDGE_TYPES = new Set(['normal', 'reject', 'conditional', 'loop'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
