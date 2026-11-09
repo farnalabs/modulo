@@ -2042,6 +2042,29 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper.unmount()
   })
 
+  it('normalises legacy source/target/type aliases and defaults edge_type on save (FAR-2457)', async () => {
+    // buildEdgePayload's fallbacks keep imported/historical edges that carry
+    // only the VueFlow-style `source`/`target`/`type` aliases savable.
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'a', node_type: 'agent', label: 'A', position: { x: 0, y: 0 } }]
+    vm.rawEdges = [{ id: 'legacy-edge', source: 'a', target: 'b', type: 'normal' }]
+    ;(api.PUT as ReturnType<typeof vi.fn>).mockClear()
+
+    await vm.saveGraph()
+
+    const savedEdge = (vi.mocked(api.PUT).mock.calls[0][1] as any).body.edges[0]
+    expect(savedEdge.source_node_id).toBe('a')
+    expect(savedEdge.target_node_id).toBe('b')
+    expect(savedEdge.edge_type).toBe('normal')
+    expect(savedEdge.source_port).toBe('out')
+    expect(savedEdge.target_port).toBe('in')
+    wrapper.unmount()
+  })
+
   it('saves the edge config and reloads the graph', async () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },

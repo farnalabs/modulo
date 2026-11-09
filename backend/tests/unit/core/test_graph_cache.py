@@ -76,6 +76,21 @@ def test_graph_allowlist_rejects_unknown_fields():
         _reject_unknown_graph_fields({"nodes": [{"id": "node-1", "typo": True}], "edges": []})
 
 
+def test_graph_allowlist_rejects_unknown_top_level_fields():
+    with pytest.raises(ValueError, match="graph_json contains unknown fields"):
+        _reject_unknown_graph_fields({"nodes": [], "edges": [], "typo": True})
+
+
+def test_graph_allowlist_rejects_non_list_entries():
+    with pytest.raises(ValueError, match="graph_json nodes must be a list"):
+        _reject_unknown_graph_fields({"nodes": {}, "edges": []})
+
+
+def test_graph_allowlist_rejects_non_object_entries():
+    with pytest.raises(ValueError, match="graph_json node at index 0 must be an object"):
+        _reject_unknown_graph_fields({"nodes": ["not-a-node"], "edges": []})
+
+
 def test_build_graph_from_json_accepts_runtime_consumed_node_fields():
     """The compile path must accept node fields node_runner still reads from
     imported/historical snapshots (prompt_template, model_backend_id,
