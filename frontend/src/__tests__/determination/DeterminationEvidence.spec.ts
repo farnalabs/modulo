@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
+import DeterminationEvidencePanel from '../../components/determination/DeterminationEvidencePanel.vue'
 import DeterminationProposalPanel from '../../components/determination/DeterminationProposalPanel.vue'
 import {
   displayEvidenceText,
@@ -8,6 +9,7 @@ import {
   looksLikeSecret,
   provenanceBadgeClass,
   unavailableEvidenceKey,
+  type EvidenceElementView,
 } from '../../components/determination/evidencePresentation'
 import type {
   DeterminationProposal,
@@ -182,6 +184,25 @@ describe('evidencePresentation', () => {
     expect(displayEvidenceText('scan:repos')).toEqual({ withheld: false, text: 'scan:repos' })
   })
 
+  it('detects long high-entropy blobs but not hex digests or plain words', () => {
+    // Long, non-hex and mixed upper/lower/digit: a bare token.
+    expect(looksLikeSecret('AbCdEf0123456789abcdefghijABCDEF0123456789')).toBe(true)
+    // Each is long, non-hex and lacks one entropy class, so none is a token.
+    expect(looksLikeSecret('abcdefghijklmnopqrstuvwxyz0123456789abcdef')).toBe(false)
+    expect(looksLikeSecret('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEF')).toBe(false)
+    expect(looksLikeSecret('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST')).toBe(false)
+    // A 40-char hex digest is a locator, not a credential.
+    expect(looksLikeSecret('0123456789abcdef0123456789abcdef01234567')).toBe(false)
+  })
+
+  it('withholds a bare bearer token that has no assignment prefix', () => {
+    expect(looksLikeSecret('Bearer abcDEF123456ghijklmnop')).toBe(true)
+    expect(displayEvidenceText('Bearer abcDEF123456ghijklmnop')).toEqual({
+      withheld: true,
+      text: '',
+    })
+  })
+
   it('keys unavailable evidence by its own content, never by position', () => {
     const first = { source_id: 'c-2:issues', requested_resource: 'issues', reason: 'timeout' }
     const second = { source_id: 'c-2:issues', requested_resource: 'issues', reason: 'not found' }
@@ -320,6 +341,123 @@ describe('Determination evidence drill-down', () => {
     expect(panel.text()).toContain('evidence:c-9')
     expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
   })
+
+  it('withholds a credential-shaped uncertainty instead of rendering it', async () => {
+    const next = proposal()
+    next.unresolved_assumptions = [
+      {
+        ...next.unresolved_assumptions![0],
+        reason: 'api_key=ghp_abcdefghijklmnopqrstuvwxyz012345',
+      },
+    ]
+    const wrapper = mountPanel({ proposal: next })
+
+    const panel = await openEvidence(wrapper, 'determination-assumption', 0)
+
+    expect(
+      panel.find('[data-testid="determination-evidence-panel-uncertainty-withheld"]').exists(),
+    ).toBe(true)
+    expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
+  })
+
+  it('closes on a backdrop click but not on a click inside the panel', async () => {
+    const wrapper = mountPanel()
+
+    await openEvidence(wrapper, 'determination-observed-fact', 0)
+
+    // A click on a child bubbles to the dialog with a different target: keep open.
+    await wrapper.find('[data-testid="determination-evidence-panel-statement"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="determination-evidence-panel"]').exists()).toBe(true)
+
+    // A click on the dialog root itself is a backdrop click: close.
+    await wrapper.find('[data-testid="determination-evidence-panel"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="determination-evidence-panel"]').exists()).toBe(false)
+  })
+
+  it('emits close for a native close while selected and tolerates a second close request', async () => {
+    const element: EvidenceElementView = {
+      id: 'e-1',
+      kind: 'observed',
+      statement: 'Observed record',
+      confidence: 'high',
+      evidenceRefs: [],
+      uncertainty: null,
+    }
+    const wrapper = mount(DeterminationEvidencePanel, { props: { element } })
+    await flushPromises()
+
+    const dialog = wrapper.find('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+
+    // A browser-native close (not routed through requestClose) still emits.
+    ;(dialog.element as HTMLDialogElement).close()
+    await vi.waitFor(() => expect(wrapper.emitted('close')).toHaveLength(1))
+
+    // requestClose on an already-closed dialog must not throw and still emits.
+    await wrapper.find('[data-testid="determination-evidence-panel-close"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(2)
+  })
+
+  it('closes the drill-down when the selected element disappears from the proposal', async () => {
+    const wrapper = mountPanel()
+    await openEvidence(wrapper, 'determination-derived-element', 0)
+    expect(wrapper.find('[data-testid="determination-evidence-panel"]').exists()).toBe(true)
+
+    const next = proposal()
+    next.derived_elements = []
+    await wrapper.setProps({ proposal: next })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="determination-evidence-panel"]').exists()).toBe(false)
+  })
+
+  it('opens an element that has no evidence_refs field with an explicit empty state', async () => {
+    const next = proposal()
+    next.derived_elements = [
+      { id: 'dddd', statement: 'No references', kind: 'derived', confidence: 'high' },
+    ] as DeterminationProposal['derived_elements']
+    const wrapper = mountPanel({ proposal: next })
+
+    const panel = await openEvidence(wrapper, 'determination-derived-element', 0)
+
+    expect(panel.find('[data-testid="determination-evidence-empty"]').exists()).toBe(true)
+  })
+})
+
+describe('Determination proposal panel states', () => {
+  it('renders the loading state', () => {
+    const wrapper = mount(DeterminationProposalPanel, {
+      props: { proposal: null, loading: true, error: null },
+    })
+
+    expect(wrapper.find('[data-testid="determination-proposal-loading"]').exists()).toBe(true)
+  })
+
+  it('renders the empty state when no proposal, no error and not loading', () => {
+    const wrapper = mount(DeterminationProposalPanel, {
+      props: { proposal: null, loading: false, error: null },
+    })
+
+    expect(wrapper.find('[data-testid="determination-proposal-empty"]').exists()).toBe(true)
+  })
+
+  it('withholds a credential-shaped unavailable-evidence reason', () => {
+    const next = proposal()
+    next.unavailable_evidence = [
+      {
+        source_id: 'c-2:issues',
+        requested_resource: 'issues',
+        reason: 'token=ghp_abcdefghijklmnopqrstuvwxyz012345',
+      },
+    ]
+    const wrapper = mountPanel({ proposal: next })
+
+    const row = wrapper.find('[data-testid="determination-unavailable-row"]')
+    expect(row.find('[data-testid="determination-evidence-withheld"]').exists()).toBe(true)
+    expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
+  })
 })
 
 describe('Determination provenance trail', () => {
@@ -379,6 +517,32 @@ describe('Determination provenance trail', () => {
     expect(unavailable[0].text()).toContain('c-2:issues')
     expect(unavailable[0].text()).toContain('issues')
     expect(unavailable[0].text()).toContain('connector query timed out')
+  })
+
+  it('withholds credential-shaped provenance locators and source errors', () => {
+    const next = proposal()
+    next.provenance = [ref('evidence:c-9', 'c-9', 'token=ghp_abcdefghijklmnopqrstuvwxyz012345')]
+    next.attempt = {
+      ...next.attempt,
+      source_inventory: [
+        {
+          source_id: 'c-9:repos',
+          connector_type: 'github',
+          resource: 'repos',
+          sample_count: 0,
+          status: 'unavailable',
+          error: 'api_key=ghp_abcdefghijklmnopqrstuvwxyz012345',
+        },
+      ],
+    }
+    const wrapper = mountPanel({ proposal: next })
+
+    const provenanceRow = wrapper.find('[data-testid="determination-provenance-row"]')
+    expect(provenanceRow.find('[data-testid="determination-evidence-withheld"]').exists()).toBe(true)
+
+    const sourceRow = wrapper.find('[data-testid="determination-source-row"]')
+    expect(sourceRow.find('[data-testid="determination-source-error"]').text()).toContain('withheld')
+    expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
   })
 
   it('marks every proposal element with its kind so an inference is never shown as observed', () => {

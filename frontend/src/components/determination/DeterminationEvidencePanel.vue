@@ -122,12 +122,10 @@ watch(
   () => props.element,
   async (element) => {
     await nextTick()
+    // `v-if="element"` means a truthy element guarantees the dialog is
+    // rendered; a cleared element unmounts it, so there is nothing to close.
     const dialog = dialogRef.value
-    if (element && dialog && !dialog.open) {
-      dialog.showModal()
-    } else if (!element && dialog?.open) {
-      dialog.close()
-    }
+    if (element && !dialog!.open) dialog!.showModal()
   },
   { immediate: true },
 )

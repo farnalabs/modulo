@@ -14,6 +14,9 @@ code:
   - frontend/src/components/determination/DeterminationProposalPanel.vue
   - frontend/src/components/determination/DeterminationReviewPanel.vue
   - frontend/src/components/determination/DeterminationEvidenceRefs.vue
+  - frontend/src/components/determination/DeterminationEvidencePanel.vue
+  - frontend/src/components/determination/DeterminationProvenanceTrail.vue
+  - frontend/src/components/determination/evidencePresentation.ts
   - frontend/src/components/determination/confidencePresentation.ts
   - frontend/src/composables/useDetermination.ts
   - frontend/src/router/index.ts
@@ -28,13 +31,14 @@ unit-tests:
   - backend/tests/unit/determination/test_review.py
   - backend/tests/unit/determination/test_scanner.py
   - frontend/src/__tests__/DeterminationView.spec.ts
+  - frontend/src/__tests__/determination/DeterminationEvidence.spec.ts
   - frontend/src/__tests__/determination/DeterminationReviewPanel.spec.ts
 bdd: []
 delivery-tasks: []
 depends-on:
   - feat-connectors
   - feat-core-evidence-store
-status: partial
+status: covered
 ---
 
 # Determination (`/determination`)
@@ -57,7 +61,9 @@ trigger, or writes to a connected tool.
 - [x] The backend refuses an approve while an unacknowledged low/unknown-confidence assumption remains (422), refuses an acknowledged id or corrected element that is not part of the proposal, revalidates corrections as a full `ProposalContract`, and pins `activation_status` to `not_activated` (`backend/src/modulo/determination/review.py`).
 - [x] The decision is recorded as one audit-chain event (`determination.proposal_review_decided`, resource type `determination_proposal`) carrying the decision, reason, acknowledged assumption ids, corrected/removed derived-element ids, `decided_at` and the actor; the route reuses the operator-scope `determination.scan` permission rather than adding a new key (`backend/src/modulo/api/routes/determination.py`).
 - [x] A recorded decision shows `review_state`, the deciding actor, `decided_at` and an explicit not-activated statement; generating a new draft clears the previous result because the proposal id changed (`frontend/src/components/determination/DeterminationReviewPanel.vue`, `frontend/src/composables/useDetermination.ts`).
-- [ ] Per-element evidence drill-down with cross-linking to the sampled source records (FAR-2472).
+- [x] Per-element evidence drill-down (FAR-2472): selecting an observed fact, derived element or unresolved assumption opens a modal panel naming the element kind, its statement, its confidence and (for an assumption) its own uncertainty, and listing every evidence reference with its reference id, source id, locator and provenance; an element with no references states that explicitly instead of showing an empty panel. The panel is a native modal dialog (focus-contained, accessible name, Escape and a Close button both dismiss it) and is keyed by element id, so removing or correcting one element never renumbers another's references (`frontend/src/components/determination/DeterminationEvidencePanel.vue`, `frontend/src/components/determination/DeterminationEvidenceRefs.vue`, `frontend/src/components/determination/evidencePresentation.ts`).
+- [x] The proposal carries a provenance trail for the proposal as a whole (FAR-2472): the determination attempt id and status, the contract version, the overall confidence and uncertainty, the proposal-level provenance references, the full source inventory (source id, connector type, resource, sample count, available/unavailable plus the connector error) and, once a review decision exists, the decision record (decision, deciding actor, decided_at) - with an explicit no-decision state before one is recorded (`frontend/src/components/determination/DeterminationProvenanceTrail.vue`).
+- [x] Observed and derived content are never collapsed (FAR-2472): every proposal element renders its kind badge (Observed / Derived / Unresolved assumption) and every evidence reference renders its own provenance badge, with observed, derived/inferred and unavailable styled distinctly; unavailable evidence stays a first-class section with its requested resource and reason. Locators, reasons and connector errors are rendered as text (never v-html) and a value that looks like a credential is replaced with an explicit withheld notice rather than displayed (`frontend/src/components/determination/evidencePresentation.ts`).
 
 ## Deferrals
 

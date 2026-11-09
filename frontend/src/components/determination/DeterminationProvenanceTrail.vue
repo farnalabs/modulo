@@ -69,7 +69,7 @@
         <div>
           <dt class="text-muted-foreground">{{ $t('views.DeterminationView.provenance_decision_decided_at') }}</dt>
           <dd class="font-medium" data-testid="determination-provenance-decision-decided-at">
-            {{ decidedAt }}
+            {{ formatDecidedAt(review) }}
           </dd>
         </div>
       </dl>
@@ -134,10 +134,10 @@
           </p>
           <p v-if="source.error" class="text-xs text-destructive-text" data-testid="determination-source-error">
             {{ $t('views.DeterminationView.source_error') }}:
-            <span v-if="sourceErrorFor(source).withheld" class="italic">
+            <span v-if="sourceErrorFor(source.error).withheld" class="italic">
               {{ $t('views.DeterminationView.evidence_value_withheld') }}
             </span>
-            <span v-else>{{ sourceErrorFor(source).text }}</span>
+            <span v-else>{{ sourceErrorFor(source.error).text }}</span>
           </p>
         </li>
       </ul>
@@ -158,7 +158,6 @@ import {
 import type {
   DeterminationProposal,
   DeterminationReviewResponse,
-  DeterminationSourceInventoryItem,
 } from '../../composables/useDetermination'
 
 const props = defineProps<{
@@ -170,16 +169,16 @@ const uncertainty = computed(() => props.proposal.uncertainty ?? [])
 const provenance = computed(() => props.proposal.provenance ?? [])
 const sources = computed(() => props.proposal.attempt.source_inventory ?? [])
 
-const decidedAt = computed(() =>
-  props.review ? formatDateShortWithTime(props.review.decided_at) : '',
-)
+function formatDecidedAt(review: DeterminationReviewResponse): string {
+  return formatDateShortWithTime(review.decided_at)
+}
 
 /** Locators and connector errors are free text and can carry a credential. */
 function locatorFor(reference: EvidenceReference): DisplayText {
   return displayEvidenceText(reference.locator)
 }
 
-function sourceErrorFor(source: DeterminationSourceInventoryItem): DisplayText {
-  return displayEvidenceText(source.error ?? '')
+function sourceErrorFor(error: string): DisplayText {
+  return displayEvidenceText(error)
 }
 </script>
