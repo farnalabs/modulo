@@ -221,7 +221,6 @@ routes:
         sidebar_order: 6
         type: page
         <<: *community
-        required_roles: [operator, admin]
         required_permissions: [determination.scan]
         deprecated: false
         exact: true
