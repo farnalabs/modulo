@@ -2205,6 +2205,57 @@ jobs:
           exit 0
 
   # ---------------------------------------------------------------------------
+  # Dispatch the out-of-band notarization staple retry (cut and recut)
+  #
+  # FAR-2480: stapling fetches the notarization ticket from Apple CloudKit,
+  # which lags `notarytool submit` by minutes to hours. A deferred staple must
+  # not block publication - the DMG is signed, notarized and passes every hard
+  # gate (codesign, Gatekeeper, hdiutil) regardless of whether the ticket has
+  # propagated yet. Publication publishes the release; this job then hands the
+  # stapling to the retryable path, which staples against the persisted DMG,
+  # re-verifies every gate and republishes the stapled bytes with refreshed
+  # checksums/manifest. The retry is also scheduled every 30 minutes as a
+  # backstop, so a failure here does not strand the release.
+  #
+  # This job fires only AFTER a successful publication and never relaxes a gate
+  # inside it: it is a post-publication trigger, not a publication dependency.
+  # ---------------------------------------------------------------------------
+  dispatch-staple-retry:
+    name: Dispatch macOS staple retry
+    needs: [publish-release, macos-installer]
+    if: >-
+      always() &&
+      (inputs.mode == 'cut' || inputs.mode == 'recut') &&
+      needs.publish-release.result == 'success' &&
+      needs.macos-installer.result == 'success'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch the staple retry for the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="bundle-v${VERSION}"
+          # `gh workflow run` needs actions:write on the workflow token. The
+          # dispatch is fail-loud: if it cannot be queued, the release is
+          # already published, and the operator sees the failure rather than a
+          # silently unstapled release.
+          gh workflow run macos-staple-retry.yml \
+            --repo "$REPO" \
+            --ref main \
+            -f version="$VERSION" \
+            -f architecture=all \
+            -f release_tag="$RELEASE_TAG"
+          echo "Dispatched macos-staple-retry.yml for ${RELEASE_TAG}"
+
+  # ---------------------------------------------------------------------------
   # Final GA compose asset (promote only)
   #
   # The cut/recut bundle is intentionally pinned to its RC image because the

@@ -13,6 +13,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 RC_VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "rc-validate.yml"
+STAPLE_RETRY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "macos-staple-retry.yml"
+MACOS_INSTALLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "macos-installer.yml"
+STAPLE_HELPER = REPO_ROOT / "scripts" / "macos" / "staple-and-verify.sh"
 
 _MATRIX_START = "docker-upgrade-rollback:"
 _PEN_TEST_START = "pen-test:"
@@ -530,3 +533,148 @@ def test_rc_validation_evidence_upload_tolerates_a_missing_directory() -> None:
 
     assert step["with"]["if-no-files-found"] == "warn"
     assert step["with"]["path"] == "${{ runner.temp }}/compose-matrix-evidence"
+
+
+# ---------------------------------------------------------------------------
+# FAR-2480: retryable notarization stapling
+#
+# Apple CloudKit ticket delivery lags notarization, so the in-run staple retry
+# can exhaust without meaning the notarization is lost. Stapling must move to a
+# retryable, idempotent path, and the release must not fail because the ticket
+# has not propagated yet. These are the structural pins for that split.
+# ---------------------------------------------------------------------------
+
+
+def _staple_retry_workflow() -> dict[str, Any]:
+    return yaml.safe_load(STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _workflow_triggers(workflow: dict[str, Any]) -> dict[Any, Any]:
+    # PyYAML resolves the unquoted `on` key to boolean True (YAML 1.1).
+    raw = workflow.get("on", workflow.get(True))
+    assert isinstance(raw, dict), "workflow must declare at least one trigger"
+    return raw
+
+
+def _python_heredoc(script: str, marker: str) -> str:
+    start = script.index("<<'" + marker + "'")
+    body = script[start:].split("\n", 1)[1]
+    return body[: body.index("\n" + marker)]
+
+
+def test_macos_staple_retry_workflow_exists_and_is_dispatch_and_scheduled() -> None:
+    assert STAPLE_RETRY_WORKFLOW.is_file(), "the FAR-2480 staple retry workflow must exist"
+    workflow = _staple_retry_workflow()
+    triggers = _workflow_triggers(workflow)
+
+    assert "workflow_dispatch" in triggers, "the retry must be dispatchable on demand"
+    assert "schedule" in triggers, "the retry must run on a schedule as the backstop"
+    schedule = triggers["schedule"]
+    assert isinstance(schedule, list)
+    assert schedule
+    assert any("cron" in entry for entry in schedule)
+
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    for name in ("version", "architecture", "release_tag", "run_id", "force"):
+        assert name in dispatch_inputs, f"workflow_dispatch must declare the '{name}' input"
+    assert set(dispatch_inputs["architecture"]["options"]) == {"all", "arm64", "x86_64"}
+
+
+def test_macos_staple_retry_invokes_the_idempotent_helper() -> None:
+    workflow = _staple_retry_workflow()
+    run_scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str)
+    ]
+    combined = "\n".join(run_scripts)
+
+    assert "scripts/macos/staple-and-verify.sh" in combined, "the workflow must run the staple helper"
+    helper = STAPLE_HELPER.read_text(encoding="utf-8")
+    # Idempotency: the guard must run BEFORE the staple action. A guard that is
+    # removed or reordered lets a schedule re-staple an already-good DMG.
+    guard = helper.index("xcrun stapler validate")
+    action = helper.index("xcrun stapler staple")
+    assert guard < action, "the already-stapled guard must precede the staple action"
+    assert "record_result unchanged" in helper
+    assert "record_result stapled" in helper
+
+
+def test_macos_staple_helper_keeps_every_hard_gate() -> None:
+    helper = STAPLE_HELPER.read_text(encoding="utf-8")
+
+    # Every gate is fail-closed and none may be dropped.
+    assert "codesign --verify" in helper
+    assert "xcrun stapler staple" in helper
+    assert "xcrun stapler validate" in helper
+    assert "spctl --assess" in helper
+    assert "hdiutil verify" in helper
+    assert "set -euo pipefail" in helper
+
+
+def test_macos_staple_retry_republishes_with_clobber() -> None:
+    text = STAPLE_RETRY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "gh release upload" in text, "the retry must attach the stapled DMG to the release"
+    assert "--clobber" in text, "replacing the unstapled asset requires --clobber"
+    # The retry regenerates the checksum file and signed manifest in the same job
+    # as the clobber, so replacement never publishes stale hashes.
+    assert "SHA256SUMS" in text
+    assert "RELEASE_MANIFEST.json" in text
+    assert "sha256sum --check SHA256SUMS" in text
+
+
+def test_macos_staple_retry_manifest_heredoc_compiles_as_python() -> None:
+    workflow = _staple_retry_workflow()
+    scripts = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step.get("run"), str) and "build_release_manifest" in step["run"]
+    ]
+    assert scripts, "the republish job must regenerate the signed manifest"
+    for script in scripts:
+        compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
+
+
+def test_release_unified_dispatches_the_staple_retry() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+
+    dispatch_jobs = [
+        job_id
+        for job_id, job in workflow["jobs"].items()
+        if any("macos-staple-retry.yml" in str(step.get("run", "")) for step in job.get("steps", []))
+    ]
+    assert dispatch_jobs, "release-unified must consume the staple retry path"
+    dispatch_job = workflow["jobs"][dispatch_jobs[0]]
+    assert "publish-release" in dispatch_job["needs"]
+    assert "actions" in dispatch_job.get("permissions", {})
+    assert dispatch_job["permissions"]["actions"] == "write"
+    text = _release_workflow_text()
+    assert "gh workflow run macos-staple-retry.yml" in text
+
+
+def test_release_unified_keeps_macos_hard_gates_while_consume_retry() -> None:
+    workflow = yaml.safe_load(_release_workflow_text())
+
+    # The publication dependency on macos-installer is unchanged: a hard gate
+    # failure (codesign, Gatekeeper, hdiutil) still fails the release. Only
+    # stapling is retried out of band.
+    final_job = workflow["jobs"]["final-release-manifest"]
+    condition = " ".join(str(final_job["if"]).split())
+    assert "needs.macos-installer.result == 'success'" in condition
+    assert "macos-installer" in workflow["jobs"]["publish-release"]["needs"]
+
+    guard_names = [step.get("name") for step in workflow["jobs"]["publish-release"]["steps"]]
+    assert "Validate publication dependencies" in guard_names
+    guard_index = guard_names.index("Validate publication dependencies")
+    guard_script = workflow["jobs"]["publish-release"]["steps"][guard_index]["run"]
+    assert "macos-installer" in guard_script
+
+    # The hard gates themselves still live in macos-installer.yml.
+    installer = MACOS_INSTALLER_WORKFLOW.read_text(encoding="utf-8")
+    assert "app_codesign_verify codesign --verify" in installer
+    assert "mounted_app_spctl spctl --assess" in installer
+    assert "dmg_verify hdiutil verify" in installer
+    assert "dmg_staple_validate xcrun stapler validate" in installer

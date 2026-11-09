@@ -1,0 +1,471 @@
+name: "macOS: Retry notarization stapling"
+
+# FAR-2480 - Apple CloudKit ticket delivery lags notarization.
+#
+# `notarytool submit` permanently records a successful notarization, but the
+# ticket does not exist on demand: CloudKit can take minutes to hours to make it
+# fetchable. The in-run staple retry in macos-installer.yml can exhaust first
+# (observed Error 65 "Record not found" and Error 68 "network connection was
+# lost" against api.apple-cloudkit.com on both architectures).
+#
+# This workflow is the out-of-band retry. It downloads the persisted signed +
+# notarized DMG (a workflow artefact, or the published release asset), staples
+# it from Apple's ticket store (CloudKit resolves the ticket from the DMG's
+# code-signing identity, so the notarytool submission id is not required),
+# re-verifies every hard gate, and republishes the stapled DMG.
+#
+# It is idempotent: an already-stapled DMG validates offline and the run is a
+# no-op success, so the schedule can run every 30 minutes safely.
+#
+# This workflow does not touch product code and does not carry a build: it only
+# operates on bytes produced by a completed notarized build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version in X.Y.Z form (release tag defaults to bundle-v<version>)"
+        type: string
+        required: true
+      architecture:
+        description: "Which DMG(s) to staple"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - arm64
+          - x86_64
+      release_tag:
+        description: "Release tag to attach the stapled DMG to (blank derives bundle-v<version>)"
+        type: string
+        required: false
+        default: ""
+      run_id:
+        description: "Run id holding the macos-installer-<version>-<arch> artefact (blank downloads from the release)"
+        type: string
+        required: false
+        default: ""
+      force:
+        description: "Re-staple even when the DMG already validates"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    # Backstop for a release whose in-run staple was deferred. The ticket
+    # propagation window is minutes-to-hours, so poll every 30 minutes; the
+    # idempotency guard makes a post-success run a cheap no-op.
+    - cron: "*/30 * * * *"
+
+# One retry at a time: a second run must never clobber a release asset while the
+# first is regenerating the checksums and signed manifest.
+concurrency:
+  group: macos-staple-retry
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve what to staple
+  # ---------------------------------------------------------------------------
+  resolve-target:
+    name: Resolve staple target
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      architectures: ${{ steps.resolve.outputs.architectures }}
+      run_id: ${{ steps.resolve.outputs.run_id }}
+    steps:
+      - name: Resolve version, release tag and architectures
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_ARCHITECTURE: ${{ github.event.inputs.architecture }}
+          DISPATCH_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          DISPATCH_RUN_ID: ${{ github.event.inputs.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          version=""
+          release_tag=""
+          architectures=""
+          run_id=""
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$version'"
+              exit 1
+            fi
+            release_tag="${DISPATCH_RELEASE_TAG:-bundle-v${version}}"
+            case "$DISPATCH_ARCHITECTURE" in
+              all) architectures="arm64 x86_64" ;;
+              arm64 | x86_64) architectures="$DISPATCH_ARCHITECTURE" ;;
+              *)
+                echo "::error::architecture must be all, arm64 or x86_64; got '$DISPATCH_ARCHITECTURE'"
+                exit 1
+                ;;
+            esac
+            run_id="$DISPATCH_RUN_ID"
+          else
+            # Scheduled backstop: only the newest bundle-v* release within the
+            # ticket-propagation window is worth polling. Older releases are not
+            # re-stapled by the schedule - a manual dispatch can target them.
+            release_json="$(gh api "repos/${REPO}/releases?per_page=30")"
+            latest="$(printf '%s' "$release_json" |
+              jq -c '[.[] | select(.draft == false) | select(.prerelease == false) | select(.tag_name | startswith("bundle-v"))] | sort_by(.published_at) | reverse | first // empty')"
+            if [[ -z "$latest" ]]; then
+              echo "No published bundle-v* release found; nothing to staple."
+              {
+                printf 'version=%s\n' ""
+                printf 'release_tag=%s\n' ""
+                printf 'architectures=%s\n' ""
+                printf 'run_id=%s\n' ""
+              } >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            release_tag="$(printf '%s' "$latest" | jq -r '.tag_name')"
+            published_at="$(printf '%s' "$latest" | jq -r '.published_at')"
+            published_epoch="$(date -u -d "$published_at" +%s)"
+            now_epoch="$(date -u +%s)"
+            age_seconds=$((now_epoch - published_epoch))
+            if [[ "$age_seconds" -gt 86400 ]]; then
+              echo "Newest bundle release ${release_tag} is ${age_seconds}s old (>24h); the ticket-propagation window has passed. Skipping the scheduled backstop; dispatch manually to override."
+              {
+                printf 'version=%s\n' ""
+                printf 'release_tag=%s\n' ""
+                printf 'architectures=%s\n' ""
+                printf 'run_id=%s\n' ""
+              } >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version="${release_tag#bundle-v}"
+            architectures="arm64 x86_64"
+          fi
+
+          {
+            printf 'version=%s\n' "$version"
+            printf 'release_tag=%s\n' "$release_tag"
+            printf 'architectures=%s\n' "$architectures"
+            printf 'run_id=%s\n' "$run_id"
+          } >>"$GITHUB_OUTPUT"
+          echo "Staple target: version=${version} release_tag=${release_tag} architectures='${architectures}' run_id='${run_id}'"
+
+  # ---------------------------------------------------------------------------
+  # Staple and verify on a macOS runner
+  # ---------------------------------------------------------------------------
+  staple:
+    name: Staple and verify DMG(s)
+    needs: [resolve-target]
+    if: needs.resolve-target.outputs.architectures != ''
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.collect.outputs.changed }}
+    env:
+      VERSION: ${{ needs.resolve-target.outputs.version }}
+      RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+      RUN_ID: ${{ needs.resolve-target.outputs.run_id }}
+      ARCHITECTURES: ${{ needs.resolve-target.outputs.architectures }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - name: Check out the staple helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Staple each requested DMG
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          rm -rf incoming stapled
+          mkdir -p incoming stapled
+          : >staple-results.txt
+          : >stapled-arches.txt
+
+          read -r -a arches <<<"$ARCHITECTURES"
+          for arch in "${arches[@]}"; do
+            dmg_name="Modulo-${VERSION}-macos-${arch}.dmg"
+            rm -rf incoming
+            mkdir -p incoming
+            if [[ -n "$RUN_ID" ]]; then
+              echo "Downloading ${dmg_name} from run ${RUN_ID} (macos-installer-${VERSION}-${arch})"
+              gh run download "$RUN_ID" --repo "$REPO" \
+                --name "macos-installer-${VERSION}-${arch}" --dir incoming
+            else
+              echo "Downloading ${dmg_name} from release ${RELEASE_TAG}"
+              gh release download "$RELEASE_TAG" --repo "$REPO" \
+                --pattern "$dmg_name" --dir incoming --clobber
+            fi
+            dmg="$(find incoming -type f -name "$dmg_name" | sed -n '1p')"
+            if [[ -z "$dmg" ]]; then
+              echo "::error::DMG ${dmg_name} was not found in the downloaded artefact/asset"
+              exit 1
+            fi
+
+            result_log="$RUNNER_TEMP/staple-${arch}.log"
+            if [[ "$FORCE" == "true" ]]; then
+              bash scripts/macos/staple-and-verify.sh --dmg "$dmg" --force | tee "$result_log"
+            else
+              bash scripts/macos/staple-and-verify.sh --dmg "$dmg" | tee "$result_log"
+            fi
+            if grep -q 'staple_result=stapled' "$result_log"; then
+              result=stapled
+            elif grep -q 'staple_result=unchanged' "$result_log"; then
+              result=unchanged
+            else
+              echo "::error::staple helper did not report a staple_result for ${dmg_name}"
+              exit 1
+            fi
+
+            if [[ "$result" == "stapled" ]]; then
+              cp "$dmg" "stapled/${dmg_name}"
+              printf '%s\n' "$arch" >>stapled-arches.txt
+            fi
+            printf '%s: %s\n' "$arch" "$result" >>staple-results.txt
+          done
+
+          cat staple-results.txt
+
+      - name: Collect staple results
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -s stapled-arches.txt ]]; then
+            changed="true"
+          else
+            changed="false"
+          fi
+          {
+            printf 'changed=%s\n' "$changed"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo '### macOS notarization staple retry'
+            echo ''
+            echo '```'
+            cat staple-results.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload stapled DMGs
+        if: steps.collect.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-installer-stapled-${{ needs.resolve-target.outputs.version }}
+          path: stapled/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Republish the stapled DMG(s)
+  #
+  # Stapling appends Apple's ticket to the DMG, which changes its bytes. The
+  # release's SHA256SUMS and signed RELEASE_MANIFEST.json hash the original
+  # bytes, so replacing an asset without regenerating them would publish a
+  # release that lies about its own contents. This job regenerates both, re-signs
+  # the manifest with the release signing key, re-attests the new DMG bytes, and
+  # only then uploads - fail-closed, and only after every artefact is consistent.
+  # ---------------------------------------------------------------------------
+  publish-stapled:
+    name: Republish the stapled DMG(s)
+    needs: [resolve-target, staple]
+    if: needs.staple.outputs.changed == 'true' && needs.resolve-target.outputs.release_tag != ''
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.resolve-target.outputs.release_tag }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Download stapled DMGs from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-stapled-${{ needs.resolve-target.outputs.version }}
+          path: stapled
+
+      - name: Download the published release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir release-assets --clobber
+          ls -l release-assets
+
+      - name: Replace the DMGs with the stapled bytes
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          stapled=(stapled/*.dmg)
+          if [[ "${#stapled[@]}" -eq 0 ]]; then
+            echo "::error::no stapled DMGs were downloaded; refusing to republish"
+            exit 1
+          fi
+          for dmg in "${stapled[@]}"; do
+            name="$(basename "$dmg")"
+            if [[ ! -f "release-assets/${name}" ]]; then
+              echo "::error::release is missing ${name}; cannot replace it"
+              exit 1
+            fi
+            cp -f "$dmg" "release-assets/${name}"
+            echo "Replaced release-assets/${name} with the stapled DMG"
+          done
+          # Both native DMGs are mandatory release inputs; confirm the DGL still
+          # covers the full Alpha scope after replacement.
+          for name in "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg"; do
+            test -s "release-assets/${name}"
+          done
+
+      - name: Sync backend dependencies
+        working-directory: backend
+        # NOSONAR githubactions:S8541: pytest-bdd is a pinned source-archive dep
+        # (no wheel), so `--no-build` hard-fails the sync on a cold uv cache.
+        # `--frozen` locks the exact revisions, so the builds are deterministic
+        # and trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
+
+      - name: Regenerate SHA256SUMS and the signed release manifest
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required to republish a stapled DMG'; exit 1; }
+
+          cd release-assets
+          if [ -f "modulo-${VERSION}-windows-amd64.exe" ]; then
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-windows-amd64.exe" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+          else
+            sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "Modulo-${VERSION}-macos-arm64.dmg" "Modulo-${VERSION}-macos-x86_64.dmg" "modulo-${VERSION}-compose.tar.gz" > SHA256SUMS
+          fi
+          cd ..
+
+          uv run --project backend --no-build --no-sync python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+
+          root = Path("release-assets")
+          version = os.environ["VERSION"]
+          include_windows = (root / f"modulo-{version}-windows-amd64.exe").is_file()
+          names = [
+              f"modulo-{version}-linux-amd64.tar.gz",
+              f"Modulo-{version}-macos-arm64.dmg",
+              f"Modulo-{version}-macos-x86_64.dmg",
+          ]
+          components = {"linux": "amd64", "macos": "native"}
+          if include_windows:
+              names.append(f"modulo-{version}-windows-amd64.exe")
+              components["windows"] = "amd64"
+          names.append(f"modulo-{version}-compose.tar.gz")
+          body = m.build_release_manifest(
+              release=f"bundle-v{version}",
+              platform="multi-platform",
+              generated_at=os.environ.get("GITHUB_SHA", ""),
+              components=components,
+              artifacts=[
+                  {"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version}
+                  for n in names
+              ],
+          )
+          payload = json.dumps(body, indent=2, sort_keys=True).encode()
+          signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+          if len(signing_key) != 64:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+          try:
+              int(signing_key, 16)
+          except ValueError as exc:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
+          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=signing_key)
+          if sig["key_id"] != m._KEY_ID_CURRENT:
+              raise SystemExit("regenerated manifest signature used an unexpected key_id")
+          try:
+              verified_key_id = m.verify_signature(payload, sig)
+          except m.ManifestSecurityError as exc:
+              raise SystemExit(f"regenerated manifest signature failed trust-store verification: {exc}") from exc
+          if verified_key_id != m._KEY_ID_CURRENT:
+              raise SystemExit("regenerated manifest signature did not verify under the expected current key_id")
+          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+          print("regenerated manifest covers: " + ", ".join(names))
+          PY
+
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+      - name: Re-attest the stapled DMGs
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/Modulo-*-macos-*.dmg
+
+      - name: Publish the stapled DMG(s) and refreshed manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(release-assets/Modulo-"${VERSION}"-macos-*.dmg)
+          if [[ "${#dmgs[@]}" -eq 0 ]]; then
+            echo "::error::no macOS DMG to publish"
+            exit 1
+          fi
+          # --clobber is deliberate here and ONLY here: the stapled bytes replace
+          # the unstapled asset, and SHA256SUMS + the signed manifest were
+          # regenerated above to match them. Publication in release-unified.yml
+          # never clobbers.
+          gh release upload "$RELEASE_TAG" \
+            "${dmgs[@]}" \
+            release-assets/SHA256SUMS \
+            release-assets/RELEASE_MANIFEST.json \
+            release-assets/RELEASE_MANIFEST.json.sig \
+            --repo "$REPO" \
+            --clobber
+          echo "Republished stapled DMG(s) and refreshed SHA256SUMS + signed manifest for ${RELEASE_TAG}"
