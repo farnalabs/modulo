@@ -453,6 +453,15 @@ The map is stored in dedicated System Maps tables (migration
 
 ## QA History
 
+- 2026-11-08: **Improve Architecture product-map walk** - fixed a data-loss
+  defect where `saveDraft` silently dropped all loop configs on every save,
+  making publish fail for any improvement_loop node that requires one (the
+  backend's `validate_publish` requires a loop config per improvement_loop node).
+  The graph editor only authors nodes and relationships, so the store now
+  carries forward existing loop configs for surviving improvement_loop nodes.
+  Added regression tests in `systemMapsStoreCrud.spec.ts` for preservation and
+  for dropping configs whose node was removed or retyped.
+
 - 2026-11-05: **Improve Architecture product-map walk** - wired the existing
   revision diff endpoint into the System Maps UI. Operators can now compare a
   historical revision with the published revision from the revision sidebar,
