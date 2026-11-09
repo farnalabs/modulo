@@ -189,14 +189,224 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # Docker upgrade / failure / rollback acceptance matrix (FAR-2195)
+  # ---------------------------------------------------------------------------
+  docker-upgrade-rollback:
+    name: Docker upgrade and rollback acceptance matrix
+    needs: [clean-host-compose]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    env:
+      RC_TAG: ${{ inputs.rc_tag }}
+      PORT: "18081"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.rc_tag }}
+          persist-credentials: false
+
+      - name: Set up Python for the release harness
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Package the exact RC compose asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RC_TAG#v}"
+          version="${version%-rc*}"
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 \
+            python scripts/package_compose_release.py \
+            --version "$version" \
+            --tag "$RC_TAG" \
+            --output-dir "$RUNNER_TEMP/compose-matrix"
+          tar -xzf "$RUNNER_TEMP/compose-matrix/modulo-${version}-compose.tar.gz" \
+            -C "$RUNNER_TEMP/compose-matrix"
+          (cd "$RUNNER_TEMP/compose-matrix" && sha256sum --check SHA256SUMS)
+          cd "$RUNNER_TEMP/compose-matrix" && ./init-env.sh
+
+
+      - name: Render matrix compose image from the phase TAG
+        shell: bash
+        env:
+          MATRIX_COMPOSE_FILE: ${{ runner.temp }}/compose-matrix/docker-compose.prod.yml
+        run: |
+          set -euo pipefail
+          # The packaged compose asset is intentionally hard-pinned to RC_TAG.
+          # Keep that verified artefact intact, but render the working matrix
+          # copy to use the TAG environment variable that each phase supplies.
+          # Without this substitution every phase silently exercises RC_TAG.
+          uv run --no-project --no-sync --no-build python scripts/render_validation_compose.py \
+            --compose-file "$MATRIX_COMPOSE_FILE"
+
+      - name: Resolve the previous published immutable bundle tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --slurp > "$RUNNER_TEMP/release-pages.json"
+          version="${RC_TAG#v}"
+          version="${version%-rc*}"
+          current_bundle_tag="bundle-v${version}"
+          # release-unified publishes the current bundle AFTER it dispatches this
+          # validation, so the current tag cannot be required in the release
+          # history. Resolve the greatest already-published tag strictly below
+          # the current version; the current tag itself is excluded.
+          if ! bundle_tag="$(python3 scripts/validate_release_tag.py resolve-previous \
+            --current "$current_bundle_tag" \
+            --release-json "$RUNNER_TEMP/release-pages.json")"; then
+            echo "::error::could not resolve a previous published bundle-v* release from the release history; refusing to claim Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          if [ -z "$bundle_tag" ]; then
+            echo "::error::no previous published bundle-v* release exists; refusing to claim Docker upgrade/rollback coverage"
+            exit 1
+          fi
+
+          case "$bundle_tag" in
+            bundle-v*) ;;
+            *)
+              echo "::error::release resolver returned unexpected tag '${bundle_tag}'; expected bundle-vX.Y.Z"
+              exit 1
+              ;;
+          esac
+
+          # A bundle cut or recut is published before promotion, so its compose
+          # asset may pin the RC image (for example v1.2.0-rc2), not the stable
+          # v1.2.0 tag. Read the image reference from that immutable predecessor
+          # bundle instead of deriving a stable tag that may not exist yet.
+          bundle_version="${bundle_tag#bundle-v}"
+          gh release download "$bundle_tag" \
+            --repo "${{ github.repository }}" \
+            --pattern "modulo-${bundle_version}-compose.tar.gz" \
+            --dir "$RUNNER_TEMP" \
+            --clobber
+          downloaded_archive="$RUNNER_TEMP/modulo-${bundle_version}-compose.tar.gz"
+          if [ ! -s "$downloaded_archive" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no downloadable compose asset; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          gh release download "$bundle_tag" \
+            --repo "${{ github.repository }}" \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP" \
+            --clobber
+          published_sums="$RUNNER_TEMP/SHA256SUMS"
+          if [ ! -s "$published_sums" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no SHA256SUMS artifact; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          archive_checksum_line="$(awk -v asset="$(basename "$downloaded_archive")" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' "$published_sums" || true)"
+          if [ -z "$archive_checksum_line" ]; then
+            echo "::error::published predecessor bundle ${bundle_tag} has no checksum for $(basename "$downloaded_archive") in SHA256SUMS; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          if ! printf '%s\n' "$archive_checksum_line" | (cd "$RUNNER_TEMP" && sha256sum --check --status -); then
+            echo "::error::checksum mismatch for published predecessor bundle asset $(basename "$downloaded_archive"); refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          bundle_dir="$(mktemp -d)"
+          tar -xzf "$downloaded_archive" -C "$bundle_dir"
+          compose_file="$bundle_dir/docker-compose.prod.yml"
+          if [ ! -s "$compose_file" ]; then
+            echo "::error::predecessor bundle ${bundle_tag} does not contain docker-compose.prod.yml; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          old_tag="$(COMPOSE_FILE="$compose_file" BUNDLE_VERSION="$bundle_version" \
+            uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python - <<'PY'
+          import os
+          import re
+          import sys
+
+          import yaml
+
+          compose_path = os.environ["COMPOSE_FILE"]
+          with open(compose_path, encoding="utf-8") as handle:
+              compose = yaml.safe_load(handle)
+          image = compose.get("services", {}).get("modulo", {}).get("image")
+          prefix = "ghcr.io/farnalabs/modulo:"
+          if not isinstance(image, str) or not image.startswith(prefix):
+              sys.exit(f"predecessor compose has invalid modulo image reference: {image!r}")
+          tag = image[len(prefix):]
+          if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?", tag):
+              sys.exit(f"predecessor compose pins non-immutable or unexpected image tag: {tag!r}")
+          expected_version = os.environ["BUNDLE_VERSION"]
+          if not re.fullmatch(rf"v{re.escape(expected_version)}(?:-rc[0-9]+)?", tag):
+              sys.exit(
+                  f"predecessor compose image tag {tag!r} does not match "
+                  f"published predecessor bundle version {expected_version!r} (including any RC suffix)"
+              )
+          print(tag)
+          PY
+          )"
+          if [ -z "$old_tag" ]; then
+            echo "::error::could not resolve the predecessor image tag from bundle ${bundle_tag}; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          echo "OLD_TAG=$old_tag" >> "$GITHUB_ENV"
+          echo "Using predecessor bundle image tag $old_tag (pinned by bundle $bundle_tag) as the rollback target."
+
+          # A release tag is only a lookup key: GHCR tags can be retargeted.
+          # Resolve the exact manifest digest through the authenticated registry
+          # path, then require GitHub-published provenance for that digest.
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          old_image="ghcr.io/farnalabs/modulo:${old_tag}"
+          old_digest="$(docker buildx imagetools inspect "$old_image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ ! "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::could not resolve a valid GHCR manifest digest for ${old_image}: ${old_digest:-<empty>}"
+            exit 1
+          fi
+          old_subject="oci://ghcr.io/farnalabs/modulo@${old_digest}"
+          if ! gh attestation verify "$old_subject" --repo "${{ github.repository }}" --format json > "$RUNNER_TEMP/predecessor-image-attestation.json"; then
+            echo "::error::no verifiable build provenance for ${old_subject}; refusing Docker upgrade/rollback coverage"
+            exit 1
+          fi
+          uv run --no-project --no-sync --no-build python scripts/validate_release_tag.py verify-image-digest \
+            --image "$old_image" \
+            --digest "$old_digest" \
+            --attestation-json "$RUNNER_TEMP/predecessor-image-attestation.json"
+          echo "Verified predecessor image identity: ${old_image} -> ${old_digest}"
+
+      - name: Run the Docker upgrade / failure / rollback matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_compose_upgrade_rollback.py \
+            --compose-file "$RUNNER_TEMP/compose-matrix/docker-compose.prod.yml" \
+            --env-file "$RUNNER_TEMP/compose-matrix/.env" \
+            --old-tag "$OLD_TAG" \
+            --new-tag "$RC_TAG" \
+            --project-name "rc-matrix-${GITHUB_RUN_ID}" \
+            --port "$PORT" \
+            --evidence-dir "$RUNNER_TEMP/compose-matrix-evidence"
+
+      - name: Upload Docker acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha-docker-upgrade-rollback-${{ github.run_id }}
+          path: ${{ runner.temp }}/compose-matrix-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
   # Read-only pen test against the live RC (the pre-existing gate)
   # ---------------------------------------------------------------------------
   pen-test:
     name: Schemathesis fuzz vs live RC
-    # FAR-2345: the validation marker is pushed by this job, so gating it on the
-    # clean-host deployment means a release is marked validated only when the
-    # downloadable artefacts actually come up for a self-hoster.
-    needs: [clean-host-compose]
+    # FAR-2195 / FAR-2345: the validation marker is pushed by this job, so
+    # gating it on both acceptance legs means a release is marked validated only
+    # when the downloadable artefacts come up for a self-hoster AND the Docker
+    # upgrade/failure/rollback matrix passes.
+    needs: [clean-host-compose, docker-upgrade-rollback]
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     permissions:
