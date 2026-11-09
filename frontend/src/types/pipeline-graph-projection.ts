@@ -11,8 +11,10 @@
  * the API shape.
  */
 
+import { MarkerType } from '@vue-flow/core'
 import type { components } from '@/lib/api/schema'
 import { NODE_REGISTRY, getNodeRegistryEntry, type NodeTypeId } from '@/components/pipeline/nodes/NodeRegistry'
+import { CANVAS_EDGE_STROKE } from '@/constants/canvas'
 import { shortId } from '@/utils/format'
 import { doesNodeHaveCapabilityScope } from '@/utils/pipeline-graph'
 
@@ -121,13 +123,56 @@ export const defaultCanvasNodeUiState: CanvasNodeUiState = {
   dragging: false,
 }
 
-/** Edge projection: wire payload -> semantic + geometry. */
+/** Every edge variant the editor renders. ``llm`` is a real wire value the
+ *  edge editor offers alongside the four routing types. */
+export type CanvasEdgeType = 'normal' | 'reject' | 'conditional' | 'loop' | 'llm'
+
+/** The canonical list of canvas edge variants, used by the exhaustiveness
+ *  regression test. Kept in lockstep with {@link CanvasEdgeType} by the
+ *  compile-time ``Record<CanvasEdgeType, ...>`` style table below. */
+export const CANVAS_EDGE_TYPES = [
+  'normal',
+  'reject',
+  'conditional',
+  'loop',
+  'llm',
+] as const satisfies readonly CanvasEdgeType[]
+
+/** Wire fields the edge form reads that the generated OpenAPI edge schema does
+ *  not (yet) declare. They are part of the live graph payload the editor has
+ *  always consumed, so the projection carries them verbatim rather than
+ *  inventing a backend contract. */
+export interface PipelineGraphEdgeExtras {
+  max_iterations?: number | null
+  routing_label?: string | null
+}
+
+/** The wire edge as the editor actually receives it. */
+export type PipelineGraphEdgeInput = PipelineGraphEdgeWire & PipelineGraphEdgeExtras
+
+/** The semantic stripe the canvas edge component (``EdgeBadges``) and the edge
+ *  inspector consume. Mirrors the historical ``data`` wrapper exactly. */
+export interface CanvasEdgeData {
+  /** HITL review config on the edge. */
+  hitl_review_config: PipelineGraphEdgeWire['hitl_review_config'] | null
+  /** Raw wire ``edge_type``, defaulted to ``normal`` for display. */
+  edge_type: string
+  /** Conditional edge expression. */
+  condition_expression: string | null
+  /** Loop iteration cap (0 when unset/non-loop). */
+  max_iterations: number
+  /** LLM routing label ('' when unset/non-llm). */
+  routing_label: string
+}
+
+/** Edge projection: wire payload -> semantic + geometry + the canvas data
+ *  wrapper the editor reads. */
 export interface CanvasEdgeProjection {
   id: string
   source: string
   target: string
-  /** Semantic edge type. */
-  edgeType: 'normal' | 'reject' | 'conditional' | 'loop'
+  /** Known semantic edge variant, used to derive UI styling. */
+  edgeType: CanvasEdgeType
   /** HITL review config on the edge. */
   hitl_review_config: PipelineGraphEdgeWire['hitl_review_config'] | null
   /** Conditional edge expression. */
@@ -136,6 +181,8 @@ export interface CanvasEdgeProjection {
   sourcePort: string
   /** Target port. */
   targetPort: string
+  /** The semantic data wrapper the canvas edge + inspector consume. */
+  data: CanvasEdgeData
 }
 
 /** UI-only edge styling (animated, stroke, marker). NEVER from wire. */
@@ -144,11 +191,24 @@ export interface CanvasEdgeUiState {
   stroke: string
   style: Record<string, string>
   markerEnd: {
-    type: 'ArrowClosed'
+    type: MarkerType
     width: number
     height: number
     color: string
   }
+}
+
+/** A Vue Flow edge as the editor renders it: geometry, UI styling and the
+ *  semantic ``data`` wrapper, all derived from the wire payload. */
+export interface CanvasFlowEdge {
+  id: string
+  source: string
+  target: string
+  type: 'smoothstep'
+  animated: boolean
+  style: Record<string, string>
+  markerEnd: CanvasEdgeUiState['markerEnd']
+  data: CanvasEdgeData
 }
 
 /** Full graph projection returned by the adapter. */
@@ -195,29 +255,54 @@ export function projectGraphNode(node: PipelineGraphNodeWire): CanvasNodeProject
   }
 }
 
+/** Normalise a wire ``edge_type`` onto the canvas variant union.
+ *
+ * Unknown values fall back to ``normal`` for styling, which is exactly how the
+ * editor has always styled them (only ``loop`` and ``llm`` get their own
+ * treatment). The raw value is still preserved verbatim in
+ * {@link CanvasEdgeData.edge_type} for the edge form.
+ */
+export function normalizeCanvasEdgeType(raw: string | null | undefined): CanvasEdgeType {
+  return (CANVAS_EDGE_TYPES as readonly string[]).includes(raw ?? '')
+    ? (raw as CanvasEdgeType)
+    : 'normal'
+}
+
 /** Map a single wire edge to its canvas projection.
  *
- * NOTE (FAR-2481): ``projectGraphEdge`` / ``withEdgeUiState`` are NOT yet
- * consumed by ``PipelineEditorView.vue``. The editor renders a Vue Flow edge
- * whose styling carries an ``llm`` variant this union does not model plus a
- * ``data`` wrapper the semantic projection does not produce. Wiring edges
- * requires reconciling that shape first; until then the editor's
- * ``convertBackendEdge`` remains the single source for canvas edges.
+ * Production consumer: ``PipelineEditorView.vue`` ``convertBackendEdge`` -
+ * through {@link projectCanvasEdge} - which both ``loadGraph()`` (live graph)
+ * and ``loadViewedSnapshot()`` map every edge through. This is the ONLY
+ * backend-edge-to-canvas mapping; the view must not re-derive any edge field.
  */
 export function projectGraphEdge(
-  edge: PipelineGraphEdgeWire,
-  _index: number
+  edge: PipelineGraphEdgeInput,
+  index: number
 ): CanvasEdgeProjection {
-  const edgeType = edge.edge_type as 'normal' | 'reject' | 'conditional' | 'loop'
+  // Defaults mirror the editor's long-standing inline mapping exactly: the raw
+  // edge type is passed through (defaulting to `normal`), and the two
+  // form-only extras default to their empty values.
+  const wireEdgeType = edge.edge_type || 'normal'
+  const hitlReviewConfig = edge.hitl_review_config || null
+  const conditionExpression = edge.condition_expression || null
+  const maxIterations = edge.max_iterations || 0
+  const routingLabel = edge.routing_label || ''
   return {
-    id: edge.id ?? `edge-${_index}`,
+    id: edge.id || `edge-${index}`,
     source: edge.source_node_id,
     target: edge.target_node_id,
-    edgeType,
-    hitl_review_config: edge.hitl_review_config ?? null,
-    conditionExpression: edge.condition_expression ?? null,
+    edgeType: normalizeCanvasEdgeType(wireEdgeType),
+    hitl_review_config: hitlReviewConfig,
+    conditionExpression,
     sourcePort: edge.source_port ?? 'out',
     targetPort: edge.target_port ?? 'in',
+    data: {
+      hitl_review_config: hitlReviewConfig,
+      edge_type: wireEdgeType,
+      condition_expression: conditionExpression,
+      max_iterations: maxIterations,
+      routing_label: routingLabel,
+    },
   }
 }
 
@@ -246,32 +331,67 @@ export function withUiState(
   }
 }
 
-/** Merge edge projection with UI state. */
+/** Exhaustive UI style table for every canvas edge variant.
+ *
+ * ``Record<CanvasEdgeType, ...>`` makes adding a variant to the union a type
+ * error until it is styled here, so a projection change cannot silently drop
+ * one. Strokes mirror the editor's pre-adapter inline mapping exactly: the
+ * shared muted-foreground token for the routing types, blue dashed for loop,
+ * violet for llm routing. */
+const EDGE_UI_STYLES: Record<
+  CanvasEdgeType,
+  { stroke: string; animated: boolean; strokeDasharray?: string }
+> = {
+  normal: { stroke: CANVAS_EDGE_STROKE, animated: false },
+  reject: { stroke: CANVAS_EDGE_STROKE, animated: false },
+  conditional: { stroke: CANVAS_EDGE_STROKE, animated: false },
+  loop: { stroke: '#3b82f6', animated: true, strokeDasharray: '5,5' },
+  llm: { stroke: '#8b5cf6', animated: false },
+}
+
+/** Merge edge projection with UI state. This is the single place UI-only
+ *  styling is layered onto an edge - callers never derive strokes themselves. */
 export function withEdgeUiState(
   projection: CanvasEdgeProjection,
   ui: Partial<CanvasEdgeUiState> = {}
 ): CanvasEdgeProjection & { ui: CanvasEdgeUiState } {
-  // Edge style derived from edgeType
-  const isLoop = projection.edgeType === 'loop'
-  // Note: 'llm' is a node mode, not an edge type. Edge types are normal/reject/conditional/loop.
-  const stroke = isLoop ? '#3b82f6' : '#64748b'
-  const style: Record<string, string> = isLoop
-    ? { stroke, strokeDasharray: '5,5' }
+  const { stroke, animated, strokeDasharray } = EDGE_UI_STYLES[projection.edgeType]
+  const style: Record<string, string> = strokeDasharray
+    ? { stroke, strokeDasharray }
     : { stroke }
 
   return {
     ...projection,
     ui: {
-      animated: isLoop,
+      animated,
       stroke,
       style,
       markerEnd: {
-        type: 'ArrowClosed',
+        type: MarkerType.ArrowClosed,
         width: 16,
         height: 16,
         color: stroke,
       },
       ...ui,
     },
+  }
+}
+
+/** Map a wire edge to the Vue Flow edge the editor renders.
+ *
+ * This composes the semantic projection with the UI styling layer, so it is
+ * the adapter's single backend-edge-to-canvas entry point. The editor's
+ * ``convertBackendEdge`` is a thin delegate. */
+export function projectCanvasEdge(edge: PipelineGraphEdgeInput, index: number): CanvasFlowEdge {
+  const projected = withEdgeUiState(projectGraphEdge(edge, index))
+  return {
+    id: projected.id,
+    source: projected.source,
+    target: projected.target,
+    type: 'smoothstep',
+    animated: projected.ui.animated,
+    style: projected.ui.style,
+    markerEnd: projected.ui.markerEnd,
+    data: projected.data,
   }
 }

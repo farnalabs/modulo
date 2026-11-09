@@ -2260,7 +2260,7 @@ import DispatchNode from '../components/pipeline/nodes/DispatchNode.vue'
 import ConnectorNode from '../components/pipeline/nodes/ConnectorNode.vue'
 import EdgeBadges from '../components/pipeline/nodes/EdgeBadges.vue'
 import { NODE_REGISTRY, PIPELINE_CONNECTORS_KEY, PIPELINE_TEAM_NAMES_KEY } from '../components/pipeline/nodes/NodeRegistry'
-import { projectGraphNode } from '../types/pipeline-graph-projection'
+import { projectCanvasEdge, projectGraphNode } from '../types/pipeline-graph-projection'
 import { shortId } from '../utils/format'
 import { doesNodeHaveCapabilityScope } from '../utils/pipeline-graph'
 import {
@@ -3845,45 +3845,13 @@ function convertBackendNode(n: any): any {
   })
 }
 
+// Backend edges map onto their Vue Flow edge entirely through the shared
+// projection adapter (FAR-2482): projectCanvasEdge owns the variant stroke
+// table and the `data` wrapper the canvas + EdgeBadges consume. Every canvas
+// edge originates here - both loadGraph() and loadViewedSnapshot() map through
+// convertBackendEdge.
 function convertBackendEdge(e: any, i: number): any {
-  const isLoop = e.edge_type === 'loop'
-  const isLlm = e.edge_type === 'llm'
-  let stroke: string
-  let style: Record<string, string>
-  if (isLoop) {
-    stroke = '#3b82f6'
-    style = { stroke, strokeDasharray: '5,5' }
-  } else if (isLlm) {
-    stroke = '#8b5cf6'
-    style = { stroke }
-  } else {
-    stroke = CANVAS_EDGE_STROKE
-    style = { stroke }
-  }
-  return {
-    id: e.id || `edge-${i}`,
-    source: e.source_node_id,
-    target: e.target_node_id,
-    type: 'smoothstep',
-    animated: isLoop,
-    style,
-    // Direction is conveyed by geometry (a closed arrowhead), not colour
-    // alone, so loop / LLM / normal edges all remain readable without relying
-    // on their tint. Edge semantics stay in `data`.
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 16,
-      height: 16,
-      color: stroke,
-    },
-    data: {
-      hitl_review_config: e.hitl_review_config || null,
-      edge_type: e.edge_type || 'normal',
-      condition_expression: e.condition_expression || null,
-      max_iterations: e.max_iterations || 0,
-      routing_label: e.routing_label || '',
-    },
-  }
+  return projectCanvasEdge(e, i)
 }
 
 function cacheLayoutOwnership(ownership: LayoutOwnership | undefined): void {
