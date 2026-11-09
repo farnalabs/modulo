@@ -8189,6 +8189,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/determination/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerun Determination
+         * @description Rerun determination against a prior attempt and report what changed.
+         *
+         *     Accepts the prior proposal contract (validated on the way in) plus the
+         *     corrections applied to that attempt. A fresh scan and inference run, the
+         *     corrections are carried forward onto a NEW attempt, and the result reports
+         *     the source-inventory differences and the per-inference classification
+         *     (retained / new / not_reproduced / removed / confidence_changed /
+         *     evidence_changed) between the two attempts.
+         *
+         *     Read-only: nothing is activated, published or persisted - the prior
+         *     contract is input and is never mutated, and the fresh proposal carries its
+         *     own new attempt id. Partial source availability or insufficient evidence is
+         *     surfaced as ``incomplete`` with the fresh attempt's ``completed_with_gaps``
+         *     status, never presented as a confident full result.
+         */
+        post: operations["rerun_determination_api_v1_determination_rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/determination/review": {
         parameters: {
             query?: never;
@@ -13271,6 +13304,20 @@ export interface components {
             /** Oldest Pending Age Seconds */
             oldest_pending_age_seconds?: number | null;
         };
+        /**
+         * CarriedForwardCorrections
+         * @description The prior attempt's corrections and whether the fresh attempt could take them.
+         */
+        CarriedForwardCorrections: {
+            /** Corrected Derived Element Ids */
+            corrected_derived_element_ids?: string[];
+            /** Removed Derived Element Ids */
+            removed_derived_element_ids?: string[];
+            /** Unmatched Corrected Derived Element Ids */
+            unmatched_corrected_derived_element_ids?: string[];
+            /** Unmatched Removed Derived Element Ids */
+            unmatched_removed_derived_element_ids?: string[];
+        };
         /** ChangeMemberRoleRequest */
         ChangeMemberRoleRequest: {
             /** Role */
@@ -14972,6 +15019,37 @@ export interface components {
             edges?: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * ElementChange
+         * @description One inference's relationship between the prior and the fresh attempt.
+         *
+         *     ``statement`` is the element's statement on the side it exists (the current
+         *     side for ``new`` and the changed statuses, the prior side for
+         *     ``not_reproduced`` / ``removed``). Both sides' ids, confidences and evidence
+         *     references are carried so a change can be inspected without the two
+         *     contracts.
+         */
+        ElementChange: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "retained" | "new" | "not_reproduced" | "removed" | "confidence_changed" | "evidence_changed";
+            /** Statement */
+            statement: string;
+            /** Prior Element Id */
+            prior_element_id?: string | null;
+            /** Current Element Id */
+            current_element_id?: string | null;
+            /** Prior Confidence */
+            prior_confidence?: ("high" | "medium" | "low" | "unknown") | null;
+            /** Current Confidence */
+            current_confidence?: ("high" | "medium" | "low" | "unknown") | null;
+            /** Prior Evidence Refs */
+            prior_evidence_refs?: components["schemas"]["EvidenceReference"][];
+            /** Current Evidence Refs */
+            current_evidence_refs?: components["schemas"]["EvidenceReference"][];
         };
         /** EmailSettingsResponse */
         EmailSettingsResponse: {
@@ -20221,6 +20299,22 @@ export interface components {
             evidence_refs?: components["schemas"]["EvidenceReference"][];
         };
         /**
+         * ProposalRerunRequest
+         * @description A request to rerun determination against a prior attempt.
+         *
+         *     ``prior_proposal`` is the attempt the caller last saw (never mutated). The
+         *     corrections are the ones applied to that attempt: they are carried forward
+         *     onto the fresh attempt by id, and recorded even when the fresh attempt no
+         *     longer reproduces the element they targeted.
+         */
+        ProposalRerunRequest: {
+            prior_proposal: components["schemas"]["ProposalContract"];
+            /** Corrected Derived Elements */
+            corrected_derived_elements?: components["schemas"]["DerivedElementEdit"][];
+            /** Removed Derived Element Ids */
+            removed_derived_element_ids?: string[];
+        };
+        /**
          * ProposalReviewRequest
          * @description A reviewer's decision on a determination proposal.
          */
@@ -20891,6 +20985,65 @@ export interface components {
             schedule_type: string;
             /** Created At */
             created_at: string;
+        };
+        /**
+         * RerunAttemptSummary
+         * @description One attempt's identity, confidence, uncertainty and provenance.
+         */
+        RerunAttemptSummary: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Proposal Id
+             * Format: uuid
+             */
+            proposal_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "completed_with_gaps";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low" | "unknown";
+            /** Uncertainty */
+            uncertainty?: string[];
+            /** Provenance */
+            provenance?: components["schemas"]["EvidenceReference"][];
+            /** Unavailable Evidence */
+            unavailable_evidence?: components["schemas"]["UnavailableEvidence"][];
+            /** Source Inventory */
+            source_inventory?: components["schemas"]["SourceInventoryItem"][];
+        };
+        /**
+         * RerunResult
+         * @description The read-only outcome of a rerun and its comparison with the prior attempt.
+         */
+        RerunResult: {
+            /**
+             * Contract Version
+             * @default alpha.determination-rerun.v1
+             * @constant
+             */
+            contract_version: "alpha.determination-rerun.v1";
+            proposal: components["schemas"]["ProposalContract"];
+            prior_attempt: components["schemas"]["RerunAttemptSummary"];
+            current_attempt: components["schemas"]["RerunAttemptSummary"];
+            corrections: components["schemas"]["CarriedForwardCorrections"];
+            source_changes: components["schemas"]["SourceInventoryChanges"];
+            /** Input Set Unchanged */
+            input_set_unchanged: boolean;
+            /** Element Changes */
+            element_changes?: components["schemas"]["ElementChange"][];
+            /** Incomplete */
+            incomplete: boolean;
+            /** Incomplete Reasons */
+            incomplete_reasons?: string[];
         };
         /** ResolveFindingRequest */
         ResolveFindingRequest: {
@@ -22584,6 +22737,28 @@ export interface components {
             notes?: string | null;
         };
         /**
+         * SourceInventoryChanges
+         * @description What changed in the sampled sources since the prior attempt.
+         *
+         *     ``new_sources`` / ``missing_sources`` are sources that appear only on one
+         *     side of the inventory; ``newly_available`` / ``newly_unavailable`` are
+         *     sources present on both whose availability flipped. A missing source is
+         *     surfaced explicitly rather than dropped: an inventory item the current scan
+         *     did not produce is still an input change the caller must see.
+         */
+        SourceInventoryChanges: {
+            /** New Sources */
+            new_sources?: components["schemas"]["SourceInventoryItem"][];
+            /** Missing Sources */
+            missing_sources?: components["schemas"]["SourceInventoryItem"][];
+            /** Newly Available */
+            newly_available?: string[];
+            /** Newly Unavailable */
+            newly_unavailable?: string[];
+            /** Sample Count Changes */
+            sample_count_changes?: components["schemas"]["SourceSampleCountChange"][];
+        };
+        /**
          * SourceInventoryItem
          * @description Inventory of every source sampled for this proposal.
          */
@@ -22603,6 +22778,18 @@ export interface components {
             status: "available" | "unavailable";
             /** Error */
             error?: string | null;
+        };
+        /**
+         * SourceSampleCountChange
+         * @description A source that is still sampled but produced a different number of records.
+         */
+        SourceSampleCountChange: {
+            /** Source Id */
+            source_id: string;
+            /** Prior Sample Count */
+            prior_sample_count: number;
+            /** Current Sample Count */
+            current_sample_count: number;
         };
         /** SpendCeilingResponse */
         SpendCeilingResponse: {
@@ -41722,6 +41909,74 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+        };
+    };
+    rerun_determination_api_v1_determination_rerun_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposalRerunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rerun input rejected */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

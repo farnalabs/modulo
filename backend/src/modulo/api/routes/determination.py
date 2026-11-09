@@ -32,6 +32,12 @@ from modulo.determination.comparison import (
 from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, build_proposal_contract, infer
 from modulo.determination.models import ProposalContract, ReviewState
+from modulo.determination.rerun import (
+    ProposalRerunRequest,
+    RerunError,
+    RerunResult,
+    rerun_proposal,
+)
 from modulo.determination.review import (
     ProposalReviewError,
     ProposalReviewRequest,
@@ -45,10 +51,13 @@ from modulo.settings import Settings, get_settings
 _CODE_DETERMINATION_RUN_DETERMINATION = "determination.run_determination"
 _CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT = "determination.create_determination_draft"
 _CODE_DETERMINATION_REVIEW_PROPOSAL = "determination.review_proposal"
+_CODE_DETERMINATION_RERUN = "determination.rerun_determination"
 
 #: Rich audit event; the coarse ``audited()`` event uses ``api_access_post``.
 _EVENT_DETERMINATION_PROPOSAL_REVIEWED = "determination.proposal_review_decided"
 _RESOURCE_DETERMINATION_PROPOSAL = "determination_proposal"
+#: A rerun persists nothing, so its audit event is the coarse ``audited()`` one.
+_RESOURCE_DETERMINATION_ATTEMPT = "determination_attempt"
 
 #: Permission that gates every determination read and review endpoint.
 _PERMISSION_DETERMINATION_SCAN = "determination.scan"
@@ -403,6 +412,122 @@ async def compare_determination_proposals(
     comparison = compare_proposals(comparison_request.base, comparison_request.target)
     request.state.audit_no_change = True
     return comparison
+
+
+@router.post(
+    "/rerun",
+    responses={
+        409: {"description": "Conflict"},
+        422: {"description": "Rerun input rejected"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        502: {"description": "Bad Gateway"},
+        503: {"description": "Service Unavailable"},
+    },
+    dependencies=[
+        Depends(
+            audited(
+                "determination_rerun_performed",
+                _RESOURCE_DETERMINATION_ATTEMPT,
+                principal_dep=get_current_tenant_user,
+            )
+        )
+    ],
+)
+@handle_db_errors(_CODE_DETERMINATION_RERUN)
+async def rerun_determination(
+    rerun_request: ProposalRerunRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_PERMISSION_DETERMINATION_SCAN),
+    settings: Settings = Depends(get_settings),
+) -> RerunResult:
+    """Rerun determination against a prior attempt and report what changed.
+
+    Accepts the prior proposal contract (validated on the way in) plus the
+    corrections applied to that attempt. A fresh scan and inference run, the
+    corrections are carried forward onto a NEW attempt, and the result reports
+    the source-inventory differences and the per-inference classification
+    (retained / new / not_reproduced / removed / confidence_changed /
+    evidence_changed) between the two attempts.
+
+    Read-only: nothing is activated, published or persisted - the prior
+    contract is input and is never mutated, and the fresh proposal carries its
+    own new attempt id. Partial source availability or insufficient evidence is
+    surfaced as ``incomplete`` with the fresh attempt's ``completed_with_gaps``
+    status, never presented as a confident full result.
+    """
+    try:
+        try:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
+                instances = await list_connector_instances(
+                    session, organisation_id=principal.organisation_id, page_size=100
+                )
+
+        except ProgrammingError:
+            logger.exception("routes.determination")
+
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="This feature is not available. Run database migrations to enable it.",
+            ) from None
+
+        relevant: list[ConnectorInstance] = [
+            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ]
+
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        async with ConnectorHub(secrets_backend=secrets_backend) as hub:
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                try:
+                    await hub.initialise(relevant)
+                except ConnectorDecryptError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
+                    ) from exc
+
+            samples = await run_scan(hub)
+
+        findings = infer(samples)
+        fresh_proposal = build_proposal_contract(samples, findings)
+
+        try:
+            return rerun_proposal(
+                rerun_request.prior_proposal,
+                fresh_proposal,
+                corrected_derived_elements=rerun_request.corrected_derived_elements,
+                removed_derived_element_ids=rerun_request.removed_derived_element_ids,
+            )
+        except RerunError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except HTTPException:
+        raise
+    except IntegrityError:
+        logger.exception(_CODE_DETERMINATION_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception(_CODE_DETERMINATION_RERUN)
+        raise HTTPException(
+            status_code=501, detail="Feature is not available. Run database migrations to enable it."
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "determination.rerun_determination")
+        logger.exception(_CODE_DETERMINATION_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in rerun_determination")
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
 @router.post(
