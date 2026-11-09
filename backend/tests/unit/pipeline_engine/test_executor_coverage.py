@@ -1141,6 +1141,12 @@ def test_agent_failure_reads_split_envelope_telemetry():
     """A self-reported failure lives on the NEW telemetry channel."""
     failed = _split_sandbox_envelope(status="failed", agent_status="failed", summary="agent crashed")
     assert _node_output_agent_failure(failed) == "agent crashed"
+    # A self-declared failure with no error/summary still elevates with the
+    # fallback reason (the telemetry-channel twin of the legacy fallback).
+    assert (
+        _node_output_agent_failure(_split_sandbox_envelope(status="failed", agent_status="failed", summary=""))
+        == "agent self-reported failure"
+    )
     # Non-failed telemetry yields None (no false A1 elevation).
     assert _node_output_agent_failure(_split_sandbox_envelope(agent_status="success")) is None
     # Legacy fallback still works.
@@ -1151,6 +1157,14 @@ def test_session_lost_reads_split_envelope_telemetry():
     """The dead-session marker lives on the NEW telemetry channel."""
     lost = _split_sandbox_envelope(status="failed", sandbox_session_lost=True, summary="session dead")
     assert _node_output_sandbox_session_lost(lost) == "session dead"
+    # A dead-session marker with no error/summary still returns the fixed
+    # placeholder (the telemetry-channel twin of the legacy fallback).
+    assert (
+        _node_output_sandbox_session_lost(
+            _split_sandbox_envelope(status="failed", sandbox_session_lost=True, summary="")
+        )
+        == "No output from agent - session interrupted"
+    )
     assert _node_output_sandbox_session_lost(_split_sandbox_envelope()) is None
 
 

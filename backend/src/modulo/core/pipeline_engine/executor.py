@@ -1255,6 +1255,23 @@ def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_text_surfaces(inner: dict[str, Any]) -> list[str]:
+    """Top-level retained text surfaces of one envelope view.
+
+    Scans the wrapper's text keys and the STRING members of ``output_json`` only
+    (the wrapper's shape, and bounded by the stdout retention cap).
+    """
+    parts: list[str] = []
+    for key in ("error", "summary", "error_message", "no_output_reason", "agent_stdout", "agent_stderr"):
+        value = inner.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    output_json = inner.get("output_json")
+    if isinstance(output_json, dict):
+        parts.extend(v for v in output_json.values() if isinstance(v, str) and v)
+    return parts
+
+
 def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
     """The retained text surfaces of a session-lost envelope.
 
@@ -1296,15 +1313,8 @@ def _node_output_sandbox_session_lost_text(node_output: Any) -> str:
         candidates.append(legacy_output)
     parts: list[str] = []
     for inner in candidates:
-        if not isinstance(inner, dict):
-            continue
-        for key in ("error", "summary", "error_message", "no_output_reason", "agent_stdout", "agent_stderr"):
-            value = inner.get(key)
-            if isinstance(value, str) and value:
-                parts.append(value)
-        output_json = inner.get("output_json")
-        if isinstance(output_json, dict):
-            parts.extend(v for v in output_json.values() if isinstance(v, str) and v)
+        if isinstance(inner, dict):
+            parts.extend(_node_output_text_surfaces(inner))
     return "\n".join(parts)
 
 
