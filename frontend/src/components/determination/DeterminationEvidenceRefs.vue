@@ -70,7 +70,12 @@
               </div>
               <div v-if="sourceFor(reference.source_id)?.error" class="sm:col-span-2">
                 <dt class="text-muted-foreground">{{ $t('views.DeterminationView.evidence_source_error') }}</dt>
-                <dd class="text-destructive-text">{{ sourceFor(reference.source_id)?.error }}</dd>
+                <dd class="text-destructive-text">
+                  <span v-if="sourceErrorFor(reference.source_id).withheld" class="italic" data-testid="determination-evidence-withheld">
+                    {{ $t('views.DeterminationView.evidence_value_withheld') }}
+                  </span>
+                  <span v-else>{{ sourceErrorFor(reference.source_id).text }}</span>
+                </dd>
               </div>
             </dl>
             <button
@@ -126,6 +131,14 @@ function toggle(referenceId: string): void {
 
 function sourceFor(sourceId: string): DeterminationSourceInventoryItem | null {
   return props.sources.find((source) => source.source_id === sourceId) ?? null
+}
+
+/**
+ * The connector error in the drill-down is free text too, so it is subject to
+ * the same credential withholding as every other connector-produced value.
+ */
+function sourceErrorFor(sourceId: string): DisplayText {
+  return displayEvidenceText(sourceFor(sourceId)?.error ?? '')
 }
 
 function detailId(referenceId: string): string {

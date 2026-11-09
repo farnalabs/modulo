@@ -545,6 +545,35 @@ describe('Determination provenance trail', () => {
     expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
   })
 
+  it('withholds a credential-shaped connector error in the evidence drill-down', async () => {
+    const next = proposal()
+    const derived = next.derived_elements ?? []
+    derived[0].evidence_refs = [ref('evidence:c-9:repos', 'c-9:repos', 'scan:repos')]
+    next.attempt = {
+      ...next.attempt,
+      source_inventory: [
+        {
+          source_id: 'c-9:repos',
+          connector_type: 'github',
+          resource: 'repos',
+          sample_count: 0,
+          status: 'unavailable',
+          error: 'api_key=ghp_abcdefghijklmnopqrstuvwxyz012345',
+        },
+      ],
+    }
+    const wrapper = mountPanel({ proposal: next })
+
+    const toggle = wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    await toggle.trigger('click')
+
+    const drilldown = wrapper.find('[data-testid="determination-derived-element"] [data-testid="determination-evidence-drilldown"]')
+    expect(drilldown.exists()).toBe(true)
+    expect(drilldown.find('[data-testid="determination-evidence-withheld"]').text()).toContain('withheld')
+    expect(wrapper.html()).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz012345')
+  })
+
   it('marks every proposal element with its kind so an inference is never shown as observed', () => {
     const wrapper = mountPanel()
 
