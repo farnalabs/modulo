@@ -1,10 +1,12 @@
 """FAR-2327: the macOS installer normalize step must honour reusable-workflow call inputs
 even when the caller (release-unified) was itself started by workflow_dispatch."""
 
+import http.server
 import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -252,3 +254,228 @@ def test_install_sh_normalizes_duplicate_dmg_extension(tmp_path: Path) -> None:
     assert "install.sh: normalized duplicate .dmg extension -> " in result.stderr
     assert "foo.dmg" in result.stderr
     assert "ERROR: DMG not found" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# FAR-2478: the native smoke teardown must stop the Postgres/Redis child tree
+# the installed launcher started, before asserting that none remain.
+# ---------------------------------------------------------------------------
+
+#: Marks a bash block that a test extracts verbatim from the workflow run step.
+#: Both markers live in the workflow itself, so the executable regression test
+#: runs the exact teardown/poll code the macOS job runs.
+_MARKER_TEMPLATE = "# {edge} {marker}"
+
+#: A stand-in for a launcher child that ignores SIGTERM. Postgres answers
+#: SIGTERM with a "smart" shutdown that waits for connected clients forever, so
+#: a TERM-only teardown leaves it alive; only the SIGKILL escalation stops it.
+_TERM_IGNORING_HOLDER = '$SIG{TERM}="IGNORE"; sleep 300;\n'
+
+
+def _bash_executable() -> str:
+    """Resolve bash without silently skipping the regression when it is absent."""
+    bash = r"C:\Program Files\Git\bin\bash.exe"
+    if Path(bash).is_file():
+        return bash
+    resolved = shutil.which("bash")
+    if resolved is None:
+        pytest.skip("bash is required to execute workflow scripts")
+    return resolved
+
+
+def _extract_marked_bash(script: str, marker: str) -> str:
+    """Return the marked region (markers included) from a workflow run block."""
+    begin = _MARKER_TEMPLATE.format(edge="BEGIN", marker=marker)
+    end = _MARKER_TEMPLATE.format(edge="END", marker=marker)
+    start = script.index(begin)
+    finish = script.index(end, start) + len(end)
+    return script[start:finish]
+
+
+def _run_bash_file(
+    script_path: Path,
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a repository-owned bash script (written under tmp_path) to completion."""
+    return subprocess.run(  # noqa: S603 - fixed bash executable and repository-owned workflow text
+        [_bash_executable(), "--noprofile", "--norc", script_path.as_posix(), *args],
+        cwd=cwd,
+        env={**os.environ, **(env or {})},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_macos_teardown_stops_owned_term_ignoring_processes(tmp_path: Path) -> None:
+    """FAR-2478: the teardown fully stops owned Postgres/Redis children.
+
+    Both owned holders ignore SIGTERM (as Postgres' smart shutdown effectively
+    does when a client is connected), so this only passes when the teardown
+    escalates to SIGKILL. The unowned control process must survive.
+    """
+    _step, build_run = _native_installer_step()
+    teardown = _extract_marked_bash(build_run, "stop_owned_processes")
+
+    data_dir = tmp_path / "modulo-native-smoke-data"
+    (data_dir / "pgdata").mkdir(parents=True)
+    (data_dir / "redis").mkdir()
+    holder = tmp_path / "term_ignoring_holder.pl"
+    holder.write_text(_TERM_IGNORING_HOLDER, encoding="utf-8")
+
+    driver = tmp_path / "teardown_driver.sh"
+    driver.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        + teardown
+        + """
+data_dir="$MODULO_TEST_DATA_DIR"
+pid_file="$MODULO_TEST_PIDFILE"
+holder="$MODULO_TEST_HOLDER"
+perl "$holder" "$data_dir/pgdata" &
+pg_pid=$!
+perl "$holder" "$data_dir/redis/dump.rdb" &
+redis_pid=$!
+printf '%s\\n%s\\n' "$pg_pid" "$redis_pid" > "$pid_file"
+perl "$holder" "unrelated-control" &
+control_pid=$!
+status=0
+stop_owned_processes "$pid_file" "$data_dir" 0 || status=$?
+for pid in "$pg_pid" "$redis_pid"; do
+  if owned_pid_is_alive "$pid"; then
+    printf 'owned process survived teardown: pid=%s\\n' "$pid" >&2
+    status=1
+  fi
+done
+if owned_pid_is_alive "$control_pid"; then
+  :
+else
+  printf 'unowned control process was killed: pid=%s\\n' "$control_pid" >&2
+  status=1
+fi
+kill -KILL "$pg_pid" "$redis_pid" "$control_pid" 2>/dev/null || true
+wait "$pg_pid" 2>/dev/null || true
+wait "$redis_pid" 2>/dev/null || true
+wait "$control_pid" 2>/dev/null || true
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_bash_file(
+        driver,
+        [],
+        cwd=tmp_path,
+        env={
+            "MODULO_TEST_DATA_DIR": data_dir.as_posix(),
+            "MODULO_TEST_PIDFILE": (tmp_path / "owned-pids").as_posix(),
+            "MODULO_TEST_HOLDER": holder.as_posix(),
+        },
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "owned process survived teardown" not in result.stderr
+    assert "unowned control process was killed" not in result.stderr
+
+
+def test_macos_teardown_runs_before_the_no_owned_postgres_redis_gate() -> None:
+    """FAR-2478: teardown must execute BEFORE the assertion it makes passable."""
+    _step, build_run = _native_installer_step()
+    teardown_index = build_run.index('run_assertion "stop_owned_processes"')
+    assertion_index = build_run.index('run_assertion "no_owned_postgres_redis"')
+    assert teardown_index < assertion_index
+    assert 'stop_owned_processes "$OWNED_PIDS" "$DATA" 5 || exit 1' in build_run
+    # The end-state assertion stays a hard gate.
+    assert 'run_assertion "no_owned_postgres_redis"' in build_run
+
+
+# ---------------------------------------------------------------------------
+# FAR-2479: spa_root_html must wait for the SPA entry document, never accept
+# the API root, and the Intel Homebrew withdrawal must be explicit.
+# ---------------------------------------------------------------------------
+
+
+def _serve_body(body: str, content_type: str) -> tuple[http.server.HTTPServer, threading.Thread, str]:
+    """Serve one fixed response on 127.0.0.1 (real HTTP, no mocking)."""
+    payload = body.encode("utf-8")
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    return server, thread, f"http://{host}:{port}/"
+
+
+def _stop_server(server: http.server.HTTPServer, thread: threading.Thread) -> None:
+    server.shutdown()
+    thread.join(timeout=10)
+    server.server_close()
+
+
+def _spa_poller_script(tmp_path: Path) -> Path:
+    _step, build_run = _native_installer_step()
+    poller = _extract_marked_bash(build_run, "spa_root_html_ready")
+    script = tmp_path / "spa_root_html_ready.sh"
+    script.write_text(poller + '\nspa_root_html_ready "$@"\n', encoding="utf-8")
+    return script
+
+
+def test_macos_spa_root_html_rejects_the_api_root(tmp_path: Path) -> None:
+    """FAR-2479: the API root body (`{"status":"ok"}`) must never satisfy the gate."""
+    script = _spa_poller_script(tmp_path)
+    server, thread, url = _serve_body('{"status":"ok"}', "application/json")
+    try:
+        result = _run_bash_file(script, [url, "5", "0"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode != 0
+    assert "is not the SPA entry document" in result.stderr
+    assert "SPA entry document not served" in result.stderr
+
+
+def test_macos_spa_root_html_accepts_a_served_spa_entry(tmp_path: Path) -> None:
+    """FAR-2479: the gate passes once the SPA entry document is actually served."""
+    script = _spa_poller_script(tmp_path)
+    server, thread, url = _serve_body('<!doctype html><html><body><div id="app"></div></body></html>', "text/html")
+    try:
+        result = _run_bash_file(script, [url, "5", "0"], cwd=tmp_path)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, result.stderr
+    assert "served after" in result.stdout
+
+
+def test_macos_spa_root_gate_uses_the_readiness_poller() -> None:
+    """FAR-2479: the workflow gate calls the bounded poller, not a single curl."""
+    _step, build_run = _native_installer_step()
+    assert 'spa_root_html_ready "http://127.0.0.1:${API_PORT}/" 60 1 || exit 1' in build_run
+    assert "# BEGIN spa_root_html_ready" in build_run
+
+
+def test_macos_intel_homebrew_withdrawal_is_explicit_and_actionable() -> None:
+    """FAR-2479: an Intel Homebrew failure must name its cause, not fail opaquely."""
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "macos-installer.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["build"]["steps"]
+    step = next(step for step in steps if step.get("name") == "Install build tools")
+    run = step.get("run")
+    assert isinstance(run, str)
+    assert "Homebrew no longer builds bottles for the Intel (x86_64) macOS configuration" in run
+    assert "::error::Homebrew could not install %s on Intel (x86_64) macOS" in run
+    assert "::error::brew update failed on Intel (x86_64) macOS" in run
+    assert 'test "$(uname -m)" =' in run
