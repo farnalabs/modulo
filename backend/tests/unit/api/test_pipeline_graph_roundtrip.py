@@ -21,6 +21,7 @@ Two documented SQLite harness adaptations (neither touches the code under test):
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,10 +33,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from modulo.api.dependencies import (
+    get_current_tenant_user,
+    get_current_tenant_user_or_api_key,
+    get_current_user,
+    get_db_session,
+    get_plan_context,
+    get_settings,
+)
 from modulo.api.main import app
 from modulo.api.routes.pipelines import (
-    GraphWriteActor,
-    GraphWriteRecording,
     PipelineGraphUpdate,
     replace_pipeline_graph,
 )
@@ -225,9 +232,24 @@ def _build_graph_payload() -> dict[str, Any]:
             },
         ],
         "edges": [
-            {"id": str(_E1_ID), "source_node_id": str(_MANUAL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "normal"},
-            {"id": str(_E2_ID), "source_node_id": str(_SANDBOX_ID), "target_node_id": str(_ROUTER_ID), "edge_type": "normal"},
-            {"id": str(_E3_ID), "source_node_id": str(_ROUTER_ID), "target_node_id": str(_HITL_ID), "edge_type": "normal"},
+            {
+                "id": str(_E1_ID),
+                "source_node_id": str(_MANUAL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E2_ID),
+                "source_node_id": str(_SANDBOX_ID),
+                "target_node_id": str(_ROUTER_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E3_ID),
+                "source_node_id": str(_ROUTER_ID),
+                "target_node_id": str(_HITL_ID),
+                "edge_type": "normal",
+            },
             # HITL gate edge with review config
             {
                 "id": str(_E4_ID),
@@ -242,11 +264,32 @@ def _build_graph_payload() -> dict[str, Any]:
                 },
             },
             # Reject edge
-            {"id": str(_E5_ID), "source_node_id": str(_HITL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "reject"},
+            {
+                "id": str(_E5_ID),
+                "source_node_id": str(_HITL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "reject",
+            },
             # Conditional edge from agent to join
-            {"id": str(_E6_ID), "source_node_id": str(_AGENT_NODE_ID), "target_node_id": str(_JOIN_ID), "edge_type": "conditional", "condition_expression": "`true`"},
-            {"id": str(_E7_ID), "source_node_id": str(_JOIN_ID), "target_node_id": str(_CONNECTOR_FULL_ID), "edge_type": "normal"},
-            {"id": str(_E8_ID), "source_node_id": str(_CONNECTOR_FULL_ID), "target_node_id": str(_CONNECTOR_MIN_ID), "edge_type": "normal"},
+            {
+                "id": str(_E6_ID),
+                "source_node_id": str(_AGENT_NODE_ID),
+                "target_node_id": str(_JOIN_ID),
+                "edge_type": "conditional",
+                "condition_expression": "`true`",
+            },
+            {
+                "id": str(_E7_ID),
+                "source_node_id": str(_JOIN_ID),
+                "target_node_id": str(_CONNECTOR_FULL_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E8_ID),
+                "source_node_id": str(_CONNECTOR_FULL_ID),
+                "target_node_id": str(_CONNECTOR_MIN_ID),
+                "edge_type": "normal",
+            },
         ],
     }
 
@@ -382,9 +425,11 @@ async def _override_session(maker: async_sessionmaker[AsyncSession]) -> AsyncGen
 
 def _make_session_override(maker: async_sessionmaker[AsyncSession]):
     """Create a dependency override for get_db_session that yields a fresh session."""
+
     async def override() -> AsyncGenerator[AsyncSession, None]:
         async with maker() as s:
             yield s
+
     return override
 
 
@@ -490,7 +535,8 @@ def _assert_semantic_node_eq(a: dict[str, Any], b: dict[str, Any], *, path: str 
         if key == "env_vars":
             # Masking: response/env round-trip replaces values with SENSITIVE_VALUE_MASK
             # Just check key presence and that values are strings
-            assert isinstance(a.get(key), dict) and isinstance(b.get(key), dict), f"{path}.env_vars"
+            assert isinstance(a.get(key), dict), f"{path}.env_vars (A)"
+            assert isinstance(b.get(key), dict), f"{path}.env_vars (B)"
             assert set(a[key].keys()) == set(b[key].keys()), f"{path}.env_vars keys"
             for k, v in a[key].items():
                 assert isinstance(v, str), f"{path}.env_vars[{k}]"
@@ -568,7 +614,7 @@ class TestRestGraphRoundtrip:
         get_nodes = {n["id"]: n for n in get_graph["nodes"]}
         payload_node_ids = {n["id"] for n in payload["nodes"]}
         assert set(put_nodes.keys()) == payload_node_ids == set(get_nodes.keys()), "node id sets"
-        assert set(e["id"] for e in put_graph["edges"]) == set(e["id"] for e in get_graph["edges"]), "edge id sets"
+        assert {e["id"] for e in put_graph["edges"]} == {e["id"] for e in get_graph["edges"]}, "edge id sets"
 
         for n_payload in payload["nodes"]:
             nid = n_payload["id"]
@@ -624,7 +670,9 @@ class TestRestGraphRoundtrip:
                 for key, expected_value in n_payload.items():
                     actual_value = persisted.get(key)
                     if key == "env_vars":
-                        assert set(actual_value.keys()) == set(expected_value.keys()), f"persisted node {n_payload['id']}.env_vars keys"
+                        assert set(actual_value.keys()) == set(expected_value.keys()), (
+                            f"persisted node {n_payload['id']}.env_vars keys"
+                        )
                         for k, v in expected_value.items():
                             if k.upper().endswith("_API_KEY") or "SECRET" in k.upper() or "TOKEN" in k.upper():
                                 assert actual_value[k] == v, f"persisted node {n_payload['id']}.env_vars[{k}]"
@@ -634,9 +682,13 @@ class TestRestGraphRoundtrip:
                         assert actual_value == expected_value, f"persisted node {n_payload['id']}.context_files"
                     elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
                         for ek, ev in expected_value.items():
-                            assert actual_value.get(ek) == ev, f"persisted node {n_payload['id']}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
+                            assert actual_value.get(ek) == ev, (
+                                f"persisted node {n_payload['id']}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
+                            )
                     else:
-                        assert actual_value == expected_value, f"persisted node {n_payload['id']}.{key}: {actual_value!r} != {expected_value!r}"
+                        assert actual_value == expected_value, (
+                            f"persisted node {n_payload['id']}.{key}: {actual_value!r} != {expected_value!r}"
+                        )
                 # For manual node, also check defaults are present
                 if n_payload["node_type"] == "manual":
                     assert persisted.get("mode") == "llm"
@@ -649,7 +701,9 @@ class TestRestGraphRoundtrip:
                     assert persisted.get("commands_concatenation_string") == " && "
 
             # Edges
-            edges = list((await s.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == _PIPELINE_ID))).scalars())
+            edges = list(
+                (await s.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == _PIPELINE_ID))).scalars()
+            )
             persisted_edges = {e.id: e for e in edges}
             for e_payload in payload["edges"]:
                 eid = uuid.UUID(e_payload["id"])
@@ -675,7 +729,7 @@ class TestRestGraphRoundtrip:
                     path=f"persisted edge {eid}",
                 )
 
-# 5. Snapshot created (version_kind='edit')
+            # 5. Snapshot created (version_kind='edit')
             snaps = list(
                 (
                     await s.execute(
@@ -701,18 +755,27 @@ class TestRestGraphRoundtrip:
                 for key, expected_value in n_payload.items():
                     actual_value = snap_node.get(key)
                     if key == "env_vars":
-                        assert set(actual_value.keys()) == set(expected_value.keys()), f"snapshot node {nid}.env_vars keys"
+                        assert set(actual_value.keys()) == set(expected_value.keys()), (
+                            f"snapshot node {nid}.env_vars keys"
+                        )
                         for k, v in expected_value.items():
-                            assert actual_value[k] == v, f"snapshot node {nid}.env_vars[{k}]: {actual_value[k]!r} != {v!r}"
+                            assert actual_value[k] == v, (
+                                f"snapshot node {nid}.env_vars[{k}]: {actual_value[k]!r} != {v!r}"
+                            )
                     elif key == "context_files":
                         assert actual_value == expected_value, f"snapshot node {nid}.context_files"
                     elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
                         for ek, ev in expected_value.items():
-                            assert actual_value.get(ek) == ev, f"snapshot node {nid}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
+                            assert actual_value.get(ek) == ev, (
+                                f"snapshot node {nid}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
+                            )
                     else:
-                        assert actual_value == expected_value, f"snapshot node {nid}.{key}: {actual_value!r} != {expected_value!r}"
+                        assert actual_value == expected_value, (
+                            f"snapshot node {nid}.{key}: {actual_value!r} != {expected_value!r}"
+                        )
 
-            # Snapshot edges (use 'source'/'target' keys instead of 'source_node_id'/'target_node_id', and 'type' instead of 'edge_type')
+            # Snapshot edges use 'source'/'target' instead of
+            # 'source_node_id'/'target_node_id', and 'type' instead of 'edge_type'.
             for e_payload in payload["edges"]:
                 eid = e_payload["id"]
                 snap_edge = snap_edges[eid]
@@ -810,24 +873,33 @@ class TestMcpRestEquivalence:
 
         payload = _build_graph_payload()
 
-# 1. REST write via real service (replace_pipeline_graph) on pipeline 1
+        # 1. REST write via real service (replace_pipeline_graph) on pipeline 1
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as s:
-            async with s.begin():
-                rest_nodes, rest_edges = await replace_pipeline_graph(
-                    s,
-                    pipeline_id=_PIPELINE_ID,
-                    org_id=_ORG_ID,
-                    nodes=[strip_unset_connector_binding_inputs(n.model_dump(mode="json")) for n in PipelineGraphUpdate.model_validate({"nodes": payload["nodes"], "edges": payload["edges"]}).nodes],
-                    edges=[_pipeline_graph_edge_to_dict(e) for e in PipelineGraphUpdate.model_validate({"nodes": payload["nodes"], "edges": payload["edges"]}).edges],
-                    actor=GraphWriteActor(
-                        is_privileged=True,
-                        caller_type="rest",
-                        account_id=_ACCOUNT_ID,
-                        is_guardrail_admin=True,
-                    ),
-                    recording=GraphWriteRecording(record_snapshot=True),
-                )
+        async with maker() as s, s.begin():
+            rest_nodes, rest_edges = await replace_pipeline_graph(
+                s,
+                pipeline_id=_PIPELINE_ID,
+                org_id=_ORG_ID,
+                nodes=[
+                    strip_unset_connector_binding_inputs(n.model_dump(mode="json"))
+                    for n in PipelineGraphUpdate.model_validate(
+                        {"nodes": payload["nodes"], "edges": payload["edges"]}
+                    ).nodes
+                ],
+                edges=[
+                    _pipeline_graph_edge_to_dict(e)
+                    for e in PipelineGraphUpdate.model_validate(
+                        {"nodes": payload["nodes"], "edges": payload["edges"]}
+                    ).edges
+                ],
+                actor=GraphWriteActor(
+                    is_privileged=True,
+                    caller_type="rest",
+                    account_id=_ACCOUNT_ID,
+                    is_guardrail_admin=True,
+                ),
+                recording=GraphWriteRecording(record_snapshot=True),
+            )
         rest_nodes = {n["id"]: n for n in rest_nodes}
         rest_edges = {str(e.id): e for e in rest_edges}
 
@@ -840,20 +912,22 @@ class TestMcpRestEquivalence:
                 yield s
 
         lock_patch, release_patch, role_patch = _patch_snapshot_and_role()
-        with lock_patch, release_patch, role_patch:
-            with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server._session", _session_factory),
-                patch(
-                    "modulo.core.team_visibility.find_connector_team_mismatches",
-                    new=AsyncMock(return_value=[]),
-                ),
-            ):
-                result = await ms.update_pipeline_graph(
-                    pipeline_id=str(_PIPELINE_ID_2),
-                    nodes=payload["nodes"],
-                    edges=payload["edges"],
-                )
+        with (
+            lock_patch,
+            release_patch,
+            role_patch,
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session", _session_factory),
+            patch(
+                "modulo.core.team_visibility.find_connector_team_mismatches",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            result = await ms.update_pipeline_graph(
+                pipeline_id=str(_PIPELINE_ID_2),
+                nodes=payload["nodes"],
+                edges=payload["edges"],
+            )
 
         assert "error" not in result, result
 
@@ -871,12 +945,34 @@ class TestMcpRestEquivalence:
                 # But persisted JSON is the same before masking
                 pass
             # Compare all non-env fields
-            for key in ("id", "node_type", "position", "label", "description", "mode", "template_id",
-                        "agent_commands", "agent_prompt", "timeout_seconds", "stall_timeout_seconds",
-                        "enable_heartbeat", "read_only", "git_credentials", "egress_policy",
-                        "stdout_retention_mode", "stdout_max_bytes", "idempotent", "router_config",
-                        "hitl_config", "output_schema_json", "agent_id", "collect", "aggregate",
-                        "join_partial_policy", "connector_binding"):
+            for key in (
+                "id",
+                "node_type",
+                "position",
+                "label",
+                "description",
+                "mode",
+                "template_id",
+                "agent_commands",
+                "agent_prompt",
+                "timeout_seconds",
+                "stall_timeout_seconds",
+                "enable_heartbeat",
+                "read_only",
+                "git_credentials",
+                "egress_policy",
+                "stdout_retention_mode",
+                "stdout_max_bytes",
+                "idempotent",
+                "router_config",
+                "hitl_config",
+                "output_schema_json",
+                "agent_id",
+                "collect",
+                "aggregate",
+                "join_partial_policy",
+                "connector_binding",
+            ):
                 if key == "connector_binding":
                     _assert_connector_binding_eq(rest_nodes[nid].get(key, {}), mcp_nodes[nid].get(key, {}))
                 elif key == "env_vars":
@@ -910,29 +1006,12 @@ def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]
     binding = node.get("connector_binding")
     if not isinstance(binding, dict):
         return node
-    _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS = ("resource", "filters", "data")
+    optional_input_fields = ("resource", "filters", "data")
 
     def _is_unset_binding_input(value: Any) -> bool:
         return value is None or value == {}
 
-    cleaned = {
-        k: v for k, v in binding.items()
-        if not (k in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and _is_unset_binding_input(v))
-    }
+    cleaned = {k: v for k, v in binding.items() if not (k in optional_input_fields and _is_unset_binding_input(v))}
     if len(cleaned) == len(binding):
         return node
     return {**node, "connector_binding": cleaned}
-
-
-# ---------------------------------------------------------------------------
-# Imports needed for the test module
-# ---------------------------------------------------------------------------
-
-from modulo.api.dependencies import (
-    get_current_tenant_user,
-    get_current_tenant_user_or_api_key,
-    get_current_user,
-    get_db_session,
-    get_plan_context,
-    get_settings,
-)

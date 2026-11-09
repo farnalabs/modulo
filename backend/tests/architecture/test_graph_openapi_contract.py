@@ -305,10 +305,9 @@ def test_node_nullable_fields(schemas: dict[str, Any]) -> None:
     for field in _EXPECTED_NODE_NULLABLE:
         prop = node["properties"].get(field)
         assert prop is not None, f"nullable field {field} missing"
-        assert any(
-            isinstance(choice, dict) and choice.get("type") == "null"
-            for choice in prop.get("anyOf", [])
-        ), f"field {field} is not nullable"
+        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), (
+            f"field {field} is not nullable"
+        )
 
 
 def test_edge_nullable_fields(schemas: dict[str, Any]) -> None:
@@ -316,10 +315,9 @@ def test_edge_nullable_fields(schemas: dict[str, Any]) -> None:
     for field in _EXPECTED_EDGE_NULLABLE:
         prop = edge["properties"].get(field)
         assert prop is not None, f"nullable field {field} missing"
-        assert any(
-            isinstance(choice, dict) and choice.get("type") == "null"
-            for choice in prop.get("anyOf", [])
-        ), f"field {field} is not nullable"
+        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), (
+            f"field {field} is not nullable"
+        )
 
 
 def test_write_response_models_differ_only_by_diagnostics(schemas: dict[str, Any]) -> None:
@@ -403,7 +401,9 @@ def test_no_additional_properties_forbidden(schemas: dict[str, Any]) -> None:
             continue
         # The component's top-level additionalProperties must NOT be False
         addl = comp.get("additionalProperties")
-        assert addl is not False, f"{name}: additionalProperties is False (extra='forbid' would be a breaking contract change)"
+        assert addl is not False, (
+            f"{name}: additionalProperties is False (extra='forbid' would be a breaking contract change)"
+        )
 
 
 def test_node_object_properties_allow_extra(schemas: dict[str, Any]) -> None:

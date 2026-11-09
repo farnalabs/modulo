@@ -9,30 +9,18 @@ but against a real Postgres database with native advisory locks, RLS and
 PG-specific types.
 """
 
-import asyncio
-import logging
 import uuid
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.api.routes.pipelines import (
-    GraphWriteActor,
-    GraphWriteRecording,
-    PipelineGraphUpdate,
-)
-from modulo.db.models.account import Account
-from modulo.db.models.agent import Agent
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -178,9 +166,24 @@ def _build_graph_payload() -> dict[str, Any]:
             },
         ],
         "edges": [
-            {"id": str(_E1_ID), "source_node_id": str(_MANUAL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "normal"},
-            {"id": str(_E2_ID), "source_node_id": str(_SANDBOX_ID), "target_node_id": str(_ROUTER_ID), "edge_type": "normal"},
-            {"id": str(_E3_ID), "source_node_id": str(_ROUTER_ID), "target_node_id": str(_HITL_ID), "edge_type": "normal"},
+            {
+                "id": str(_E1_ID),
+                "source_node_id": str(_MANUAL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E2_ID),
+                "source_node_id": str(_SANDBOX_ID),
+                "target_node_id": str(_ROUTER_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E3_ID),
+                "source_node_id": str(_ROUTER_ID),
+                "target_node_id": str(_HITL_ID),
+                "edge_type": "normal",
+            },
             {
                 "id": str(_E4_ID),
                 "source_node_id": str(_HITL_ID),
@@ -193,10 +196,31 @@ def _build_graph_payload() -> dict[str, Any]:
                     "human_only": True,
                 },
             },
-            {"id": str(_E5_ID), "source_node_id": str(_HITL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "reject"},
-            {"id": str(_E6_ID), "source_node_id": str(_AGENT_NODE_ID), "target_node_id": str(_JOIN_ID), "edge_type": "conditional", "condition_expression": "`true`"},
-            {"id": str(_E7_ID), "source_node_id": str(_JOIN_ID), "target_node_id": str(_CONNECTOR_FULL_ID), "edge_type": "normal"},
-            {"id": str(_E8_ID), "source_node_id": str(_CONNECTOR_FULL_ID), "target_node_id": str(_CONNECTOR_MIN_ID), "edge_type": "normal"},
+            {
+                "id": str(_E5_ID),
+                "source_node_id": str(_HITL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "reject",
+            },
+            {
+                "id": str(_E6_ID),
+                "source_node_id": str(_AGENT_NODE_ID),
+                "target_node_id": str(_JOIN_ID),
+                "edge_type": "conditional",
+                "condition_expression": "`true`",
+            },
+            {
+                "id": str(_E7_ID),
+                "source_node_id": str(_JOIN_ID),
+                "target_node_id": str(_CONNECTOR_FULL_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E8_ID),
+                "source_node_id": str(_CONNECTOR_FULL_ID),
+                "target_node_id": str(_CONNECTOR_MIN_ID),
+                "edge_type": "normal",
+            },
         ],
     }
 
@@ -215,13 +239,12 @@ async def seeded_env(
     # Seed via raw SQL (matches test_evals_redirect pattern)
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
             {"id": str(_ORG_ID), "name": f"Roundtrip {str(_ORG_ID)[:8]}", "slug": f"rt-{str(_ORG_ID)[:8]}"},
         )
         from modulo.auth.passwords import hash_password
-        _PASSWORD = "roundtrip-password-1"
+
+        password = "roundtrip-password-1"
         await conn.execute(
             text(
                 "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
@@ -231,7 +254,7 @@ async def seeded_env(
                 "id": str(_ACCOUNT_ID),
                 "email": f"rt-{str(_ACCOUNT_ID)[:10]}@example.com",
                 "name": "Roundtrip Admin",
-                "hash": hash_password(_PASSWORD),
+                "hash": hash_password(password),
             },
         )
         await conn.execute(
@@ -242,8 +265,11 @@ async def seeded_env(
         )
         await conn.execute(
             text(
-                "INSERT INTO agents (id, organisation_id, account_id, name, prompt_template) "
-                "VALUES (:id, :oid, :uid, :name, :prompt)"
+                "INSERT INTO agents (id, organisation_id, account_id, name, prompt_template, "
+                "is_executable, prompt_always_visible, prompt_version_history, connector_type_refs, "
+                "required_environment_capabilities, retry_policy) "
+                "VALUES (:id, :oid, :uid, :name, :prompt, true, false, '[]'::json, '[]'::json, "
+                "'[]'::json, '{}'::json)"
             ),
             {
                 "id": str(_AGENT_ROW_ID),
@@ -277,7 +303,7 @@ async def seeded_env(
 
     # Login
     email = f"rt-{str(_ACCOUNT_ID)[:10]}@example.com"
-    login = await integration_client.post("/api/v1/auth/login", json={"email": email, "password": _PASSWORD})
+    login = await integration_client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert login.status_code == 200, login.text
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -342,10 +368,14 @@ class TestPipelineGraphContractPostgres:
             pipeline = pipeline_row.scalar_one()
             persisted_nodes = {n["id"]: n for n in pipeline.graph_nodes_json}
             for n_payload in payload["nodes"]:
-                _assert_semantic_node_eq(persisted_nodes[n_payload["id"]], n_payload, path=f"persisted node {n_payload['id']}")
+                _assert_semantic_node_eq(
+                    persisted_nodes[n_payload["id"]], n_payload, path=f"persisted node {n_payload['id']}"
+                )
 
             # Edges
-            edges = list((await conn.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
+            edges = list(
+                (await conn.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
+            )
             persisted_edges = {e.id: e for e in edges}
             for e_payload in payload["edges"]:
                 eid = uuid.UUID(e_payload["id"])
@@ -387,7 +417,9 @@ class TestPipelineGraphContractPostgres:
                     assert "prompt_template" in snap_node
                 _assert_semantic_node_eq(snap_node, n_payload, path=f"snapshot node {nid}")
             for e_payload in payload["edges"]:
-                _assert_semantic_edge_eq(snap_edges[e_payload["id"]], e_payload, path=f"snapshot edge {e_payload['id']}")
+                _assert_semantic_edge_eq(
+                    snap_edges[e_payload["id"]], e_payload, path=f"snapshot edge {e_payload['id']}"
+                )
 
     async def test_postgres_write_vs_response_drops_unset_connector_binding_inputs(
         self,
@@ -566,9 +598,24 @@ def _build_graph_payload() -> dict[str, Any]:
             },
         ],
         "edges": [
-            {"id": str(_E1_ID), "source_node_id": str(_MANUAL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "normal"},
-            {"id": str(_E2_ID), "source_node_id": str(_SANDBOX_ID), "target_node_id": str(_ROUTER_ID), "edge_type": "normal"},
-            {"id": str(_E3_ID), "source_node_id": str(_ROUTER_ID), "target_node_id": str(_HITL_ID), "edge_type": "normal"},
+            {
+                "id": str(_E1_ID),
+                "source_node_id": str(_MANUAL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E2_ID),
+                "source_node_id": str(_SANDBOX_ID),
+                "target_node_id": str(_ROUTER_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E3_ID),
+                "source_node_id": str(_ROUTER_ID),
+                "target_node_id": str(_HITL_ID),
+                "edge_type": "normal",
+            },
             {
                 "id": str(_E4_ID),
                 "source_node_id": str(_HITL_ID),
@@ -581,10 +628,31 @@ def _build_graph_payload() -> dict[str, Any]:
                     "human_only": True,
                 },
             },
-            {"id": str(_E5_ID), "source_node_id": str(_HITL_ID), "target_node_id": str(_SANDBOX_ID), "edge_type": "reject"},
-            {"id": str(_E6_ID), "source_node_id": str(_AGENT_NODE_ID), "target_node_id": str(_JOIN_ID), "edge_type": "conditional", "condition_expression": "`true`"},
-            {"id": str(_E7_ID), "source_node_id": str(_JOIN_ID), "target_node_id": str(_CONNECTOR_FULL_ID), "edge_type": "normal"},
-            {"id": str(_E8_ID), "source_node_id": str(_CONNECTOR_FULL_ID), "target_node_id": str(_CONNECTOR_MIN_ID), "edge_type": "normal"},
+            {
+                "id": str(_E5_ID),
+                "source_node_id": str(_HITL_ID),
+                "target_node_id": str(_SANDBOX_ID),
+                "edge_type": "reject",
+            },
+            {
+                "id": str(_E6_ID),
+                "source_node_id": str(_AGENT_NODE_ID),
+                "target_node_id": str(_JOIN_ID),
+                "edge_type": "conditional",
+                "condition_expression": "`true`",
+            },
+            {
+                "id": str(_E7_ID),
+                "source_node_id": str(_JOIN_ID),
+                "target_node_id": str(_CONNECTOR_FULL_ID),
+                "edge_type": "normal",
+            },
+            {
+                "id": str(_E8_ID),
+                "source_node_id": str(_CONNECTOR_FULL_ID),
+                "target_node_id": str(_CONNECTOR_MIN_ID),
+                "edge_type": "normal",
+            },
         ],
     }
 
@@ -627,7 +695,8 @@ def _assert_semantic_node_eq(a: dict[str, Any], b: dict[str, Any], *, path: str 
             _assert_connector_binding_eq(a[key], b[key], path=f"{path}.connector_binding")
             continue
         if key == "env_vars":
-            assert isinstance(a.get(key), dict) and isinstance(b.get(key), dict), f"{path}.env_vars"
+            assert isinstance(a.get(key), dict), f"{path}.env_vars (A)"
+            assert isinstance(b.get(key), dict), f"{path}.env_vars (B)"
             assert set(a[key].keys()) == set(b[key].keys()), f"{path}.env_vars keys"
             for k, v in a[key].items():
                 assert isinstance(v, str), f"{path}.env_vars[{k}]"
@@ -667,7 +736,3 @@ def _assert_semantic_edge_eq(a: dict[str, Any], b: dict[str, Any], path: str = "
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
-
-from modulo.api.dependencies import get_settings, get_db_session, get_current_user, get_plan_context
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.passwords import hash_password
