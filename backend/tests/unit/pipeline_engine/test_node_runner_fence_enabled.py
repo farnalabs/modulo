@@ -357,7 +357,6 @@ async def test_marker_carries_attempt_key():
     result = await _run_fence(node_fn, create_mock)
 
     assert result["telemetry"]["attempt_key"] == "run:run-1:node:n1:7"
-    assert result["artifacts"][0]["attempt_key"] == "run:run-1:node:n1:7"
     marker = json.loads(state_at_run["sandbox_dispatch_state"])
     assert marker["state"] == "dispatching"
     assert marker["attempt_key"] == "run:run-1:node:n1:7"

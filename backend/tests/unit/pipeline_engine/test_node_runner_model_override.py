@@ -379,8 +379,8 @@ async def test_sandbox_agent_context_scope_filters_out_of_scope_key() -> None:
         "_org_id": "org-1",
     }
     result, _ = await _run_sandbox_agent(node_def, state)
-    assert result["telemetry"]["status"] == "skipped"
-    assert "agent_command template references missing input fields" in result["output"]["summary"]
+    assert result["status"] == "skipped"
+    assert "agent_command template references missing input fields" in result["summary"]
 
 
 @pytest.mark.asyncio

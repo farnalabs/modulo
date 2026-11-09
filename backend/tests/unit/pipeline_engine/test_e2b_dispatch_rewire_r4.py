@@ -251,8 +251,8 @@ async def test_provider_full_dispatch_runs_the_abc_call_sequence(monkeypatch: py
     assert dispatch.last_environment is not None
     assert dispatch.last_environment["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
 
-    assert result["output"]["status"] == "completed"
-    assert result["artifacts"][0]["output"]["exit_code"] == 0
+    assert result["telemetry"]["status"] == "completed"
+    assert result["telemetry"]["exit_code"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +312,8 @@ async def test_provider_stream_error_never_fabricates_a_zero_exit(
     fn = make_sandbox_agent_fn(_base_node_def())
     result = await fn(_run_state())
 
-    inner = result["artifacts"][0]["output"]
-    assert inner["exit_code"] == -1
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["exit_code"] == -1
+    assert result["telemetry"]["status"] == "failed"
     assert dispatch.events == ["create", "command", "destroy_by_ref", "close"], dispatch.events
 
 
@@ -329,9 +328,8 @@ async def test_provider_healthy_non_zero_exit_is_a_result_not_a_stream_error(
     fn = make_sandbox_agent_fn(_base_node_def())
     result = await fn(_run_state())
 
-    inner = result["artifacts"][0]["output"]
-    assert inner["exit_code"] == 7
-    assert result["output"]["status"] == "failed"
+    assert result["telemetry"]["exit_code"] == 7
+    assert result["telemetry"]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +697,7 @@ async def test_cost_estimate_stamps_through_the_sanctioned_helper(
         result = await fn(_run_state())
 
     assert len(calls) == 1, "the dispatch must stamp through _compute_sandbox_cost exactly once"
-    assert result["output"]["cost_estimate_usd"] == real(pinned_elapsed, fixture)
+    assert result["telemetry"]["cost_estimate_usd"] == real(pinned_elapsed, fixture)
 
 
 # ---------------------------------------------------------------------------
@@ -721,9 +719,8 @@ async def test_dispatch_marker_and_telemetry_carry_provider_attribution(
         result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
     # Node telemetry (the P1b splitter folds these verbatim).
-    assert result["output"]["provider"] == "e2b"
-    assert result["output"]["via_provider"] is True
-    assert result["artifacts"][0]["output"]["via_provider"] is True
+    assert result["telemetry"]["provider"] == "e2b"
+    assert result["telemetry"]["via_provider"] is True
 
     assert len(stamped) == 1
     entry = stamped[0]
@@ -733,16 +730,14 @@ async def test_dispatch_marker_and_telemetry_carry_provider_attribution(
 
 
 async def test_marker_telemetry_lands_in_node_telemetry_json(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    """The attribution keys survive the envelope -> telemetry split."""
-    from modulo.core.node_output_split import split_node_output
-
+    """The attribution keys are present in the telemetry (new split format)."""
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     install_fake_dispatch(monkeypatch, ref="sbx-telemetry", exit_code=0)
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=AssertionError("no legacy create"))):
         result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
-    _, telemetry = split_node_output(result, "sandbox_agent", None, node_id="n1")
+    telemetry = result["telemetry"]
     assert telemetry["provider"] == "e2b"
     assert telemetry["via_provider"] is True
 
@@ -816,7 +811,7 @@ async def test_provider_workspace_inputs_receive_the_abc_mediated_handle(
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=AssertionError("no legacy create"))):
         result = await make_sandbox_agent_fn(node_def)(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert len(seen) == 1
     assert isinstance(seen[0], _ProviderMediatedHandle)
     assert seen[0].sandbox_id == "sbx-t10-on"
@@ -1303,8 +1298,8 @@ async def test_provider_empty_provider_ref_after_create_is_refused(
 
     result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
-    assert result["output"]["status"] == "failed"
-    assert result["artifacts"][0]["output"]["error_type"] == "RuntimeProviderError"
+    assert result["telemetry"]["status"] == "failed"
+    assert result["telemetry"]["error_type"] == "RuntimeProviderError"
 
 
 async def test_provider_dispatch_provider_close_failure_is_swallowed(
@@ -1320,7 +1315,7 @@ async def test_provider_dispatch_provider_close_failure_is_swallowed(
 
     result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     close.assert_awaited_once()
 
 
@@ -1432,7 +1427,7 @@ async def test_route_resolved_provider_is_reused_and_its_hub_is_aclosed(
 
     result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert provider.events[0] == "create"
     fresh_hub.assert_not_awaited()
     hub.aclose.assert_awaited_once()
@@ -1465,7 +1460,7 @@ async def test_route_uses_the_kubernetes_profiles_image_ref(monkeypatch: pytest.
 
     result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     assert provider.created_spec is not None
     assert provider.created_spec.image_ref == "ghcr.io/acme/agent:1.2.3"
 
@@ -1485,7 +1480,7 @@ async def test_route_hub_aclose_failure_is_logged_not_raised(monkeypatch: pytest
 
     result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
-    assert result["output"]["status"] == "completed"
+    assert result["telemetry"]["status"] == "completed"
     hub.aclose.assert_awaited_once()
 
 
@@ -1563,8 +1558,8 @@ async def test_provider_bridge_escalation_surfaces_a_summary_only_failure_detail
 
     result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
-    assert result["output"]["status"] == "failed"
-    summary = result["output"]["summary"]
+    assert result["telemetry"]["status"] == "failed"
+    summary = result["telemetry"]["summary"]
     assert "escalation requested" in summary
     assert "git push" in summary
     assert "gr-esc" in summary

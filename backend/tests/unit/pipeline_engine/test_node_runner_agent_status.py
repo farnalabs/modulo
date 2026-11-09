@@ -76,17 +76,14 @@ async def _run_node(output_json: str, *, exit_code: int = 0) -> dict:
         return await fn(_run_state())
 
 
-async def test_agent_status_and_outcome_surface_verbatim_in_both_outputs():
-    """The agent's raw status/outcome appear on BOTH output dicts, unchanged."""
+async def test_agent_status_and_outcome_surface_verbatim_in_telemetry():
+    """The agent's raw status/outcome appear in telemetry, unchanged."""
     result = await _run_node('{"status": "completed", "outcome": "success", "summary": "groomed"}')
 
-    node_telemetry = result["telemetry"]
-    artifact_output = result["artifacts"][0]
+    telemetry = result["telemetry"]
 
-    assert node_telemetry["agent_status"] == "completed"
-    assert node_telemetry["agent_outcome"] == "success"
-    assert artifact_output["agent_status"] == "completed"
-    assert artifact_output["agent_outcome"] == "success"
+    assert telemetry["agent_status"] == "completed"
+    assert telemetry["agent_outcome"] == "success"
 
 
 async def test_legacy_status_failed_surfaces_as_agent_status_failed():
@@ -95,14 +92,11 @@ async def test_legacy_status_failed_surfaces_as_agent_status_failed():
     while the exit-code-derived node status stays 'completed'."""
     result = await _run_node('{"status": "failed", "summary": "all sub-calls timed out"}', exit_code=0)
 
-    node_telemetry = result["telemetry"]
-    artifact_output = result["artifacts"][0]
+    telemetry = result["telemetry"]
 
-    assert node_telemetry["agent_status"] == "failed"
-    assert artifact_output["agent_status"] == "failed"
+    assert telemetry["agent_status"] == "failed"
     # Node status remains harness truth from the exit code — NOT overwritten.
-    assert node_telemetry["status"] == "completed"
-    assert artifact_output["status"] == "completed"
+    assert telemetry["status"] == "completed"
 
 
 async def test_exit_code_derivation_unchanged():
@@ -110,13 +104,11 @@ async def test_exit_code_derivation_unchanged():
     self-reported completed — the exit code is harness truth for node status."""
     result = await _run_node('{"status": "completed", "outcome": "success", "summary": "ok"}', exit_code=1)
 
-    node_telemetry = result["telemetry"]
-    artifact_output = result["artifacts"][0]
+    telemetry = result["telemetry"]
 
-    assert node_telemetry["status"] == "failed"
-    assert artifact_output["status"] == "failed"
+    assert telemetry["status"] == "failed"
     # The agent's self-report is still surfaced verbatim.
-    assert node_telemetry["agent_status"] == "completed"
+    assert telemetry["agent_status"] == "completed"
 
 
 async def test_non_string_agent_verdicts_do_not_surface():
@@ -124,13 +116,10 @@ async def test_non_string_agent_verdicts_do_not_surface():
     a garbage verdict must never be read as a false failure or success."""
     result = await _run_node('{"status": true, "outcome": 0, "summary": "ok"}')
 
-    node_telemetry = result["telemetry"]
-    artifact_output = result["artifacts"][0]
+    telemetry = result["telemetry"]
 
-    assert node_telemetry["agent_status"] is None
-    assert node_telemetry["agent_outcome"] is None
-    assert artifact_output["agent_status"] is None
-    assert artifact_output["agent_outcome"] is None
+    assert telemetry["agent_status"] is None
+    assert telemetry["agent_outcome"] is None
 
 
 async def test_missing_output_json_fails_open_with_no_silent_agent_status():
@@ -153,9 +142,10 @@ async def test_outcome_failed_surfaces_verbatim():
     outcome alone."""
     result = await _run_node('{"status": "completed", "outcome": "failed", "summary": "partial"}')
 
-    assert result["telemetry"]["agent_status"] == "completed"
-    assert result["telemetry"]["agent_outcome"] == "failed"
-    assert result["artifacts"][0]["agent_outcome"] == "failed"
+    telemetry = result["telemetry"]
+
+    assert telemetry["agent_status"] == "completed"
+    assert telemetry["agent_outcome"] == "failed"
 
 
 async def test_summary_and_other_fields_still_extracted():
@@ -164,12 +154,16 @@ async def test_summary_and_other_fields_still_extracted():
         '{"status": "completed", "summary": "done", "changed_files": ["a.py"], "pr_url": "https://example.com/p"}'
     )
 
-    node_output = result["output"]
-    artifact_output = result["artifacts"][0]
-    assert node_output["summary"] == "done"
-    assert artifact_output["summary"] == "done"
-    assert artifact_output["changed_files"] == ["a.py"]
-    assert artifact_output["pr_url"] == "https://example.com/p"
+    output = result["output"]
+    telemetry = result["telemetry"]
+    # Pure return (agent's output.json) contains summary, changed_files, pr_url
+    assert output["summary"] == "done"
+    assert output["changed_files"] == ["a.py"]
+    assert output["pr_url"] == "https://example.com/p"
+    # Telemetry also mirrors these fields
+    assert telemetry["summary"] == "done"
+    assert telemetry["changed_files"] == ["a.py"]
+    assert telemetry["pr_url"] == "https://example.com/p"
 
 
 async def test_unparseable_output_json_raises_before_agent_status():
@@ -199,7 +193,6 @@ async def test_non_string_or_non_dict_output_never_sets_agent_status(output_json
     never fabricates an agent_status."""
     result = await _run_node(output_json, exit_code=0)
     assert result["telemetry"]["agent_status"] is None
-    assert result["artifacts"][0]["agent_status"] is None
 
 
 async def test_fallback_echo_surfaces_session_lost_marker_not_agent_failed():
@@ -213,19 +206,14 @@ async def test_fallback_echo_surfaces_session_lost_marker_not_agent_failed():
     echo = '{"status": "failed", "summary": "No output from agent - session interrupted"}'
     result = await _run_node(echo, exit_code=0)
 
-    node_telemetry = result["telemetry"]
-    artifact_output = result["artifacts"][0]
+    telemetry = result["telemetry"]
 
-    assert node_telemetry["agent_status"] is None
-    assert artifact_output["agent_status"] is None
-    assert node_telemetry["sandbox_session_lost"] is True
-    assert artifact_output["sandbox_session_lost"] is True
+    assert telemetry["agent_status"] is None
+    assert telemetry["sandbox_session_lost"] is True
     # The failure detail survives the marker.
-    assert node_telemetry["summary"] == "No output from agent - session interrupted"
-    assert artifact_output["summary"] == "No output from agent - session interrupted"
+    assert telemetry["summary"] == "No output from agent - session interrupted"
     # A dead session is never a completed node, even when the wrapper exits 0.
-    assert node_telemetry["status"] == "failed"
-    assert artifact_output["status"] == "failed"
+    assert telemetry["status"] == "failed"
 
 
 async def test_fallback_echo_nonzero_exit_also_stamped():
@@ -234,9 +222,11 @@ async def test_fallback_echo_nonzero_exit_also_stamped():
     echo = '{"status": "failed", "summary": "No output from agent - session interrupted"}'
     result = await _run_node(echo, exit_code=1)
 
-    assert result["telemetry"]["sandbox_session_lost"] is True
-    assert result["telemetry"]["agent_status"] is None
-    assert result["telemetry"]["status"] == "failed"
+    telemetry = result["telemetry"]
+
+    assert telemetry["sandbox_session_lost"] is True
+    assert telemetry["agent_status"] is None
+    assert telemetry["status"] == "failed"
 
 
 async def test_genuine_verdict_no_marker():
@@ -245,9 +235,10 @@ async def test_genuine_verdict_no_marker():
     proving the fallback-echo detection is surgical, not over-broad."""
     result = await _run_node('{"status": "failed", "summary": "the task is impossible because X"}', exit_code=0)
 
-    assert result["telemetry"]["agent_status"] == "failed"
-    assert "sandbox_session_lost" not in result["telemetry"]
-    assert result["artifacts"][0]["agent_status"] == "failed"
+    telemetry = result["telemetry"]
+
+    assert telemetry["agent_status"] == "failed"
+    assert "sandbox_session_lost" not in telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +283,11 @@ async def test_fallback_echo_after_3_attempts_variant_stamped():
     echo = '{"status": "failed", "summary": "No output from agent - session interrupted after 3 attempts"}'
     result = await _run_node(echo, exit_code=0)
 
-    assert result["telemetry"]["sandbox_session_lost"] is True
-    assert result["telemetry"]["agent_status"] is None
-    assert result["telemetry"]["status"] == "failed"
-    assert result["artifacts"][0]["sandbox_session_lost"] is True
+    telemetry = result["telemetry"]
+
+    assert telemetry["sandbox_session_lost"] is True
+    assert telemetry["agent_status"] is None
+    assert telemetry["status"] == "failed"
 
 
 async def test_fallback_echo_in_error_field_stamped():
@@ -305,7 +297,9 @@ async def test_fallback_echo_in_error_field_stamped():
     echo = '{"status": "failed", "error": "No output from agent - session interrupted"}'
     result = await _run_node(echo, exit_code=0)
 
-    assert result["telemetry"]["sandbox_session_lost"] is True
-    assert result["telemetry"]["agent_status"] is None
-    assert result["telemetry"]["status"] == "failed"
-    assert result["telemetry"]["summary"]
+    telemetry = result["telemetry"]
+
+    assert telemetry["sandbox_session_lost"] is True
+    assert telemetry["agent_status"] is None
+    assert telemetry["status"] == "failed"
+    assert telemetry["summary"]
