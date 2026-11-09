@@ -16,19 +16,19 @@ const apiState = vi.hoisted(() => ({
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/costs/limits') {
-        return Promise.resolve({
-           data: apiState.limitsOverride ?? {
-             org_daily_limit_usd: apiState.orgLimit,
-             teams: [
-
-              { id: 'team-1', name: 'Alpha', daily_limit_usd: 50.0 },
-              { id: 'team-2', name: 'Beta', daily_limit_usd: null },
-            ],
-          },
-          error: undefined,
-        })
-      }
+       if (path === '/api/v1/admin/costs/limits') {
+         return Promise.resolve({
+            data: apiState.limitsOverride ?? {
+              organisation_id: 'test-org',
+              org_daily_spend_limit: apiState.orgLimit,
+              team_limits: [
+                { team_id: 'team-1', team_name: 'Alpha', daily_spend_limit: 50.0 },
+                { team_id: 'team-2', team_name: 'Beta', daily_spend_limit: null },
+              ],
+            },
+           error: undefined,
+         })
+       }
       if (path === '/api/v1/admin/costs') {
         return Promise.resolve({
            data: apiState.costsOverride ?? {
@@ -169,7 +169,7 @@ describe('AdminSpendLimitsView', () => {
     expect(existingInput.props('modelValue')).toBe('100')
     existing.unmount()
 
-    apiState.limitsOverride = { org_daily_limit_usd: null, teams: [] }
+    apiState.limitsOverride = { organisation_id: 'test-org', org_daily_spend_limit: null, team_limits: [] }
     const absent = await mountWithFeatures()
     const absentInput = absent.findComponent({ name: 'InputText' })
     expect(absentInput.props('modelValue')).toBe('')
@@ -189,7 +189,7 @@ describe('AdminSpendLimitsView', () => {
   })
 
   it('covers empty limits, invalid decimal values, and ceiling load/save branches', async () => {
-    apiState.limitsOverride = { org_daily_limit_usd: null, teams: [] }
+    apiState.limitsOverride = { organisation_id: 'test-org', org_daily_spend_limit: null, team_limits: [] }
     apiState.costsOverride = { period: 'month', group_by: 'team', items: [], org_total: 'not-a-number' }
     apiState.ceilingError = { detail: 'ceiling unavailable' }
     const wrapper = await mountWithFeatures()
@@ -279,5 +279,67 @@ describe('AdminSpendLimitsView', () => {
 
     await input.vm.$emit('update:modelValue', 'not-a-number')
     expect(vm.orgLimit).toBe(null)
+  })
+
+  it('falls back when optional limit and cost fields are absent', async () => {
+    apiState.limitsOverride = { organisation_id: 'test-org', org_daily_spend_limit: null }
+    apiState.costsOverride = { period: 'month', group_by: 'team' }
+    const wrapper = await mountWithFeatures()
+
+    expect(wrapper.find('[data-testid="admin-spend-limits-org-limit"]').element).toHaveProperty('value', '')
+    expect(wrapper.text()).toContain('No teams found.')
+    expect(wrapper.text()).toContain('$0.00')
+    wrapper.unmount()
+  })
+
+  it('updates ceiling and team limit values from the form controls', async () => {
+    apiState.ceiling = { max_run_cost: 5, spend_ceiling: 100, remaining_budget_usd: 42 }
+    const wrapper = await mountWithFeatures()
+    const vm = wrapper.vm as unknown as {
+      ceilingMaxRun: number | null
+      ceilingSpend: number | null
+      teams: Array<{ id: string; editingLimit: number | null }>
+    }
+
+    const maxRun = wrapper.findComponent<any>('[data-testid="admin-spend-limits-max-run-cost"]')
+    await maxRun.vm.$emit('update:modelValue', '7.5')
+    expect(vm.ceilingMaxRun).toBe(7.5)
+    await maxRun.vm.$emit('update:modelValue', '')
+    expect(vm.ceilingMaxRun).toBe(null)
+
+    const spend = wrapper.findComponent<any>('[data-testid="admin-spend-limits-spend-ceiling"]')
+    await spend.vm.$emit('update:modelValue', '250')
+    expect(vm.ceilingSpend).toBe(250)
+
+    const teamInput = wrapper.findComponent<any>('[data-testid="admin-spend-limits-team-limit-team-1"]')
+    await teamInput.vm.$emit('update:modelValue', '12.5')
+    expect(vm.teams.find((team) => team.id === 'team-1')?.editingLimit).toBe(12.5)
+    wrapper.unmount()
+  })
+
+  it('reads the typed spend-limit contract and sends daily_spend_limit bodies', async () => {
+    apiState.ceiling = { max_run_cost: null, spend_ceiling: null, remaining_budget_usd: null }
+    const wrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+
+    // Response contract: org_daily_spend_limit + team_limits (not the old
+    // org_daily_limit_usd / teams shape that silently rendered nothing).
+    expect(wrapper.findAll('[data-testid^="admin-spend-limits-team-limit-"]')).toHaveLength(2)
+    const orgInput = wrapper.find('[data-testid="admin-spend-limits-org-limit"]')
+    expect((orgInput.element as HTMLInputElement).value).toBe('100')
+
+    await wrapper.find('[data-testid="admin-spend-limits-org-save"]').trigger('click')
+    await flushPromises()
+    expect(apiPut).toHaveBeenCalledWith('/api/v1/admin/costs/limits/org', {
+      body: { daily_spend_limit: 100 },
+    })
+
+    await wrapper.find('[data-testid="admin-spend-limits-team-save-team-1"]').trigger('click')
+    await flushPromises()
+    expect(apiPut).toHaveBeenCalledWith('/api/v1/admin/costs/limits/teams/{team_id}', {
+      params: { path: { team_id: 'team-1' } },
+      body: { daily_spend_limit: 50 },
+    })
+    wrapper.unmount()
   })
 })

@@ -7,7 +7,17 @@
     />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled class="space-y-6">
-      <LoadingSpinner v-if="loading" />
+      <!-- STATE-3 (ux-conformance): teams/form layout is known before data
+           arrives, so the loading placeholder is a determinate pulse skeleton
+           instead of an indeterminate spinner. -->
+      <div v-if="loading" class="space-y-6" aria-busy="true" data-testid="admin-spend-limits-loading">
+        <span class="sr-only" role="status">{{ $t('common.loading') }}</span>
+        <div v-for="n in 3" :key="n" class="card space-y-3 p-6">
+          <SkeletonBlock height-class="h-5 w-48" />
+          <SkeletonBlock height-class="h-4 w-72" />
+          <SkeletonBlock height-class="h-10 w-full" />
+        </div>
+      </div>
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
@@ -20,8 +30,8 @@
           <template #default>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
-                <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="onUpdateOrgLimit" type="number" min="0" step="0.01" :placeholder="$t('views.AdminSpendLimitsView.no_limit')" data-testid="admin-spend-limits-org-limit" />
+                <label for="admin-spend-limits-org-limit" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</label>
+                <InputText id="admin-spend-limits-org-limit" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="onUpdateOrgLimit" type="number" min="0" step="0.01" :placeholder="$t('views.AdminSpendLimitsView.no_limit')" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
@@ -39,16 +49,20 @@
             :description="$t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle')"
           >
             <template #default>
-              <LoadingSpinner v-if="ceilingLoading" />
+              <div v-if="ceilingLoading" class="space-y-3" aria-busy="true" data-testid="admin-spend-limits-ceiling-loading">
+                <SkeletonBlock height-class="h-10 w-full" />
+                <SkeletonBlock height-class="h-10 w-full" />
+                <SkeletonBlock height-class="h-16 w-full" />
+              </div>
               <ErrorAlert v-else-if="ceilingLoadError" :message="ceilingLoadError" :on-retry="loadCeiling" />
 
               <template v-else>
                 <div class="space-y-4">
                   <div class="flex items-end gap-3">
                     <div class="flex-1">
-                      <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.per_run_ceiling_usd') }}</span>
+                      <label for="admin-spend-limits-max-run-cost" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.per_run_ceiling_usd') }}</label>
                       <InputText
-                        :aria-label="$t('views.AdminSpendLimitsView.per_run_ceiling_aria')"
+                        id="admin-spend-limits-max-run-cost"
                         :model-value="ceilingMaxRun == null ? '' : String(ceilingMaxRun)"
                         @update:model-value="v => ceilingMaxRun = parseNumericInput(v)"
                         type="number"
@@ -63,9 +77,9 @@
 
                   <div class="flex items-end gap-3">
                     <div class="flex-1">
-                      <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.org_lifetime_ceiling_usd') }}</span>
+                      <label for="admin-spend-limits-spend-ceiling" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.org_lifetime_ceiling_usd') }}</label>
                       <InputText
-                        :aria-label="$t('views.AdminSpendLimitsView.org_lifetime_ceiling_aria')"
+                        id="admin-spend-limits-spend-ceiling"
                         :model-value="ceilingSpend == null ? '' : String(ceilingSpend)"
                         @update:model-value="v => ceilingSpend = parseNumericInput(v)"
                         type="number"
@@ -104,9 +118,12 @@
           :description="$t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams')"
         >
           <template #default>
-            <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              {{ $t('views.AdminSpendLimitsView.no_teams_found') }}
-            </div>
+            <EmptyState
+              v-if="teams.length === 0"
+              :title="$t('views.AdminSpendLimitsView.no_teams_found')"
+              :description="$t('views.AdminSpendLimitsView.no_teams_found_description')"
+              data-testid="admin-spend-limits-teams-empty"
+            />
             <table v-else class="w-full text-sm">
               <thead>
                 <tr>
@@ -119,7 +136,7 @@
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
-                    <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')"
+                    <InputText :aria-label="$t('views.AdminSpendLimitsView.team_daily_limit_aria', { team: team.name })"
                       :model-value="team.editingLimit == null ? '' : String(team.editingLimit)" @update:model-value="v => team.editingLimit = parseNumericInput(v)"
                       type="number"
                       min="0"
@@ -147,7 +164,10 @@
           :description="$t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams')"
         >
           <template #default>
-            <LoadingSpinner v-if="costsLoading" />
+            <div v-if="costsLoading" class="space-y-3" aria-busy="true" data-testid="admin-spend-limits-costs-loading">
+              <SkeletonBlock height-class="h-16 w-full" />
+              <SkeletonBlock height-class="h-12 w-full" />
+            </div>
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
               <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
@@ -168,7 +188,12 @@
                   </span>
                 </div>
               </div>
-              <p v-else class="text-sm text-muted-foreground">{{ $t('views.AdminSpendLimitsView.no_team_cost_data_available') }}</p>
+              <EmptyState
+                v-else
+                :title="$t('views.AdminSpendLimitsView.no_team_cost_data_available')"
+                :description="$t('views.AdminSpendLimitsView.no_team_cost_data_description')"
+                data-testid="admin-spend-limits-costs-empty"
+              />
             </div>
           </template>
         </DataCard>
@@ -186,8 +211,9 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
@@ -201,29 +227,14 @@ const planStore = usePlanStore()
 const costPageTabs = useCostPageTabs()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
-interface SpendLimitData {
-  org_daily_limit_usd: number | null
-  teams: Array<{
-    id: string
-    name: string
-    daily_limit_usd: number | null
-  }>
-}
+type SpendLimitResponse = components['schemas']['SpendLimitResponse']
+type CostReportResponse = components['schemas']['CostReportResponse']
+type SetSpendLimitRequest = components['schemas']['SetSpendLimitRequest']
 
-interface CostReportData {
-  period: string
-  group_by: string
-  items: Array<{
-    entity_id: string
-    entity_name: string
-    total_spend_usd: number
-    total_runs: number
-    components: Array<{ name: string; amount_usd: string }>
-  }>
-  org_unassigned_components?: string | null
-  legacy_total?: string | null
-  org_total?: string | null
-  has_more?: boolean
+interface TeamLimitRow {
+  team_id: string
+  team_name: string
+  daily_spend_limit: number | null
 }
 
 interface TeamCostItem {
@@ -255,7 +266,10 @@ interface TeamRow {
 }
 
 const { data: limitsData, loading, error: loadError, load: loadData } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs/limits'),
+  () => api.GET('/api/v1/admin/costs/limits').then((res) => ({
+    data: res.data as SpendLimitResponse | undefined,
+    error: res.error,
+  })),
 )
 
 const orgLimit = ref<number | null>(null)
@@ -267,11 +281,12 @@ function onUpdateOrgLimit(v: unknown) {
 
 watch(() => limitsData.value, (data) => {
   if (data) {
-    const resp = data as SpendLimitData
-    orgLimit.value = resp.org_daily_limit_usd
-    teams.value = (resp.teams ?? []).map(t => ({
-      ...t,
-      editingLimit: t.daily_limit_usd,
+    orgLimit.value = data.org_daily_spend_limit ?? null
+    teams.value = ((data.team_limits ?? []) as unknown as TeamLimitRow[]).map((t) => ({
+      id: t.team_id,
+      name: t.team_name,
+      daily_limit_usd: t.daily_spend_limit ?? null,
+      editingLimit: t.daily_spend_limit ?? null,
       saving: false,
       saveError: null,
     }))
@@ -279,17 +294,18 @@ watch(() => limitsData.value, (data) => {
 })
 
 const { data: costsResp, loading: costsLoading, error: costsError } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs'),
-  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' } }
+  () => api.GET('/api/v1/admin/costs').then((res) => ({
+    data: res.data as CostReportResponse | undefined,
+    error: res.error,
+  })),
+  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0', has_more: false } },
 )
 
 const orgTotalCost = computed(() => {
-  const resp = costsResp.value as CostReportData | null
-  return parseDecimalString(resp?.org_total) ?? 0
+  return parseDecimalString(costsResp.value.org_total) ?? 0
 })
 const teamCosts = computed<TeamCostItem[]>(() => {
-  const resp = costsResp.value as CostReportData | null
-  return (resp?.items ?? []).map((item) => ({
+  return (costsResp.value.items ?? []).map((item) => ({
     team_id: item.entity_id,
     team_name: item.entity_name,
     cost_usd: item.total_spend_usd,
@@ -361,9 +377,8 @@ async function saveOrgLimit() {
   orgSaveError.value = null
   orgSaveSuccess.value = false
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/costs/limits/org', {
-      body: { daily_limit_usd: orgLimit.value },
-    })
+    const body: SetSpendLimitRequest = { daily_spend_limit: orgLimit.value }
+    const { error: err } = await api.PUT('/api/v1/admin/costs/limits/org', { body })
     if (err) {
       orgSaveError.value = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(err) })
     } else {
@@ -380,8 +395,10 @@ async function saveTeamLimit(team: TeamRow) {
   team.saving = true
   team.saveError = null
   try {
-    const { error: err } = await (api as any).PUT(`/api/v1/admin/costs/limits/teams/${team.id}`, {
-      body: { daily_limit_usd: team.editingLimit },
+    const body: SetSpendLimitRequest = { daily_spend_limit: team.editingLimit }
+    const { error: err } = await api.PUT('/api/v1/admin/costs/limits/teams/{team_id}', {
+      params: { path: { team_id: team.id } },
+      body,
     })
     if (err) {
       team.saveError = t('views.AdminSpendLimitsView.failed_to_save', { detail: formatApiError(err) })
