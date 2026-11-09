@@ -505,7 +505,32 @@ def test_split_already_split_without_artifacts_idempotent() -> None:
     telemetry = {"status": "completed", "wall_clock_time_ms": 10}
     value, split_telemetry = split_node_output({"output": pure_return, "telemetry": telemetry}, "sandbox_agent", None)
     assert value == pure_return
-    assert split_telemetry is telemetry
+    # The already-split branch returns a merged telemetry copy (it folds any
+    # extra top-level stamps in), so idempotence is asserted by VALUE.
+    assert split_telemetry == telemetry
+
+
+def test_split_new_format_folds_extra_toplevel_stamps_losslessly() -> None:
+    """The already-split envelope may carry extra top-level stamps (FAR-130:
+    ``_record_chain_end_output`` stamps ``otel_span_id`` / ``otel_trace_id``
+    before persistence). Those must be folded into telemetry losslessly rather
+    than dropped by the idempotent branch."""
+    stamped = {
+        "output": {"pr_url": "u"},
+        "telemetry": {"status": "completed"},
+        "artifacts": [{"node_id": "sb", "status": "completed", "output": {}}],
+        "otel_span_id": "span-123",
+        "otel_trace_id": "trace-abc",
+    }
+    ret, tel = split_node_output(stamped, "sandbox_agent", None)
+    assert ret == {"pr_url": "u"}
+    assert tel["status"] == "completed"
+    assert tel["otel_span_id"] == "span-123"
+    assert tel["otel_trace_id"] == "trace-abc"
+    # the split channels are NOT re-folded into telemetry
+    assert "output" not in tel
+    assert "telemetry" not in tel
+    assert "artifacts" not in tel
 
 
 # ---------------------------------------------------------------------------

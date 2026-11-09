@@ -579,9 +579,17 @@ def split_node_output(
         telemetry = outer_dict.get("telemetry")
         if "output" in outer_dict and isinstance(telemetry, dict):
             # Already-split (new FAR-130 sandbox envelope): ``output`` is the
-            # pure return and ``telemetry`` the exhaustive side. Return them
-            # verbatim — never fold one into the other.
-            return outer_dict.get("output"), telemetry
+            # pure return and ``telemetry`` the exhaustive side. The pure
+            # return is returned verbatim — never nest telemetry under it.
+            # Any OTHER top-level key (e.g. the ``otel_span_id`` /
+            # ``otel_trace_id`` stamps ``_record_chain_end_output`` adds before
+            # persistence) is folded into telemetry losslessly, exactly like
+            # the legacy path, so those stamps still surface in the stored
+            # ``node_telemetry_json`` entry. The three split channels
+            # themselves are never re-folded.
+            merged_telemetry = dict(telemetry)
+            _add_lossless(outer_dict, merged_telemetry, {"output", "telemetry", "artifacts"})
+            return outer_dict.get("output"), merged_telemetry
     if not isinstance(outer_dict, dict):
         _log.warning(
             "node_output_split.malformed",
