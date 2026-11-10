@@ -5072,6 +5072,9 @@ export default {
     }
   },
   "components": {
+    "LogoMark": {
+      "logo": "Farna Control logo"
+    },
     "DataTable": {
       "scroll_instructions": "Swipe horizontally to view all table columns.",
       "scroll_region_label": "Scrollable table"
@@ -5334,9 +5337,6 @@ export default {
           "schemas_identical_no_mapping": "Schemas are identical — no mapping needed"
         }
       }
-    },
-    "LogoMark": {
-      "modulo_logo": "Modulo logo"
     },
     "AppLayout": {
       "all_features": "All Features",

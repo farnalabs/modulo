@@ -1,8 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" fill="#0B0E14" rx="12" />
-  <g stroke="#00FFD1" stroke-width="8" fill="none" stroke-linejoin="round" stroke-linecap="round">
-    <line x1="30" y1="84.64" x2="70" y2="15.36" />
-    <polygon points="36,28 31,36.66 21,36.66 16,28 21,19.34 31,19.34" />
-    <polygon points="84,72 79,80.66 69,80.66 64,72 69,63.34 79,63.34" />
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t"><title id="t">Farna Control app icon, teal</title><rect width="512" height="512" rx="112.64" fill="#0d9488"/><g transform="translate(31.83 25.75) scale(4.15)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="6"><polygon points="52,46.14 44,60 28,60 20,46.14 28,32.28 44,32.28" fill="#FFFFFF" stroke="#FFFFFF"/><polygon points="88,66.93 80,80.79 64,80.79 56,66.93 64,53.07 80,53.07" stroke="#FFFFFF"/><line x1="52" y1="46.14" x2="79.71" y2="30.14" stroke="#FFFFFF"/></g></svg>
