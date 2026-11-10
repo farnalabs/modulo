@@ -3321,7 +3321,7 @@ async def get_finding(
         Depends(audited("api_access_post", "eval_finding", principal_dep=get_current_tenant_user)),
     ],
     responses={
-        400: {"description": "Invalid resolution value"},
+        400: {"description": "Invalid resolution value, or missing resolution reason"},
         404: {"description": _MSG_FINDING_NOT_FOUND},
         500: {"description": "Internal Server Error"},
         501: {"description": "Not Implemented"},
@@ -3337,9 +3337,12 @@ async def resolve_finding(
 ) -> ResolveFindingResponse:
     """Resolve an eval/guardrail finding.
 
-    Marks a finding as accepted, dismissed, superseded, or pending with an
-    optional reason. Triggers mute policy evaluation for the associated
-    eval/guardrail definition and records an explicit audit event.
+    Marks a finding as accepted, dismissed, superseded, or pending. A
+    resolution that OVERRIDES the computed finding (everything except the
+    pending revert) requires a reason and is attributed to the authenticated
+    caller; it is stored alongside the verdict, never over it. Triggers mute
+    policy evaluation for the associated eval/guardrail definition and records
+    an explicit audit event.
     """
     try:
         async with session.begin():
