@@ -778,3 +778,34 @@ def test_route_handler_without_a_wrapper_is_used_as_is() -> None:
         return None
 
     assert _unwrap_system_maps_route_handler(handler) is handler
+
+
+def test_no_system_maps_tools_on_mcp_beyond_discovery() -> None:
+    """FAR-2288: discover_system_map is the ONLY System Maps tool on MCP.
+
+    Authoring, publish, diff, restore, overview and revision reads are REST-only
+    and must not be registered on MCP.
+    """
+    from modulo.api.mcp_server import mcp
+    from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+    system_map_mcp_tools = {name for name in mcp._tool_manager._tools if "system_map" in name}
+    assert system_map_mcp_tools == {"discover_system_map"}
+
+    forbidden_tool_names = {
+        "create_system_map",
+        "update_system_map",
+        "delete_system_map",
+        "get_system_map",
+        "list_system_maps",
+        "publish_system_map_revision",
+        "archive_system_map_revision",
+        "delete_system_map_revision",
+        "diff_system_map_revision",
+        "restore_system_map_revision",
+        "get_system_map_revision",
+        "get_system_map_overview",
+    }
+    for forbidden in forbidden_tool_names:
+        assert forbidden not in mcp._tool_manager._tools
+        assert forbidden not in TOOL_SCOPE_REQUIREMENTS
