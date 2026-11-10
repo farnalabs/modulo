@@ -41,7 +41,7 @@ runs:
         $maxAttempts = [int]::Parse("${{ inputs.smoke-retries }}")
         for ($attempt=1; $attempt -le $maxAttempts; $attempt++) {
           $resp = curl -s -m 30 "${{ inputs.url }}/" 2>$null
-          if ($resp -match '<title>Modulo') {
+          if ($resp -match '<title>Farna Control') {
             Write-Host "${{ inputs.url }} - OK"
             exit 0
           }
