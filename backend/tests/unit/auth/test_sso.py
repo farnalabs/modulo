@@ -1021,7 +1021,12 @@ class TestOidcGetAuthorizeUrl:
             assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth")
             assert "client_id=google-client-id" in url
             assert "response_type=code" in url
-            assert len(raw_state) > 0
+            # raw_state is a bare UUID; the signed state in the URL is "provider:raw_state:hmac".
+            assert isinstance(raw_state, str)
+            assert uuid.UUID(raw_state)  # raises if not a valid UUID
+            parsed = urllib.parse.urlparse(url)
+            signed_state = urllib.parse.parse_qs(parsed.query)["state"][0]
+            assert signed_state.startswith(f"google:{raw_state}:")
 
     async def test_env_scopes_string_not_character_joined(self) -> None:
         """FAR-464 CHANGES_REQUESTED #3: env-var providers may carry ``scopes`` as a

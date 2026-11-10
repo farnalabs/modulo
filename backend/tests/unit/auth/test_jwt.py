@@ -152,10 +152,12 @@ def test_empty_sub_raises() -> None:
         decode_principal(token, _KEY)
 
 
-def test_token_is_string() -> None:
+def test_token_is_valid_jwt_structure() -> None:
     token = _make_access_token("bob")
     assert isinstance(token, str)
-    assert len(token) > 0
+    parts = token.split(".")
+    assert len(parts) == 3, "JWT must have exactly 3 parts (header.payload.signature)"
+    assert all(len(p) > 0 for p in parts), "all JWT parts must be non-empty"
 
 
 def test_token_carries_org_context() -> None:

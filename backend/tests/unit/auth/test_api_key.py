@@ -51,9 +51,18 @@ def test_generate_api_key_hash_is_sha256_of_full_key() -> None:
 
 
 def test_generate_api_key_unique_each_call() -> None:
-    k1, _, _ = generate_api_key()
-    k2, _, _ = generate_api_key()
+    k1, p1, h1 = generate_api_key()
+    k2, p2, h2 = generate_api_key()
     assert k1 != k2
+    assert p1 != p2
+    assert h1 != h2
+    # Both keys must have valid structure
+    assert k1.startswith("mk_")
+    assert k2.startswith("mk_")
+    assert len(p1) == 8
+    assert len(p2) == 8
+    assert len(h1) == 64  # SHA-256 hex
+    assert len(h2) == 64
 
 
 def test_hash_key_constant_time_verifiable() -> None:
@@ -244,14 +253,17 @@ def test_serialize_key_masks_secret_and_reports_active() -> None:
     assert serialized["is_active"] is True
 
 
-def test_serialize_key_expired_is_inactive() -> None:
-    key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
-    assert _serialize_key(key)["is_active"] is False
-
-
-def test_serialize_key_revoked_is_inactive() -> None:
-    key = _make_serializable_key(revoked_at=datetime.now(UTC))
-    assert _serialize_key(key)["is_active"] is False
+@pytest.mark.parametrize(
+    ("overrides", "description"),
+    [
+        ({"expires_at": datetime.now(UTC) - timedelta(days=1)}, "expired"),
+        ({"revoked_at": datetime.now(UTC)}, "revoked"),
+    ],
+    ids=["expired", "revoked"],
+)
+def test_serialize_key_inactive_when_expired_or_revoked(overrides: dict, description: str) -> None:
+    key = _make_serializable_key(**overrides)
+    assert _serialize_key(key)["is_active"] is False, f"expected inactive for {description} key"
 
 
 # ---------------------------------------------------------------------------
@@ -267,17 +279,17 @@ def test_serialize_key_includes_revoked_at_field() -> None:
     assert "revoked_at" in _serialize_key(_make_serializable_key())
 
 
-def test_serialize_key_revoked_at_is_none_for_active_key() -> None:
-    key = _make_serializable_key()
-    assert _serialize_key(key)["revoked_at"] is None
-
-
-def test_serialize_key_revoked_at_is_none_for_expired_key() -> None:
-    key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
-    serialized = _serialize_key(key)
-
-    assert serialized["is_active"] is False
-    assert serialized["revoked_at"] is None
+@pytest.mark.parametrize(
+    ("overrides", "description"),
+    [
+        ({}, "active"),
+        ({"expires_at": datetime.now(UTC) - timedelta(days=1)}, "expired"),
+    ],
+    ids=["active", "expired"],
+)
+def test_serialize_key_revoked_at_is_none_for_active_or_expired_key(overrides: dict, description: str) -> None:
+    key = _make_serializable_key(**overrides)
+    assert _serialize_key(key)["revoked_at"] is None, f"expected no revoked_at for {description} key"
 
 
 def test_serialize_key_revoked_at_is_iso8601_for_revoked_key() -> None:
