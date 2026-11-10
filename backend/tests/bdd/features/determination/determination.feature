@@ -29,3 +29,35 @@ Feature: SDLC Assessment and Pipeline Draft Generation
     When I request GET /api/v1/determination
     Then the response status is 200
     And the response has an empty sample list
+
+  Scenario: Operator reviews and approves a determination proposal
+    Given I am authenticated as an operator
+    When I submit an approve decision acknowledging unresolved assumptions
+    Then the response status is 200
+    And the proposal decision is approve
+    And the proposal review state is approved
+    And the proposal activation status is not_activated
+
+  Scenario: Operator reject review decision requires a reason
+    Given I am authenticated as an operator
+    When I submit a reject decision with no reason
+    Then the response status is 422
+
+  Scenario: Operator approve decision is blocked by unacknowledged assumptions
+    Given I am authenticated as an operator
+    When I submit an approve decision without acknowledging low confidence assumptions
+    Then the response status is 422
+
+  Scenario: Operator compares two determination proposals
+    Given I am authenticated as an operator
+    When I request POST /api/v1/determination/compare
+    Then the response status is 200
+    And the comparison contract version is alpha.determination-comparison.v1
+    And the comparison activation status is not_activated
+
+  Scenario: Operator reruns determination against a prior proposal
+    Given I am authenticated as an operator
+    And connected tools are configured
+    When I request POST /api/v1/determination/rerun
+    Then the response status is 200
+    And the rerun contract version is alpha.determination-rerun.v1
