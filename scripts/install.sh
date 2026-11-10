@@ -315,7 +315,7 @@ print_support_block() {
   fi
   {
     printf '\n'
-    printf -- '----- Modulo install failed: support reference %s -----\n' "${SUPPORT_REF:-unknown}"
+    printf -- '----- Farna Control install failed: support reference %s -----\n' "${SUPPORT_REF:-unknown}"
     printf '  Install target   : %s\n' "$(redact "${target}")"
     printf '  Failing stage    : %s\n' "$(redact "${STAGE}")"
     printf '  Install log      : %s\n' "$(redact "${log_display}")"
@@ -323,7 +323,7 @@ print_support_block() {
     printf '\n'
     printf 'Send this block AND the install log file above to Modulo support so the\n'
     printf 'failure can be diagnosed: https://github.com/%s/issues\n' "${REPO}"
-    printf -- '----- end of Modulo install support block -----\n'
+    printf -- '----- end of Farna Control install support block -----\n'
   } >&2
 }
 

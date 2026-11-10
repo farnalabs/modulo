@@ -601,7 +601,7 @@ end.
         @{ Name = "Max install logs constant"; Pattern = 'MAX_INSTALL_LOGS.*=.*5' }
         @{ Name = "Log directory LocalAppData"; Pattern = '\{localappdata\}.*LOG_DIR_NAME' }
         @{ Name = "Redaction marker"; Pattern = '\[redacted\]' }
-        @{ Name = "Support block delimiter"; Pattern = '----- Modulo install failed: support reference' }
+        @{ Name = "Support block delimiter"; Pattern = '----- Farna Control install failed: support reference' }
         @{ Name = "GitHub issues URL in support block"; Pattern = 'github.com/farnalabs/modulo/issues' }
     )
 

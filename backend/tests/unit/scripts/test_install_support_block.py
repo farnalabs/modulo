@@ -41,8 +41,8 @@ _INSTALL_SH = _REPO_ROOT / "scripts" / "install.sh"
 #: executes this suite for real.
 pytestmark = pytest.mark.posix_only
 
-_BLOCK_START = re.compile(r"^----- Modulo install failed: support reference (?P<ref>[0-9a-f]{8}) -----$")
-_BLOCK_END = "----- end of Modulo install support block -----"
+_BLOCK_START = re.compile(r"^----- Farna Control install failed: support reference (?P<ref>[0-9a-f]{8}) -----$")
+_BLOCK_END = "----- end of Farna Control install support block -----"
 _REF_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _ENV_KEYS_TO_DROP = (
     "XDG_STATE_HOME",

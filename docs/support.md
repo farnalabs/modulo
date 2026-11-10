@@ -294,5 +294,5 @@ or to `support@modulo.run`, never to anyone who asks for it unprompted.
 - [Upgrade process](./upgrade-process.md) - upgrading an existing instance.
 
 This page is also published at
-[modulo.run/docs/support](https://farna.dev/control/docs/support). Where the two
+[farna.dev/control/docs/support](https://farna.dev/control/docs/support). Where the two
 differ, this page wins: it ships with the version you are running.
