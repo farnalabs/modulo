@@ -292,7 +292,10 @@ async def test_finalize_cost_budget_exceeded_overrides_terminal_write() -> None:
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
         patch("modulo.core.cost_controller.finalize.build_cost_breakdown", return_value=([], Decimal(0))),
-        patch("modulo.settings.get_settings", return_value=MagicMock()),
+        # Carry the real unified refs cap: bare MagicMock coerces to 1 and the
+        # terminal finalise path caches it in the process-wide work_item_refs_cap
+        # lru_cache, dropping every later co-located test's refs.
+        patch("modulo.settings.get_settings", return_value=MagicMock(modulo_work_item_refs_cap=100)),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
 

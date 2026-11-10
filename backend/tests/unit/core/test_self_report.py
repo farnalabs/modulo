@@ -16,14 +16,39 @@ Locks the FAR-143 contract:
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from typing import Any
+
+import pytest
 
 from modulo.core.lifecycle_map.self_report import (
     parse_self_report_refs,
     validate_and_normalise_reported_refs,
 )
+from modulo.settings import get_settings, work_item_refs_cap
 
 _ENTRY: dict[str, Any] = {"kind": "github_pr", "ref": "#123"}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_refs_cap_cache() -> Generator[None, None, None]:
+    """Clear the process-wide refs-cap caches around every test in this module.
+
+    ``work_item_refs_cap`` and the ``get_settings`` it reads are ``lru_cache``d
+    for the life of the worker process, so a test in another module that stubs
+    ``modulo.settings.get_settings`` (for example with a bare ``MagicMock``,
+    whose ``int()`` is ``1``) and then exercises a refs path leaves a cap of 1
+    cached and visible here once xdist co-locates the modules in a shard. The
+    unpinned tests below then silently drop every ref past the first. Clear
+    both caches before and after each test so this module is independent of
+    xdist co-location, mirroring ``test_work_item_refs_slice2b.py`` and
+    ``test_journey_advancement.py``.
+    """
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
+    yield
+    work_item_refs_cap.cache_clear()
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
