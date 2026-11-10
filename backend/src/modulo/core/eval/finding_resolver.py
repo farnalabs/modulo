@@ -19,6 +19,12 @@ from modulo.db.models.trigger_event_finding import TriggerEventFinding
 # Resolution vocabulary — must match the CHECK constraint on eval_results.resolution
 RESOLUTION_VALUES = ("accepted", "dismissed", "superseded", "pending")
 
+#: The resolutions that OVERRIDE the computed finding (everything but the
+#: ``pending`` revert) and therefore must carry a reason (FAR-2491).
+_OVERRIDE_RESOLUTIONS: frozenset[str] = frozenset({"accepted", "dismissed", "superseded"})
+
+_MSG_REASON_REQUIRED = "A resolution reason is required to override a finding"
+
 
 class FindingResolutionError(ValueError):
     """Raised when a finding resolution operation is invalid."""
@@ -38,7 +44,9 @@ async def resolve_finding(
         session: Database session with RLS org context already set.
         finding_id: UUID of the EvalResult to resolve.
         resolution: One of 'accepted', 'dismissed', 'superseded', 'pending'.
-        reason: Optional human-readable reason for the resolution.
+        reason: Human-readable reason for the resolution. REQUIRED for every
+            resolution that overrides the computed finding (FAR-2491); only
+            the ``pending`` revert may omit it.
         resolved_by: Account ID of the user resolving the finding.
         org_id: Organisation ID (for RLS scoping).
 
@@ -46,10 +54,23 @@ async def resolve_finding(
         The updated EvalResult row.
 
     Raises:
-        FindingResolutionError: If the finding doesn't exist or resolution is invalid.
+        FindingResolutionError: If the finding doesn't exist, the resolution is
+            invalid, or a non-``pending`` resolution carries no reason.
     """
     if resolution not in RESOLUTION_VALUES:
         raise FindingResolutionError(f"Invalid resolution: {resolution}. Must be one of {RESOLUTION_VALUES}")
+
+    # Provenance override rule (adopted 2026-11-09; FAR-2491). A human
+    # resolution of a computed finding is an OVERRIDE, recorded as a distinct,
+    # additive fact next to the verdict — never by writing over it. The rule
+    # requires an override to be AUTHORED and REASONED, and names "an override
+    # with no reason" as a prohibited shape. Failing closed here (rather than
+    # accepting a null reason) is what keeps a silent, unexplained override out
+    # of the acceptance-rate record; the check is ordered BEFORE the finding
+    # lookup so it covers every storage arm (eval result AND trigger-event
+    # finding) and cannot be bypassed by an unknown id.
+    if resolution in _OVERRIDE_RESOLUTIONS and not (reason or "").strip():
+        raise FindingResolutionError(_MSG_REASON_REQUIRED)
 
     result = await session.execute(
         select(EvalResult).where(

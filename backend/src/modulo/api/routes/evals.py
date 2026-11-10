@@ -3337,9 +3337,12 @@ async def resolve_finding(
 ) -> ResolveFindingResponse:
     """Resolve an eval/guardrail finding.
 
-    Marks a finding as accepted, dismissed, superseded, or pending with an
-    optional reason. Triggers mute policy evaluation for the associated
-    eval/guardrail definition and records an explicit audit event.
+    Marks a finding as accepted, dismissed, superseded, or pending. A
+    resolution that OVERRIDES the computed finding (everything except the
+    pending revert) requires a reason and is attributed to the authenticated
+    caller; it is stored alongside the verdict, never over it. Triggers mute
+    policy evaluation for the associated eval/guardrail definition and records
+    an explicit audit event.
     """
     try:
         async with session.begin():
