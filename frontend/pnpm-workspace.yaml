@@ -383,3 +383,4 @@ minimumReleaseAgeExclude:
   - '@tanstack/vue-query@5.107.1'
   - '@grafana/faro-core@2.14.0'
   - '@grafana/faro-web-sdk@2.14.0'
+  - '@lucide/vue@1.71.0'
