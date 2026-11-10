@@ -62,6 +62,17 @@ _RESOURCE_DETERMINATION_ATTEMPT = "determination_attempt"
 #: Permission that gates every determination read and review endpoint.
 _PERMISSION_DETERMINATION_SCAN = "determination.scan"
 
+#: Log scope shared by every determination route handler.
+_LOG_SCOPE_DETERMINATION = "routes.determination"
+#: 501 detail when the schema has not been migrated yet.
+_MSG_MIGRATIONS_REQUIRED = "This feature is not available. Run database migrations to enable it."
+#: 409 detail for a uniqueness conflict.
+_MSG_ALREADY_EXISTS = "A resource with this value already exists"
+#: 501 detail when a migration-needed error surfaces from the outer handler.
+_MSG_FEATURE_UNAVAILABLE_MIGRATIONS = "Feature is not available. Run database migrations to enable it."
+#: 503 detail when the database is unreachable.
+_MSG_DATABASE_UNAVAILABLE = "Database service unavailable. Please try again later."
+
 
 logger = logging.getLogger(__name__)
 
@@ -193,11 +204,11 @@ async def run_determination(
                 )
 
         except ProgrammingError:
-            logger.exception("routes.determination")
+            logger.exception(_LOG_SCOPE_DETERMINATION)
 
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
+                detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
         relevant: list[ConnectorInstance] = [
@@ -234,19 +245,17 @@ async def run_determination(
         logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=_MSG_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
-        raise HTTPException(
-            status_code=501, detail="Feature is not available. Run database migrations to enable it."
-        ) from None
+        raise HTTPException(status_code=501, detail=_MSG_FEATURE_UNAVAILABLE_MIGRATIONS) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "determination.run_determination")
         logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
+            detail=_MSG_DATABASE_UNAVAILABLE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -290,11 +299,11 @@ async def create_determination_draft(
                 )
 
         except ProgrammingError:
-            logger.exception("routes.determination")
+            logger.exception(_LOG_SCOPE_DETERMINATION)
 
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
+                detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
         relevant: list[ConnectorInstance] = [
@@ -360,19 +369,17 @@ async def create_determination_draft(
         logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=_MSG_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
-        raise HTTPException(
-            status_code=501, detail="Feature is not available. Run database migrations to enable it."
-        ) from None
+        raise HTTPException(status_code=501, detail=_MSG_FEATURE_UNAVAILABLE_MIGRATIONS) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "determination.create_determination_draft")
         logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
+            detail=_MSG_DATABASE_UNAVAILABLE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -466,11 +473,11 @@ async def rerun_determination(
                 )
 
         except ProgrammingError:
-            logger.exception("routes.determination")
+            logger.exception(_LOG_SCOPE_DETERMINATION)
 
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
+                detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
         relevant: list[ConnectorInstance] = [
@@ -509,19 +516,17 @@ async def rerun_determination(
         logger.exception(_CODE_DETERMINATION_RERUN)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=_MSG_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_DETERMINATION_RERUN)
-        raise HTTPException(
-            status_code=501, detail="Feature is not available. Run database migrations to enable it."
-        ) from None
+        raise HTTPException(status_code=501, detail=_MSG_FEATURE_UNAVAILABLE_MIGRATIONS) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "determination.rerun_determination")
         logger.exception(_CODE_DETERMINATION_RERUN)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
+            detail=_MSG_DATABASE_UNAVAILABLE,
         ) from None
     except asyncio.CancelledError:
         raise

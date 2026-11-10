@@ -363,3 +363,50 @@ class TestInvalidInput:
 
         with pytest.raises(RerunError, match="duplicate derived element ids"):
             rerun_proposal(prior, fresh)
+
+    def test_removal_without_a_fresh_counterpart_is_recorded_as_unmatched(self) -> None:
+        element_id = uuid.UUID("44444444-4444-4444-4444-444444444444")
+        prior = _contract([_element("No longer inferred", element_id=element_id)])
+        fresh = _contract([_element("Something else")])
+
+        result = rerun_proposal(prior, fresh, removed_derived_element_ids=[element_id])
+
+        assert result.corrections.unmatched_removed_derived_element_ids == [element_id]
+        assert not result.corrections.removed_derived_element_ids
+        assert [item.statement for item in result.proposal.derived_elements] == ["Something else"]
+
+    def test_correction_that_collapses_two_elements_is_refused(self) -> None:
+        destroyed_id = uuid.UUID("44444444-4444-4444-4444-444444444444")
+        prior = _contract(
+            [
+                _element("Alpha observed", element_id=destroyed_id),
+                _element("Beta observed"),
+            ]
+        )
+        fresh = _contract([_element("Alpha observed"), _element("Beta observed")])
+        edit = DerivedElementEdit(id=destroyed_id, statement="Beta observed")
+
+        with pytest.raises(RerunError, match="collapse two derived elements"):
+            rerun_proposal(prior, fresh, corrected_derived_elements=[edit])
+
+    def test_duplicate_fresh_statements_are_refused(self) -> None:
+        prior = _contract([_element("Kept")])
+        fresh = _contract(
+            [
+                _element("Kept", element_id=uuid.UUID("55555555-5555-5555-5555-555555555555")),
+                _element("Kept", element_id=uuid.UUID("66666666-6666-6666-6666-666666666666")),
+            ]
+        )
+
+        with pytest.raises(RerunError, match="the fresh proposal carries duplicate derived element statements"):
+            rerun_proposal(prior, fresh)
+
+    def test_duplicate_fresh_inventory_source_ids_are_refused(self) -> None:
+        prior = _contract([_element("Kept")], inventory=[_inventory_item("conn:repos")])
+        fresh = _contract(
+            [_element("Kept")],
+            inventory=[_inventory_item("conn:repos"), _inventory_item("conn:repos")],
+        )
+
+        with pytest.raises(RerunError, match="the current source inventory carries duplicate source ids"):
+            rerun_proposal(prior, fresh)

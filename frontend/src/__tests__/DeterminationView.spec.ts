@@ -546,6 +546,26 @@ describe('DeterminationView', () => {
     }
   })
 
+  it('carries the review panel corrections into a rerun of the current proposal', async () => {
+    routeApi({})
+    const wrapper = await mountView()
+    await generateDraft(wrapper)
+
+    await wrapper.find(`[data-testid="determination-review-statement-${DERIVED_ID}"]`).setValue('Rewritten stage statement')
+    await wrapper.find('[data-testid="determination-rerun-run"]').trigger('click')
+    await flushPromises()
+
+    expect(mockPost).toHaveBeenLastCalledWith('/api/v1/determination/rerun', {
+      body: expect.objectContaining({
+        prior_proposal: expect.objectContaining({ proposal_id: PROPOSAL_ID }),
+        corrected_derived_elements: [
+          expect.objectContaining({ id: DERIVED_ID, statement: 'Rewritten stage statement' }),
+        ],
+        removed_derived_element_ids: [],
+      }),
+    })
+  })
+
   it('omits the cross-link count when no element cites an inventory source', async () => {
     const withoutRefs = {
       ...proposal(),

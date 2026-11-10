@@ -134,6 +134,11 @@ describe('rerunPresentation', () => {
     expect(elementChangeGroupClass('removed')).toContain('destructive')
   })
 
+  it('treats an absent source-change payload as no change', () => {
+    expect(inputChangesPresent(null)).toBe(false)
+    expect(inputChangesPresent(undefined)).toBe(false)
+  })
+
   it('detects an input change from every source-difference list', () => {
     expect(inputChangesPresent({})).toBe(false)
     expect(inputChangesPresent({ newly_available: ['github'] })).toBe(true)
@@ -457,5 +462,196 @@ describe('DeterminationRerunPanel', () => {
 
     expect(wrapper.find('[data-testid="determination-rerun-needs-proposal"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="determination-rerun-run"]').exists()).toBe(false)
+  })
+
+  it('renders evidence on both sides of a change when it carries references', () => {
+    const priorRef = {
+      reference_id: 'prior-ref',
+      source_id: 'github:repos',
+      locator: 'scan:repos',
+      provenance: 'observed' as const,
+    }
+    const currentRef = {
+      reference_id: 'current-ref',
+      source_id: 'github:repos',
+      locator: 'scan:repos',
+      provenance: 'derived' as const,
+    }
+    const wrapper = mountPanel({
+      result: emptyResult({
+        element_changes: [
+          change('evidence_changed', 'Evidence moved', {
+            prior_evidence_refs: [priorRef],
+            current_evidence_refs: [currentRef],
+          }),
+        ],
+      }),
+    })
+
+    const row = wrapper.find('[data-testid="determination-rerun-change"]')
+    expect(row.text()).toContain('prior-ref')
+    expect(row.text()).toContain('current-ref')
+  })
+
+  it('treats absent evidence-reference lists on a change as empty', () => {
+    const bare = change('new', 'No evidence keys')
+    delete (bare as Record<string, unknown>).prior_evidence_refs
+    delete (bare as Record<string, unknown>).current_evidence_refs
+
+    const wrapper = mountPanel({ result: emptyResult({ element_changes: [bare] }) })
+
+    expect(wrapper.findAll('[data-testid="determination-rerun-change"]')).toHaveLength(1)
+  })
+
+  it('treats absent optional result collections as empty rather than crashing', () => {
+    const result = emptyResult()
+    delete (result as Record<string, unknown>).element_changes
+    delete (result as Record<string, unknown>).incomplete_reasons
+
+    const wrapper = mountPanel({ result })
+
+    expect(wrapper.find('[data-testid="determination-rerun-no-changes"]').exists()).toBe(true)
+  })
+
+  it('surfaces unmatched corrections without inventing a matched section', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({
+        corrections: {
+          unmatched_corrected_derived_element_ids: ['unmatched-correction'],
+          unmatched_removed_derived_element_ids: ['unmatched-removal'],
+        },
+      }),
+    })
+
+    expect(wrapper.find('[data-testid="determination-rerun-corrections-matched"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="determination-rerun-corrections-unmatched"]').text()).toContain(
+      'unmatched-correction',
+    )
+  })
+
+  it('omits the unmatched section when every carried-forward correction matched', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({ corrections: { corrected_derived_element_ids: ['matched-correction'] } }),
+    })
+
+    expect(wrapper.find('[data-testid="determination-rerun-corrections-unmatched"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="determination-rerun-corrections-matched"]').text()).toContain(
+      'matched-correction',
+    )
+  })
+
+  it('does not repeat a missing-source reason the backend already named', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({
+        incomplete: true,
+        incomplete_reasons: ['source no longer sampled: linear'],
+        source_changes: {
+          missing_sources: [
+            { source_id: 'linear', connector_type: 'linear', resource: 'issues', sample_count: 1, status: 'available' },
+          ],
+        },
+      }),
+    })
+
+    expect(wrapper.findAll('[data-testid="determination-rerun-incomplete-reason"]')).toHaveLength(1)
+  })
+
+  it('renders an unavailable source inventory item with its error', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({
+        input_set_unchanged: false,
+        source_changes: {
+          new_sources: [
+            {
+              source_id: 'credential-source',
+              connector_type: 'github',
+              resource: 'issues',
+              sample_count: 0,
+              status: 'unavailable',
+              error: 'token: abc123secretvalue',
+            },
+          ],
+        },
+      }),
+    })
+
+    const row = wrapper.find('[data-testid="determination-rerun-input-new"]')
+    expect(row.text()).toContain('Unavailable')
+    expect(row.text()).toContain('withheld')
+    expect(row.text()).not.toContain('abc123secretvalue')
+  })
+
+  it('renders a plain source error and a source with no error at all', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({
+        input_set_unchanged: false,
+        source_changes: {
+          new_sources: [
+            {
+              source_id: 'plain-source',
+              connector_type: 'github',
+              resource: 'issues',
+              sample_count: 0,
+              status: 'unavailable',
+              error: 'connector query timed out',
+            },
+            {
+              source_id: 'healthy-source',
+              connector_type: 'github',
+              resource: 'repos',
+              sample_count: 3,
+              status: 'available',
+            },
+          ],
+        },
+      }),
+    })
+
+    const rows = wrapper.findAll('[data-testid="determination-rerun-input-new"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('connector query timed out')
+    expect(rows[1].text()).toContain('Available')
+  })
+
+  it('treats absent optional attempt collections as empty', () => {
+    const attempt = attemptSummary(PRIOR_ATTEMPT)
+    delete (attempt as Record<string, unknown>).uncertainty
+    delete (attempt as Record<string, unknown>).unavailable_evidence
+    delete (attempt as Record<string, unknown>).provenance
+
+    const wrapper = mountPanel({ result: emptyResult({ prior_attempt: attempt }) })
+
+    const firstAttempt = wrapper.findAll('[data-testid="determination-rerun-attempt"]')[0]
+    expect(firstAttempt.find('[data-testid="determination-rerun-attempt-uncertainty-empty"]').exists()).toBe(true)
+  })
+
+  it('falls back to a gap reason when the backend sent no reasons', () => {
+    const result = emptyResult({ incomplete: true })
+    delete (result as Record<string, unknown>).incomplete_reasons
+
+    const wrapper = mountPanel({ result })
+
+    const reasons = wrapper.findAll('[data-testid="determination-rerun-incomplete-reason"]')
+    expect(reasons).toHaveLength(1)
+  })
+
+  it('renders an unavailable attempt with its withheld and plain reasons', () => {
+    const wrapper = mountPanel({
+      result: emptyResult({
+        prior_attempt: attemptSummary(PRIOR_ATTEMPT, {
+          unavailable_evidence: [
+            { source_id: 'repo-one', requested_resource: 'pulls', reason: 'timeout' },
+            { source_id: 'repo-two', requested_resource: 'issues', reason: 'password=hunter2' },
+          ],
+        }),
+      }),
+    })
+
+    const rows = wrapper.findAll('[data-testid="determination-rerun-attempt-unavailable-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('timeout')
+    expect(rows[1].text()).toContain('withheld')
+    const attempts = wrapper.findAll('[data-testid="determination-rerun-attempt"]')
+    expect(attempts[0].find('[data-testid="determination-rerun-attempt-unavailable-empty"]').exists()).toBe(false)
   })
 })

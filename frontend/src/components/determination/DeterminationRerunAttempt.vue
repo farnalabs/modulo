@@ -1,6 +1,5 @@
 <template>
   <article
-    v-if="attempt"
     class="rounded-lg border bg-muted/20 p-3 space-y-2"
     data-testid="determination-rerun-attempt"
   >
@@ -98,21 +97,21 @@ import type { RerunAttemptSummary } from '../../composables/useDetermination'
  *
  * The two attempts are always rendered with an explicit heading (prior vs
  * new), so the observed side can never be mistaken for the fresh side. The
- * attempt is nullable only so the parent's template needs no narrowing; the
- * parent renders this component inside a non-null result.
+ * parent renders this component only inside a non-null rerun result, so the
+ * attempt is non-null here.
  */
 const props = defineProps<{
   heading: string
-  attempt: RerunAttemptSummary | null
+  attempt: RerunAttemptSummary
 }>()
 
-const attemptId = computed(() => props.attempt?.attempt_id ?? '')
-const proposalId = computed(() => props.attempt?.proposal_id ?? '')
-const attemptStatus = computed(() => props.attempt?.status ?? 'completed')
-const attemptConfidence = computed(() => props.attempt?.confidence ?? 'unknown')
-const uncertainty = computed(() => props.attempt?.uncertainty ?? [])
-const unavailable = computed(() => props.attempt?.unavailable_evidence ?? [])
-const provenance = computed(() => props.attempt?.provenance ?? [])
+const attemptId = computed(() => props.attempt.attempt_id)
+const proposalId = computed(() => props.attempt.proposal_id)
+const attemptStatus = computed(() => props.attempt.status)
+const attemptConfidence = computed(() => props.attempt.confidence)
+const uncertainty = computed(() => props.attempt.uncertainty ?? [])
+const unavailable = computed(() => props.attempt.unavailable_evidence ?? [])
+const provenance = computed(() => props.attempt.provenance ?? [])
 
 /** A source error reason is free text produced by a connector. */
 function reasonFor(reason: string): DisplayText {

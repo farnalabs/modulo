@@ -441,15 +441,14 @@ const pendingCorrectionCount = computed(
     props.corrections.correctedDerivedElements.length + props.corrections.removedDerivedElementIds.length,
 )
 
-const changes = computed<ElementChange[]>(() => props.result?.element_changes ?? [])
+const changes = computed<ElementChange[]>(() => props.result!.element_changes ?? [])
 const counts = computed(() => elementChangeCounts(changes.value))
 const populatedStatuses = computed(() => statuses.filter((status) => counts.value[status] > 0))
 
-const displayIncomplete = computed(() => (props.result ? rerunReportsIncomplete(props.result) : false))
+const displayIncomplete = computed(() => rerunReportsIncomplete(props.result!))
 
 const incompleteReasons = computed<string[]>(() => {
-  const result = props.result
-  if (!result) return []
+  const result = props.result!
   const reasons = [...(result.incomplete_reasons ?? [])]
   for (const sourceId of result.source_changes.newly_unavailable ?? []) {
     reasons.push(t('views.DeterminationView.rerun_newly_unavailable_reason', { source: sourceId }))
@@ -467,19 +466,18 @@ const incompleteReasons = computed<string[]>(() => {
   return reasons
 })
 
-const priorAttempt = computed(() => props.result?.prior_attempt ?? null)
-const currentAttempt = computed(() => props.result?.current_attempt ?? null)
+const priorAttempt = computed(() => props.result!.prior_attempt)
+const currentAttempt = computed(() => props.result!.current_attempt)
 
-const inputsUnchanged = computed(() => props.result?.input_set_unchanged ?? false)
-const newSources = computed(() => props.result?.source_changes.new_sources ?? [])
-const missingSources = computed(() => props.result?.source_changes.missing_sources ?? [])
-const newlyAvailable = computed(() => props.result?.source_changes.newly_available ?? [])
-const newlyUnavailable = computed(() => props.result?.source_changes.newly_unavailable ?? [])
-const sampleCountChanges = computed(() => props.result?.source_changes.sample_count_changes ?? [])
+const inputsUnchanged = computed(() => props.result!.input_set_unchanged)
+const newSources = computed(() => props.result!.source_changes.new_sources ?? [])
+const missingSources = computed(() => props.result!.source_changes.missing_sources ?? [])
+const newlyAvailable = computed(() => props.result!.source_changes.newly_available ?? [])
+const newlyUnavailable = computed(() => props.result!.source_changes.newly_unavailable ?? [])
+const sampleCountChanges = computed(() => props.result!.source_changes.sample_count_changes ?? [])
 
 const matchedIds = computed(() => {
-  const corrections = props.result?.corrections
-  if (!corrections) return []
+  const corrections = props.result!.corrections
   return [
     ...(corrections.corrected_derived_element_ids ?? []).map((value) => ({
       key: `corrected:${value}`,
@@ -495,8 +493,7 @@ const matchedIds = computed(() => {
 })
 
 const unmatchedIds = computed(() => {
-  const corrections = props.result?.corrections
-  if (!corrections) return []
+  const corrections = props.result!.corrections
   return [
     ...(corrections.unmatched_corrected_derived_element_ids ?? []).map((value) => ({
       key: `corrected:${value}`,
@@ -513,9 +510,7 @@ const unmatchedIds = computed(() => {
 
 const hasMatched = computed(() => matchedIds.value.length > 0)
 const hasUnmatched = computed(() => unmatchedIds.value.length > 0)
-const correctionsEmpty = computed(() =>
-  props.result ? correctionsAreEmpty(props.result.corrections) : true,
-)
+const correctionsEmpty = computed(() => correctionsAreEmpty(props.result!.corrections))
 
 function statusLabel(status: ElementChangeStatus): string {
   return t(`views.DeterminationView.rerun_status_${status}`)

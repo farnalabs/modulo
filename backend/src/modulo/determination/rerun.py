@@ -422,9 +422,12 @@ def _classify_elements(
             changes.append(_paired_change(prior, current))
         elif current is not None:
             changes.append(_new_change(current))
-        elif prior is not None:
+        else:
+            # The statement came from the union of both indexes, so a statement
+            # that is neither paired nor current-only must be prior-only.
+            prior_only = prior_by_statement[statement]
             absent_status: ElementChangeStatus = "not_reproduced" if inputs_unchanged else "removed"
-            changes.append(_absent_change(absent_status, prior))
+            changes.append(_absent_change(absent_status, prior_only))
     return changes
 
 

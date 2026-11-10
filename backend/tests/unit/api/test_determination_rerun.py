@@ -8,6 +8,7 @@ when a source is unavailable or missing.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager
@@ -24,8 +25,10 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
 from modulo.core.audit_coverage import audit_session
+from modulo.core.connector_hub import ConnectorDecryptError
 from modulo.determination.inference import build_proposal_contract
 from modulo.determination.models import ProposalContract
+from modulo.determination.rerun import ProposalRerunRequest
 from modulo.determination.scanner import ScanSample
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -362,3 +365,87 @@ def test_rerun_error_mapping(
         )
 
     assert resp.status_code == expected_status
+
+
+@contextmanager
+def _connector_listing_error(error: BaseException) -> Generator[None, None, None]:
+    with (
+        patch("modulo.api.routes.determination.list_connector_instances", side_effect=error),
+        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+    ):
+        yield
+
+
+@contextmanager
+def _hub_initialise_error(error: BaseException) -> Generator[None, None, None]:
+    hub = AsyncMock()
+    hub.initialise = AsyncMock(side_effect=error)
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=hub)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch(
+            "modulo.api.routes.determination.list_connector_instances",
+            return_value=_mock_page([_mock_connector_instance()]),
+        ),
+        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+        patch("modulo.api.routes.determination.create_secrets_backend"),
+        patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=cm)),
+    ):
+        yield
+
+
+class TestRerunErrorHandlingDetails:
+    def test_connector_listing_programming_error_returns_501(self, client: TestClient) -> None:
+        exc = ProgrammingError("stmt", {}, Exception("mock table does not exist"))
+
+        with _connector_listing_error(exc):
+            resp = client.post(
+                "/api/v1/determination/rerun",
+                json=_body(build_proposal_contract([_available_sample()])),
+            )
+
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
+    def test_connector_listing_integrity_error_returns_409(self, client: TestClient) -> None:
+        exc = IntegrityError("stmt", {}, Exception("mock constraint violation"))
+
+        with _connector_listing_error(exc):
+            resp = client.post(
+                "/api/v1/determination/rerun",
+                json=_body(build_proposal_contract([_available_sample()])),
+            )
+
+        assert resp.status_code == 409
+        assert "already exists" in resp.json()["detail"].lower()
+
+    def test_connector_decrypt_error_returns_502(self, client: TestClient) -> None:
+        with _hub_initialise_error(ConnectorDecryptError(_CONNECTOR_ID)):
+            resp = client.post(
+                "/api/v1/determination/rerun",
+                json=_body(build_proposal_contract([_available_sample()])),
+            )
+
+        assert resp.status_code == 502
+        assert str(_CONNECTOR_ID) in resp.json()["detail"]
+
+    def test_cancelled_error_propagates(self) -> None:
+        request = ProposalRerunRequest(prior_proposal=build_proposal_contract([_available_sample()]))
+
+        from modulo.api.routes.determination import rerun_determination
+
+        with (
+            _scan_environment(None, scan_error=asyncio.CancelledError()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            asyncio.run(
+                rerun_determination(
+                    request,
+                    session=_make_mock_session(),
+                    principal=_make_principal("operator"),
+                    settings=_make_settings(),
+                )
+            )
