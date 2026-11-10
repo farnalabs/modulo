@@ -68,6 +68,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { fetchDbCapacity, type DbCapacityInfo } from '../lib/api/dbCapacity'
+import { formatBytes } from '../lib/formatBytes'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -144,21 +145,6 @@ const levelMeta = computed<{ role: string; ariaLive: 'polite' | 'assertive' }>((
   }
   return { role: 'status', ariaLive: 'polite' }
 })
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (bytes == null || typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
-    return '—'
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'] as const
-  let value = bytes
-  let idx = 0
-  while (value >= 1024 && idx < units.length - 1) {
-    value /= 1024
-    idx += 1
-  }
-  const decimals = Number.isInteger(value) ? 0 : 1
-  return `${value.toFixed(decimals)} ${units[idx]}`
-}
 
 const usedBytesLabel = computed<string | null>(() => {
   const used = capacity.value?.used_bytes

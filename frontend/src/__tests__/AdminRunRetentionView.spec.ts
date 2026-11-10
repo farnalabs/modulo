@@ -101,7 +101,7 @@ describe('AdminRunRetentionView', () => {
   it('shows candidate summary from the API', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="admin-run-retention-total-runs"]').text()).toBe('3')
-    expect(wrapper.find('[data-testid="admin-run-retention-total-bytes"]').text()).toBe('50.0 MB')
+    expect(wrapper.find('[data-testid="admin-run-retention-total-bytes"]').text()).toBe('50 MB')
     expect(wrapper.find('[data-testid="admin-run-retention-terminal-runs"]').text()).toBe('2')
   })
 
