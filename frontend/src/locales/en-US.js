@@ -4723,7 +4723,13 @@ export default {
       "checkpoint_purged_rows": "{count} checkpoint row | {count} checkpoint rows",
       "checkpoint_purged_from": "from {count} run | from {count} runs",
       "checkpoint_freed": "· freed {bytes}",
-      "checkpoint_purge_failed": "Checkpoint purge failed"
+      "checkpoint_purge_failed": "Checkpoint purge failed",
+      "bytes_zero": "0 B",
+      "bytes_unit_B": "B",
+      "bytes_unit_KB": "KB",
+      "bytes_unit_MB": "MB",
+      "bytes_unit_GB": "GB",
+      "bytes_unit_TB": "TB"
     },
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",
