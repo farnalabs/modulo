@@ -152,13 +152,15 @@ describe('AdminHousekeepingView — scan', () => {
     expect(mockGet.mock.calls.length).toBeGreaterThan(callsBefore)
   })
 
-  it('echoes the raw created_at string when it cannot be parsed as a date', async () => {
+  it('falls back to the em-dash placeholder when created_at cannot be parsed as a date', async () => {
     mockGet.mockResolvedValue(scanPayload([
       category('stale_pipelines', [candidate('p-1', 'Weird Date', { created_at: 'not-a-date' })]),
     ]))
     const wrapper = mountView()
     await nextTick()
-    expect(wrapper.text()).toContain('not-a-date')
+    const row = wrapper.find('[data-testid="hk-candidate"]')
+    expect(row.text()).not.toContain('not-a-date')
+    expect(row.text()).toContain('—')
   })
 
   it('shows an em-dash placeholder when the candidate has no created_at', async () => {
