@@ -1,4 +1,4 @@
-# Contributing to Modulo
+# Contributing to Farna Control
 
 - [Welcome](#welcome)
 - [Development Setup](#development-setup)
@@ -15,10 +15,10 @@
 
 ## Welcome
 
-Modulo is a self-hosted Delivery Governance Platform for governing the software
-development lifecycle as AI and automation take on more of the work. It provides
-composable pipelines of atomic AI agents that record, evaluate, control, and
-improve automated work between existing tools like GitHub, GitLab, and Slack.
+Farna Control is a self-hosted Delivery Governance Platform for governing the
+software development lifecycle as AI and automation take on more of the work. It
+provides composable pipelines of atomic AI agents that record, evaluate, control,
+and improve automated work between existing tools like GitHub, GitLab, and Slack.
 
 We're glad you're here. Be respectful, constructive, and assume good faith.
 
@@ -97,8 +97,8 @@ is the supported primary database; MariaDB is a conformance-tier backend only.
 
 ```powershell
 # 1. Clone the repository
-git clone https://github.com/farnalabs/modulo.git modulo
-cd modulo
+git clone https://github.com/farnalabs/farna-control.git farna-control
+cd farna-control
 
 # 2. Start infrastructure
 #    Compose refuses to start without a valid FERNET_KEY — generate one once
@@ -195,7 +195,7 @@ environment variable.
 ## Project Structure
 
 ```
-modulo/
+farna-control/
 ├── backend/
 │   ├── src/
 │   │   └── modulo/
@@ -477,8 +477,8 @@ concurrency groups keyed on `${{ github.ref }}`.
 
 ### PR-based delivery
 
-Modulo uses PR-based delivery. Push your branch, open a pull request, and CI
-(`ci.yml`) validates it automatically; merging is handled by the
+Farna Control uses PR-based delivery. Push your branch, open a pull request,
+and CI (`ci.yml`) validates it automatically; merging is handled by the
 `merge-queue.yml` workflow once checks pass and review approves. For
 farnalabs-internal delivery, additional automation helpers
 exist in the internal tooling repo (not part of the public contribution flow).
@@ -554,12 +554,12 @@ Use branch names that reflect the work:
 
 ### Versioning
 
-Modulo follows [Semantic Versioning 2.0.0](https://semver.org/). During the
-alpha phase (`0.x`), breaking changes may occur in minor releases.
+Farna Control follows [Semantic Versioning 2.0.0](https://semver.org/). During
+the alpha phase (`0.x`), breaking changes may occur in minor releases.
 
 ### How releases work
 
-Modulo does not run a manual release workflow. Version bumps happen at publish
+Farna Control does not run a manual release workflow. Version bumps happen at publish
 time (via `publish.ps1` verify step / CI) — never per merge — and a changelog
 is maintained in the product roadmap. Before a release tag is created, maintainers
 update both application version files together and set the `LICENSE` Change
@@ -582,9 +582,9 @@ disclosure process, see [`SECURITY.md`](SECURITY.md).
 ### Security contacts
 
 Prefer GitHub's **Report a vulnerability** (private security advisory) on the
-repository page, or email `security@modulo.run`.
+repository page, or email `security@farna.dev`.
 
-- **Email**: `security@modulo.run`
+- **Email**: `security@farna.dev`
 - **Do not** open public GitHub issues for security vulnerabilities
 
 ### Security documentation
@@ -609,4 +609,4 @@ repository page, or email `security@modulo.run`.
 
 ---
 
-*Thank you for contributing to Modulo.*
+*Thank you for contributing to Farna Control.*
