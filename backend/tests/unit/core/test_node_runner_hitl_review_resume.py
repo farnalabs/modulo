@@ -26,9 +26,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
+from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_REPORTED
 
 _REVIEW_ID = "gate_a_b"
 _FOREIGN_REVIEW_ID = "gate_c_d"
+
+
+def _output_provenance_key(review_id: str) -> str:
+    """The per-gate state key carrying the AUTHOR of the gate's ``output``."""
+    return f"{nr.HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"
 
 
 def _resume(decision: Any) -> tuple[bool, dict[str, Any] | None]:
@@ -176,6 +182,100 @@ async def test_deliver_manual_decision_resumes() -> None:
     assert result is not None
     assert result["artifacts"][0]["result"] == "delivered_manual"
     assert result["output"] == manual_output
+
+
+# --- FAR-2490: a human-supplied output is LABELLED as human-authored --------
+#
+# The provenance override rule (adopted 2026-11-09) requires a human override of
+# a computed result to be a distinct, additive fact, labelled wherever it is
+# read. Before the fix the gate wrote the human's payload into ``output`` — the
+# exact state key a downstream node / prompt template / conditional edge reads
+# for an agent's output — with NO marker at all, so a consumer could not tell a
+# human-supplied value from agent-generated data.
+
+
+async def test_deliver_manual_output_is_stamped_human_provenance() -> None:
+    """``deliver_manual`` stamps the human class ADDITIVELY: the payload stays
+    byte-identical under ``output`` and the class rides in a sibling key."""
+    manual_output = {"answer": 42}
+    resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": manual_output})
+    assert resumed is True
+    assert result is not None
+    # ADDITIVE: the human's value is never rewritten to carry the marker.
+    assert result["output"] == manual_output
+    assert result[_output_provenance_key(_REVIEW_ID)] == PROVENANCE_ATTESTED
+
+
+async def test_deliver_manual_provenance_is_not_the_agent_report_class() -> None:
+    """The stamp must be the natively-recorded governance class (``attested``)
+    — never ``reported``, the class a dispatched AGENT's folded-back data
+    carries. Conflating the two would let human-supplied data read as an
+    agent's report."""
+    _resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": {"a": 1}})
+    assert result is not None
+    stamp = result[_output_provenance_key(_REVIEW_ID)]
+    assert stamp != PROVENANCE_REPORTED
+    assert stamp == PROVENANCE_ATTESTED
+
+
+async def test_approved_with_modification_is_stamped_human_provenance() -> None:
+    """FAR-2489: approve-with-modification REPLACES the computed output with a
+    human-authored one, so it carries the same additive human stamp."""
+    modified = {"pr_title": "human edited"}
+    resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID, "modified_output": modified})
+    assert resumed is True
+    assert result is not None
+    assert result["output"] == modified
+    assert result[_output_provenance_key(_REVIEW_ID)] == PROVENANCE_ATTESTED
+
+
+async def test_plain_approval_neither_replaces_nor_stamps_the_computed_output() -> None:
+    """A plain approve does NOT supply a replacement value: the computed output
+    survives untouched (never written over) and there is nothing to label."""
+    resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID})
+    assert resumed is True
+    assert result is not None
+    assert "output" not in result
+    assert _output_provenance_key(_REVIEW_ID) not in result
+
+
+async def test_rejection_does_not_stamp_an_output_provenance() -> None:
+    """A rejection supplies no output, so it must not claim authorship of one."""
+    resumed, result = await _resume({"action": "rejected", "review_id": _REVIEW_ID, "reason": "nope"})
+    assert resumed is True
+    assert result is not None
+    assert "output" not in result
+    assert _output_provenance_key(_REVIEW_ID) not in result
+
+
+async def test_output_provenance_is_scoped_to_the_deciding_gate() -> None:
+    """Two gates in one run must not share one marker: each gate's stamp names
+    ITS OWN review id, so an earlier gate's human output cannot label a later
+    gate's computed one."""
+    first_id = "gate_a_b"
+    second_id = "gate_c_d"
+    _resumed, first = await nr._hitl_review_resume_result(
+        {"action": "deliver_manual", "review_id": first_id, "output": {"a": 1}},
+        first_id,
+        state={},
+        hitl_review_config={},
+        session_factory=None,
+        org_id=None,
+    )
+    _resumed2, second = await nr._hitl_review_resume_result(
+        {"action": "deliver_manual", "review_id": second_id, "output": {"b": 2}},
+        second_id,
+        state={},
+        hitl_review_config={},
+        session_factory=None,
+        org_id=None,
+    )
+    assert first is not None
+    assert second is not None
+    assert _output_provenance_key(first_id) in first
+    assert _output_provenance_key(second_id) not in first
+    assert _output_provenance_key(second_id) in second
+    assert _output_provenance_key(first_id) not in second
 
 
 # --- M6: one human-decision vocabulary, no dead constant -------------------

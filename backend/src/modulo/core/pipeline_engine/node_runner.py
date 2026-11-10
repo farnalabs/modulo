@@ -158,6 +158,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
 )
 from modulo.core.provenance import (
     DISPATCH_DATUM_PROVENANCE,
+    PROVENANCE_ATTESTED,
     PROVENANCE_KEY,
     PROVENANCE_REPORTED,
     WITNESSED_VIA_KEY,
@@ -5425,27 +5426,62 @@ async def _dispatch_reject_correction_best_effort(
             )
 
 
+#: FAR-2489 / FAR-2490: the state key naming the AUTHOR of the value a gate
+#: wrote into ``output`` — set whenever a HUMAN replaced the gate's output
+#: (``deliver_manual``, or approve-with-modification).
+#:
+#: Stable and derived from the gate id, exactly like
+#: :data:`HITL_REVIEW_ANSWER_STATE_KEY_PREFIX`, so a pipeline author can read it
+#: from a prompt template / JMESPath condition as
+#: ``state.hitl_review_output_provenance_<review_id>``.
+#:
+#: The value is the governed-run provenance class of a human statement
+#: (:data:`modulo.core.provenance.PROVENANCE_ATTESTED` — "governance events
+#: Modulo records natively: approvals, guardrail verdicts, HITL decisions").
+#: Per ADR-042 an ``attested`` datum is a natively-recorded human/governance
+#: statement, NOT a computed measurement and NOT an agent report — and agent
+#: output carries no provenance class at all, so the stamp is unambiguous.
+HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX = "hitl_review_output_provenance_"
+
+
+def _stamp_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
+    """Mark a gate result's ``output`` as HUMAN-authored, ADDITIVELY.
+
+    Mutates *gate_result* in place (the caller owns the dict).
+
+    The provenance override rule (adopted 2026-11-09) requires a human override
+    of a computed result to be a distinct, additive fact — never a write over
+    the computed value — and to be labelled wherever it is read. The human's
+    payload therefore stays byte-identical under ``output`` (pipelines read that
+    key directly, and it IS the human's value), while the provenance class rides
+    in a sibling state key. The value the human overrode is untouched and stays
+    readable on the source node's own output.
+    """
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = PROVENANCE_ATTESTED
+
+
 def _hitl_review_deliver_manual_result(
     review_id: str,
     decision: Any,
 ) -> tuple[bool, dict[str, Any]]:
     """Build the gate result for a manual-delivery resume decision."""
     manual_output = decision.get("output", {})
-    return (
-        True,
-        {
-            "artifacts": [
-                {
-                    "node_id": review_id,
-                    "status": "interrupted",
-                    "result": "delivered_manual",
-                    "human_data": decision,
-                    "manual_output": manual_output,
-                }
-            ],
-            "output": manual_output,
-        },
-    )
+    gate_result: dict[str, Any] = {
+        "artifacts": [
+            {
+                "node_id": review_id,
+                "status": "interrupted",
+                "result": "delivered_manual",
+                "human_data": decision,
+                "manual_output": manual_output,
+            }
+        ],
+        "output": manual_output,
+    }
+    # FAR-2490: the human supplied this value directly — stamp its provenance so
+    # a downstream consumer can never mistake it for agent-generated output.
+    _stamp_human_output_provenance(review_id, gate_result)
+    return (True, gate_result)
 
 
 # FAR-860: the state key prefix for the human's choice answer. Downstream
@@ -5531,6 +5567,11 @@ def _hitl_review_approve_reject_result(
     # original agent output.
     if isinstance(decision, dict) and "modified_output" in decision:
         gate_result["output"] = decision["modified_output"]
+        # FAR-2489: this replacement value is HUMAN-authored — stamp it exactly
+        # as ``deliver_manual`` does so a downstream consumer can tell the two
+        # apart from agent output (the artifact's ``result`` says the gate was
+        # approved; this says who wrote the payload).
+        _stamp_human_output_provenance(review_id, gate_result)
     return gate_result
 
 

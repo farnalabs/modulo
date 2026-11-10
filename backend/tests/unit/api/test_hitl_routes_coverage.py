@@ -1445,6 +1445,84 @@ def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClie
     assert mgr_call.await_args.kwargs.get("answer") is None
 
 
+# ---------------------------------------------------------------------------
+# FAR-2489: a human decision is AUTHORED and REASONED
+# ---------------------------------------------------------------------------
+#
+# The provenance override rule requires a human override to be a distinct,
+# authored and reasoned fact. Authorship rides on the claim row
+# (``HitlClaim.decided_by``, stamped by ``HITLManager._decide`` from the
+# principal) and on the ``hitl.*`` audit events; the reviewer's reason rides in
+# the SAME decision payload that is persisted on the claim row AND injected into
+# ``executor.resume``. These tests pin the route half of that chain so a future
+# edit cannot silently drop the human's "why".
+
+
+def test_approve_notes_ride_in_the_persisted_decision_payload(client: tuple[TestClient, AsyncMock]) -> None:
+    """The reviewer's ``notes`` on /approve reach the decision payload that is
+    written to the claim row and replayed through the resume."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "tok", "notes": "checked the diff by hand"},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    payload = mgr_call.await_args.kwargs["decision_payload"]
+    assert payload["action"] == "approved"
+    assert payload["review_id"] == "gate-1"
+    assert payload["notes"] == "checked the diff by hand"
+    # The SAME dict feeds the direct resume injection.
+    assert resume.await_args.kwargs["resume_data"]["notes"] == "checked the diff by hand"
+
+
+def test_reject_reason_rides_in_the_persisted_decision_payload(client: tuple[TestClient, AsyncMock]) -> None:
+    """The (required) reviewer ``reason`` on /reject reaches the same payload."""
+    http, _session = client
+    mgr_call = AsyncMock(_gate_mock)
+    resume = AsyncMock()
+    executor = MagicMock()
+    executor.resume = resume
+    patches = [
+        patch("modulo.api.routes.hitl.HITLManager.reject", new=mgr_call),
+        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        resp = http.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject",
+            json={"claim_token": "tok", "reason": "output does not match the spec"},
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert resp.status_code == 200, resp.text
+    payload = mgr_call.await_args.kwargs["decision_payload"]
+    assert payload["action"] == "rejected"
+    assert payload["reason"] == "output does not match the spec"
+    assert resume.await_args.kwargs["resume_data"]["reason"] == "output does not match the spec"
+
+
 def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tuple[TestClient, AsyncMock]) -> None:
     """Legacy snapshots with an unresolvable config keep the fail-open
     None-answer behaviour (FAR-907 must not strand legacy gates)."""
