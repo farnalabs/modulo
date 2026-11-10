@@ -293,12 +293,13 @@ async def _interrupt_run(
 
 async def _gate_result(gate_config: dict, payload: dict[str, Any]) -> dict:
     """Invoke the HITL gate node directly with the committed decision and return
-    its artifact — the exact routing a resume applies."""
+    its FULL state update — the exact dict the gate node returns, which is the
+    surface a downstream consumer reads (FAR-2489: including the sibling
+    provenance marker, which the artifact alone does not carry)."""
     from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     gate_fn = make_hitl_review_fn(gate_config)
-    result = await gate_fn({"_hitl_decision": payload, "run_context": {"input": {}}})
-    return result["artifacts"][0]
+    return await gate_fn({"_hitl_decision": payload, "run_context": {"input": {}}})
 
 
 async def _resume_and_complete(
@@ -509,9 +510,23 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
     assert completed_at is not None
 
     # The gate resumed as APPROVED carrying the human's modification.
-    gate_result = await _gate_result(gate_config, payload)
+    gate_update = await _gate_result(gate_config, payload)
+    gate_result = gate_update["artifacts"][0]
     assert gate_result["result"] == "approved"
     assert gate_result["human_data"] == payload
+
+    # FAR-2489 (M2): the human-supplied replacement output is LABELLED as
+    # human-authored on the state update the gate returns — the surface a
+    # consumer reads — and the marker's digest describes EXACTLY that value.
+    from modulo.core.pipeline_engine.node_runner import (
+        HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX,
+        hitl_output_provenance_marker,
+    )
+    from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY
+
+    marker = gate_update[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{gate_config['review_id']}"]
+    assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
+    assert marker == hitl_output_provenance_marker(gate_config["review_id"], payload["modified_output"])
 
 
 async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
@@ -592,9 +607,16 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     assert await _run_error_code(db_engine, run_id) == "hitl.rejected"
 
     # A committed rejection routes the gate to REJECTED — never an approval.
-    gate_result = await _gate_result(gate_config, payload)
+    gate_update = await _gate_result(gate_config, payload)
+    gate_result = gate_update["artifacts"][0]
     assert gate_result["result"] == "rejected"
     assert gate_result["human_data"] == payload
+
+    # FAR-2489: a rejection supplies no human-authored output, so the marker key
+    # carries an explicit tombstone — never a stale human attestation.
+    from modulo.core.pipeline_engine.node_runner import HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX
+
+    assert gate_update[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{gate_config['review_id']}"] is None
 
 
 async def _reject_roundtrip(

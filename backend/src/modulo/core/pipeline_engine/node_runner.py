@@ -44,6 +44,7 @@ Eval-before-interrupt ((Section 8.17):
 import asyncio
 import base64
 import difflib
+import hashlib
 import json
 import logging
 import math
@@ -158,6 +159,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
 )
 from modulo.core.provenance import (
     DISPATCH_DATUM_PROVENANCE,
+    PROVENANCE_ATTESTED,
     PROVENANCE_KEY,
     PROVENANCE_REPORTED,
     WITNESSED_VIA_KEY,
@@ -5425,27 +5427,157 @@ async def _dispatch_reject_correction_best_effort(
             )
 
 
+#: FAR-2489 / FAR-2490: the state key carrying the PROVENANCE MARKER for the
+#: value a gate wrote into ``output`` — set whenever a HUMAN supplied that value
+#: (``deliver_manual``, or approve-with-modification).
+#:
+#: Stable and derived from the gate id, exactly like
+#: :data:`HITL_REVIEW_ANSWER_STATE_KEY_PREFIX`, so a pipeline author can read it
+#: from a prompt template / JMESPath condition as
+#: ``state.hitl_review_output_provenance_<review_id>``.
+#:
+#: WHAT THE MARKER DESCRIBES — AND WHAT IT DOES NOT
+#: ------------------------------------------------
+#: ``output`` is ONE SHARED "current node output" slot: every node returns a
+#: value for it and the state reducer replaces it wholesale
+#: (:func:`modulo.core.pipeline_engine.graph_cache._pipeline_state_reducer`).
+#: The moment the next node runs, ``state["output"]`` holds THAT node's value
+#: while this per-gate key survives in state and in the checkpoint. So the
+#: marker does **not** describe whatever ``state["output"]`` happens to hold
+#: when you read it — it describes EXACTLY the value the gate wrote at decision
+#: time, and it carries that value's SHA-256 so a consumer can prove the pairing
+#: instead of assuming it.
+#:
+#: Read it from the state update the gate node RETURNS (the dict ``await
+#: make_hitl_review_fn(...)(state)`` yields on a resume) — the only moment the
+#: marker and the value it describes are guaranteed to travel together. Verify
+#: with :func:`hitl_output_provenance_marker`: a marker is valid for a value
+#: ``v`` only when it equals ``hitl_output_provenance_marker(review_id, v)``.
+#:
+#: VALUE SHAPE — a dict, never a bare string::
+#:
+#:     {
+#:         PROVENANCE_KEY: PROVENANCE_ATTESTED,   # -> "provenance": "attested"
+#:         "review_id": <the gate's review id>,
+#:         "output_sha256": <sha256 hex of the canonical serialisation of the
+#:                           value the gate wrote to "output">,
+#:     }
+#:
+#: ``attested`` is the governed-run provenance class of a human statement
+#: (:data:`modulo.core.provenance.PROVENANCE_ATTESTED` — "governance events
+#: Modulo records natively: approvals, guardrail verdicts, HITL decisions").
+#: Per ADR-042 an ``attested`` datum is a natively-recorded human/governance
+#: statement, NOT a computed measurement and NOT an agent report — and agent
+#: output carries no provenance class at all, so the marker is unambiguous.
+#:
+#: A ``None`` under this key is an explicit TOMBSTONE: it means "this gate's
+#: most recent decision supplied no human-authored output", and it exists so a
+#: marker from an EARLIER decision on the same re-entered gate can never outlive
+#: the decision that superseded it. Consumers must treat ``None`` (and an
+#: absent key) as "no human attestation".
+HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX = "hitl_review_output_provenance_"
+
+
+def _canonical_output_serialisation(value: Any) -> str:
+    """The canonical text the marker's ``output_sha256`` digest is taken over.
+
+    Key-sorted and separator-stable so the digest depends on the VALUE, not on
+    dict insertion order — a consumer holding the same value can reproduce it.
+    ``default=str`` keeps the stamp TOTAL: the digest must never raise on an
+    exotic payload (a raising stamp would break the resume path), and a payload
+    that is not plain-JSON would already fail the run's own checkpoint
+    serialisation.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def hitl_output_provenance_marker(review_id: str, value: Any) -> dict[str, Any]:
+    """Build the provenance marker describing *value* as HUMAN-authored.
+
+    This is the verification primitive as well as the writer: a marker read from
+    run state is valid for *value* only when it EQUALS
+    ``hitl_output_provenance_marker(review_id, value)``. Anything else — a
+    marker left by an earlier decision, a marker whose gate differed, or a value
+    the next node has since overwritten under ``state["output"]`` — compares
+    unequal, so a consumer labels output human-attested only when it really is.
+
+    ``value`` is never mutated and never copied into the marker: only its digest
+    is stored, so the marker stays small and cannot leak payload content.
+    """
+    return {
+        PROVENANCE_KEY: PROVENANCE_ATTESTED,
+        "review_id": review_id,
+        "output_sha256": hashlib.sha256(_canonical_output_serialisation(value).encode("utf-8")).hexdigest(),
+    }
+
+
+def _stamp_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
+    """Mark a gate result's ``output`` as HUMAN-authored, ADDITIVELY.
+
+    Mutates *gate_result* in place (the caller owns the dict).
+
+    The provenance override rule (adopted 2026-11-09) requires a human override
+    of a computed result to be a distinct, additive fact — never a write over
+    the computed value — and to be labelled wherever it is read. The human's
+    payload therefore stays byte-identical under ``output`` (pipelines read that
+    key directly, and it IS the human's value), while the marker rides in a
+    sibling state key. The value the human overrode is untouched and stays
+    readable on the source node's own output.
+    """
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = hitl_output_provenance_marker(
+        review_id, gate_result["output"]
+    )
+
+
+def _clear_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
+    """Retire whatever marker this gate left on a PREVIOUS decision.
+
+    Mutates *gate_result* in place (the caller owns the dict).
+
+    A gate can be re-entered (a loop back onto the same edge) and decided again.
+    A decision that supplies NO human-authored output must not leave the earlier
+    decision's marker standing, or a stale human attestation would outlive the
+    decision that superseded it. The reducer cannot delete a key, so the marker
+    is retired with an explicit ``None`` tombstone — documented on
+    :data:`HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX` and the shape a
+    consumer must treat as "no human attestation".
+
+    Note this does NOT write, replace or clear the computed ``output`` itself:
+    the gate simply wrote no output on this decision, so the upstream value
+    survives untouched.
+    """
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = None
+
+
 def _hitl_review_deliver_manual_result(
     review_id: str,
     decision: Any,
 ) -> tuple[bool, dict[str, Any]]:
-    """Build the gate result for a manual-delivery resume decision."""
+    """Build the gate result for a manual-delivery resume decision.
+
+    ``decision["output"]`` is stored byte-identical under ``output`` (the object
+    is never mutated or copied into the marker) and the sibling provenance key
+    carries a marker that describes EXACTLY that value — see
+    :data:`HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX` for the shape and for
+    why the marker must not be read against a later ``state["output"]``.
+    """
     manual_output = decision.get("output", {})
-    return (
-        True,
-        {
-            "artifacts": [
-                {
-                    "node_id": review_id,
-                    "status": "interrupted",
-                    "result": "delivered_manual",
-                    "human_data": decision,
-                    "manual_output": manual_output,
-                }
-            ],
-            "output": manual_output,
-        },
-    )
+    gate_result: dict[str, Any] = {
+        "artifacts": [
+            {
+                "node_id": review_id,
+                "status": "interrupted",
+                "result": "delivered_manual",
+                "human_data": decision,
+                "manual_output": manual_output,
+            }
+        ],
+        "output": manual_output,
+    }
+    # FAR-2490: the human supplied this value directly — stamp its provenance so
+    # a downstream consumer can never mistake it for agent-generated output.
+    _stamp_human_output_provenance(review_id, gate_result)
+    return (True, gate_result)
 
 
 # FAR-860: the state key prefix for the human's choice answer. Downstream
@@ -5515,6 +5647,12 @@ def _hitl_review_approve_reject_result(
     executor finalize can tell a gate whose router ENDED the run (``terminate``)
     from one that diverted or continued - it must only downgrade the former to
     ``rejected``.
+
+    FAR-2489: EVERY resume outcome through this builder leaves the sibling
+    provenance key in a state consistent with what it wrote — the human marker
+    when ``modified_output`` replaced ``output``, an explicit ``None`` tombstone
+    otherwise (see :func:`_clear_human_output_provenance`). No decision can
+    therefore leave a marker behind that describes a value it did not write.
     """
     result_status = "rejected" if is_rejected else "approved"
     artifact: dict[str, Any] = {
@@ -5531,6 +5669,17 @@ def _hitl_review_approve_reject_result(
     # original agent output.
     if isinstance(decision, dict) and "modified_output" in decision:
         gate_result["output"] = decision["modified_output"]
+        # FAR-2489: this replacement value is HUMAN-authored — stamp it exactly
+        # as ``deliver_manual`` does so a downstream consumer can tell the two
+        # apart from agent output (the artifact's ``result`` says the gate was
+        # approved; this says who wrote the payload).
+        _stamp_human_output_provenance(review_id, gate_result)
+    else:
+        # FAR-2489 re-entry hole: this decision supplies NO human-authored
+        # output (plain approve, or reject). Retire any marker an EARLIER
+        # decision on this same, re-entered gate left behind, so a stale human
+        # attestation can never outlive the decision that superseded it.
+        _clear_human_output_provenance(review_id, gate_result)
     return gate_result
 
 
