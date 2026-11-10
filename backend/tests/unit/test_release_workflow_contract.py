@@ -1284,7 +1284,11 @@ def test_release_schema_freshness_proof_is_wired_into_both_jobs() -> None:
     assert schema_gate_permissions["contents"] == "write"
     preflight_permissions = workflow["jobs"]["preflight"]["permissions"]
     assert preflight_permissions.get("contents") == "read"
-    assert preflight_permissions.get("actions") != "write"
+    # The discovery gate runs scripts/run_release_preflight.py, which queries the
+    # Actions API (gh run list --workflow, gh api .../actions/runs/<id>/jobs).
+    # GitHub sets unlisted permissions to `none`, so the key must be PRESENT and
+    # exactly `read` -- an absent key is not a safe default here.
+    assert preflight_permissions.get("actions") == "read"
     assert workflow["jobs"]["preflight"]["needs"] == ["schema-gate"]
     preflight_checkout = workflow["jobs"]["preflight"]["steps"][0]
     assert preflight_checkout["with"]["persist-credentials"] is False

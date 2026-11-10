@@ -367,6 +367,11 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      # The discovery gate queries the Actions API to prove CI results on the
+      # exact commit (gh run list, gh api .../actions/runs/<id>/jobs). GitHub
+      # sets any unlisted permission to `none`, which would make those reads
+      # fail closed; `actions: read` is required, never `write`.
+      actions: read
       packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
