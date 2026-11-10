@@ -17,6 +17,8 @@ All DB-adjacent collaborators are inert here: the approve/reject path calls
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -26,7 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_REPORTED
+from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY, PROVENANCE_REPORTED
 
 _REVIEW_ID = "gate_a_b"
 _FOREIGN_REVIEW_ID = "gate_c_d"
@@ -184,7 +186,7 @@ async def test_deliver_manual_decision_resumes() -> None:
     assert result["output"] == manual_output
 
 
-# --- FAR-2490: a human-supplied output is LABELLED as human-authored --------
+# --- FAR-2489 / FAR-2490: a human-supplied output is LABELLED as human-authored
 #
 # The provenance override rule (adopted 2026-11-09) requires a human override of
 # a computed result to be a distinct, additive fact, labelled wherever it is
@@ -192,18 +194,40 @@ async def test_deliver_manual_decision_resumes() -> None:
 # exact state key a downstream node / prompt template / conditional edge reads
 # for an agent's output — with NO marker at all, so a consumer could not tell a
 # human-supplied value from agent-generated data.
+#
+# The marker is a SELF-VERIFYING dict, not a bare string: ``output`` is a single
+# shared "current node output" slot that the NEXT node replaces wholesale, so a
+# marker that did not carry the digest of the value it describes would happily
+# label the following node's agent output as human-attested. These tests pin
+# both halves: the shape, and the fact that a marker only matches the value the
+# gate actually wrote.
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    """The DOCUMENTED canonicalisation a consumer reproduces to verify a marker.
+
+    Written here from the contract, not imported from the implementation, so
+    this test fails if the shipped recipe and the published one diverge.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _consumer_digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
 async def test_deliver_manual_output_is_stamped_human_provenance() -> None:
     """``deliver_manual`` stamps the human class ADDITIVELY: the payload stays
-    byte-identical under ``output`` and the class rides in a sibling key."""
+    byte-identical under ``output`` and the marker rides in a sibling key."""
     manual_output = {"answer": 42}
     resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": manual_output})
     assert resumed is True
     assert result is not None
     # ADDITIVE: the human's value is never rewritten to carry the marker.
     assert result["output"] == manual_output
-    assert result[_output_provenance_key(_REVIEW_ID)] == PROVENANCE_ATTESTED
+    marker = result[_output_provenance_key(_REVIEW_ID)]
+    assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
+    assert marker["review_id"] == _REVIEW_ID
 
 
 async def test_deliver_manual_provenance_is_not_the_agent_report_class() -> None:
@@ -213,39 +237,112 @@ async def test_deliver_manual_provenance_is_not_the_agent_report_class() -> None
     agent's report."""
     _resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": {"a": 1}})
     assert result is not None
-    stamp = result[_output_provenance_key(_REVIEW_ID)]
-    assert stamp != PROVENANCE_REPORTED
-    assert stamp == PROVENANCE_ATTESTED
+    marker = result[_output_provenance_key(_REVIEW_ID)]
+    assert marker[PROVENANCE_KEY] != PROVENANCE_REPORTED
+    assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
+
+
+async def test_marker_digest_is_reproducible_by_a_consumer() -> None:
+    """THE SELF-VERIFYING CONTRACT (M1): the marker carries the SHA-256 of the
+    canonical serialisation of the value the gate wrote, so a consumer holding
+    that value can PROVE the pairing instead of assuming it. The digest is
+    computed here from the published recipe, not read from the implementation."""
+    manual_output = {"b": [1, 2], "a": {"nested": True}}
+    _resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": manual_output})
+    assert result is not None
+    marker = result[_output_provenance_key(_REVIEW_ID)]
+    assert marker["output_sha256"] == _consumer_digest(manual_output)
+
+
+async def test_marker_does_not_describe_a_later_state_output() -> None:
+    """THE M1 DEFECT: ``output`` is one shared slot the NEXT node replaces
+    wholesale. A marker kept in state must therefore NOT validate against
+    whatever ``output`` holds later — only against the value the gate wrote."""
+    gate_output = {"answer": "human"}
+    _resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": gate_output})
+    assert result is not None
+    marker = result[_output_provenance_key(_REVIEW_ID)]
+    # The next agent node overwrites ``output``; the marker survives in state.
+    later_agent_output = {"answer": "agent"}
+    assert marker["output_sha256"] != _consumer_digest(later_agent_output)
+    # ... while still describing the value the gate actually wrote.
+    assert marker["output_sha256"] == _consumer_digest(gate_output)
 
 
 async def test_approved_with_modification_is_stamped_human_provenance() -> None:
     """FAR-2489: approve-with-modification REPLACES the computed output with a
-    human-authored one, so it carries the same additive human stamp."""
+    human-authored one, so it carries the same additive human marker."""
     modified = {"pr_title": "human edited"}
     resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID, "modified_output": modified})
     assert resumed is True
     assert result is not None
     assert result["output"] == modified
-    assert result[_output_provenance_key(_REVIEW_ID)] == PROVENANCE_ATTESTED
+    marker = result[_output_provenance_key(_REVIEW_ID)]
+    assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
+    assert marker["output_sha256"] == _consumer_digest(modified)
 
 
-async def test_plain_approval_neither_replaces_nor_stamps_the_computed_output() -> None:
-    """A plain approve does NOT supply a replacement value: the computed output
-    survives untouched (never written over) and there is nothing to label."""
+async def test_plain_approval_retires_any_previous_marker() -> None:
+    """A plain approve supplies NO replacement value: the computed output
+    survives untouched (never written over) and the marker key is retired with
+    an explicit ``None`` tombstone, so no human attestation is claimed."""
     resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID})
     assert resumed is True
     assert result is not None
     assert "output" not in result
-    assert _output_provenance_key(_REVIEW_ID) not in result
+    assert _output_provenance_key(_REVIEW_ID) in result
+    assert result[_output_provenance_key(_REVIEW_ID)] is None
 
 
-async def test_rejection_does_not_stamp_an_output_provenance() -> None:
+async def test_rejection_retires_any_previous_marker() -> None:
     """A rejection supplies no output, so it must not claim authorship of one."""
     resumed, result = await _resume({"action": "rejected", "review_id": _REVIEW_ID, "reason": "nope"})
     assert resumed is True
     assert result is not None
     assert "output" not in result
-    assert _output_provenance_key(_REVIEW_ID) not in result
+    assert result[_output_provenance_key(_REVIEW_ID)] is None
+
+
+async def test_reentering_a_gate_with_a_plain_approval_clears_the_previous_marker() -> None:
+    """THE M1 RE-ENTRY HOLE: a gate can be re-entered (a loop back onto the same
+    edge) and decided again. The second decision must leave a marker consistent
+    with what IT wrote — a tombstone — so the first decision's human attestation
+    cannot outlive the decision that superseded it."""
+    _first_resumed, first = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": {"a": 1}})
+    assert first is not None
+    assert first[_output_provenance_key(_REVIEW_ID)][PROVENANCE_KEY] == PROVENANCE_ATTESTED
+    _second_resumed, second = await _resume({"action": "approved", "review_id": _REVIEW_ID})
+    assert second is not None
+    assert second[_output_provenance_key(_REVIEW_ID)] is None
+
+
+def test_marker_builder_does_not_mutate_the_payload() -> None:
+    """Building the marker must never touch the human's payload object (it is
+    the same object the gate result and the artifact carry)."""
+    payload = {"answer": 42, "nested": {"a": 1}}
+    before = json.dumps(payload, sort_keys=True, default=str)
+    nr.hitl_output_provenance_marker(_REVIEW_ID, payload)
+    assert json.dumps(payload, sort_keys=True, default=str) == before
+
+
+async def test_marker_reaches_the_state_update_the_gate_node_returns() -> None:
+    """M2.1 — THE CONSUMER SURFACE: the marker must be present on the state
+    update the GATE NODE returns (what LANGGRAPH merges into run state), not
+    only on an internal helper's result. A consumer reads it from exactly
+    there; a marker that never leaves ``_hitl_review_resume_result`` would
+    label nothing."""
+    manual_output = {"answer": 42}
+    gate_fn = nr.make_hitl_review_fn({"review_id": _REVIEW_ID, "human_only": True})
+    update = await gate_fn(
+        {
+            "_hitl_decision": {"action": "deliver_manual", "review_id": _REVIEW_ID, "output": manual_output},
+            "run_context": {},
+        }
+    )
+    marker = update[_output_provenance_key(_REVIEW_ID)]
+    assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
+    assert marker["review_id"] == _REVIEW_ID
+    assert marker["output_sha256"] == _consumer_digest(manual_output)
 
 
 async def test_output_provenance_is_scoped_to_the_deciding_gate() -> None:

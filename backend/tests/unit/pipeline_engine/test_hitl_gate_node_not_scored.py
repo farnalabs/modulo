@@ -24,6 +24,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import modulo.core.pipeline_engine.executor as ex
+from modulo.core.pipeline_engine.node_runner import (
+    HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX,
+    hitl_output_provenance_marker,
+)
 
 _GATE_NODE_ID = "hitl_review_agent_node_next_node"
 _REAL_NODE_ID = "agent_node"
@@ -55,6 +59,10 @@ def _context(*, node_ids: set[str], eval_definitions_by_node: dict[str, Any] | N
 
 def _gate_event() -> dict[str, Any]:
     """The ``on_chain_end`` event a resumed ``deliver_manual`` gate emits."""
+    manual_output = {"answer": 42}
+    # The real marker shape (FAR-2489), built with its own writer so this
+    # fixture cannot drift from the shipped contract.
+    provenance_key = f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{_GATE_NODE_ID}"
     return {
         "event": "on_chain_end",
         "name": _GATE_NODE_ID,
@@ -65,11 +73,11 @@ def _gate_event() -> dict[str, Any]:
                         "node_id": _GATE_NODE_ID,
                         "status": "interrupted",
                         "result": "delivered_manual",
-                        "manual_output": {"answer": 42},
+                        "manual_output": manual_output,
                     }
                 ],
-                "output": {"answer": 42},
-                "hitl_review_output_provenance_" + _GATE_NODE_ID: "attested",
+                "output": manual_output,
+                provenance_key: hitl_output_provenance_marker(_GATE_NODE_ID, manual_output),
             }
         },
     }
