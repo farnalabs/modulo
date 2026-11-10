@@ -281,6 +281,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { isTerminalStatus } from '../constants/runStatuses'
 import { RUN_STATUS } from '../constants/filters'
 import { formatDateShort } from '../lib/formatDate'
+import { formatBytes } from '../lib/formatBytes'
 import type { components } from '../lib/api/schema'
 
 const { t } = useI18n()
@@ -543,14 +544,6 @@ async function exportFile() {
   } finally {
     exporting.value = false
   }
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return t('views.AdminRunRetentionView.bytes_zero')
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const val = bytes / Math.pow(1024, i)
-  return `${val.toFixed(1)} ${units[i]}`
 }
 
 function shortId(id: string): string {

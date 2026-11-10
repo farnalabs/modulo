@@ -2982,7 +2982,6 @@ export default {
       "candidates_subtitle": "Up to 500 matching runs with an estimated per-run size.",
       "no_runs_match": "No runs match the current filters.",
       "no_runs_match_change_filters": "Adjust the date, pipeline, or status filters to find purgable runs.",
-      "bytes_zero": "0 B",
       "confirm_warning": "This permanently deletes data and cannot be undone.",
       "confirm_purge_detail": "{count} terminal run(s) matching the current filters will be purged, along with their checkpoints and related per-run rows. In-flight runs are never touched.",
       "purge_selected": "Purge selected",
@@ -4723,13 +4722,7 @@ export default {
       "checkpoint_purged_rows": "{count} checkpoint row | {count} checkpoint rows",
       "checkpoint_purged_from": "from {count} run | from {count} runs",
       "checkpoint_freed": "· freed {bytes}",
-      "checkpoint_purge_failed": "Checkpoint purge failed",
-      "bytes_zero": "0 B",
-      "bytes_unit_B": "B",
-      "bytes_unit_KB": "KB",
-      "bytes_unit_MB": "MB",
-      "bytes_unit_GB": "GB",
-      "bytes_unit_TB": "TB"
+      "checkpoint_purge_failed": "Checkpoint purge failed"
     },
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",
@@ -5817,6 +5810,12 @@ export default {
   },
   "common": {
     "na": "n/a",
+    "bytes_zero": "0 B",
+    "bytes_unit_B": "B",
+    "bytes_unit_KB": "KB",
+    "bytes_unit_MB": "MB",
+    "bytes_unit_GB": "GB",
+    "bytes_unit_TB": "TB",
     "email": "Email",
     "password": "Password",
     "sign_in": "Sign in",

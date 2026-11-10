@@ -473,7 +473,7 @@ describe('AdminHousekeepingView — checkpoint retention', () => {
     expect(result.text()).toContain('Purged')
     expect(result.text()).toContain('2 checkpoint row')
     expect(result.text()).toContain('from 1 run')
-    expect(result.text()).toContain('freed 1.0 KB')
+    expect(result.text()).toContain('freed 1 KB')
     expect(wrapper.find('[data-testid="hk-ckpt-purge-confirm"]').exists()).toBe(false)
   })
 
@@ -541,6 +541,6 @@ describe('AdminHousekeepingView — checkpoint retention', () => {
     await nextTick()
     await wrapper.find('[data-testid="hk-ckpt-purge-confirm"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-testid="hk-ckpt-result"]').text()).toContain('5.0 MB')
+    expect(wrapper.find('[data-testid="hk-ckpt-result"]').text()).toContain('5 MB')
   })
 })

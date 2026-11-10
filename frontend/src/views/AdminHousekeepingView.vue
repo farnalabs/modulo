@@ -10,7 +10,6 @@
           </Button>
         </template>
       </PageHeader>
-      <Breadcrumb />
 
       <div v-if="loading" data-testid="hk-loading">
         <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
@@ -266,7 +265,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import DataCard from '../components/ui/DataCard.vue'
-import Breadcrumb from '../components/Breadcrumb.vue'
+import { formatBytes } from '../lib/formatBytes'
 
 // FAR-1977: derive the wire types from the generated OpenAPI schema rather
 // than hand-declaring them. A local duplicate silently drifted from the
@@ -332,24 +331,6 @@ function formatDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return t('views.AdminHousekeepingView.bytes_zero')
-  const units = [
-    t('views.AdminHousekeepingView.bytes_unit_B'),
-    t('views.AdminHousekeepingView.bytes_unit_KB'),
-    t('views.AdminHousekeepingView.bytes_unit_MB'),
-    t('views.AdminHousekeepingView.bytes_unit_GB'),
-    t('views.AdminHousekeepingView.bytes_unit_TB'),
-  ]
-  const idx = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / Math.pow(1024, idx)
-  const formattedValue = value.toLocaleString(undefined, {
-    minimumFractionDigits: value >= 10 || idx === 0 ? 0 : 1,
-    maximumFractionDigits: value >= 10 || idx === 0 ? 0 : 1,
-  })
-  return `${formattedValue} ${units[idx]}`
 }
 
 async function scan() {
