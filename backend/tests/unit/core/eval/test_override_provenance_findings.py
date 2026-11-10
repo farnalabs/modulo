@@ -87,6 +87,14 @@ async def test_override_resolution_requires_a_reason(resolution: str, reason: st
     override rolls back the rule's own audit guarantee. The check is ordered
     before the finding lookup, so it holds for both storage arms (eval result
     and trigger-event finding) and an unknown id cannot bypass it.
+
+    ``execute`` must therefore never run: the ordering is the contract, not an
+    implementation detail. If the guard were moved below the lookup, an
+    eval-result finding would still fail closed (so the status assertions alone
+    would keep passing) while a trigger-event finding — which the route resolves
+    only after the core reports "not found" — would silently accept an override
+    with no reason, exactly the shape FAR-2491 prohibits. This assertion is
+    what fails in that regression.
     """
     session = _session_returning(_VerdictGuard())
 
@@ -94,6 +102,8 @@ async def test_override_resolution_requires_a_reason(resolution: str, reason: st
         await resolve_finding(session, "finding-1", resolution, reason, _ACCOUNT_ID, _ORG_ID)
 
     assert "reason is required" in str(exc_info.value)
+    # Ordering pin: the guard fails closed BEFORE any row is read.
+    session.execute.assert_not_awaited()
     session.flush.assert_not_awaited()
 
 

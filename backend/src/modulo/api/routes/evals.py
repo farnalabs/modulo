@@ -3321,7 +3321,7 @@ async def get_finding(
         Depends(audited("api_access_post", "eval_finding", principal_dep=get_current_tenant_user)),
     ],
     responses={
-        400: {"description": "Invalid resolution value"},
+        400: {"description": "Invalid resolution value, or missing resolution reason"},
         404: {"description": _MSG_FINDING_NOT_FOUND},
         500: {"description": "Internal Server Error"},
         501: {"description": "Not Implemented"},

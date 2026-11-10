@@ -966,11 +966,52 @@ def test_resolve_missing_trigger_event_finding_returns_404(client: tuple[TestCli
     ):
         response = http.post(
             f"/api/v1/evals/findings/{uuid.uuid4()}/resolve",
-            json={"resolution": "accepted"},
+            # The reason is part of the request contract (FAR-2491): without it
+            # the real core rejects the override at the route boundary with 400
+            # before any lookup, so a reason-less payload would no longer reach
+            # the "not found" arm this test exists to cover.
+            json={"resolution": "accepted", "reason": "checked"},
         )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Finding not found"
+
+
+def test_resolve_override_without_reason_returns_400_before_any_lookup(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-2491: a reason-less override is rejected at the route boundary.
+
+    ``resolve_finding_core`` is deliberately NOT mocked here, so this pins the
+    real guard AND the route's error mapping end to end. Two regressions fail
+    it loudly:
+
+    * the guard moved below the finding lookup — the queued row WOULD be found,
+      so the request would succeed (200) and record an unexplained override,
+      which is the shape the rule prohibits; and
+    * every ``FindingResolutionError`` mapped to 404 — the override refusal
+      would answer 404 instead of 400.
+
+    The assertion that the queued result was never consumed is the ordering
+    pin: no row was read before the guard failed closed.
+    """
+    http, session = client
+    finding = _finding_row()
+    queued: list[MagicMock] = [_result(scalar_one_or_none=finding)]
+    _queue_execute(session, queued)
+
+    with (
+        patch("modulo.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock),
+    ):
+        response = http.post(
+            f"/api/v1/evals/findings/{finding.id}/resolve",
+            json={"resolution": "accepted"},
+        )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "A resolution reason is required to override a finding"
+    assert len(queued) == 1
 
 
 def test_resolve_finding_invalid_core_error_returns_400(client: tuple[TestClient, AsyncMock]) -> None:

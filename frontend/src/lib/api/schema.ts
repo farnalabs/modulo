@@ -43368,7 +43368,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResolveFindingResponse"];
                 };
             };
-            /** @description Invalid resolution value */
+            /** @description Invalid resolution value, or missing resolution reason */
             400: {
                 headers: {
                     [name: string]: unknown;
