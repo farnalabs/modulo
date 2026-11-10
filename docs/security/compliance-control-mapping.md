@@ -1,14 +1,14 @@
 # Compliance control mapping
 
-This document describes Modulo's compliance control-mapping pack and the
+This document describes Farna Control's compliance control-mapping pack and the
 per-instance evidence index generated from it.
 
 **Audience:** platform engineers, security and compliance owners, and the
-external auditor examining a self-hosted Modulo instance.
+external auditor examining a self-hosted Farna Control instance.
 
 ## What this is, and what it is not
 
-Modulo holds no SOC 2, ISO/IEC 42001 or EU AI Act attestation. That is a
+Farna Control holds no SOC 2, ISO/IEC 42001 or EU AI Act attestation. That is a
 deliberate decision, not a gap to be papered over.
 
 In a self-hosted deployment the customer's auditor audits **the customer's own
@@ -21,8 +21,8 @@ What they do **not** do:
 
 - They do not attest that the customer's system is compliant. Only the
   customer's auditor can reach that conclusion.
-- They do not test the customer's controls. They record what Modulo observed.
-- They do not cover activity outside Modulo's execution boundary. Rows for
+- They do not test the customer's controls. They record what Farna Control observed.
+- They do not cover activity outside Farna Control's execution boundary. Rows for
   that are marked `customer-responsibility` or `gap`, with the responsibility
   stated.
 
@@ -48,7 +48,7 @@ load time and refuses an invalid or dishonest one:
 - a `customer-responsibility` row must be tagged `customer-supplied`;
 - artifact types the instance does not produce cannot evidence a
   `satisfied`/`supported` claim;
-- every framework must name at least one thing Modulo does not satisfy
+- every framework must name at least one thing Farna Control does not satisfy
   (a pack that claims everything is worse than no pack);
 - the required SOC 2 clause set is present;
 - every indexed artifact type is mapped to at least one clause.
@@ -59,10 +59,10 @@ load time and refuses an invalid or dishonest one:
 
 | Value | Meaning |
 |---|---|
-| `satisfied` | Modulo enforces the control and produces the evidence for it, within the stated boundary. |
-| `supported` | Modulo supplies evidence or a mechanism that contributes to the clause; the customer completes it. |
-| `customer-responsibility` | Modulo does not satisfy the clause. The evidence is the customer's own record. |
-| `gap` | Neither Modulo nor the shipped documentation provides the capability. The responsibility is stated. |
+| `satisfied` | Farna Control enforces the control and produces the evidence for it, within the stated boundary. |
+| `supported` | Farna Control supplies evidence or a mechanism that contributes to the clause; the customer completes it. |
+| `customer-responsibility` | Farna Control does not satisfy the clause. The evidence is the customer's own record. |
+| `gap` | Neither Farna Control nor the shipped documentation provides the capability. The responsibility is stated. |
 
 There is deliberately **no single verdict** anywhere in the pack or the
 response. Coverage is reported per row and per framework.
@@ -71,9 +71,9 @@ response. Coverage is reported per row and per framework.
 
 | Value | Meaning |
 |---|---|
-| `observed` | Modulo recorded the fact directly (for example an audit event or a run snapshot). |
+| `observed` | Farna Control recorded the fact directly (for example an audit event or a run snapshot). |
 | `derived` | The evidence is computed from Modulo-observed records. |
-| `customer-supplied` | The evidence must come from the customer. It is never presented as Modulo's. |
+| `customer-supplied` | The evidence must come from the customer. It is never presented as Farna Control's. |
 
 ## The shipped pack at a glance
 
@@ -87,13 +87,13 @@ These counts are pinned by `backend/tests/unit/compliance/test_mapping_pack.py`.
 They change only with an explicit pack-version bump.
 
 A `gap` count of zero is a deliberate, evidenced outcome - not a missing row.
-The vocabulary defines `gap` as "neither Modulo nor the shipped documentation
+The vocabulary defines `gap` as "neither Farna Control nor the shipped documentation
 provides the capability",
 and the shipped `docs/security/incident-response-playbook.md` does provide
 incident-report and post-mortem templates - so the EU AI Act Article 73 row is
 honestly `customer-responsibility` (detecting and reporting a serious incident
 remains entirely the customer's obligation) rather than `gap`. Every framework
-still names several things Modulo does not itself satisfy, which is the property
+still names several things Farna Control does not itself satisfy, which is the property
 that matters.
 
 ## The per-instance evidence index
@@ -128,7 +128,7 @@ response:
 | `build_identity` | `GET /api/v1/deployment` (product version, source revision, build timestamp) | observed |
 
 The index does **not** list every artifact the pack maps, because it cannot: a
-row whose `artifact_type` is `customer_records` is evidenced by material Modulo
+row whose `artifact_type` is `customer_records` is evidenced by material Farna Control
 never sees. Ten mapping rows across the three frameworks rest on
 `customer_records` - policies, risk assessments, internal-audit reports,
 vulnerability-management records, incident records and restore-test records.
@@ -240,7 +240,7 @@ deployed at the time.
 
 ## Honest limitations
 
-- The audit chain proves what Modulo recorded and that the record is
+- The audit chain proves what Farna Control recorded and that the record is
   internally consistent. It does not prove that the recorded facts are true.
 - The chain verifier checks at most 10,000 events per call, always the first
   10,000 in created-at order, and reports `valid: false` when it truncates. It
@@ -268,6 +268,6 @@ deployed at the time.
   customer should confirm the exact wording and applicability against their
   licensed copies and their auditor's scope.
 - There is no third-party attestation report attached to this pack. If a
-  questionnaire asks for one, the answer is that Modulo does not hold one; see
+  questionnaire asks for one, the answer is that Farna Control does not hold one; see
   `docs/security/security-questionnaire-answer-bank.md` for how to answer such
   questions honestly.

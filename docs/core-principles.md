@@ -1,8 +1,8 @@
-# Core Principles – Modulo
+# Core Principles – Farna Control
 
 **Status:** Draft
 **Date:** 11 August 2026
-**Related:** `architecture.md`, ADRs (migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
+**Related:** `architecture.md`, ADRs (migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Farna Control's engineering principles; public blog content at modulo.run/blog derives from it.
 
 ## 1. Schema seams
 Boundaries in a pipeline **can** carry typed schema contracts, but the contract is opt-in per agent and per edge – not every boundary has one. An agent declares `input_schema_id` / `output_schema_id` only when it wants one (both are nullable); validation runs where a contract actually exists. At an edge, compatibility is checked only when **both** sides declare a schema (the source's output pin and the target's input pin) – if either side is untyped the boundary passes through unchecked. A Runner node's output is validated against its `output_schema_json` only when that schema is present. Where schemas do exist they are JSON Schema Draft 2020-12, org-scoped, versioned (semver), reusable, and composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
@@ -47,7 +47,7 @@ Credentials decrypt once at run-start into a run-scoped context; they never ente
 **Benefit:** a run cannot leak credentials in traces, logs, or prompts.
 
 ## 7. We dispatch, we don't run agents
-Modulo orchestrates agent work: Inline Prompt nodes call models in-process, and Runner nodes (`sandbox_agent`) dispatch an agent runtime inside a provisioned workspace; Modulo owns dispatch, auth, audit, cost tracking, eval gates, HITL. The runtime owns the tool-using loop. Bring your own model, agent, prompt.
+Farna Control orchestrates agent work: Inline Prompt nodes call models in-process, and Runner nodes (`sandbox_agent`) dispatch an agent runtime inside a provisioned workspace; Farna Control owns dispatch, auth, audit, cost tracking, eval gates, HITL. The runtime owns the tool-using loop. Bring your own model, agent, prompt.
 **Why:** established agent runtimes do tool-use better than a platform can; competing with them is the wrong strategy.
 **Where:** ADR 044 (agent-dispatch-model), ADR 029 (agent-execution-tiers), the `sandbox_agent` node type.
 **Benefit:** swap runtimes without changing governance; your stack stays yours.
@@ -60,7 +60,7 @@ A failed output produces a new run with feedback attached; the original stays as
 
 ## 9. Self-hosted, no telemetry by default
 Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported: no personal data, pipeline content, or API keys.
-Modulo runs without requiring a Farnalabs-operated service.
+Farna Control runs without requiring a Farnalabs-operated service.
 **Why:** governance without data ownership is theater for regulated and IP-sensitive teams.
 **Where:** deployment docs, `docs/architecture.md`.
 **Benefit:** adoption is not blocked by data-residency concerns.
@@ -68,7 +68,7 @@ Modulo runs without requiring a Farnalabs-operated service.
 ## 10. Capacity is a supported state – the boundary is not an error path
 
 Reaching a capacity limit is a normal, supported operating state and evidence the
-system is being fully used – never a failure. Modulo's behavior at the concurrency
+system is being fully used – never a failure. Farna Control's behavior at the concurrency
 boundary must be indistinguishable in quality from its behavior below it: at the
 limit, work is queued and explained rather than refused; every capacity decision
 names the limit that bound it; nothing recoverable is lost; no pipeline's saturation
@@ -99,6 +99,6 @@ Everything needed to understand and trust a single run - its frozen snapshot, ev
 ## How this doc is used
 
 - New engineers and agents read it to understand why the system is shaped this way.
-- Blog content at modulo.run/blog derives from it (the "Principles of Modulo" post links back here).
+- Blog content at modulo.run/blog derives from it (the "Principles of Farna Control" post links back here).
 - Comparison pages reference individual principles instead of re-explaining them.
 - When a principle changes, update this doc first; the blog follows.

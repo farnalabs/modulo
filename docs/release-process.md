@@ -1,6 +1,6 @@
 # Release Process
 
-How we cut, validate and promote a release of Modulo - and how to rehearse the whole thing without publishing anything.
+How we cut, validate and promote a release of Farna Control - and how to rehearse the whole thing without publishing anything.
 
 ---
 

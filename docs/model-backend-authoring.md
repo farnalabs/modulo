@@ -1,6 +1,6 @@
 # Model Backend Authoring Guide
 
-Model backends wrap LLM providers behind Modulo's `ModelBackendBase` ABC.
+Model backends wrap LLM providers behind Farna Control's `ModelBackendBase` ABC.
 
 ## Architecture
 

@@ -39,7 +39,7 @@ status: covered
 
 # Teams Org Entity
 
-The Organization entity is the root tenant entity in Modulo's multi-tenant architecture.
+The Organization entity is the root tenant entity in Farna Control's multi-tenant architecture.
 Every resource belongs to an organization (feature `feat-org` / route `/admin/org`). Postgres
 Row-Level Security (RLS) enforces tenant isolation at the database layer, and
 `OrgMembership` scopes users (`admin | operator | runner | viewer`) to organizations.

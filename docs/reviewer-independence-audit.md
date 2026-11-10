@@ -8,9 +8,9 @@
 
 ## Executive Summary
 
-This audit examines every review stage in Modulo to verify that reviewing agents do not share runtime, credentials, or context with authoring agents. Four review stages were identified and audited.
+This audit examines every review stage in Farna Control to verify that reviewing agents do not share runtime, credentials, or context with authoring agents. Four review stages were identified and audited.
 
-**Overall finding:** Modulo's review architecture **already provides strong isolation guarantees** by design:
+**Overall finding:** Farna Control's review architecture **already provides strong isolation guarantees** by design:
 - PR Reviewer runs as `modulo-reviewbot` (separate GitHub identity from `farnalabs` bot)
 - Review nodes run in separate E2B sandboxes from authoring nodes
 - Model credentials are resolved per-run from the ModelBackendHub
@@ -147,4 +147,4 @@ The test `backend/tests/architecture/test_reviewer_independence.py` asserts:
 
 ## Conclusion
 
-Modulo's review architecture provides **strong reviewer independence** by design. The only gap is the documented soft-signal nature of `model_judge` evals potentially sharing a model backend – this is acceptable given the explicit design intent and the availability of `human_set` evals for correctness-critical gates.
+Farna Control's review architecture provides **strong reviewer independence** by design. The only gap is the documented soft-signal nature of `model_judge` evals potentially sharing a model backend – this is acceptable given the explicit design intent and the availability of `human_set` evals for correctness-critical gates.

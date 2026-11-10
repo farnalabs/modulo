@@ -2,7 +2,7 @@
 
 ## Overview
 
-Modulo provides CLI scripts for automated backup and restore of Postgres data,
+Farna Control provides CLI scripts for automated backup and restore of Postgres data,
 Fernet keys, and configuration. Backups are encrypted with AES-256-CBC via
 OpenSSL.
 
@@ -121,7 +121,7 @@ uv run scripts/backup-prune.py --backup-dir /backups/daily            # execute
 
 ## Run Data Retention Export
 
-Separately from backup files, Modulo retains run data in the database. The
+Separately from backup files, Farna Control retains run data in the database. The
 **Run Retention** admin page (`/admin/run-retention`, system-admin only)
 exports the runs matching the current filter so they can be archived before
 the **purge**, which permanently deletes terminal runs and their checkpoints.

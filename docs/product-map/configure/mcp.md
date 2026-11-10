@@ -45,7 +45,7 @@ status: covered
 # Model Context Protocol (MCP)
 
 Remote MCP server through which external agents (Claude Code, IDE agents, Assistant)
-drive the Modulo ViewModel as a tool stack. Mounted at `/mcp` as a Starlette
+drive the Farna Control ViewModel as a tool stack. Mounted at `/mcp` as a Starlette
 sub-application, it exposes the pipeline/schema/connector/trigger/viewmodel tool
 surfaces over MCP (SSE), authenticates by API key (`mk_*` bearer) or OAuth, and
 enforces role / tenant / team scoping at both the middleware and viewmodel
@@ -264,7 +264,7 @@ applications. Built on the auth + model-backend core.
       `code` keyword-only with no default
 - [x] OAuth discovery metadata (2026-10-07, FAR-1476): two unauthenticated
       `/.well-known/` documents let a stock MCP harness bootstrap OAuth from a
-      bare Modulo URL – the RFC 8414 authorization-server metadata
+      bare Farna Control URL – the RFC 8414 authorization-server metadata
       (`/.well-known/oauth-authorization-server`: issuer, the
       `/mcp/oauth/authorize` + `/mcp/oauth/token` endpoints, `code` response
       type, `authorization_code` / `refresh_token` grants, PKCE `S256`,

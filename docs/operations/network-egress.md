@@ -2,7 +2,7 @@
 
 > Last updated: 2026-09-30
 >
-> This document enumerates all outbound network connections made by Modulo
+> This document enumerates all outbound network connections made by Farna Control
 > components. It is the single source of truth for data residency compliance
 > (principle: `docs/core-principles.md` §9 "Self-hosted, no telemetry by
 > default"; the PRD is retired) and SOC 2 evidence.
@@ -11,7 +11,7 @@
 
 ## 1. Default Configuration – Zero Egress
 
-With default settings and **no connectors configured**, Modulo makes **zero
+With default settings and **no connectors configured**, Farna Control makes **zero
 external network calls**. There are no hardcoded DNS resolutions, phone-home
 mechanisms, telemetry endpoints, or cloud API calls in the base runtime.
 
@@ -141,7 +141,7 @@ No third-party CDNs, analytics scripts, or tracking pixels are loaded.
 | License check | None | None |
 | Frontend | None | None |
 
-All outbound network calls require explicit operator action. Modulo
+All outbound network calls require explicit operator action. Farna Control
 never initiates external connections without configuration.
 
 ---

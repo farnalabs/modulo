@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete reference for all environment variables supported by Modulo. Variables are grouped by function.
+Complete reference for all environment variables supported by Farna Control. Variables are grouped by function.
 
 ---
 
@@ -198,7 +198,7 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 Signs the offline-verifiable evidence export: an Ed25519 signature over the
 canonical manifest, so a third party holding only the artifact and the
 pre-published public key can verify authorship and re-derive the embedded
-audit chain without contacting Modulo. See
+audit chain without contacting Farna Control. See
 [`docs/offline-verifiable-evidence.md`](./offline-verifiable-evidence.md).
 Signing is disabled by default and fails closed: an instance that has not
 configured a signing key cannot emit signed evidence.
@@ -445,7 +445,7 @@ mutation transaction, including the clone's separate-connection step-(a)
 | `MODULO_OTEL_SERVICE_NAME` | No | `modulo` | OTel service name attribute |
 | `MODULO_SLOW_CALLBACK_WARN_MS` | No | `0` | When greater than `0` (milliseconds), process startup arms asyncio's slow-callback warning at this threshold and starts a low-frequency sampler that records the loop thread's stack, so the readiness stall log can name the blocking callback (`file:line`) - the FAR-1439 class where a synchronous call freezes the event loop and starves every async DB op at once. `0` (the default) is a zero-cost no-op. |
 
-Telemetry is opt-in. With default settings, Modulo makes **zero** external network calls. See [`docs/operations/network-egress.md`](./operations/network-egress.md).
+Telemetry is opt-in. With default settings, Farna Control makes **zero** external network calls. See [`docs/operations/network-egress.md`](./operations/network-egress.md).
 
 ---
 
@@ -670,7 +670,7 @@ Notifications are edge-triggered and deduplicated: a new state must hold for 2 c
 
 The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the nine ones that *are* alert-worthy: a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe`, `dispatcher_reconcile`, `decision_record_reconcile` or `legacy_agent_return_sweep` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories: `break_glass` and a not-measured `db_hygiene` probe - stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails. `event_loop_lag` is the exception, gated by magnitude rather than silenced outright (FAR-1771): under 250 ms (`_LOOP_LAG_DEGRADED_MS`, `api/routes/health.py`) it reads `ok` and stays quiet; from 250 ms to 1 s it reads `degraded` - visible in the readiness payload, but it never pages; at 1 s or above (`SEVERE_EVENT_LOOP_STALL_MS`, `core/health_alerts.py`) it reads `degraded`, flips `HealthObservation.observed_state` and is listed as a failing check, so it emails like a real failure (same 2-tick hysteresis). All three bands stay out of the readiness aggregate, so `event_loop_lag` never gates bluegreen.
 
-This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
+This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Farna Control itself running.
 
 ---
 
@@ -741,7 +741,7 @@ Secrets backend selection: `MODULO_SECRETS_BACKEND` (default: `fernet`, options:
 
 ## Outbound Egress Guard (SSRF)
 
-Every outbound URL Modulo is given by a user or an organization is validated
+Every outbound URL Farna Control is given by a user or an organization is validated
 before a request is made: notification webhooks, SSO test connections,
 observability and error-forwarder tests, all `base_url`-bearing connectors, and
 the OpenAI-compatible model backends. Private, loopback, link-local,

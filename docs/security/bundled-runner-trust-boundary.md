@@ -22,7 +22,7 @@ documented.
 ## Execution-tier model (where T1 sits)
 
 The execution tiers form a convenience↔control spectrum: Tiers 1–3 are all
-"Modulo provisions a workspace and runs the agent in it", differing only in
+"Farna Control provisions a workspace and runs the agent in it", differing only in
 WHERE the compute lives. Tier 4 is a variant with a different payload (whose
 agent runs).
 
@@ -31,8 +31,8 @@ agent runs).
 | **T1** Bundled Runner (self-hosted Docker) – this document | simplest, self-contained; **deliberately permissive networking** – bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
 | **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
 | **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* – T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
-| **T3** Modulo runner on Kubernetes | **most recommended shape** – inherits the customer's RBAC (role-based access control), admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) – see the evidence note below |
-| **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
+| **T3** Farna Control runner on Kubernetes | **most recommended shape** – inherits the customer's RBAC (role-based access control), admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) – see the evidence note below |
+| **T4** Bring-your-own agent image | Farna Control provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run – external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
 **T3 is the bounded-egress answer for self-hosted compute.** When an
@@ -79,7 +79,7 @@ is a DECISION, not an omission: a vendor-built egress gateway (an nftables
 or proxy middlebox owning enforcement) would be the same criticized shape
 as the socket proxy – a bespoke module owning a control the operator
 should own. The bounded answer for self-hosted compute is the Kubernetes
-tier (T3, in the model above): run Modulo's runner on your cluster and
+tier (T3, in the model above): run Farna Control's runner on your cluster and
 bound the workspace with YOUR NetworkPolicy, RBAC, and admission policy –
 the T3 provider ships on main (FAR-1051), with a green kind conformance
 gate (FAR-1053) that does not yet exercise workload identity or
@@ -176,7 +176,7 @@ spike, linuxserver base – archive/export/logs/top/change already denied):
 
 The provider's own use of this surface is exactly: create, start, exec
 (create/start/inspect), inspect, list (label-filtered), destroy. Anything
-beyond that in the residual list is not exercised by Modulo and exists only
+beyond that in the residual list is not exercised by Farna Control and exists only
 because category granularity cannot express "exec-create without the rest of
 the containers category". The escalation path (a minimal in-repo allowlist
 proxy with per-endpoint rules) is the plan's named contingency if this
@@ -194,7 +194,7 @@ threat model demands it).
 
 **Hijacked-stream timeout**: exec-start streams inherit HAProxy's 10-minute
 inactivity timeout through the proxy – a silent exec longer than that is cut
-by the proxy. This is consistent with (and backup to) Modulo's own stall
+by the proxy. This is consistent with (and backup to) Farna Control's own stall
 detection, which kills the exec first.
 
 **Image scanning**: the proxy image and the runner image are digest-pinned,

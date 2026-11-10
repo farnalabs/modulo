@@ -1,6 +1,6 @@
 # Evals
 
-Modulo evaluates agent/node outputs against **eval definitions**. An eval is a
+Farna Control evaluates agent/node outputs against **eval definitions**. An eval is a
 deterministic (or model-mediated) check attached to a pipeline node. This
 document explains the eval types, why the eval system is deliberately
 **non-circular**, and how to use **human-authored eval sets** – the trustworthy

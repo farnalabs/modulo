@@ -1,6 +1,6 @@
 # Self-Hosted Admin Operations
 
-**Audience:** Platform engineers and SREs operating a self-hosted Modulo
+**Audience:** Platform engineers and SREs operating a self-hosted Farna Control
 instance. This guide covers emergency administrative procedures that require
 direct infrastructure access – beyond what the application API or admin UI
 provides.
@@ -126,7 +126,7 @@ affect encrypted data at rest (that uses `FERNET_KEY`). Recovery is simple:
 
 1. Generate a new key: `openssl rand -base64 32`
 2. Set `SECRET_KEY` in the environment.
-3. Restart Modulo services.
+3. Restart Farna Control services.
 4. All users (including admin) must re-authenticate.
 
 **No data is lost.** Sessions are ephemeral – users log back in.
@@ -394,7 +394,7 @@ Emergency situation
 ## 8. License Verification Key
 
 A license key is only as trustworthy as the public key used to verify it.
-Modulo ships a built-in development key so local development and the test suite
+Farna Control ships a built-in development key so local development and the test suite
 work out of the box. **Outside debug mode that development key is not a trust
 anchor**: a license that would only verify against it is refused, and the
 instance stays on the Community tier.

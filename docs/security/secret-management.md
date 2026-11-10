@@ -2,7 +2,7 @@
 
 ## How Secrets Are Stored
 
-Modulo supports three backends for secret storage, configured via the `MODULO_SECRETS_BACKEND` environment variable:
+Farna Control supports three backends for secret storage, configured via the `MODULO_SECRETS_BACKEND` environment variable:
 
 | Backend | Env Value | Description |
 |---------|-----------|-------------|
@@ -10,7 +10,7 @@ Modulo supports three backends for secret storage, configured via the `MODULO_SE
 | HashiCorp Vault | `vault` | KV v2 secrets engine via `hvac`. Configured via `VAULT_ADDR`, `VAULT_TOKEN` or `VAULT_ROLE_ID`+`VAULT_SECRET_ID`. |
 | AWS Secrets Manager | `aws` | Managed via `boto3`. IAM role or access key determines access. |
 
-At startup, Modulo reads `SECRET_KEY` (for JWT signing, minimum 32 bytes) and `FERNET_KEY` (for Fernet encryption, at least 32 bytes). The application refuses to start if either is absent or insufficient. Note that the startup check only enforces a minimum length; Fernet itself additionally requires the key to decode to exactly 32 bytes, so always generate `FERNET_KEY` with `Fernet.generate_key()` rather than supplying an arbitrary string.
+At startup, Farna Control reads `SECRET_KEY` (for JWT signing, minimum 32 bytes) and `FERNET_KEY` (for Fernet encryption, at least 32 bytes). The application refuses to start if either is absent or insufficient. Note that the startup check only enforces a minimum length; Fernet itself additionally requires the key to decode to exactly 32 bytes, so always generate `FERNET_KEY` with `Fernet.generate_key()` rather than supplying an arbitrary string.
 
 Connector credentials and webhook secrets are decrypted once per run into a run-scoped context object. Decrypted values **never** enter:
 
@@ -43,7 +43,7 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 2. For `FERNET_KEY`, set the new key as `FERNET_KEY` and keep the old key in
    `FERNET_KEY_OLD` during the rotation window so existing values remain
    decryptable.
-3. Restart Modulo services (a rolling restart is recommended).
+3. Restart Farna Control services (a rolling restart is recommended).
 4. As a system administrator (permission `system.config.manage`), start the
    rotation:
 
@@ -76,9 +76,9 @@ stored values.
 ### Vault Secrets
 
 1. Log into Vault UI or CLI.
-2. Navigate to the secret path configured for Modulo.
+2. Navigate to the secret path configured for Farna Control.
 3. Update the secret values.
-4. Modulo picks up the changes on the next decrypt cycle (per-run).
+4. Farna Control picks up the changes on the next decrypt cycle (per-run).
 
 ### AWS Secrets Manager
 

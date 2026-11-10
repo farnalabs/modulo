@@ -32,7 +32,7 @@ Admin bypass is the **last resort** for these scenarios:
 
 ## 2. Checkpoint Schema Reference
 
-Modulo's `ModuloPostgresSaver` extends the upstream LangGraph `PostgresSaver`
+Farna Control's `ModuloPostgresSaver` extends the upstream LangGraph `PostgresSaver`
 by adding `organisation_id` as the first column of every primary key. All
 three checkpoint tables live in the `public` schema.
 

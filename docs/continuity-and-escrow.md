@@ -1,6 +1,6 @@
 # Continuity and Escrow
 
-Modulo is self-hosted and published as source under the Business Source License
+Farna Control is self-hosted and published as source under the Business Source License
 1.1 (BUSL). This page describes what a customer, or a successor taking over a
 deployment, can rely on if Farnalabs stops operating. It covers the from-source
 build that makes the source usable on its own, and the one license caveat that
@@ -15,7 +15,7 @@ patches.
 ## What escrow by publication means
 
 Escrow here is not a copy of the source held by a third party. It is the public
-repository: the code that builds Modulo is readable, and it builds without any
+repository: the code that builds Farna Control is readable, and it builds without any
 credential held only by Farnalabs.
 
 Verified properties:
@@ -24,7 +24,7 @@ Verified properties:
 |---|---|
 | The source builds with no Farnalabs-held secret. | The production all-in-one image builds from a clean checkout with no credential or build secret from Farnalabs. [Build the image from source](#build-the-image-from-source) below gives the command, which was run against this checkout for this page. |
 | The Community tier needs no license key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/modulo/core/license_bootstrap.py`: "Booting with no license at all stays valid"). |
-| You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Modulo and of any modified version or derivative work you create, including personal, internal and commercial use, provided that you may not use Modulo or any such modified version or derivative work to offer a paid hosted or managed service to third parties where that service provides substantially the same functionality as Modulo. See `LICENSE`. |
+| You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Farna Control and of any modified version or derivative work you create, including personal, internal and commercial use, provided that you may not use Farna Control or any such modified version or derivative work to offer a paid hosted or managed service to third parties where that service provides substantially the same functionality as Farna Control. See `LICENSE`. |
 | Each released version converts to Apache-2.0. | `LICENSE`: the Change Date for the distributed version is 2029-07-12, and "For each version of the Licensed Work, the Change Date is three years after that version is first publicly released." |
 
 ## What you keep, and what you do not
@@ -44,7 +44,7 @@ is convenient, but it is a Farnalabs-built artifact. The escrow path is to build
 the same all-in-one image from the source you already have:
 
 ```bash
-git clone https://github.com/farnalabs/modulo.git
+git clone https://github.com/farnalabs/farna-control.git
 cd modulo
 git checkout <release-tag>          # the release you intend to keep running
 

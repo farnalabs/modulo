@@ -24,7 +24,7 @@ status: covered
 # SCIM 2.0 Provisioning
 
 API-only SCIM 2.0 provisioning surface (`/scim/v2/*`) that lets an Enterprise
-identity provider (Okta, Entra ID, ...) push users and groups into Modulo so
+identity provider (Okta, Entra ID, ...) push users and groups into Farna Control so
 team membership syncs automatically from the IdP. There is deliberately **no
 UI**: SCIM is a machine-to-machine protocol driven by the IdP, so it is a
 backend-only plan feature (`scim`, `tier: team`) and the frontend
@@ -51,7 +51,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       (`totalResults` / `itemsPerPage` / `startIndex` / `Resources`), paginated
       by `startIndex` (>= 1) and `count` (1–100, default 20) with an optional
       SCIM `filter`; `GET /scim/v2/Groups` mirrors it for teams
-- [x] `POST /scim/v2/Users` JIT-provisions a Modulo user: a brand-new account is
+- [x] `POST /scim/v2/Users` JIT-provisions a Farna Control user: a brand-new account is
       created with `auth_provider="scim"`, a NULL `password_hash` (a
       password login on a SCIM account is 401 by design) and an org membership
       at the default `runner` role; an existing account without a membership is
@@ -74,7 +74,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       lockout is 409 with the guard's reason, and an unverifiable guard is 503
       (never a silent success that locks the org out)
       (`assert_not_last_admin`, `_resolve_scim_admin_caller`)
-- [x] `POST /scim/v2/Groups` maps an IdP group to a Modulo team (duplicate
+- [x] `POST /scim/v2/Groups` maps an IdP group to a Farna Control team (duplicate
       `displayName` → 409) and syncs its initial members; `PATCH`/`PUT`
       `/scim/v2/Groups/{group_id}` add/remove members and rename the team, and
       the member operations are validated against the caller's org so a group

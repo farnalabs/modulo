@@ -224,9 +224,9 @@ The map is stored in dedicated System Maps tables (migration
       `test_system_maps_discovery.py`)
 - [x] The draft's lifecycle-map-shaped `stages` / `edges` compatibility
       projection is honest about provenance: a discovery pipeline node maps to
-      `modulo`, a trigger node to `manual` (it carries no Modulo pipeline of its
+      `modulo`, a trigger node to `manual` (it carries no Farna Control pipeline of its
       own), and connector/folder nodes to `placeholder` (external systems,
-      never presented as Modulo) (`api/routes/system_maps.py::_stage_type`;
+      never presented as Farna Control) (`api/routes/system_maps.py::_stage_type`;
       `test_system_maps_routes.py`)
 - [x] Discovery persists a draft in the System Maps tables, not `lifecycle_maps`:
       it creates the map (or refuses a name already used by a live map with

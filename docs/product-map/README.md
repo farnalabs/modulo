@@ -1,6 +1,6 @@
 # Product Map
 
-The product map is the single inventory of every shipped feature in Modulo. It has two
+The product map is the single inventory of every shipped feature in Farna Control. It has two
 layers:
 
 1. **`frontend/src/manifest.yaml`** – the machine-readable product surface (ADR 008 – Core
@@ -109,7 +109,7 @@ Fresh entries for these features are added to the graph below as behavior tracke
 ### Configure
 - **feat-schemas** - Typed JSON schemas, schema editor, inference, and parameter schemas - routes: `/schemas`, `/schemas/editor/:id`, `/schemas/infer`, `/admin/parameter-schemas`
 - **feat-model-backends** - Model backend management and setup - routes: `/admin/model-backends`, `/setup/model-backend/:id`
-- **feat-assistant** - Modulo assistant configuration and skills - routes: `/admin/assistant`, `/settings/assistant`, `/assistant`
+- **feat-assistant** - Farna Control assistant configuration and skills - routes: `/admin/assistant`, `/settings/assistant`, `/assistant`
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
 - **feat-guardrails** - Guardrail policies (in-page Import control ships on `/settings/guardrails`) - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`

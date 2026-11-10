@@ -13,8 +13,8 @@
 
 ## Context
 
-Modulo's MCP server (ADR 014/047) is the control plane for external agents,
-Claude Code, IDE agents, Modulo assistant sessions, CI automation. Today every MCP API
+Farna Control's MCP server (ADR 014/047) is the control plane for external agents,
+Claude Code, IDE agents, Farna Control assistant sessions, CI automation. Today every MCP API
 key is an ORG-LEVEL credential: it carries an org role (operator/runner), a
 team boundary, and optionally a run binding (sandbox keys), but it has no
 identity axis. Consequences:
@@ -190,7 +190,7 @@ keys re-read as 'org', silent widening on rollback is PINNED as accepted
 
 ## Observability notes
 
-- **Bucket-string shift:** Modulo assistant JWT callers now carry auth_type 'jwt'
+- **Bucket-string shift:** Farna Control assistant JWT callers now carry auth_type 'jwt'
   (previously 'oauth'), so the trigger_pipeline bucket string shifts
   `trigger_pipeline:{org}:oauth:user:{uid}` → `...:jwt:user:{uid}`, a
   one-time in-memory budget reset for those callers (fresh empty buckets).

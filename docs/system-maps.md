@@ -12,24 +12,24 @@
 ### 1.1 What Delivery System Maps Is
 Delivery System Maps provides the operational model for an organization's governed agentic delivery system. In external product communication, the feature is named Delivery System Maps. In the product user interface and navigation, it is named System Maps.
 
-System Maps represents the end-to-end software delivery topography: executable Modulo pipelines, external CI and verification capabilities, manual human engineering gates, intermediate queues, governance controls, and autonomous improvement loops. It displays flow rates, queue latencies, capacity constraints, bottlenecks, failure concentrations, and telemetry coverage across the whole delivery architecture.
+System Maps represents the end-to-end software delivery topography: executable Farna Control pipelines, external CI and verification capabilities, manual human engineering gates, intermediate queues, governance controls, and autonomous improvement loops. It displays flow rates, queue latencies, capacity constraints, bottlenecks, failure concentrations, and telemetry coverage across the whole delivery architecture.
 
 ### 1.2 Category Positioning
-Modulo is a Delivery Governance Platform: a self-hosted system for governing the software development lifecycle as AI and automation take on more of the work. It records, evaluates, controls, and improves automated work across the SDLC. For developer experience and platform engineering teams, graph engineering is the implementation mechanism Modulo applies: a pipeline is an explicit graph of agent, connector, gate, and human nodes joined by typed edges, and Modulo compiles, executes, and governs that graph.
+Farna Control is a Delivery Governance Platform: a self-hosted system for governing the software development lifecycle as AI and automation take on more of the work. It records, evaluates, controls, and improves automated work across the SDLC. For developer experience and platform engineering teams, graph engineering is the implementation mechanism Farna Control applies: a pipeline is an explicit graph of agent, connector, gate, and human nodes joined by typed edges, and Farna Control compiles, executes, and governs that graph.
 
-System Maps is the operator's view of the delivery system: pipelines are executable work, controls are quality gates, improvement loops are continuous-improvement mechanisms, connectors are interfaces to external systems, and the map shows how work moves across the lifecycle. Every node shows provenance-graded operational metrics: the evidence an operator needs to inspect and improve automation. The software-factory metaphor may help explain the implementation, but Modulo is not a prescriptive software factory or generic workflow automation product.
+System Maps is the operator's view of the delivery system: pipelines are executable work, controls are quality gates, improvement loops are continuous-improvement mechanisms, connectors are interfaces to external systems, and the map shows how work moves across the lifecycle. Every node shows provenance-graded operational metrics: the evidence an operator needs to inspect and improve automation. The software-factory metaphor may help explain the implementation, but Farna Control is not a prescriptive software factory or generic workflow automation product.
 
-Modulo governs the execution of autonomous pipelines, enforces quality and safety gates, records immutable audit evidence, and coordinates human-in-the-loop decisions. System Maps provides the system-level visibility required to inspect, operate, and tune that governed delivery network.
+Farna Control governs the execution of autonomous pipelines, enforces quality and safety gates, records immutable audit evidence, and coordinates human-in-the-loop decisions. System Maps provides the system-level visibility required to inspect, operate, and tune that governed delivery network.
 
 ### 1.3 Core Value Proposition
 The core value proposition of System Maps is: operate and improve your governed delivery system.
 
 Engineering organizations adopting autonomous agents do not suffer from a shortage of code generation. They suffer from systemic instability: unmonitored queues, silent handoff failures, uneven agent capacity, runaway error loops, and blind spots where human review bottlenecks throughput. System Maps makes the delivery system observable as an engineered graph.
 
-Modulo cultivates the forest rather than growing the individual tree. Traditional software engineering tools focus on tracking single units of work through linear column states. Modulo focuses on the health, capacity, safety, and continuous improvement of the delivery machinery itself.
+Farna Control cultivates the forest rather than growing the individual tree. Traditional software engineering tools focus on tracking single units of work through linear column states. Farna Control focuses on the health, capacity, safety, and continuous improvement of the delivery machinery itself.
 
 ### 1.4 Explicit Rejection of Issue and Project Management
-System Maps is not an issue tracker, a ticketing system, or an agile project management board. Modulo explicitly rejects replicating Jira, Linear, or GitHub Project boards.
+System Maps is not an issue tracker, a ticketing system, or an agile project management board. Farna Control explicitly rejects replicating Jira, Linear, or GitHub Project boards.
 
 Issue trackers model the state of human and task assignments. They organize work around tickets, assignees, sprints, story points, and estimates. Modeling delivery as ticket transitions creates three failure modes for agentic SDLC platforms:
 1. It encourages building complex project management features (epics, backlogs, sprint planning) that distract from core execution governance.
@@ -43,7 +43,7 @@ In System Maps, work items (such as pull requests, issues, and ticket keys) are 
 ## 2. Conceptual Boundary & System Hierarchy
 
 ### 2.1 The Four-Layer System Hierarchy
-Modulo separates delivery architecture into four distinct layers:
+Farna Control separates delivery architecture into four distinct layers:
 
 ```
 +-----------------------------------------------------------------------+
@@ -96,11 +96,11 @@ System Maps adheres to four strict database design rules:
 3. **Draft isolation:** A draft revision can be edited, validated, and previewed without affecting active system overview dashboards or live pipeline run attributions.
 4. **Relational graph projections:** Map nodes and relationships are projected into queryable relational rows during publish. This enables SQL joins, foreign key integrity checks, and fast attribution lookups without parsing JSON blobs on every read.
 
-**Tenant integrity has two explicit enforcement boundaries.** Every System Map row carries `organisation_id`. Foreign keys between the new System Map tables use composite keys where both tables own the organization column, so a revision can reference only its map and a relationship can reference only nodes in its revision. New binding and admission rows also carry a non-null `organisation_id`; their references to existing Modulo resources use ordinary primary-key foreign keys plus one shared database-backed validation function, `validate_system_map_resource_org(resource_kind, resource_id, expected_org_id, expected_team_id)`. Every writer, including UI, `modulo apply`, publication, admission, reconciliation, and administrative repair, calls that validation in the same transaction before inserting or publishing. The function reads the resource under the current RLS context and fails closed on a missing, deleted, cross-organization, or out-of-scope resource. This is not pure relational foreign-key tenant safety: existing tables do not currently expose the composite keys needed for that claim.
+**Tenant integrity has two explicit enforcement boundaries.** Every System Map row carries `organisation_id`. Foreign keys between the new System Map tables use composite keys where both tables own the organization column, so a revision can reference only its map and a relationship can reference only nodes in its revision. New binding and admission rows also carry a non-null `organisation_id`; their references to existing Farna Control resources use ordinary primary-key foreign keys plus one shared database-backed validation function, `validate_system_map_resource_org(resource_kind, resource_id, expected_org_id, expected_team_id)`. Every writer, including UI, `modulo apply`, publication, admission, reconciliation, and administrative repair, calls that validation in the same transaction before inserting or publishing. The function reads the resource under the current RLS context and fails closed on a missing, deleted, cross-organization, or out-of-scope resource. This is not pure relational foreign-key tenant safety: existing tables do not currently expose the composite keys needed for that claim.
 
 `accounts` is a global table and does not gain an `organisation_id` in this design. Account ownership and audit columns therefore use the existing `account_id` foreign key only. At write time, the same transaction validates active membership through the shared membership check before accepting it as `account_id` or `updated_by`; the transaction rejects an account that lacks membership. This is an explicit database-backed membership rule, not an invented account composite key.
 
-Node keys remain stable within a revision for import/export and human-readable diffs. The relationship and loop-config tables enforce those key references in SQL using composite foreign keys because those new tables own both `revision_id` and `organisation_id`. Existing-resource bindings are protected by the shared validation function on every write, not by a composite FK that does not exist. `external_ref` and values inside `config_json` are application-level data: they do not identify Modulo rows and cannot provide a relational tenant boundary.
+Node keys remain stable within a revision for import/export and human-readable diffs. The relationship and loop-config tables enforce those key references in SQL using composite foreign keys because those new tables own both `revision_id` and `organisation_id`. Existing-resource bindings are protected by the shared validation function on every write, not by a composite FK that does not exist. `external_ref` and values inside `config_json` are application-level data: they do not identify Farna Control rows and cannot provide a relational tenant boundary.
 
 ### 3.2 Relational Entities
 
@@ -541,7 +541,7 @@ The DDL and service transaction divide tenant enforcement as follows:
 - Account bindings use the existing `account_id` foreign key. The shared membership validation checks active membership in the current organization for `account_id` and `updated_by`.
 - The graph validator still enforces semantic rules such as allowed relationship types, required node properties, and flow acyclicity.
 
-The migration is executable in this order: create the new tables and their organization-owned composite keys; add ordinary foreign keys to existing resource primary keys; add the shared validator and invoke it from every binding, publication, admission, reconciliation, and administrative repair writer; add the indexes used by its organization and team validation queries; backfill or publish only after those checks are active; then add attribution columns and terminalization writes. The migration does not alter `accounts`, and it does not require new composite unique keys on teams, pipelines, connectors, triggers, or evaluations. References stored only inside JSON, such as `external_ref` or a connector-specific configuration value, remain application-level because they do not identify a Modulo row.
+The migration is executable in this order: create the new tables and their organization-owned composite keys; add ordinary foreign keys to existing resource primary keys; add the shared validator and invoke it from every binding, publication, admission, reconciliation, and administrative repair writer; add the indexes used by its organization and team validation queries; backfill or publish only after those checks are active; then add attribution columns and terminalization writes. The migration does not alter `accounts`, and it does not require new composite unique keys on teams, pipelines, connectors, triggers, or evaluations. References stored only inside JSON, such as `external_ref` or a connector-specific configuration value, remain application-level because they do not identify a Farna Control row.
 
 ---
 
@@ -549,10 +549,10 @@ The migration is executable in this order: create the new tables and their organ
 
 ### 4.1 Node Typology
 
-| Node Type | Purpose | Primary Properties | Modulo Binding |
+| Node Type | Purpose | Primary Properties | Farna Control Binding |
 |---|---|---|---|
-| `pipeline` | Represents an automated, executable Modulo pipeline. | `pipeline_ref`, `execution.max_concurrent_runs`, `execution.timeout_seconds` | `pipeline_ref` resolves to the relational `pipeline_id` binding. |
-| `external_capability` | Represents work executed outside Modulo (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional `connector_instance_id` binding for status telemetry. |
+| `pipeline` | Represents an automated, executable Farna Control pipeline. | `pipeline_ref`, `execution.max_concurrent_runs`, `execution.timeout_seconds` | `pipeline_ref` resolves to the relational `pipeline_id` binding. |
+| `external_capability` | Represents work executed outside Farna Control (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional `connector_instance_id` binding for status telemetry. |
 | `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `service_level.sla_hours` | `owner_team_ref` resolves to the relational `owner_team_id` binding. |
 | `queue` | Represents an intermediate buffer or backlog holding items between capabilities. | `queue_type`, `capacity_limit`, `drain_rate_per_hour` | Capacity is represented directly by `capacity_limit`; no separate slot entity is referenced. |
 | `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Optional `eval_id` binding; guardrail and human-in-the-loop (HITL) references are outside the initial relational binding contract. |
@@ -616,7 +616,7 @@ System Maps enforces strict loop semantics. Static publication validation checks
 3. **The Seven-Parameter Improvement Loop Contract:** Every `improvement_loop` node must define exactly seven control parameters:
    - **Target Signal (`target_signal`):** The quantifiable operational symptom or defect to monitor (e.g. `failing_test_ratio`, `uncovered_architecture_gaps`, `critical_security_findings`).
    - **Observation Window (`observation_window_seconds`):** The time duration over which signal data is collected before deciding to act (e.g. 3600 seconds, 86400 seconds).
-   - **Action Pipeline (`config_json.action_pipeline_ref`):** The authoring reference for the executable Modulo pipeline dispatched to investigate and apply a remediation (e.g. Improve Architecture, Improve Security). It resolves to the relational `action_pipeline_id` binding in the published loop configuration.
+   - **Action Pipeline (`config_json.action_pipeline_ref`):** The authoring reference for the executable Farna Control pipeline dispatched to investigate and apply a remediation (e.g. Improve Architecture, Improve Security). It resolves to the relational `action_pipeline_id` binding in the published loop configuration.
    - **Budget Limit (`budget_limit_usd`):** Maximum model and compute spend allocated to this loop per UTC calendar month. Publication requires a positive value; dispatch accounts each admitted run against the remaining loop budget and refuses or defers admission when the cap would be exceeded.
    - **Maximum Concurrent Runs (`max_concurrent_runs`):** Maximum number of active remediation runs admitted by this loop at once. Publication requires an integer of at least 1; dispatch refuses admission above this cap and also applies the lower action-pipeline and organization concurrency limits.
    - **Cooldown Window (`cooldown_seconds`):** Minimum quiet period required after a remediation run before the loop is permitted to fire again, preventing rapid-fire oscillatory commits. Dispatch enforces this interval from the last admitted run.
@@ -681,20 +681,20 @@ Every metric or evidence item displayed on a System Map node carries exactly one
 
 | Value | Meaning | Example UI label |
 |---|---|---|
-| `observed` | Modulo directly recorded the external event or response, or directly measured the runtime fact. | **Observed** - run completed at 14:03; connector received HTTP 200. |
-| `reported` | An agent, external system, connector payload, webhook, or operator asserted a claim that Modulo has not independently verified. | **Reported** - GitHub says the pull request merged. |
-| `derived` | Modulo calculated the value deterministically from observed facts. | **Derived** - p95 latency calculated from terminal run facts. |
-| `unknown` | Modulo cannot classify the value reliably because it is unavailable, contradictory, stale beyond its validity window, or missing required attribution. | **Unknown** - source unavailable, conflicting, or unattributed. |
+| `observed` | Farna Control directly recorded the external event or response, or directly measured the runtime fact. | **Observed** - run completed at 14:03; connector received HTTP 200. |
+| `reported` | An agent, external system, connector payload, webhook, or operator asserted a claim that Farna Control has not independently verified. | **Reported** - GitHub says the pull request merged. |
+| `derived` | Farna Control calculated the value deterministically from observed facts. | **Derived** - p95 latency calculated from terminal run facts. |
+| `unknown` | Farna Control cannot classify the value reliably because it is unavailable, contradictory, stale beyond its validity window, or missing required attribution. | **Unknown** - source unavailable, conflicting, or unattributed. |
 
 `unknown` is a required displayed provenance badge. Evidence rows and aggregate cards render it exactly as **Unknown**, never as a blank, zero, `Unobserved`, or an inferred node value. `observed`, `reported`, and `derived` render as **Observed**, **Reported**, and **Derived** respectively. Each badge tooltip names the source and calculation path when available, and says why the value is unknown when it is not.
 
-Receipt and content have separate provenance. Modulo may **observe** that a self-report envelope arrived, including its sender, timestamp, signature status, and raw receipt metadata. The claim inside that envelope remains **reported** unless Modulo independently records the underlying event. The UI therefore renders separate badges rather than upgrading the claim: for example, `Envelope observed` beside `Claim reported`, with `Derived` shown only for calculations based on observed facts.
+Receipt and content have separate provenance. Farna Control may **observe** that a self-report envelope arrived, including its sender, timestamp, signature status, and raw receipt metadata. The claim inside that envelope remains **reported** unless Farna Control independently records the underlying event. The UI therefore renders separate badges rather than upgrading the claim: for example, `Envelope observed` beside `Claim reported`, with `Derived` shown only for calculations based on observed facts.
 
 `Unobserved` is not a provenance value. It is a separate coverage/data-state label that means the node or external capability has no active telemetry observation for the selected period. It renders as **Unobserved** beside the provenance badge when applicable. A missing metric therefore renders **Unknown** for provenance plus **Unobserved** for coverage, while an explicitly unattributed run renders **Unknown** plus **Unattributed**. Neither state is coerced to zero or silently treated as observed.
 
 ### 5.4 Honest Reporting of Missing Data
 When a pipeline or execution path is not mapped to a System Map, or when an external step lacks telemetry:
-- Modulo never coerces missing metrics to zero.
+- Farna Control never coerces missing metrics to zero.
 - Unmapped runs are grouped under an explicit `Unattributed Flow` category and carry an **Unknown** provenance badge.
 - Nodes lacking active telemetry instrumentation display an **Unobserved** coverage/data-state label, independently of their provenance badge.
 - Dashboard totals separate observed throughput, reported throughput, derived aggregates, and unknown or unattributed throughput.
@@ -702,10 +702,10 @@ When a pipeline or execution path is not mapped to a System Map, or when an exte
 
 ---
 
-## 6. Worked Example: Modulo's Self-Governing Improvement Loops
+## 6. Worked Example: Farna Control's Self-Governing Improvement Loops
 
 ### 6.1 The Reference Delivery System
-Modulo's own engineering system serves as the primary real-world implementation of an agentic delivery system governed by System Maps.
+Farna Control's own engineering system serves as the primary real-world implementation of an agentic delivery system governed by System Maps.
 
 The primary delivery flow consists of:
 1. Feature Specification (`manual_capability`)
@@ -717,7 +717,7 @@ The primary delivery flow consists of:
 
 
 ### 6.2 The Six Autonomous Improvement Loops
-Modulo operates six autonomous sidecar improvement loops. Each loop acts on a specific vulnerability, defect, or drift vector without blocking the forward delivery flow:
+Farna Control operates six autonomous sidecar improvement loops. Each loop acts on a specific vulnerability, defect, or drift vector without blocking the forward delivery flow:
 
 ```
 [ Primary Flow ]
@@ -798,7 +798,7 @@ System Maps is a first-class operational view integrated into the Dashboard.
 
 ### 7.2 "Discover My System" Automatic Topology Discovery
 
-The **Discover my system** flow scans the organization's existing Modulo resources to generate an initial draft System Map:
+The **Discover my system** flow scans the organization's existing Farna Control resources to generate an initial draft System Map:
 
 1. **Scan Sources:**
    - **Pipelines** – all active pipelines with their node types, triggers, and connector bindings.
@@ -997,7 +997,7 @@ Several underlying technical components remain sound and will be retained.
 ### 9.3 What Is Deprecated and Discarded
 1. **Mutable Stage State Columns:** The `lifecycle_map_stages` table which stored mutable stage position and status lists is retired. Replaced by `system_map_nodes` projections.
 2. **Ticket Journey Boards:** The column-based work-item card UI is discarded.
-3. **Stage Graduation RPCs:** The endpoints that manually advanced work items between stages (`/graduate`) are removed. Modulo tracks executable pipeline facts, not manual board state.
+3. **Stage Graduation RPCs:** The endpoints that manually advanced work items between stages (`/graduate`) are removed. Farna Control tracks executable pipeline facts, not manual board state.
 
 ### 9.4 Database Migration Plan
 1. A new migration creates `system_maps`, `system_map_revisions`, `system_map_nodes`, `system_map_relationships`, and `system_map_loop_configs`.
@@ -1036,7 +1036,7 @@ Several underlying technical components remain sound and will be retained.
   - Cooldown and budget enforcement for improvement loops.
   - Loop outcome reporting (measuring signal before and after remediation runs).
   - Autonomous dispatch admission and reservation runtime for improvement loops.
-- **Exit Criteria:** Modulo's six improvement loops run with visible budget, cooldown, and outcome tracking on the map; admission, reservation, and cooldown enforcement operate at dispatch time.
+- **Exit Criteria:** Farna Control's six improvement loops run with visible budget, cooldown, and outcome tracking on the map; admission, reservation, and cooldown enforcement operate at dispatch time.
 
 ### Beta 4: Operational Recommendations, Bottleneck Detection & Autonomy Attestation
 - **Scope:**
@@ -1051,10 +1051,10 @@ Several underlying technical components remain sound and will be retained.
 ## 11. Non-Goals, Risks & Mitigations, and Open Decisions
 
 ### 11.1 Explicit Non-Goals
-1. **Modulo is not an Issue Tracker:** Modulo will not implement ticket creation forms, sprint backlogs, kanban stage transitions, or user story point estimation.
-2. **Modulo is not an Arbitrary Cycle Engine:** Modulo will not allow cycles in the primary delivery flow. Looping workflows must be modeled as bounded control sidecars.
-3. **Modulo is not an APM or Distributed Tracing Vendor:** Modulo monitors pipeline runs, handoffs, and SDLC capabilities. It does not replace Datadog, Dynatrace, or OpenTelemetry application performance monitoring in production runtime services.
-4. **Modulo does not Manage Developer Time:** Modulo measures pipeline throughput, queue latency, and autonomous loop outcomes. It does not track individual developer velocity, hours, or personal activity.
+1. **Farna Control is not an Issue Tracker:** Farna Control will not implement ticket creation forms, sprint backlogs, kanban stage transitions, or user story point estimation.
+2. **Farna Control is not an Arbitrary Cycle Engine:** Farna Control will not allow cycles in the primary delivery flow. Looping workflows must be modeled as bounded control sidecars.
+3. **Farna Control is not an APM or Distributed Tracing Vendor:** Farna Control monitors pipeline runs, handoffs, and SDLC capabilities. It does not replace Datadog, Dynatrace, or OpenTelemetry application performance monitoring in production runtime services.
+4. **Farna Control does not Manage Developer Time:** Farna Control measures pipeline throughput, queue latency, and autonomous loop outcomes. It does not track individual developer velocity, hours, or personal activity.
 
 ### 11.2 Risks & Mitigations
 
@@ -1064,7 +1064,7 @@ Several underlying technical components remain sound and will be retained.
 | **Graph Clutter & Sprawl** | Large enterprises model hundreds of nodes, turning the canvas into an illegible tangle. | Enforce hierarchical `system_boundary` containment; support drill-down sub-maps; provide collapsed subsystem nodes. |
 | **False-Positive Bottleneck Alerts** | Normal batch cadences (e.g. nightly builds) trigger spurious bottleneck warnings. | Require minimum sample sizes and observation windows before flagging a queue as stalled or bottlenecked. |
 | **Runaway Improvement Loops** | An autonomous improvement loop spins out of control, generating dozens of conflicting PRs. | Atomic admission reservations under database row locks, a unique loop-plus-admission idempotency key, and transactionally reconciled cooldown, monthly budget, and concurrency reservations. |
-| **Data Sync Drift with Issue Trackers** | Work-item keys displayed in the Evidence Drawer drift out of sync with external trackers. | Work items are non-authoritative drill-down references; Modulo never writes back ticket status to external trackers. |
+| **Data Sync Drift with Issue Trackers** | Work-item keys displayed in the Evidence Drawer drift out of sync with external trackers. | Work items are non-authoritative drill-down references; Farna Control never writes back ticket status to external trackers. |
 
 ### 11.3 Open Architecture & Product Decisions
 
@@ -1078,7 +1078,7 @@ Several underlying technical components remain sound and will be retained.
 #### Decision 2: Plan Tier Gating for System Maps
 - **Tension:** What functionality in System Maps belongs in the free Community tier versus the paid Team and Enterprise tiers?
 - **Trade-offs:**
-  - Restricting the visual System Map to paid tiers limits top-of-funnel adoption and hides Modulo's defining visual surface.
+  - Restricting the visual System Map to paid tiers limits top-of-funnel adoption and hides Farna Control's defining visual surface.
   - Making everything free removes commercial incentive for engineering leadership.
 - **Recommendation:** Core principle 11 applies: "Run-level truth is free." In System Maps:
   - **Community Tier:** Authoring, publishing, and live operational inspection of 1 System Map with up to 15 nodes; live WIP and health status.

@@ -9,7 +9,7 @@
 
 ## 1. Context
 
-Modulo owns the orchestration layer – the visual, composable pipeline of atomic AI agents, i.e. the **execution graph**. Today the graph has powerful but *hidden* capabilities: nodes stored as JSON, edges as a table, LangGraph `StateGraph` execution, native fan-out, conditional edges (JMESPath), HITL as an edge gate, pipeline-level retry only, no per-node tool scoping, and snapshot versioning. The ergonomics gap is not missing features – it is that these capabilities are buried in edge strings, blanket policies, and compile-time synthetic nodes. This design makes them **first-class, visual, and composable**.
+Farna Control owns the orchestration layer – the visual, composable pipeline of atomic AI agents, i.e. the **execution graph**. Today the graph has powerful but *hidden* capabilities: nodes stored as JSON, edges as a table, LangGraph `StateGraph` execution, native fan-out, conditional edges (JMESPath), HITL as an edge gate, pipeline-level retry only, no per-node tool scoping, and snapshot versioning. The ergonomics gap is not missing features – it is that these capabilities are buried in edge strings, blanket policies, and compile-time synthetic nodes. This design makes them **first-class, visual, and composable**.
 
 ## 2. Current state (what already exists – do not reinvent)
 

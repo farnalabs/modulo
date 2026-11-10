@@ -312,7 +312,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `runs.execution_origin` (migration `0288_runs_execution_origin`)
       is stamped `dispatched` by `create_run` when the run's frozen snapshot
       graph contains at least one `dispatch` node - part of the work ran
-      OUTSIDE Modulo and was only witnessed/triggered by it (`db/models/run.py`
+      OUTSIDE Farna Control and was only witnessed/triggered by it (`db/models/run.py`
       single-sources the closed `EXECUTION_ORIGIN_DISPATCHED` vocabulary);
       `NULL` means Modulo-executed or legacy (never backfilled). The provenance
       rides every run-rendering surface - RunResponse, the `/api/v1/viewmodel`
@@ -324,11 +324,11 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       lifecycle_maps,analytics}.py`)
 - [x] The governed-run provenance VOCABULARY is ONE taxonomy (FAR-1693,
       ADR-042 unified 2026-10-12): `core/provenance.py` single-sources the
-      closed four-class set - `observed` (Modulo observed it through a
-      credential it holds), `derived` (Modulo computed it from observed facts),
+      closed four-class set - `observed` (Farna Control observed it through a
+      credential it holds), `derived` (Farna Control computed it from observed facts),
       `reported` (arrived from ANY external surface, incl. a dispatched runtime,
       stamped `witnessed_via: <connector/channel>`), `attested` (governance
-      events Modulo records natively). The dispatch arm's `witnessed_via` is the
+      events Farna Control records natively). The dispatch arm's `witnessed_via` is the
       CHANNEL STAMP of a `reported` datum, not a class of its own: a dispatch
       node's folded-back data is stamped `provenance: reported` (NEVER
       `attested` - the binding foreclosure is that substrate data stays the

@@ -1,6 +1,6 @@
 # Break-Glass Admin Recovery Runbook
 
-**Audience:** Modulo operators (SRE / platform / security) who hold the
+**Audience:** Farna Control operators (SRE / platform / security) who hold the
 break-glass operator secrets. This is the operational procedure for
 recovering an organization whose only admin cannot authenticate.
 

@@ -11,7 +11,7 @@ holding **only**:
 1. the artifact, and
 2. a pre-published public verification key,
 
-can verify - with no Modulo service, no Farnalabs-operated endpoint, no network
+can verify - with no Farna Control service, no Farnalabs-operated endpoint, no network
 and no login. Three things are checked, each by re-deriving it rather than
 trusting it:
 
@@ -27,11 +27,11 @@ event, a falsified chain claim, or a swapped verification key all fail.
 
 ## Honest boundary - what it does, and does not, prove
 
-It proves the **integrity, authorship and reproducibility of what Modulo
-recorded**: the events Modulo captured, the files it exported, and the identity
+It proves the **integrity, authorship and reproducibility of what Farna Control
+recorded**: the events Farna Control captured, the files it exported, and the identity
 that exported them. It does **not** prove that the recorded facts are true, that
 the sensors that captured them are infallible, or anything about execution that
-happened outside Modulo. A signed chain is still a chain of *observations*.
+happened outside Farna Control. A signed chain is still a chain of *observations*.
 
 Use the phrase **"offline-verifiable evidence"** rather than the bare claim
 "independently verifiable": the artifact proves authorship, integrity and

@@ -1,8 +1,8 @@
 # Quickstart
 
-Welcome to Modulo. Get a local Modulo stack running in under 10 minutes, then run your first pipeline.
+Welcome to Farna Control. Get a local Farna Control stack running in under 10 minutes, then run your first pipeline.
 
-Modulo is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work: record automated work, evaluate its outputs and evidence, control what proceeds, and improve the delivery system. The local stack currently demonstrates governed, repeatable AI-assisted software delivery pipelines; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
+Farna Control is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work: record automated work, evaluate its outputs and evidence, control what proceeds, and improve the delivery system. The local stack currently demonstrates governed, repeatable AI-assisted software delivery pipelines; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
@@ -100,7 +100,7 @@ The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhos
 
 ## 3b. Start the SAQ workers (required for pipeline execution + cron)
 
-Modulo executes pipeline runs through SAQ workers. The local Compose file also
+Farna Control executes pipeline runs through SAQ workers. The local Compose file also
 contains worker services, but those services use the Compose network and are
 intended for a containerized backend. Because this quickstart runs the backend
 on the host, stop the Compose workers first and start the host workers in
@@ -143,7 +143,7 @@ refuse to route traffic to an API that otherwise works.
 
 ## 3c. Smoke-check the stack
 
-A Modulo stack can answer `GET /healthz` and accept a login while still being
+A Farna Control stack can answer `GET /healthz` and accept a login while still being
 unable to do the two things that matter: storing a credential and checkpointing
 a run. Both failures come from a `FERNET_KEY` that is not a real Fernet key, and
 neither is visible in `docker compose ps`. Run the smoke check once – it creates
@@ -158,7 +158,7 @@ the checkpointer tables exist:
 Expected output:
 
 ```text
-Modulo compose smoke check -> http://localhost:8000
+Farna Control compose smoke check -> http://localhost:8000
   PASS login as admin (HTTP 200)
   PASS readiness checkpointer ok
   PASS checkpoint tables present (checkpoints, checkpoint_migrations)

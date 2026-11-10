@@ -1,11 +1,11 @@
 # Plugin API
 
-Modulo's plugin system extends the platform with **connector types** and **model backend providers** via standard Python `importlib.metadata.entry_points`. Plugins are third-party Python packages that register builders at startup, enabling new tool integrations and LLM providers without modifying Modulo core.
+Farna Control's plugin system extends the platform with **connector types** and **model backend providers** via standard Python `importlib.metadata.entry_points`. Plugins are third-party Python packages that register builders at startup, enabling new tool integrations and LLM providers without modifying Farna Control core.
 
 ## Architecture
 
 ```
-Plugin package          Modulo Core
+Plugin package          Farna Control Core
     │                       │
     ├─ entry_point ─────────┤
     │  modulo.connectors     │  PluginRegistry.discover_plugins()
@@ -137,7 +137,7 @@ Three authenticated endpoints expose plugin information:
 
 All three require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API; see [Installation](#installation).
 
-## How plugins interact with Modulo
+## How plugins interact with Farna Control
 
 ### ConnectorHub fallback
 
@@ -281,7 +281,7 @@ my_field = "my_plugin:build_my_field"
 def build_my_field(config: dict) -> "SchemaField":
     # Return a SchemaField or any consumer-defined field object. As with the
     # eval group above, the registry stores the builder, not the built object,
-    # and has no consumer. Note there is no SchemaField class in Modulo today:
+    # and has no consumer. Note there is no SchemaField class in Farna Control today:
     # only the API response models SchemaFieldResponse / SchemaFieldListResponse
     # in modulo.api.routes.schemas.
     ...
@@ -289,7 +289,7 @@ def build_my_field(config: dict) -> "SchemaField":
 
 > Note: `backend/pyproject.toml` declares no `project.entry-points` table for
 > these groups, since they are provided by third-party plugin packages, not by
-> Modulo core. In-tree builders register the same way by adding the matching
+> Farna Control core. In-tree builders register the same way by adding the matching
 > `[project.entry-points."modulo.evals"]` / `[project.entry-points."modulo.schema_types"]`
 > table to their own `pyproject.toml`.
 
@@ -302,7 +302,7 @@ Add your package to the deployment's dependencies (see [Installation](#installat
 A complete plugin that adds a "Slack notify" connector type:
 
 ```python
-"""modulo-connector-slack – Slack notification connector for Modulo."""
+"""modulo-connector-slack – Slack notification connector for Farna Control."""
 
 from typing import Any
 
@@ -361,7 +361,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "modulo-connector-slack"
 version = "0.1.0"
-description = "Slack notification connector for Modulo"
+description = "Slack notification connector for Farna Control"
 
 [project.entry-points."modulo.connectors"]
 slack_notify = "modulo_connector_slack:build_slack_connector"
@@ -371,7 +371,7 @@ slack_notify = "modulo_connector_slack:build_slack_connector"
 
 ### Build-time only
 
-Modulo uses **build-time plugin installation** through v2. Plugins are added to the deployment's `pyproject.toml` or `requirements.txt` and the container (or Python environment) is rebuilt. Runtime `pip install` is explicitly disallowed; it is a supply-chain security risk and incompatible with read-only Docker containers.
+Farna Control uses **build-time plugin installation** through v2. Plugins are added to the deployment's `pyproject.toml` or `requirements.txt` and the container (or Python environment) is rebuilt. Runtime `pip install` is explicitly disallowed; it is a supply-chain security risk and incompatible with read-only Docker containers.
 
 **Self-hosted deployments:**
 
@@ -382,7 +382,7 @@ echo "modulo-connector-slack==0.1.0" >> requirements.txt
 # Rebuild the Python environment
 uv pip install -r requirements.txt
 
-# Restart the Modulo server
+# Restart the Farna Control server
 ```
 
 **Docker deployments:**

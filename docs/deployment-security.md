@@ -1,6 +1,6 @@
 # Deployment Security Hardening Guide
 
-**Audience:** Platform engineers, SREs, and security teams deploying Modulo in
+**Audience:** Platform engineers, SREs, and security teams deploying Farna Control in
 production. This guide covers configuration and verification steps beyond the
 basic deployment instructions in `docs/deployment.md`.
 
@@ -18,7 +18,7 @@ basic deployment instructions in `docs/deployment.md`.
 
 ### 1.1 TLS Termination
 
-Terminate TLS at the reverse proxy. Modulo ships without TLS built in – it
+Terminate TLS at the reverse proxy. Farna Control ships without TLS built in – it
 expects a proxy to handle it.
 
 | Proxy | Setup |
@@ -97,7 +97,7 @@ Block all other inbound ports. For VPC deployments, see
 | Rotation | On suspicion of compromise, or quarterly for compliance |
 | Impact of rotation | Invalidates all existing JWT sessions |
 
-Modulo refuses to start if `SECRET_KEY` is absent or shorter than 32 bytes.
+Farna Control refuses to start if `SECRET_KEY` is absent or shorter than 32 bytes.
 
 ### 2.2 FERNET_KEY Rotation
 
@@ -207,7 +207,7 @@ multi-tenant isolation.
   `prefer` / `allow` are REJECTED at startup - they map to a certificate-none
   SSL context that silently downgrades to plaintext, so they cannot describe a
   security posture. An unknown value fails the boot rather than being guessed.
-- **Default posture:** with NO `sslmode` in the URL, Modulo connects with
+- **Default posture:** with NO `sslmode` in the URL, Farna Control connects with
   explicit plaintext (`ssl=False`) - deliberately NOT asyncpg's own
   "prefer TLS" default, which raises `ConnectionResetError` against servers
   without a TLS listener (e.g. Fly's internal Postgres on its private
@@ -330,7 +330,7 @@ coordinate across replicas. See `docs/deployment.md` §Scaling for details.
 
 ### 4.2 CSRF Protection
 
-Modulo uses the **double-submit cookie** pattern:
+Farna Control uses the **double-submit cookie** pattern:
 1. Server sets a cryptographically random CSRF token as a non-HttpOnly cookie
    (JavaScript needs to read it) with `Secure` and `SameSite=Strict` attributes.
 2. Client includes the same token in a custom header (`X-CSRF-Token`).
@@ -399,7 +399,7 @@ using the configured secrets backend (Fernet, Vault, or AWS Secrets Manager).
 
 ### 5.1 Image Vulnerability Scanning
 
-Modulo's CI does **not** currently scan the built container images. Trivy runs as a
+Farna Control's CI does **not** currently scan the built container images. Trivy runs as a
 required CI check (`ci.yml`), scanning the repository filesystem for dependency CVEs
 and misconfigurations - it does not scan the built images. The `publish-images.yml`
 workflow builds each backend/frontend image once and gates the GHCR push on image
@@ -422,7 +422,7 @@ trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+| `TAG` | Farna Control image version (required, no default) | `v0.4.0` |
 
 **SLAs** (from `docs/security/dependency-policy.md`):
 
@@ -611,7 +611,7 @@ Configure alerts for these events in your monitoring system:
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+| `TAG` | Farna Control image version (required, no default) | `v0.4.0` |
 
 3. **Deploy the new image** (Docker Compose):
    ```bash
