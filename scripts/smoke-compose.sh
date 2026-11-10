@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Post-start smoke check for a Modulo deployment (Docker Compose, FAR-2181).
+# Post-start smoke check for a Farna Control deployment (Docker Compose, FAR-2181).
 #
 # WHY THIS EXISTS
 # A stack can be *almost* up and still look healthy. The API answers, login
@@ -126,7 +126,7 @@ print("" if value is None else value)
 PY
 }
 
-echo "Modulo compose smoke check -> ${BASE_URL}"
+echo "Farna Control compose smoke check -> ${BASE_URL}"
 
 # 1. API reachable + login.
 http POST /api/v1/auth/login "$(python3 -c '

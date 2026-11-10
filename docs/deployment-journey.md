@@ -52,17 +52,17 @@ without managing servers or databases.
 ### The pattern
 
 ```
-┌─────────────────────────────────────────────┐
-│  Fly.io / Railway                            │
-│                                              │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │ Postgres  │  │  Redis   │  │ Farna Control App │ │
-│  │ (managed) │  │(managed) │  │(Docker)    │ │
-│  └──────────┘  └──────────┘  └─────┬──────┘ │
-│                                     │        │
-│                LocalRuntimeProvider │(in-proc)│
-│                max_concurrency = 2  │        │
-└─────────────────────────────────────┴────────┘
+┌──────────────────────────────────────────────────┐
+│  Fly.io / Railway                                │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌─────────────────┐ │
+│  │ Postgres │  │  Redis   │  │ Farna Control   │ │
+│  │(managed) │  │(managed) │  │ App (Docker)    │ │
+│  └──────────┘  └──────────┘  └────────┬────────┘ │
+│                                       │          │
+│                  LocalRuntimeProvider │(in-proc) │
+│                   max_concurrency = 2 │          │
+└───────────────────────────────────────┴──────────┘
 ```
 
 ### Option A: Fly.io (recommended)
@@ -131,16 +131,16 @@ data residency, air-gapped).
 ### The pattern
 
 ```
-┌──────────┐  ┌──────────┐  ┌──────────────────┐
-│Postgres  │  │  Redis   │  │  Farna Control Backend  │
-│(existing)│  │(existing)│  │  (Docker/Podman) │
-└──────────┘  └──────────┘  └────────┬─────────┘
-                                     │
-                                     ▼
-                        ┌──────────────────────┐
-                        │    E2B Runtime       │
-                        │    (sandboxed)       │
-                        └──────────────────────┘
+┌──────────┐  ┌──────────┐  ┌───────────────────────┐
+│Postgres  │  │  Redis   │  │ Farna Control Backend │
+│(existing)│  │(existing)│  │  (Docker/Podman)      │
+└──────────┘  └──────────┘  └───────────┬───────────┘
+                                        │
+                                        ▼
+                            ┌──────────────────────┐
+                            │    E2B Runtime       │
+                            │    (sandboxed)       │
+                            └──────────────────────┘
 ```
 
 ### Deployment options

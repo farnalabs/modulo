@@ -45,7 +45,7 @@ the same all-in-one image from the source you already have:
 
 ```bash
 git clone https://github.com/farnalabs/farna-control.git
-cd modulo
+cd farna-control
 git checkout <release-tag>          # the release you intend to keep running
 
 docker build \

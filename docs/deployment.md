@@ -579,7 +579,7 @@ Download it to a file and run it rather than streaming it into a shell:
 `curl ... | bash` pipe skips that verification entirely.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+curl -fsSL https://raw.githubusercontent.com/farnalabs/farna-control/main/scripts/install.sh -o modulo-install.sh
 bash modulo-install.sh
 ```
 
