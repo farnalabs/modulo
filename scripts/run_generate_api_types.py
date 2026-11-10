@@ -138,7 +138,7 @@ def _generate_schema(tempdir: str) -> tuple[int, str]:
         f'os.environ["SECRET_KEY"] = "{_TEMPLATE_ENV["SECRET_KEY"]}"\n'
         f'os.environ["FERNET_KEY"] = "{_TEMPLATE_ENV["FERNET_KEY"]}"\n'
         f'os.environ["MODULO_CSRF_ENABLED"] = "{_TEMPLATE_ENV["MODULO_CSRF_ENABLED"]}"\n'
-        "from modulo.api.main import app\n"
+        "from farna.api.main import app\n"
         f'with open(r"{schema_path.replace(os.sep, "/")}", "w", encoding="utf-8") as f:\n'
         "    json.dump(app.openapi(), f, ensure_ascii=False)\n"
         f'print(f"Schema: {{os.path.getsize(r"{schema_path.replace(os.sep, "/")}")}} bytes")\n'

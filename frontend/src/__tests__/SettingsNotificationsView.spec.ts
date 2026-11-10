@@ -67,7 +67,7 @@ function selectedLevel(wrapper: ReturnType<typeof mount>): string {
 // added: a new backend category fails this assertion until it is labelled.
 const EVENT_MAPPER_PATH = resolvePath(
   __dirname,
-  '../../../backend/src/modulo/core/notifier/event_mapper.py',
+  '../../../backend/src/farna/core/notifier/event_mapper.py',
 )
 
 function backendCategories(): string[] {

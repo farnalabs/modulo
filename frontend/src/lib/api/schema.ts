@@ -15350,7 +15350,7 @@ export interface components {
             /** By Type */
             by_type: components["schemas"]["TypeBreakdown"][];
             /** Coverage Gaps */
-            coverage_gaps: components["schemas"]["modulo__api__routes__admin__CoverageGap"][];
+            coverage_gaps: components["schemas"]["farna__api__routes__admin__CoverageGap"][];
             /** Recent Results */
             recent_results: components["schemas"]["RecentEvalResult"][];
         };
@@ -24730,7 +24730,7 @@ export interface components {
             expires_in_seconds: number;
         };
         /** CoverageGap */
-        modulo__api__routes__admin__CoverageGap: {
+        farna__api__routes__admin__CoverageGap: {
             /** Pipeline Id */
             pipeline_id: string;
             /** Pipeline Name */
@@ -24742,7 +24742,7 @@ export interface components {
          * PurgeResponse
          * @description Response from a manual evidence purge.
          */
-        modulo__api__routes__admin_evidence_retention__PurgeResponse: {
+        farna__api__routes__admin_evidence_retention__PurgeResponse: {
             /** Rows Deleted */
             rows_deleted: number;
             /** Batches */
@@ -24753,7 +24753,7 @@ export interface components {
             max_rows?: number | null;
         };
         /** PurgeResponse */
-        modulo__api__routes__admin_run_retention__PurgeResponse: {
+        farna__api__routes__admin_run_retention__PurgeResponse: {
             /** Purged Runs */
             purged_runs: number;
             /** Purged Checkpoints */
@@ -24762,7 +24762,7 @@ export interface components {
             freed_estimated_bytes: number;
         };
         /** MeResponse */
-        modulo__api__routes__auth__MeResponse: {
+        farna__api__routes__auth__MeResponse: {
             /** Id */
             id: string;
             /** Email */
@@ -24787,7 +24787,7 @@ export interface components {
             must_change_password: boolean;
         };
         /** PublishRequest */
-        modulo__api__routes__composite_templates__PublishRequest: {
+        farna__api__routes__composite_templates__PublishRequest: {
             /**
              * Version
              * @description Override version string, defaults to '1.0.0'
@@ -24795,7 +24795,7 @@ export interface components {
             version?: string | null;
         };
         /** PublishResponse */
-        modulo__api__routes__composite_templates__PublishResponse: {
+        farna__api__routes__composite_templates__PublishResponse: {
             /**
              * Id
              * Format: uuid
@@ -24807,7 +24807,7 @@ export interface components {
             published: boolean;
         };
         /** SchemaCreate */
-        modulo__api__routes__parameter_schemas__SchemaCreate: {
+        farna__api__routes__parameter_schemas__SchemaCreate: {
             /** Name */
             name: string;
             /** Description */
@@ -24816,9 +24816,9 @@ export interface components {
             parameters?: components["schemas"]["ParameterDef"][];
         };
         /** SchemaListResponse */
-        modulo__api__routes__parameter_schemas__SchemaListResponse: {
+        farna__api__routes__parameter_schemas__SchemaListResponse: {
             /** Items */
-            items: components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"][];
+            items: components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"][];
             /** Total */
             total: number;
             /** Page */
@@ -24827,7 +24827,7 @@ export interface components {
             page_size: number;
         };
         /** SchemaResponse */
-        modulo__api__routes__parameter_schemas__SchemaResponse: {
+        farna__api__routes__parameter_schemas__SchemaResponse: {
             /**
              * Id
              * Format: uuid
@@ -24865,7 +24865,7 @@ export interface components {
             account_id: string;
         };
         /** SchemaUpdate */
-        modulo__api__routes__parameter_schemas__SchemaUpdate: {
+        farna__api__routes__parameter_schemas__SchemaUpdate: {
             /** Name */
             name?: string | null;
             /** Description */
@@ -24876,7 +24876,7 @@ export interface components {
             version: number;
         };
         /** PublishRequest */
-        modulo__api__routes__registry__PublishRequest: {
+        farna__api__routes__registry__PublishRequest: {
             /** Author */
             author: string;
             /** Name */
@@ -24898,7 +24898,7 @@ export interface components {
             signing_key_hex: string;
         };
         /** SchemaCreate */
-        modulo__api__routes__schemas__SchemaCreate: {
+        farna__api__routes__schemas__SchemaCreate: {
             /** Name */
             name: string;
             /** Description */
@@ -24911,9 +24911,9 @@ export interface components {
             } | null;
         };
         /** SchemaListResponse */
-        modulo__api__routes__schemas__SchemaListResponse: {
+        farna__api__routes__schemas__SchemaListResponse: {
             /** Items */
-            items: components["schemas"]["modulo__api__routes__schemas__SchemaResponse"][];
+            items: components["schemas"]["farna__api__routes__schemas__SchemaResponse"][];
             /** Total */
             total: number;
             /** Page */
@@ -24922,7 +24922,7 @@ export interface components {
             page_size: number;
         };
         /** SchemaResponse */
-        modulo__api__routes__schemas__SchemaResponse: {
+        farna__api__routes__schemas__SchemaResponse: {
             /**
              * Id
              * Format: uuid
@@ -24965,7 +24965,7 @@ export interface components {
             deprecated_at?: string | null;
         };
         /** SchemaUpdate */
-        modulo__api__routes__schemas__SchemaUpdate: {
+        farna__api__routes__schemas__SchemaUpdate: {
             /** Name */
             name?: string | null;
             /** Description */
@@ -24974,7 +24974,7 @@ export interface components {
             abstract_name?: string | null;
         };
         /** CoverageGap */
-        modulo__api__routes__variants__CoverageGap: {
+        farna__api__routes__variants__CoverageGap: {
             /** Variant */
             variant: {
                 [key: string]: unknown;
@@ -24983,7 +24983,7 @@ export interface components {
             missing_evals: string[];
         };
         /** MeResponse */
-        modulo__api__routes__viewmodel__MeResponse: {
+        farna__api__routes__viewmodel__MeResponse: {
             user: components["schemas"]["UserInfo"];
             org: components["schemas"]["OrganisationInfo"];
             /** Team Memberships */
@@ -25008,7 +25008,7 @@ export interface components {
             must_change_password: boolean;
         };
         /** PublishResponse */
-        modulo__api__schemas__system_maps__PublishResponse: {
+        farna__api__schemas__system_maps__PublishResponse: {
             revision: components["schemas"]["SystemMapRevisionResponse"];
             /** Validation Errors */
             validation_errors?: components["schemas"]["PublishValidationError"][];
@@ -28790,7 +28790,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__auth__MeResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__auth__MeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32592,7 +32592,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaListResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32617,7 +32617,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaCreate"];
+                "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaCreate"];
             };
         };
         responses: {
@@ -32627,7 +32627,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32660,7 +32660,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32687,7 +32687,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaUpdate"];
+                "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaUpdate"];
             };
         };
         responses: {
@@ -32697,7 +32697,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32730,7 +32730,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32763,7 +32763,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__parameter_schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__parameter_schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33487,7 +33487,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaListResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaListResponse"];
                 };
             };
             /** @description Unauthorized */
@@ -33519,7 +33519,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaCreate"];
+                "application/json": components["schemas"]["farna__api__routes__schemas__SchemaCreate"];
             };
         };
         responses: {
@@ -33529,7 +33529,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33593,7 +33593,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33652,7 +33652,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaUpdate"];
+                "application/json": components["schemas"]["farna__api__routes__schemas__SchemaUpdate"];
             };
         };
         responses: {
@@ -33662,7 +33662,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33695,7 +33695,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33732,7 +33732,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__schemas__SchemaResponse"];
                 };
             };
             /** @description Validation Error */
@@ -35111,7 +35111,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__composite_templates__PublishRequest"];
+                "application/json": components["schemas"]["farna__api__routes__composite_templates__PublishRequest"];
             };
         };
         responses: {
@@ -35121,7 +35121,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__composite_templates__PublishResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__composite_templates__PublishResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37458,7 +37458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__viewmodel__MeResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__viewmodel__MeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40381,7 +40381,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__schemas__system_maps__PublishResponse"];
+                    "application/json": components["schemas"]["farna__api__schemas__system_maps__PublishResponse"];
                 };
             };
             /** @description Validation Error */
@@ -41463,7 +41463,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["modulo__api__routes__registry__PublishRequest"];
+                "application/json": components["schemas"]["farna__api__routes__registry__PublishRequest"];
             };
         };
         responses: {
@@ -45642,7 +45642,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__admin_evidence_retention__PurgeResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__admin_evidence_retention__PurgeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -45750,7 +45750,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__admin_run_retention__PurgeResponse"];
+                    "application/json": components["schemas"]["farna__api__routes__admin_run_retention__PurgeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -46761,7 +46761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__variants__CoverageGap"][];
+                    "application/json": components["schemas"]["farna__api__routes__variants__CoverageGap"][];
                 };
             };
             /** @description Validation Error */

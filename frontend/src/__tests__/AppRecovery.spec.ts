@@ -304,7 +304,7 @@ describe('App demo reload guard (FAR-535)', () => {
 // REAL MeResponse shape: renaming or dropping a field backend-side breaks
 // `npm run type-check` here instead of silently reintroducing the
 // `name: undefined` bug at runtime.
-type MeResponse = components['schemas']['modulo__api__routes__auth__MeResponse']
+type MeResponse = components['schemas']['farna__api__routes__auth__MeResponse']
 
 const ME_PAYLOAD: MeResponse = {
   id: 'acc-1',

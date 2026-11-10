@@ -188,7 +188,7 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 
-type Profile = components['schemas']['modulo__api__routes__auth__MeResponse']
+type Profile = components['schemas']['farna__api__routes__auth__MeResponse']
 type MyTeam = components['schemas']['MyTeamResponse']
 type PipelineItem = components['schemas']['PipelineResponse']
 

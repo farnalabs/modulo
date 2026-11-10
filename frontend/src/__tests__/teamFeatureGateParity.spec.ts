@@ -14,9 +14,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(__dirname, '../../../')
-const BACKEND_ROUTES = join(REPO_ROOT, 'backend', 'src', 'modulo', 'api', 'routes')
+const BACKEND_ROUTES = join(REPO_ROOT, 'backend', 'src', 'farna', 'api', 'routes')
 const FRONTEND_SRC = resolve(__dirname, '../')
-const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'modulo', 'core', 'feature_flags.py')
+const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'farna', 'core', 'feature_flags.py')
 
 /**
  * Known acceptable exceptions — backend-only features with no UI surface:

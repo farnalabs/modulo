@@ -104,7 +104,7 @@ PYTHONPATH="$TARGET/Contents/Resources/bundle/backend/src:$TARGET/Contents/Resou
   "$TARGET/Contents/Resources/bundle/runtime/bin/python3" - "$TARGET" "$PLIST" "$DATA_DIR" <<'PY'
 import sys
 from pathlib import Path
-from modulo.launcher.service import render_launchd_plist
+from farna.launcher.service import render_launchd_plist
 app = Path(sys.argv[1])
 plist_path = Path(sys.argv[2])
 data_dir = Path(sys.argv[3])

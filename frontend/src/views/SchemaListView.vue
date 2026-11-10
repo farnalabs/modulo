@@ -275,7 +275,7 @@ import Dialog from 'primevue/dialog'
 import Menu from 'primevue/menu'
 import Select from '../components/shared/AppSelect.vue'
 
-type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse'] & {
+type SchemaItem = components['schemas']['farna__api__routes__schemas__SchemaResponse'] & {
   folder_id?: string | null
 }
 

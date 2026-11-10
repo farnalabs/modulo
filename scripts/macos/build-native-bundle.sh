@@ -149,7 +149,7 @@ PYTHONPATH="${BUNDLE_ROOT}/backend/src:${BUNDLE_ROOT}/backend/.venv/lib/python3.
 from pathlib import Path
 import sys
 
-from modulo.launcher.initdb import postgres_server_argv
+from farna.launcher.initdb import postgres_server_argv
 
 bundle = Path(sys.argv[1])
 pgdata = bundle / "runtime-contract-pgdata"
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
     if (!child) return 70;
     child[0] = python;
     child[1] = "-c";
-    child[2] = "from modulo.cli.main import cli; cli()";
+    child[2] = "from farna.cli.main import cli; cli()";
     for (int i = 1; i < argc; ++i) child[i + 2] = argv[i];
     child[argc + 2] = NULL;
     execv(python, child);
