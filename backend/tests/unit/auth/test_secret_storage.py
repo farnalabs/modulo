@@ -11,9 +11,12 @@ from modulo.auth.secret_storage import (
     DecryptionError,
     InvalidFernetKeyError,
     InvalidSecretTypeError,
+    _is_complete_fernet_token,
+    _read_rls_org_id,
     decode_stored_secret,
     decode_stored_secret_scoped,
     encrypt_stored_secret,
+    is_encrypted_secret,
 )
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -195,37 +198,27 @@ class TestIsEncryptedSecret:
     """The probe replaces the gAAAA-prefix heuristic on classification sites."""
 
     def test_current_key_token_is_encrypted(self) -> None:
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
         assert is_encrypted_secret(token, _FERNET_KEY) is True
         assert is_encrypted_secret(token.encode(), _FERNET_KEY) is True
 
     def test_plaintext_is_not_encrypted(self) -> None:
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         assert is_encrypted_secret("plain-hmac-secret", _FERNET_KEY) is False
         assert is_encrypted_secret(b"plain-bytes", _FERNET_KEY) is False
 
     def test_gaaaa_prefixed_plaintext_is_not_encrypted(self) -> None:
         """The prefix heuristic's false positive: a plaintext value beginning
         ``gAAAA`` must classify as PLAINTEXT so the write path encrypts it."""
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         tricky = "gAAAA-this-is-really-just-a-plaintext-secret"
         assert is_encrypted_secret(tricky, _FERNET_KEY) is False
 
     def test_old_key_token_recognised_only_with_old_key(self) -> None:
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         old_key = Fernet.generate_key().decode()
         old_token = Fernet(old_key.encode()).encrypt(b"legacy").decode()
         assert is_encrypted_secret(old_token, _FERNET_KEY, old_key) is True
         assert is_encrypted_secret(old_token, _FERNET_KEY) is False
 
     def test_non_str_non_bytes_and_empty_are_not_encrypted(self) -> None:
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         assert is_encrypted_secret(None, _FERNET_KEY) is False
         assert is_encrypted_secret(123, _FERNET_KEY) is False
         assert is_encrypted_secret("", _FERNET_KEY) is False
@@ -234,8 +227,6 @@ class TestIsEncryptedSecret:
         """An invalid configured key classifies as "not encrypted" — the
         subsequent encrypt attempt fails closed with InvalidFernetKeyError
         instead of the probe silently mis-classifying."""
-        from modulo.auth.secret_storage import is_encrypted_secret
-
         token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
         assert is_encrypted_secret(token, "a" * 32) is False
 
@@ -250,23 +241,17 @@ class TestIsCompleteFernetToken:
     genuine token no key decrypts (fail loud)."""
 
     def test_genuine_token_is_complete(self) -> None:
-        from modulo.auth.secret_storage import _is_complete_fernet_token
-
         token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
         assert _is_complete_fernet_token(token) is True
 
     def test_short_gaaaa_prefixed_plaintext_is_not_complete(self) -> None:
         """A ``gAAAA``-prefixed plaintext too short to be a token is legacy
         plaintext — skipped, never fed to the decryptor."""
-        from modulo.auth.secret_storage import _is_complete_fernet_token
-
         assert _is_complete_fernet_token("gAAAA-short-plaintext") is False
 
     def test_non_str_and_empty_are_not_complete(self) -> None:
         """Non-string and empty inputs short-circuit to ``False`` before the
         base64 decode — never a crash, never a false positive."""
-        from modulo.auth.secret_storage import _is_complete_fernet_token
-
         assert _is_complete_fernet_token(None) is False
         assert _is_complete_fernet_token(b"bytes-not-str") is False
         assert _is_complete_fernet_token(123) is False
@@ -279,8 +264,6 @@ async def test_read_rls_org_id_postgres_ignores_populated_info() -> None:
     ``set_rls_org`` never writes ``session.info`` on Postgres, so a populated
     (stale/foreign) value must not resolve the decrypt against the wrong tenant.
     """
-    from modulo.auth.secret_storage import _read_rls_org_id
-
     foreign = uuid.uuid4()
     session = _make_session(dialect="postgresql", info={"org_id": str(foreign)}, current_setting=str(_ORG_ID))
 
@@ -296,8 +279,6 @@ async def test_read_rls_org_id_no_readable_dialect_keeps_info_path() -> None:
     regression that treated this shape as Postgres (GUC-first) or dropped the
     generic path would resolve the GUC value instead and fail here.
     """
-    from modulo.auth.secret_storage import _read_rls_org_id
-
     guc_org = uuid.uuid4()
     session = AsyncMock(spec=["execute", "info"])
     session.info = {"org_id": str(_ORG_ID)}

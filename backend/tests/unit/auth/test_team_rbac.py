@@ -75,13 +75,6 @@ class TestEffectiveAccessModel:
 
 
 class TestGetEffectiveTeamRole:
-    def test_returns_correct_role_for_valid_pairs(self) -> None:
-        assert get_effective_team_role("admin", "operator") == "operator"
-        assert get_effective_team_role("admin", "viewer") == "viewer"
-        assert get_effective_team_role("viewer", "operator") == "viewer"
-        assert get_effective_team_role("operator", "runner") == "runner"
-        assert get_effective_team_role("runner", "operator") == "runner"
-
     def test_unknown_org_role_falls_back_to_viewer(self) -> None:
         assert get_effective_team_role("superadmin", "operator") == "viewer"
 

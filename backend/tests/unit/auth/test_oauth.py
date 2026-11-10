@@ -257,7 +257,7 @@ class TestValidateClientSecret:
 
 @pytest.mark.asyncio
 class TestAuthorizationCode:
-    async def test_create_code_returns_string(self) -> None:
+    async def test_create_code_returns_valid_authorization_code(self) -> None:
         session = AsyncMock()
         session.add = MagicMock()
         session.flush = AsyncMock()
@@ -272,7 +272,9 @@ class TestAuthorizationCode:
             code_challenge=_CODE_CHALLENGE,
         )
         assert isinstance(code, str)
-        assert len(code) > 0
+        # _generate_code uses secrets.token_urlsafe(64) -> ~86 chars
+        assert len(code) >= 80
+        assert all(c.isalnum() or c in "-_" for c in code)
         created = session.add.call_args.args[0]
         assert created.account_id == _ACCOUNT_ID
         assert created.code_challenge == _CODE_CHALLENGE

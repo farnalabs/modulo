@@ -80,7 +80,9 @@ class TestTriState:
         assert exc.value.reason == "not_granted"
 
     def test_assert_grant_none_is_noop(self) -> None:
-        assert_grant(None, "run.trigger")
+        """A key with no grant set (None) is legacy/unrestricted — asserting a
+        grant must return cleanly rather than raise."""
+        assert assert_grant(None, "run.trigger") is None
 
 
 # ── registry-level exclusion flag ───────────────────────────────────────────
