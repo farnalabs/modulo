@@ -381,3 +381,5 @@ minimumReleaseAgeExclude:
   - '@rollup/rollup-win32-x64-msvc@4.68.0'
   - '@tanstack/query-core@5.107.1'
   - '@tanstack/vue-query@5.107.1'
+  - '@grafana/faro-core@2.14.0'
+  - '@grafana/faro-web-sdk@2.14.0'
