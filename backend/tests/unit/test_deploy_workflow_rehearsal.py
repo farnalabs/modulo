@@ -1166,7 +1166,7 @@ def _cut_wait_budget_seconds(script: str) -> int:
 
 
 def _schema_wait_budget_seconds(script: str) -> int:
-    match = re.search(r"SCHEMA_GATE_MAX_WAIT_SECONDS:-(\d+)", script)
+    match = re.search(r'SCHEMA_GATE_MAX_WAIT_SECONDS", "(\d+)"', script)
     assert match is not None, "schema script must define a default wait budget"
     return int(match.group(1))
 
@@ -1247,6 +1247,8 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     log = tmp_path / "commands.log"
     real_git = shutil.which("git")
     assert real_git is not None
+    real_python3 = shutil.which("python3")
+    assert real_python3 is not None
     _write_executable(
         bin_dir / "git",
         f"""#!/usr/bin/env bash
@@ -1260,6 +1262,11 @@ exec {shlex.quote(real_git)} \"$@\"
         f"""#!/usr/bin/env bash
 set -e
 printf 'python3 %s\\n' \"$*\" >> {shlex.quote(str(log))}
+if [ \"$1\" = \"-\" ]; then
+  # Production runs `python3 - "$TARGET_SHA" <<'PY'` (stdin-script execution).
+  # Delegate to the real interpreter unchanged so the released code actually runs.
+  exec {shlex.quote(real_python3)} \"$@\"
+fi
 if [ \"$1\" = \"-c\" ]; then
   grep -q '0.2.0' backend/pyproject.toml && printf '0.2.0\\n' || printf '0.1.0\\n'
   exit 0
@@ -1643,8 +1650,12 @@ set -e
 printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
 printf '%s\\n' \"${{GH_TOKEN:-}}\" >> {shlex.quote(str(log) + ".tokens")}
 case \"$*\" in
-  *'run list'*) printf '123\\ncompleted\\nsuccess\\n'; exit 0 ;;
-  *'actions/runs/123/jobs'*) printf 'success\\n'; exit 0 ;;
+  *'matching-refs'*) printf '[]\\n'; exit 0 ;;
+  *'run list'*) printf '%s\\n' '[{{"databaseId":123,"status":"completed","conclusion":"success"}}]'; exit 0 ;;
+  *'/actions/runs/123/jobs'*)
+    printf '%s\\n' '{{"jobs":[{{"name":"Schema freshness","status":"completed","conclusion":"success"}}]}}'
+    exit 0
+    ;;
   *) printf 'unexpected gh call: %s\\n' \"$*\" >&2; exit 1 ;;
 esac
 """,
@@ -1663,68 +1674,121 @@ _SCHEMA_GATE_STEP_NAME = "Assert schema-freshness gate green on exact cut/recut 
 _SCHEMA_TARGET_SHA = "a" * 40
 
 
+def _schema_gate_python() -> str:
+    """The executable Python heredoc nested in the release schema-gate step."""
+    script = _release_job_run(_SCHEMA_GATE_STEP_NAME)
+    start = script.index("<<'PY'")
+    body = script[start:].split("\n", 1)[1]
+    return body[: body.index("\nPY")]
+
+
+def _green_schema_job() -> dict[str, Any]:
+    return {"name": "Schema freshness", "status": "completed", "conclusion": "success"}
+
+
+def _jobs_payload(*jobs: dict[str, Any]) -> str:
+    return json.dumps({"jobs": list(jobs)})
+
+
 def _schema_gate_harness(
     tmp_path: Path,
     *,
     run_lookups: list[tuple[str, int]],
-    jobs_conclusion: str = "success",
+    jobs_lookups: list[tuple[str, int]] | None = None,
+    existing_tags: list[str] | None = None,
+    create_returncode: int = 0,
 ) -> tuple[dict[str, str], Path]:
     """Run the schema-gate step against a stubbed ``gh``.
 
     ``run_lookups`` is the raw stdout payload and exit code of each successive
-    ``gh run list`` call; once the samples run out the last one repeats. The
-    poll budget is set to the number of samples (interval one second), and
-    ``sleep`` is stubbed out, so the loop advances on the stub's own state per
-    invocation rather than on wall-clock time.
+    ``gh run list`` call; the last sample repeats once the list is exhausted.
+    ``jobs_lookups`` does the same for the per-run jobs lookup. ``sleep`` is
+    stubbed out, so the loop advances on the stub's own state per invocation
+    rather than on wall-clock time.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "gh.log"
-    counter = tmp_path / "gh-count"
-    samples = tmp_path / "samples"
-    samples.mkdir()
-    for index, (payload, returncode) in enumerate(run_lookups):
-        (samples / f"{index}.out").write_text(payload, encoding="utf-8")
-        (samples / f"{index}.rc").write_text(str(returncode), encoding="utf-8")
-    sample_count = len(run_lookups)
+
+    def _samples(name: str, samples: list[tuple[str, int]]) -> tuple[Path, int]:
+        directory = tmp_path / name
+        directory.mkdir()
+        for index, (payload, returncode) in enumerate(samples):
+            (directory / f"{index}.out").write_text(payload, encoding="utf-8")
+            (directory / f"{index}.rc").write_text(str(returncode), encoding="utf-8")
+        return directory, len(samples)
+
+    run_dir, run_count = _samples("runs", run_lookups)
+    jobs = jobs_lookups if jobs_lookups is not None else [(_jobs_payload(_green_schema_job()), 0)]
+    jobs_dir, jobs_count = _samples("jobs", jobs)
+    tags_file = tmp_path / "tags.json"
+    tags_file.write_text(
+        json.dumps([[{"ref": "refs/tags/" + tag} for tag in (existing_tags or [])]]),
+        encoding="utf-8",
+    )
     _write_executable(
         bin_dir / "gh",
         f"""#!/usr/bin/env bash
 set -u
 printf 'gh %s\\n' "$*" >> {shlex.quote(str(log))}
 case "$*" in
-  *'run list'*)
+  *'matching-refs'*)
+    cat {shlex.quote(str(tags_file))}
+    exit 0
+    ;;
+  *'-X POST'*)
+    exit {create_returncode}
+    ;;
+  *'-X DELETE'*)
+    exit 0
+    ;;
+  *'workflow run'*)
+    exit 0
+    ;;
+  *'/actions/runs/'*'/jobs'*)
+    counter={shlex.quote(str(tmp_path / "jobs-count"))}
     count=0
-    if [ -f {shlex.quote(str(counter))} ]; then count="$(cat {shlex.quote(str(counter))})"; fi
+    if [ -f "$counter" ]; then count="$(cat "$counter")"; fi
     count=$((count + 1))
-    printf '%s' "$count" > {shlex.quote(str(counter))}
+    printf '%s' "$count" > "$counter"
     index=$((count - 1))
-    if [ "$index" -ge {sample_count} ]; then index=$(({sample_count} - 1)); fi
-    cat {shlex.quote(str(samples))}/"$index.out"
-    rc="$(cat {shlex.quote(str(samples))}/"$index.rc")"
+    if [ "$index" -ge {jobs_count} ]; then index=$(({jobs_count} - 1)); fi
+    cat {shlex.quote(str(jobs_dir))}/"$index.out"
+    rc="$(cat {shlex.quote(str(jobs_dir))}/"$index.rc")"
+    if [ "$rc" -ne 0 ]; then printf 'gh: jobs request failed\\n' >&2; fi
+    exit "$rc"
+    ;;
+  *'run list'*)
+    counter={shlex.quote(str(tmp_path / "runs-count"))}
+    count=0
+    if [ -f "$counter" ]; then count="$(cat "$counter")"; fi
+    count=$((count + 1))
+    printf '%s' "$count" > "$counter"
+    index=$((count - 1))
+    if [ "$index" -ge {run_count} ]; then index=$(({run_count} - 1)); fi
+    cat {shlex.quote(str(run_dir))}/"$index.out"
+    rc="$(cat {shlex.quote(str(run_dir))}/"$index.rc")"
     if [ "$rc" -ne 0 ]; then printf 'gh: request failed (sample %s)\\n' "$index" >&2; fi
     exit "$rc"
     ;;
-  *'actions/runs/'*'/jobs'*) printf '%s\\n' {shlex.quote(jobs_conclusion)}; exit 0 ;;
   *) printf 'unexpected gh command: %s\\n' "$*" >&2; exit 1 ;;
 esac
 """,
     )
-    _write_executable(
-        bin_dir / "sleep",
-        f"""#!/usr/bin/env bash
-printf 'sleep %s\\n' "$*" >> {shlex.quote(str(log))}
-""",
-    )
+    # NOTE: the step now sleeps via Python's own ``time.sleep`` (the proof is a
+    # Python heredoc, not a bash loop), so a stub ``sleep`` binary on PATH is
+    # never consulted. The poll interval is kept at one second and the wait
+    # budget is the sample count, so each test waits only a couple of seconds.
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "GITHUB_REPOSITORY": "example/repo",
         "GH_TOKEN": "test-token",
+        "GITHUB_RUN_ID": "4242",
         "MODE": "cut",
         "CUT_SHA": _SCHEMA_TARGET_SHA,
         "SCHEMA_GATE_POLL_INTERVAL_SECONDS": "1",
-        "SCHEMA_GATE_MAX_WAIT_SECONDS": str(sample_count),
+        "SCHEMA_GATE_MAX_WAIT_SECONDS": str(run_count),
     }
     return env, log
 
@@ -1733,75 +1797,156 @@ def _run_schema_gate(tmp_path: Path, env: dict[str, str]) -> subprocess.Complete
     return _run_bash(_release_job_run(_SCHEMA_GATE_STEP_NAME), cwd=tmp_path, env=env)
 
 
+def _run_payload(*runs: dict[str, Any]) -> str:
+    return json.dumps(list(runs))
+
+
 @pytest.mark.posix_only
 def test_schema_gate_waits_for_the_exact_commit_run_to_appear(tmp_path: Path) -> None:
     env, log = _schema_gate_harness(
         tmp_path,
-        run_lookups=[("\n\n", 0), ("123\nin_progress\n\n", 0), ("123\ncompleted\nsuccess\n", 0)],
+        run_lookups=[
+            ("[]", 0),
+            (_run_payload({"databaseId": 123, "status": "in_progress", "conclusion": None}), 0),
+            (_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0),
+        ],
+        jobs_lookups=[
+            (_jobs_payload({"name": "Schema freshness", "status": "in_progress", "conclusion": None}), 0),
+            (_jobs_payload(_green_schema_job()), 0),
+        ],
     )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
 
     assert result.returncode == 0, output
-    assert "No CI workflow run for exact target" in output
-    assert "CI run 123 is in_progress (attempt 2/3" in output
+    assert "Dispatched ci.yml on temporary tag" in output
+    assert "a Schema freshness job is still in progress" in output
     assert f"Schema freshness passed on exact target {_SCHEMA_TARGET_SHA}" in output
     commands = log.read_text(encoding="utf-8")
     assert commands.count("run list") == 3
-    # Two waits between the three attempts, then the gate is asserted.
-    assert commands.count("sleep 1") == 2
+    # Two bounded waits between the three attempts, then the gate is asserted.
+    assert output.count("Waiting for schema freshness on") == 2
+    assert "attempt 2/3" in output
 
 
 @pytest.mark.posix_only
 def test_schema_gate_aborts_when_the_exact_commit_run_fails(tmp_path: Path) -> None:
-    env, log = _schema_gate_harness(tmp_path, run_lookups=[("123\ncompleted\nfailure\n", 0)])
-    result = _run_schema_gate(tmp_path, env)
-    output = result.stdout + result.stderr
-
-    assert result.returncode != 0
-    assert "concluded 'failure', not success" in output
-    assert _SCHEMA_TARGET_SHA in output
-    # The failing run must never be probed for a green job.
-    assert "actions/runs/123/jobs" not in log.read_text(encoding="utf-8")
-
-
-@pytest.mark.posix_only
-@pytest.mark.parametrize("jobs_conclusion", ["cancelled", ""])
-def test_schema_gate_aborts_when_the_schema_freshness_job_did_not_succeed(tmp_path: Path, jobs_conclusion: str) -> None:
-    env, _log = _schema_gate_harness(
-        tmp_path, run_lookups=[("123\ncompleted\nsuccess\n", 0)], jobs_conclusion=jobs_conclusion
+    # A green Schema freshness job inside a run that concluded red does not
+    # prove the commit's CI passed: the whole run must be a success.
+    env, log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[(_run_payload({"databaseId": 123, "status": "completed", "conclusion": "failure"}), 0)],
     )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    expected = jobs_conclusion or "missing"
-    assert f"Schema freshness was '{expected}'" in output
+    assert "CI run 123 concluded 'failure', not success" in output
     assert _SCHEMA_TARGET_SHA in output
+    # The failing run must never be turned into a verification tag.
+    assert "-X POST" not in log.read_text(encoding="utf-8")
 
 
 @pytest.mark.posix_only
-def test_schema_gate_fails_closed_and_names_the_sha_when_no_run_appears(tmp_path: Path) -> None:
-    env, log = _schema_gate_harness(tmp_path, run_lookups=[("\n\n", 0)] * 3)
+@pytest.mark.parametrize("jobs_conclusion", ["failure", "skipped"])
+def test_schema_gate_aborts_when_the_schema_freshness_job_did_not_succeed(tmp_path: Path, jobs_conclusion: str) -> None:
+    env, _log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[(_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0)],
+        jobs_lookups=[
+            (_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": jobs_conclusion}), 0)
+        ],
+    )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert f"No CI workflow run appeared for exact target {_SCHEMA_TARGET_SHA}" in output
+    assert f"Schema freshness was '{jobs_conclusion}'" in output
+    assert _SCHEMA_TARGET_SHA in output
+
+
+@pytest.mark.posix_only
+def test_schema_gate_treats_an_inconclusive_run_as_no_evidence(tmp_path: Path) -> None:
+    # A completed run whose Schema freshness job was cancelled can neither prove
+    # nor disprove the gate: it must trigger a fresh dispatch rather than abort
+    # as if the gate had failed.
+    env, log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[(_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0)],
+        jobs_lookups=[
+            (_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": "cancelled"}), 0)
+        ],
+    )
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert "Schema freshness was 'cancelled'" not in output
+    assert "Dispatched ci.yml on temporary tag" in output
+    assert "Timed out after" in output
+    assert "-X POST" in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_schema_gate_does_not_read_a_run_without_the_schema_job_as_evidence(tmp_path: Path) -> None:
+    # The observed failure shape: the commit's only ci.yml run is a re-run of one
+    # unrelated failed job, so it has no Schema freshness job at all. That run is
+    # not evidence the gate failed - the proof must dispatch a real run instead.
+    env, log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[
+            (_run_payload({"databaseId": 9, "status": "completed", "conclusion": "failure"}), 0),
+            (_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0),
+        ],
+        jobs_lookups=[
+            (
+                _jobs_payload(
+                    {
+                        "name": "Trigger Branch Fixer on main CI failure",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ),
+                0,
+            ),
+            (_jobs_payload(_green_schema_job()), 0),
+        ],
+    )
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "Dispatched ci.yml on temporary tag" in output
+    assert f"Schema freshness passed on exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "concluded" not in output
+    assert "-X POST" in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.posix_only
+def test_schema_gate_fails_closed_and_names_the_sha_when_no_run_appears(tmp_path: Path) -> None:
+    env, log = _schema_gate_harness(tmp_path, run_lookups=[("[]", 0)] * 3)
+    result = _run_schema_gate(tmp_path, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert f"Timed out after 3s waiting for a green Schema freshness job on exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "no CI run proves the Schema freshness gate" in output
     assert "refusing to tag" in output
-    assert "minute(s)" in output
     assert log.read_text(encoding="utf-8").count("run list") == 3
 
 
 @pytest.mark.posix_only
 def test_schema_gate_fails_closed_when_the_run_never_completes(tmp_path: Path) -> None:
-    env, _log = _schema_gate_harness(tmp_path, run_lookups=[("123\nin_progress\n\n", 0)] * 2)
+    env, _log = _schema_gate_harness(
+        tmp_path,
+        run_lookups=[(_run_payload({"databaseId": 123, "status": "in_progress", "conclusion": None}), 0)] * 2,
+        jobs_lookups=[(_jobs_payload({"name": "Schema freshness", "status": "in_progress", "conclusion": None}), 0)],
+    )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
     assert "Timed out after" in output
-    assert f"waiting for CI run 123 on exact target {_SCHEMA_TARGET_SHA}" in output
+    assert "a Schema freshness job is still in progress" in output
     assert "refusing to tag" in output
 
 
@@ -1809,7 +1954,10 @@ def test_schema_gate_fails_closed_when_the_run_never_completes(tmp_path: Path) -
 def test_schema_gate_retries_transient_gh_errors(tmp_path: Path) -> None:
     env, log = _schema_gate_harness(
         tmp_path,
-        run_lookups=[("", 1), ("123\ncompleted\nsuccess\n", 0)],
+        run_lookups=[
+            ("", 1),
+            (_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0),
+        ],
     )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
@@ -1835,22 +1983,27 @@ def test_schema_gate_fails_closed_when_gh_never_answers(tmp_path: Path) -> None:
 def test_schema_gate_polls_instead_of_sampling_once() -> None:
     script = _release_job_run(_SCHEMA_GATE_STEP_NAME)
 
-    assert "for ((poll=1; poll<=MAX_POLLS; poll++)); do" in script
-    assert "MAX_POLLS=$(( (MAX_WAIT_SECONDS + POLL_INTERVAL_SECONDS - 1) / POLL_INTERVAL_SECONDS ))" in script
-    assert "SCHEMA_GATE_MAX_WAIT_SECONDS:-" in script
-    assert "SCHEMA_GATE_POLL_INTERVAL_SECONDS:-" in script
+    assert "while True:" in script
+    assert "time.sleep(min(poll_seconds, remaining))" in script
+    assert "SCHEMA_GATE_MAX_WAIT_SECONDS" in script
+    assert "SCHEMA_GATE_POLL_INTERVAL_SECONDS" in script
+    # The loop is bounded by attempt count as well as wall-clock, so a stubbed
+    # clock cannot spin forever.
+    assert "max_attempts" in script
     # The one-shot abort this change removes: a single empty lookup used to end the cut.
     assert "No CI workflow run found for exact target" not in script
-    assert "No CI workflow run appeared for exact target" in script
 
 
 def test_schema_gate_wait_budget_fits_the_release_job_timeout() -> None:
     script = _release_job_run(_SCHEMA_GATE_STEP_NAME)
     budget = _schema_wait_budget_seconds(script)
-    release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
 
     assert budget == 60 * 60
-    assert budget <= release_job["timeout-minutes"] * 60
+    # The proof runs inside the release job AND in the dedicated schema-gate
+    # job; both must leave room for the bounded wait.
+    assert budget <= jobs["release"]["timeout-minutes"] * 60
+    assert budget <= jobs["schema-gate"]["timeout-minutes"] * 60
 
 
 @pytest.mark.posix_only
