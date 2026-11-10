@@ -89,8 +89,12 @@ describe('LogoMark', () => {
   it('uses the default size and renders its opaque background', () => {
     const wrapper = mount(LogoMark)
     const svg = wrapper.get('svg')
-    expect(svg.attributes('width')).toBe('40')
+    // The mark's brand viewBox is 240 x 183.72: `size` is the HEIGHT and the
+    // width is derived from that aspect ratio (40 * 240/183.72 = 52.25).
     expect(svg.attributes('height')).toBe('40')
+    expect(svg.attributes('width')).toBe('52.25')
+    expect(svg.attributes('viewBox')).toBe('0 0 240 183.72')
+    expect(svg.attributes('aria-label')).toBe('Farna Control logo')
     expect(svg.find('rect').exists()).toBe(true)
     expect(svg.attributes('role')).toBe('img')
   })
@@ -98,8 +102,8 @@ describe('LogoMark', () => {
   it('supports a custom size and transparent rendering', () => {
     const wrapper = mount(LogoMark, { props: { size: 72, transparent: true } })
     const svg = wrapper.get('svg')
-    expect(svg.attributes('width')).toBe('72')
     expect(svg.attributes('height')).toBe('72')
+    expect(svg.attributes('width')).toBe('94.06')
     expect(svg.find('rect').exists()).toBe(false)
     expect(svg.findAll('polygon')).toHaveLength(2)
   })
