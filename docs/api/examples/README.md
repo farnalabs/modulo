@@ -1,10 +1,10 @@
-# Modulo API Client Examples
+# Farna Control API Client Examples
 
-Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, including the cookie-based login, refresh, and logout flow.
+Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Farna Control API operations, including the cookie-based login, refresh, and logout flow.
 
 ## Prerequisites
 
-- A running Modulo instance (default: `http://localhost:8000`)
+- A running Farna Control instance (default: `http://localhost:8000`)
 - An active user account (`MODULO_EMAIL` / `MODULO_PASSWORD`)
 - Python 3 with `httpx` for the Python examples, Node.js for the JavaScript
   examples, and `bash` plus `jq` for the curl examples (the shell scripts use
@@ -114,7 +114,7 @@ bash library/curl.sh
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODULO_URL` | `http://localhost:8000` | Base URL of the Modulo API server |
+| `MODULO_URL` | `http://localhost:8000` | Base URL of the Farna Control API server |
 | `MODULO_EMAIL` | _(required)_ | Email for authentication |
 | `MODULO_PASSWORD` | _(required)_ | Password for authentication |
 | `MODULO_POLL_INTERVAL` | `2` | Seconds between run status polls (`full-workflow.py`) |

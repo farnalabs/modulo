@@ -59,7 +59,7 @@ status: covered
 # Visual Pipeline Editor and Pipeline Graph
 
 Pipelines are the visual, composable graph of agent / manual / approval / router nodes
-that Modulo executes, authored through `/pipelines/:id/editor`, `/pipelines`,
+that Farna Control executes, authored through `/pipelines/:id/editor`, `/pipelines`,
 `/library/:id/create-pipeline` and the composite editor. `api/routes/pipelines.py` owns
 pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-versioning` /
 `-diff-rollback` hang off this surface), and execution semantics are pinned by

@@ -1,6 +1,6 @@
 # Public Launch Checklist
 
-Production deployment readiness checklist for the Modulo Alpha public launch. Each item must be verified before marking the launch as complete.
+Production deployment readiness checklist for the Farna Control Alpha public launch. Each item must be verified before marking the launch as complete.
 
 ---
 
@@ -23,9 +23,9 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+| `TAG` | Farna Control image version (required, no default) | `v0.4.0` |
 
-- [ ] **`install.sh`** is reachable at the documented native-install URL - `https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh`
+- [ ] **`install.sh`** is reachable at the documented native-install URL - `https://raw.githubusercontent.com/farnalabs/farna-control/main/scripts/install.sh`
   - A short `modulo.run` URL for it does not exist yet (the old one 404s); do not advertise any short URL until it actually serves the script
 - [ ] **DNS** is configured for the target domain
   - A/AAAA record or CNAME to the reverse proxy or load balancer
@@ -51,7 +51,7 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
 - [ ] `CORS_ORIGINS` lists exact production origins, with no wildcards and no trailing slashes
 - [ ] `MODULO_LOG_LEVEL` is set to `INFO` (not `DEBUG`)
 - [ ] `MODULO_TELEMETRY_ENABLED` is set appropriately for data residency requirements
-- [ ] `MODULO_USERS` contains strong plaintext seed passwords and is **not** committed to git; Modulo hashes them during seeding
+- [ ] `MODULO_USERS` contains strong plaintext seed passwords and is **not** committed to git; Farna Control hashes them during seeding
 
 ---
 

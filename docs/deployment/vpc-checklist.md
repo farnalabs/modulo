@@ -1,6 +1,6 @@
 # VPC-Only Deployment Verification Checklist
 
-> Use this checklist when deploying Modulo in a VPC with no public internet
+> Use this checklist when deploying Farna Control in a VPC with no public internet
 > access. Each item must be verified before marking the deployment as
 > compliant with data residency requirements (principle:
 > `docs/core-principles.md` §9 "Self-hosted, no telemetry by default";
@@ -67,12 +67,12 @@
   - the shipped `deploy/compose/docker-compose.prod.yml` does **not** satisfy this out of
     the box: it pins `ghcr.io/farnalabs/modulo:${TAG:?TAG is required - set the Modulo version you intend to run}`, `postgres:16-alpine` and
     `redis:8-alpine`. The last two are Docker Hub official images, so an air-gapped or
-    egress-restricted VPC cannot pull them. The Modulo image now **requires** `TAG` to be
+    egress-restricted VPC cannot pull them. The Farna Control image now **requires** `TAG` to be
     set (no default), so the compose file will refuse to start without it.
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml config | grep image`
   - expected **baseline**: the verify command fails with "TAG is required" until `TAG` is set in the environment
   - expected **compliant**: after setting `TAG=<version>`, every image resolves to an internal registry URL, which means
-    mirroring all three into it (the Modulo image via the `${TAG}` variable, Postgres and
+    mirroring all three into it (the Farna Control image via the `${TAG}` variable, Postgres and
     Redis by mirroring the official images or pointing those service blocks at your own
     internal tags) before running the check again
   - note that `backend/tests/architecture/test_prod_compose_env_contract.py` guards the
@@ -119,8 +119,8 @@
 
 ## Prior Art
 
-Modulo's multi-VPC network design follows the VPC segmentation and IP address
+Farna Control's multi-VPC network design follows the VPC segmentation and IP address
 planning guidance in [Building a Scalable and Secure Multi-VPC AWS Network
 Infrastructure](https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html).
 The default-deny egress posture in §5 (no implicit trust of external networks)
-is Modulo's own design choice, not a whitepaper recommendation.
+is Farna Control's own design choice, not a whitepaper recommendation.

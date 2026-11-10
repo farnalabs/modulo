@@ -20,7 +20,7 @@ status: covered
 
 # JWT Auth
 
-Stateless JWT authentication for the Modulo API: access / refresh token issuance,
+Stateless JWT authentication for the Farna Control API: access / refresh token issuance,
 principal decoding with tenant context, and purpose-scoped compact tokens
 (WebSocket, claim, refresh). Consumed by `feat-teams-org-entity` and every
 authenticated API route through `auth/dependencies.py`.
@@ -34,7 +34,7 @@ authenticated API route through `auth/dependencies.py`.
       `purpose` claim only when `allowed_purposes` is supplied; returns an
       `AuthenticatedPrincipal` (carrying the `is_system_admin` flag) and raises on
       wrong key, expired token, malformed/empty `sub`, missing or non-string
-      account id, or a token used outside its allowed purpose. Modulo's own
+      account id, or a token used outside its allowed purpose. Farna Control's own
       tokens carry no `iss` claim, so no issuer check is performed
 - [x] `none` algorithm is rejected and only allowlisted signing algorithms pass
 - [x] Refresh tokens carry a `refresh` purpose and issue a new access token via

@@ -1,6 +1,6 @@
 # Architecture Guide
 
-Modulo is a self-hosted Delivery Governance Platform: govern the software development lifecycle as AI and automation take on more of the work. Its operating loop is **record → evaluate → control → improve**: capture automated work, assess outputs and evidence, control progression through gates and human decisions, and improve the delivery system from observed results. The current implementation demonstrates this through governed, repeatable AI-assisted software delivery pipelines; its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. Issue-to-PR is one governed workflow, not the whole product. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
+Farna Control is a self-hosted Delivery Governance Platform: govern the software development lifecycle as AI and automation take on more of the work. Its operating loop is **record → evaluate → control → improve**: capture automated work, assess outputs and evidence, control progression through gates and human decisions, and improve the delivery system from observed results. The current implementation demonstrates this through governed, repeatable AI-assisted software delivery pipelines; its pipeline engine applies graph engineering to compose agents, connectors, gates, and humans into an explicit graph. Issue-to-PR is one governed workflow, not the whole product. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
 
 ## System overview
 
@@ -64,7 +64,7 @@ Modulo is a self-hosted Delivery Governance Platform: govern the software develo
 | **Database** | PostgreSQL 16 | Primary data store |
 | **Cache/queue** | Redis 8 | SAQ broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
-| **Orchestration** | Docker Compose + Fly.io | Fly.io deployment path for the Modulo app and staging infrastructure; self-hosted deployments use Docker Compose or the native bundle |
+| **Orchestration** | Docker Compose + Fly.io | Fly.io deployment path for the Farna Control app and staging infrastructure; self-hosted deployments use Docker Compose or the native bundle |
 
 ## Key Components
 
@@ -252,7 +252,7 @@ There are 41 concrete connectors; the `ConnectorType` enum has 43 members, inclu
 
 #### SSRF-safe Outbound Egress Guard
 
-The `ssrf` module (`backend/src/modulo/core/ssrf.py`) provides the shared SSRF (Server-Side Request Forgery) protection for every outbound network hop in Modulo. It is used by notification endpoints, SSO test connections, observability test paths, error forwarders, every `base_url`-bearing connector, and OpenAI-compatible model backends.
+The `ssrf` module (`backend/src/modulo/core/ssrf.py`) provides the shared SSRF (Server-Side Request Forgery) protection for every outbound network hop in Farna Control. It is used by notification endpoints, SSO test connections, observability test paths, error forwarders, every `base_url`-bearing connector, and OpenAI-compatible model backends.
 
 **Threat Model**
 - Blocks private/link-local/cloud-metadata/CGNAT ranges via DNS resolution
@@ -306,7 +306,7 @@ The baseline (ceiling) for each integration type is defined in a static map in `
 
 Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.
 
-Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a Runner agent's model credentials will bind as per-agent env vars at dispatch, so no standing Modulo credentials enter the workspace (pending D6; today's dispatch injects standing host credentials).
+Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a Runner agent's model credentials will bind as per-agent env vars at dispatch, so no standing Farna Control credentials enter the workspace (pending D6; today's dispatch injects standing host credentials).
 
 | Provider | Status |
 |----------|--------|
@@ -348,7 +348,7 @@ Immutable event recording for all state-changing actions. Written in alpha; view
 
 ### Compliance Control Mapping (`modulo/compliance/`)
 
-Maps Modulo's controls and evidence to the frameworks buyers actually test - SOC 2 Trust Services Criteria (CC6, CC7, CC8 plus the evidence layer), ISO/IEC 42001 clauses touching change approval, oversight and traceability, and the EU AI Act obligations that apply to a system changing software under human oversight. The mapping content is versioned YAML shipped in the product (`backend/src/modulo/compliance/mappings/`, `pack_version` + a deterministic content hash), not a website document, so it moves with the release it describes. Coverage is attributed per row and per framework (`satisfied` / `supported` / `customer-responsibility` / `gap`) and every row states the provenance of its evidence (`observed` / `derived` / `customer-supplied`); the loader rejects a pack that claims everything, presents a customer control as Modulo's, or drops a required SOC 2 clause.
+Maps Farna Control's controls and evidence to the frameworks buyers actually test - SOC 2 Trust Services Criteria (CC6, CC7, CC8 plus the evidence layer), ISO/IEC 42001 clauses touching change approval, oversight and traceability, and the EU AI Act obligations that apply to a system changing software under human oversight. The mapping content is versioned YAML shipped in the product (`backend/src/modulo/compliance/mappings/`, `pack_version` + a deterministic content hash), not a website document, so it moves with the release it describes. Coverage is attributed per row and per framework (`satisfied` / `supported` / `customer-responsibility` / `gap`) and every row states the provenance of its evidence (`observed` / `derived` / `customer-supplied`); the loader rejects a pack that claims everything, presents a customer control as Farna Control's, or drops a required SOC 2 clause.
 
 `GET /api/v1/compliance/evidence-index` (permission `compliance.evidence_index.read`, admin) generates the per-instance evidence index: the audit chain, run snapshots, HITL decisions (including human-only approvals), eval results, autonomy promotions and demotions, the release SBOM and the build identity - each keyed to the mapping rows it satisfies, each with its identifiers, location and provenance. A mapped artifact with no records is reported `absent` with a reason and named in `missing_artifact_types`; it is never omitted. The index records the pack version and content hash that produced it. See [`docs/security/compliance-control-mapping.md`](security/compliance-control-mapping.md).
 
@@ -358,7 +358,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; an unrelated `MODULO_RUNNER_*` variable never registers it, FAR-996; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
+Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Farna Control has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; an unrelated `MODULO_RUNNER_*` variable never registers it, FAR-996; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
 E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved every E2B dispatch onto the RuntimeProvider ABC (FAR-1050 deliverable 1). The `MODULO_E2B_VIA_PROVIDER` flag the plan originally gated on was **retired by slice R6 (PR #1033)**: the provider path is now unconditional, and `via_provider` survives only as a historical attribution field on the dispatch marker and node telemetry: [`docs/design/e2b-provider-conformance-rewire.md`](design/e2b-provider-conformance-rewire.md).
 
@@ -1033,7 +1033,7 @@ Compose files (`docker-compose*.yml` at the repo root; the non-default ones live
 ### Kubernetes (Helm)
 
 A maintained, vendor-neutral Helm chart ships at `deploy/helm/modulo/`
-(validated end-to-end on EKS, FAR-1052, 2026-09-23). It deploys the Modulo
+(validated end-to-end on EKS, FAR-1052, 2026-09-23). It deploys the Farna Control
 stack; the Kubernetes runtime provider that runs agent workspaces as
 long-lived pods also ships (FAR-1051) - enabled with
 `MODULO_KUBERNETES_ENABLED` and selected per dispatch via an Environment
@@ -1042,7 +1042,7 @@ ServiceAccount in their own cluster - and its kind conformance gate is green
 (FAR-1053), while the scheduled managed-cluster leg has not run yet (its
 kubeconfig secrets are not provisioned); see
 `docs/deployment/k8s-conformance-parity.md`, or the public reader-facing
-guide at https://modulo.run/docs/kubernetes. Docker Compose
+guide at https://farna.dev/control/docs/kubernetes. Docker Compose
 (`deploy/compose/docker-compose.prod.yml`) remains the default self-hosted
 install; the managed deployment path is Fly.io.
 

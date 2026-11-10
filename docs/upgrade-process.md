@@ -1,6 +1,6 @@
 # Upgrade Process
 
-How to upgrade an existing Modulo deployment with minimal downtime. Covers version upgrades, database migrations, and rollback procedures.
+How to upgrade an existing Farna Control deployment with minimal downtime. Covers version upgrades, database migrations, and rollback procedures.
 
 ---
 
@@ -139,7 +139,7 @@ keys-in-vault operations tracked as needs-human.
 The production compose file pins the image through `TAG`; never upgrade by
 silently changing a floating tag. Before touching a real deployment, rehearse
 the complete matrix on a disposable host with the same release compose asset.
-Run the harness from a Modulo checkout, pointing it at the extracted
+Run the harness from a Farna Control checkout, pointing it at the extracted
 `docker-compose.prod.yml` and its generated `.env`:
 
 ```bash
@@ -281,7 +281,7 @@ only while it is being rolled forward.
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+| `TAG` | Farna Control image version (required, no default) | `v0.4.0` |
 
 ### Application Rollback
 

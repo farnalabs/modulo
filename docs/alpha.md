@@ -1,6 +1,6 @@
 # Alpha - definition, scope and exit
 
-**Status:** settled 2026-08-16, restated 2026-09-21, revised 2026-10-10 (deliverables-based exit; human sign-offs retired). This is the live statement of what "alpha" means for Modulo. It supersedes the alpha sections of the retired monolithic PRD, which described an earlier, internal-only alpha.
+**Status:** settled 2026-08-16, restated 2026-09-21, revised 2026-10-10 (deliverables-based exit; human sign-offs retired). This is the live statement of what "alpha" means for Farna Control. It supersedes the alpha sections of the retired monolithic PRD, which described an earlier, internal-only alpha.
 
 ## Definition
 
@@ -11,7 +11,7 @@ Alpha means all four of:
 3. **All docs are valid and up to date.**
 4. **A user can pull it down and start using it in anger**, via various distribution methods.
 
-**Hosted signup is not offered.** Alpha users self-host Modulo on their own infrastructure. There is no multi-tenant hosted product and no customer-facing evaluation instance; the project's own deployment exists for internal use, not as a service offered to customers.
+**Hosted signup is not offered.** Alpha users self-host Farna Control on their own infrastructure. There is no multi-tenant hosted product and no customer-facing evaluation instance; the project's own deployment exists for internal use, not as a service offered to customers.
 
 ## How alpha and beta are determined
 
@@ -30,7 +30,7 @@ Alpha and beta are gated purely by deliverables in the code: the scoped Alpha-mi
 - **Documentation:** the public docs and quickstart valid and current, with no stale org/path/version references.
 - **Contribution path:** the public repo is usable by an outside contributor (CI runs for forks, internal references scrubbed).
 - **Release engineering:** signed images/artifacts and an SBOM per release.
-- **Deployment shape:** a Kubernetes deployment path (Helm chart plus a runtime provider) as the recommended production self-hosting shape. Shipped - the Helm chart for the stack was validated end-to-end on EKS (FAR-1052), the runtime provider that runs agent workspaces as pods ships on main (FAR-1051), and its kind conformance gate is green (FAR-1053), so the combined path may be presented publicly as an existing capability. The scheduled managed-cluster conformance run has not executed yet (its kubeconfig secrets are pending), so no managed-cluster validation is claimed. The public reader-facing guide for the path is https://modulo.run/docs/kubernetes.
+- **Deployment shape:** a Kubernetes deployment path (Helm chart plus a runtime provider) as the recommended production self-hosting shape. Shipped - the Helm chart for the stack was validated end-to-end on EKS (FAR-1052), the runtime provider that runs agent workspaces as pods ships on main (FAR-1051), and its kind conformance gate is green (FAR-1053), so the combined path may be presented publicly as an existing capability. The scheduled managed-cluster conformance run has not executed yet (its kubeconfig secrets are pending), so no managed-cluster validation is claimed. The public reader-facing guide for the path is https://farna.dev/control/docs/kubernetes.
 - **Frontend stack:** the browser UI is a Vue 3 single-page app built on the PrimeVue component library (migrated from shadcn-vue + Radix Vue in FAR-317), themed through `frontend/src/lib/primevue-theme.ts`. Shipped - `docs/architecture.md` carries the full tech-stack table.
 - **Governance model:** the evaluation and policy-gate model ships before any customer exposure - it is a conceptual change to how runs are governed, not an incremental feature.
 

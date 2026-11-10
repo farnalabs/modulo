@@ -1,6 +1,6 @@
 # Progressive Autonomy: Measurement Framework & Initial Study
 
-> **FAR-395** – Evidence-based progressive autonomy is Modulo's key wedge against
+> **FAR-395** – Evidence-based progressive autonomy is Farna Control's key wedge against
 > incumbents (GitHub Actions, GitLab CI). Those tools gate *human review* on/off;
 > they do not *record* the autonomy decision per change, nor learn from outcomes.
 > This document defines how we measure progressive autonomy and publishes an
@@ -14,7 +14,7 @@ explicitly below.
 
 ## 1. The claim we are making
 
-Modulo lets each pipeline choose a default **autonomy level** for its HITL reviews:
+Farna Control lets each pipeline choose a default **autonomy level** for its HITL reviews:
 
 | Level | HITL review behavior |
 |---|---|
@@ -63,7 +63,7 @@ reason. With the flag off, resolution is unchanged from S0.
 
 **Why this is defensible vs incumbents:** GitHub/GitLab expose "require review"
 as a static branch-protection boolean. They produce no cross-agent evidence
-record of *what autonomy was granted, to whom, and what happened next*. Modulo's
+record of *what autonomy was granted, to whom, and what happened next*. Farna Control's
 audit chain (`audit_events`, SHA-256 linked per org) is already the substrate
 for that evidence record. This document turns it into a measurement instrument.
 
@@ -192,9 +192,9 @@ environment with live runs.*
 
 1. **Incumbents gate; they don't record.** GitHub/GitLab branch protection is a
    static boolean. There is no event saying "this change was auto-merged under
-   elevated autonomy and here is what happened." Modulo's `audit_events` chain
+   elevated autonomy and here is what happened." Farna Control's `audit_events` chain
    *is* that record, now extended to per-run autonomy.
-2. **Cross-agent evidence is the moat.** Autonomy decisions in Modulo are made
+2. **Cross-agent evidence is the moat.** Autonomy decisions in Farna Control are made
    by agents (context-setter recommends, pipeline defaults, hitl-gate
    eval-before-interrupt). The evidence record spans *every* agent touchpoint,
    not a single CI job – so the learning signal is richer than a human-review

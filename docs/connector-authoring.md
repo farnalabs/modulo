@@ -1,6 +1,6 @@
 # Connector Authoring Guide
 
-Connectors are Modulo's abstraction for external tool integrations. Each connector
+Connectors are Farna Control's abstraction for external tool integrations. Each connector
 implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 
 ## Architecture
@@ -283,6 +283,6 @@ registry.register_connector_type(
 
 ## Generic REST connector
 
-For pointing Modulo at an arbitrary HTTP endpoint (no vendor client), see
+For pointing Farna Control at an arbitrary HTTP endpoint (no vendor client), see
 [`rest-connector.md`](rest-connector.md) – config shape, auth modes, the
 verb-agnostic read/write mapping, retry, and security guards.

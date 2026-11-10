@@ -7,7 +7,7 @@ not change the mode.
 
 ## Background
 
-Modulo ships with `lenient` as the hard default for schema validation. In
+Farna Control ships with `lenient` as the hard default for schema validation. In
 lenient mode, validation failures are recorded as warnings but do not fail
 the node. In strict mode, validation failures trigger the repair loop
 (up to 3 re-prompting attempts) and the node fails if validation cannot

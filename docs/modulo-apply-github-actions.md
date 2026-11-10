@@ -183,9 +183,9 @@ jobs:
 ## Approval model
 
 **Merging to `main` IS the approval.** The apply jobs run on push to `main`,
-so whoever can merge the PR has approved the change. Modulo owns no approval
+so whoever can merge the PR has approved the change. Farna Control owns no approval
 step: the CLI has no confirm/approve prompt in CI, and nothing in this
-workflow asks Modulo for permission to write. Any extra gate – required
+workflow asks Farna Control for permission to write. Any extra gate – required
 reviewers, protected branches, an approval queue before production deploys –
 comes from GitHub branch protection or GitHub Environments protection rules
 configured in the repo, never from a Modulo-owned approval.

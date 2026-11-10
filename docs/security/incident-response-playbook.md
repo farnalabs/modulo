@@ -1,7 +1,7 @@
 # Incident Response Playbook
 
 **Audience:** Platform engineers, SREs, security team, and on-call responders
-for Modulo production deployments.
+for Farna Control production deployments.
 
 **Prerequisite reading:**
 - `docs/deployment-security.md` – deployment hardening, audit log, rate limiting
@@ -26,7 +26,7 @@ for Modulo production deployments.
 
 ### 1.2 CVSS Mapping
 
-| Modulo Severity | CVSSv3 Range |
+| Farna Control Severity | CVSSv3 Range |
 |----------------|-------------|
 | Critical | 9.0–10.0 |
 | High | 7.0–8.9 |
@@ -194,7 +194,7 @@ instead.
 **Containment procedures by incident type:**
 
 **SSO/OIDC compromise:**
-1. Disable the compromised IdP provider in Modulo admin settings.
+1. Disable the compromised IdP provider in Farna Control admin settings.
 2. For each affected org user, deactivate via `POST /api/v1/admin/users/{user_id}/deactivate`, which blacklists their JWT token families and revokes their API keys.
 3. Notify org admins of IdP config re-validation (see §8.1 for template).
 4. Rotate `OIDC_CLIENT_SECRET` for the affected provider.
@@ -446,7 +446,7 @@ Subject: Security Incident Notification – <incident-id>
 
 Dear <org admin>,
 
-Modulo has identified and responded to a security incident affecting
+Farna Control has identified and responded to a security incident affecting
 <org name>. The incident occurred between <start> and <end> UTC.
 
 Impact summary:
@@ -471,7 +471,7 @@ Subject: [CONFIDENTIAL] Security Incident Notification – <incident-id>
 
 To: <DPO / legal counsel / compliance officer>
 
-This is a formal notification of a security incident affecting Modulo.
+This is a formal notification of a security incident affecting Farna Control.
 
 Incident ID: <id>
 Detection date: <date>
@@ -650,7 +650,7 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 1. Rotate SECRET_KEY:      Set a new value in the deployment environment and redeploy
 2. Rotate FERNET_KEY:       Set a new base64-encoded 32-byte value in the deployment environment and redeploy
 3. Rotate DATABASE_URL:     Update in deployment environment + redeploy
-4. Rotate OIDC_CLIENT_SECRET: Update in IdP console + Modulo admin settings
+4. Rotate OIDC_CLIENT_SECRET: Update in IdP console + Farna Control admin settings
 5. Invalidate all sessions: deactivate and reactivate affected users via `POST /api/v1/admin/users/{user_id}/deactivate` (blacklists token families); there is no session-revoke CLI
 ```
 

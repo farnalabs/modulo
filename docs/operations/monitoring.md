@@ -1,6 +1,6 @@
 # Monitoring Configuration
 
-Modulo ships a built-in error tracking system (Community tier) and supports
+Farna Control ships a built-in error tracking system (Community tier) and supports
 optional third-party monitoring backends (Team tier – require a license key).
 This page covers configuration for all monitoring options.
 

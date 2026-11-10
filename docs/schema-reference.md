@@ -1,6 +1,6 @@
 # Schema Reference
 
-Modulo uses JSON Schema for structured data validation across pipeline nodes.
+Farna Control uses JSON Schema for structured data validation across pipeline nodes.
 This reference covers the schema entity model, schema profiles, validation
 semantics, the on-disk sandbox contract, and native structured output.
 
@@ -141,7 +141,7 @@ advisory-only stripping.
 
 ## Validation semantics
 
-Modulo validates node output against the assigned schema using
+Farna Control validates node output against the assigned schema using
 [jsonschema](https://python-jsonschema.readthedocs.io/) Draft 2020-12. Two
 validator modes control behavior on validation failure.
 
@@ -185,7 +185,7 @@ repair prompt.
 ## Native structured output
 
 When a model backend declares `supports_native_structured_output` and the node
-has an `output_schema_json` assigned, Modulo forwards the rendered schema to
+has an `output_schema_json` assigned, Farna Control forwards the rendered schema to
 the provider's native structured-output decoding path. This means the provider
 guarantees the output conforms to the schema at the API level.
 
@@ -204,9 +204,9 @@ structured output was used for a given attempt.
 
 ## On-disk sandbox contract
 
-When a pipeline runs, Modulo writes advisory schema files into the sandbox
+When a pipeline runs, Farna Control writes advisory schema files into the sandbox
 filesystem at `<output_dir>/schemas/<node_id>/`. These files are inputs to
-the dispatched runtime and any operator tooling; Modulo validates independently.
+the dispatched runtime and any operator tooling; Farna Control validates independently.
 
 ### File layout
 
@@ -269,7 +269,7 @@ directory inside the sandbox.
 
 ## Schema inference
 
-Modulo can auto-generate schemas from sample data via `POST /api/v1/schemas/infer`:
+Farna Control can auto-generate schemas from sample data via `POST /api/v1/schemas/infer`:
 
 ```json
 {

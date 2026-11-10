@@ -15,7 +15,7 @@ status: covered
 
 # SSRF-safe Outbound URL Validation
 
-The shared SSRF guard for every outbound network hop in Modulo - blocks
+The shared SSRF guard for every outbound network hop in Farna Control - blocks
 private / loopback / link-local / cloud-metadata / CGNAT targets via DNS
 resolution, and owns the *pinned-IP* connection transport that closes the
 DNS-rebinding window a validate-then-connect pattern leaves open. Consumed by

@@ -160,7 +160,7 @@ rate-limited by the `TriggerEngine`.
       (`sha256=` HMAC-SHA256 of the exact raw body, keyed by the trigger's
       `hmac_secret`) when NO `X-Modulo-*` header is sent, so a native GitHub
       repo webhook can post straight to a trigger. Mismatch, wrong prefix or
-      non-hex → 401. If any Modulo header is present the Modulo scheme is used
+      non-hex → 401. If any Farna Control header is present the Farna Control scheme is used
       with no fallback. GitHub's scheme has no timestamp, so there is no replay
       window; the payload-hash dedup (400 on repeat) is the only replay bound
       The replay route (`/webhook/replay/{event_id}`) applies the same rule to an

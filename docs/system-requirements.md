@@ -1,12 +1,12 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and native macOS arm64 and x86_64 single-install artifacts.
+Supported platforms, minimum resources, and database backends for running Farna Control in production. Farna Control v1 supports Linux hosts and native macOS arm64 and x86_64 single-install artifacts.
 
 ---
 
 ## Supported Platforms
 
-Modulo v1 targets Linux hosts and native macOS for the native single-install
+Farna Control v1 targets Linux hosts and native macOS for the native single-install
 artifact. Windows native support is Beta scope, opt-in only: the native installer (delivered
 by FAR-2337 / FAR-2338) is built, signed and attested by the unified release pipeline
 on a `cut`/`recut` release only when the Beta-only `include_windows` input is enabled,
@@ -243,7 +243,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | 443 | HTTPS | API + Web UI (via reverse proxy) |
 | 80 | HTTP | Redirect to HTTPS |
 
-With default settings and no connectors configured, Modulo makes **zero external network calls**. See [`docs/operations/network-egress.md`](./operations/network-egress.md) for the full egress audit.
+With default settings and no connectors configured, Farna Control makes **zero external network calls**. See [`docs/operations/network-egress.md`](./operations/network-egress.md) for the full egress audit.
 
 ---
 
@@ -260,7 +260,7 @@ here.
 
 ---
 
-## Modulo Website Version Display (Scope-Out Decision)
+## Farna Control Website Version Display (Scope-Out Decision)
 
 **Decision recorded per FAR-1872 (d):** A grep of `modulo-website/src/**` found ZERO version strings and ZERO ghcr tags.
 

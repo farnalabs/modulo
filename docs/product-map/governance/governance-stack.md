@@ -19,7 +19,7 @@ status: covered
 
 A read-only, navigable **Governance Stack** page that expresses the
 organization's agentic stack as one hierarchy of levels. Each level shows what
-exists today in Modulo's own primitives, with a live count and a
+exists today in Farna Control's own primitives, with a live count and a
 configured/empty/restricted state, and deep-links to the management surface
 for that level.
 
@@ -31,7 +31,7 @@ change**, so `pnpm run generate:api` is not required.
 
 ## The seven levels
 
-| # | Level | Modulo primitive | Backing API | Management surface |
+| # | Level | Farna Control primitive | Backing API | Management surface |
 |---|---|---|---|---|
 | 1 | Models | Model Backends | `GET /api/v1/model-backends` | `/admin/model-backends` |
 | 2 | Tools | Connectors | `GET /api/v1/connectors` | `/admin/connectors` |
@@ -50,8 +50,8 @@ change**, so `pnpm run generate:api` is not required.
       permission) state, or a retry-able per-level error state. One level's
       failure or restriction never blanks another level or the page.
 - [x] Levels deep-link to their existing management surfaces (the table above).
-- [x] Level 3 (MCP) today is what Modulo *serves* to agents (OAuth clients,
-      API keys); Level 4 (Agents) is agents Modulo dispatches; Level 5
+- [x] Level 3 (MCP) today is what Farna Control *serves* to agents (OAuth clients,
+      API keys); Level 4 (Agents) is agents Farna Control dispatches; Level 5
       (Commands) is a rename over composite templates + library primitives.
 - [x] Level 6 (Autonomy) summarizes the pipeline list as total pipelines plus
       the distribution across the three rungs from `earned_autonomy_level`,
@@ -83,7 +83,7 @@ change**, so `pnpm run generate:api` is not required.
 - Upstream MCP-server inventory and a pinned tool-definition allowlist are not
   yet governed (planned for Beta); the MCP card states the boundary and draws
   no fabricated data.
-- An org-wide inventory of agents Modulo did not dispatch is not yet governed
+- An org-wide inventory of agents Farna Control did not dispatch is not yet governed
   (planned for Beta); the Agents card states the boundary.
 - The interactive earned-autonomy panel and promote/demote controls are out of
   scope here (a separate slice); this surface is a readout only.

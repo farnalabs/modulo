@@ -12,7 +12,7 @@ operations.
 
 ## 1. Prerequisites
 
-- Docker engine reachable from the Modulo backend and SAQ workers (the same
+- Docker engine reachable from the Farna Control backend and SAQ workers (the same
   host in the default compose; a remote engine works identically – see
   "Remote engine" below).
 - The runner image available at the pinned digest (see §3 – until the GHCR
@@ -133,7 +133,7 @@ survives and is not reported as drift.
   omission: bounded egress belongs to your cluster's controls, not a
   vendor-built gateway. For self-hosted compute, the supported bounded
   answer is the Kubernetes tier (T3 – the provider ships on main,
-  FAR-1051): run Modulo's runner on your cluster and bound the workspace
+  FAR-1051): run Farna Control's runner on your cluster and bound the workspace
   with your own NetworkPolicy. Its kind conformance gate is green
   (FAR-1053) but does not exercise workload identity or NetworkPolicy
   enforcement, and the scheduled managed-cluster leg has not run yet
@@ -157,8 +157,8 @@ compute lives; T4 swaps in the customer's agent image.
 | **T1** Bundled Runner (self-hosted Docker) – this guide | simplest, self-contained; **deliberately permissive networking** – bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
 | **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
 | **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* – T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
-| **T3** Modulo runner on Kubernetes | **most recommended shape** – inherits the customer's RBAC (role-based access control), admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) – workload identity / NetworkPolicy enforcement not exercised by the gate, managed leg pending |
-| **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
+| **T3** Farna Control runner on Kubernetes | **most recommended shape** – inherits the customer's RBAC (role-based access control), admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) – workload identity / NetworkPolicy enforcement not exercised by the gate, managed leg pending |
+| **T4** Bring-your-own agent image | Farna Control provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run – external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
 T1 is deliberately the permissive end of the spectrum. For bounded egress

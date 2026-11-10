@@ -3,13 +3,13 @@
 ## Overview
 
 Load tests are written for [k6](https://k6.io) – a developer-centric, open-source
-load testing tool. Scripts live in `tests/performance/` and target the Modulo API
+load testing tool. Scripts live in `tests/performance/` and target the Farna Control API
 (`http://localhost:8000/api/v1`).
 
 ## Prerequisites
 
 - [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) installed locally (v0.49+)
-- The Modulo backend (and its dependencies: Postgres 16, Redis 8) is running
+- The Farna Control backend (and its dependencies: Postgres 16, Redis 8) is running
 - Test user credentials exist in the target environment (`auth-burst.js` rotates
   through five of them so token caching does not distort the login numbers):
   - `admin@modulo.test`, `user-one@modulo.test`, `user-two@modulo.test`,

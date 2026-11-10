@@ -1,6 +1,6 @@
-# Modulo Grafana Dashboards
+# Farna Control Grafana Dashboards
 
-Pre-built Grafana dashboards for Modulo's OpenTelemetry metrics. These provide observability into pipeline performance, human-in-the-loop review workflow, and LLM cost tracking.
+Pre-built Grafana dashboards for Farna Control's OpenTelemetry metrics. These provide observability into pipeline performance, human-in-the-loop review workflow, and LLM cost tracking.
 
 > **Known gap (re-verified 2026-10-15):** the shipped collector config
 > (`configs/otel-collector.yml`) has **no `traces` pipeline and no spanmetrics
@@ -25,12 +25,12 @@ Pre-built Grafana dashboards for Modulo's OpenTelemetry metrics. These provide o
 ## Prerequisites
 
 - **Grafana 9+** (tested with 9.5 / 10.x)
-- **Prometheus** or **Grafana Mimir** as a data source, receiving OTel metrics from Modulo's OpenTelemetry exporter
-- The Modulo OTel metrics pipeline must be active and exporting to the Prometheus endpoint
+- **Prometheus** or **Grafana Mimir** as a data source, receiving OTel metrics from Farna Control's OpenTelemetry exporter
+- The Farna Control OTel metrics pipeline must be active and exporting to the Prometheus endpoint
 
 ## Using the bundled local stack (nothing to import)
 
-With Modulo's own Docker Compose stack the dashboards are **already provisioned** - do
+With Farna Control's own Docker Compose stack the dashboards are **already provisioned** - do
 not import them by hand:
 
 ```bash

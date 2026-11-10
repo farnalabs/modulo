@@ -2,7 +2,7 @@
 
 <!-- FAR-1049 (T2b of the Agent Execution Tiers plan, ADR 029). Audience:
      operators who want the Bundled Runner to execute on a rented VM
-     (Hetzner, Ubicloud, any Docker host) while Modulo itself runs
+     (Hetzner, Ubicloud, any Docker host) while Farna Control itself runs
      elsewhere. Companion: docs/security/bundled-runner-operator-guide.md
      (§5 network shape, §7 verifying the install, §8 remote engine –
      TLS/mTLS, escape hatch, loopback exemptions); docs/security/
@@ -23,7 +23,7 @@
 Hetzner, Ubicloud, or any Docker host is **not a new execution tier**. It is
 **T1 – the Bundled Runner – on rented compute**. It already works today:
 point `MODULO_DOCKER_HOST` at the VM (with TLS, per FAR-1038, see operator
-guide §8) and the Bundled Runner runs there, including from a Modulo
+guide §8) and the Bundled Runner runs there, including from a Farna Control
 deployment running elsewhere. The deliverable for this shape is
 documentation and validation, **not an adapter**.
 
@@ -66,7 +66,7 @@ a few concurrent workspaces. Note the concurrency preflight (operator guide
 §10): the Concurrency tab sizes the org's sandbox cap against the engine's
 reported `/info` resources at 1.0 CPU / 1 GiB per container, worst case.
 
-Record the VM's public IP – Modulo will reach it over the network, so this
+Record the VM's public IP – Farna Control will reach it over the network, so this
 endpoint **requires TLS** (step 4).
 
 ### Step 2 – Install Docker on the VM
@@ -90,7 +90,7 @@ Never expose the raw Docker socket over the network. Deploy the same
 filtered proxy the overlay ships (`lscr.io/linuxserver/socket-proxy`,
 digest-pinned in `deploy/compose/runner.yml`) on the VM, with the socket
 mounted read-only and **no host-published ports** facing the public
-interface – Modulo reaches it over a private/firewalled path or through the
+interface – Farna Control reaches it over a private/firewalled path or through the
 TLS front you add in step 4.
 
 The overlay's proxy config is host-agnostic: copy the `docker-socket-proxy`
@@ -136,7 +136,7 @@ TLS (mTLS), `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, the daemon's
 
 ### Step 5 – Point `MODULO_DOCKER_HOST` at the VM
 
-On the Modulo deployment (wherever it runs – it does not need to be on the
+On the Farna Control deployment (wherever it runs – it does not need to be on the
 VM), set the endpoint env vars following the documented 4-step chain
 (`MODULO_DOCKER_HOST` → `DOCKER_HOST` → local socket):
 
@@ -207,7 +207,7 @@ non-negotiable for the shape to hold:
 1. **TLS/mTLS on the endpoint (FAR-1038).** Non-loopback `tcp://` without
    TLS is rejected at registration. Configure per operator guide §8;
    mTLS recommended for production. Loopback exemptions do not apply when
-   Modulo and the engine are different hosts.
+   Farna Control and the engine are different hosts.
 2. **The socket proxy in front of the engine.** The raw socket is a
    documented operator override, never the default. The filtered proxy is
    accident-prevention for the backend's Docker client (it is *not*
@@ -269,7 +269,7 @@ endpoint (or the workspace subnet) **at the host**, so a workspace cannot
 reach the proxy/backend bridge by IP even without the engine rules. For
 example, with `ufw`/`nftables` on the VM:
 
-- allow the proxy/backend port only from the Modulo host's IP (not from the
+- allow the proxy/backend port only from the Farna Control host's IP (not from the
   workspace bridge's subnet), and/or
 - drop traffic sourced from the `modulo-runner-workspace` bridge subnet
   (e.g. `172.x.y.0/24` – check the actual subnet with
@@ -277,7 +277,7 @@ example, with `ufw`/`nftables` on the VM:
   bridge and any host-published ports.
 
 The same rule applies to the default compose's own network shape if you run
-Modulo and the engine on one host: verify the engine, and firewall if the
+Farna Control and the engine on one host: verify the engine, and firewall if the
 ruleset is missing. The trust-boundary doc states this caveat as the
 authoritative version – keep them in sync if either changes.
 
@@ -315,7 +315,7 @@ can reach*:
 - This is a **decision, not an omission**: a vendor-built egress gateway
   would own a control the operator should own. The bounded answer for
   self-hosted compute is the **Kubernetes tier (T3 – provider shipped,
-  FAR-1051)**: run Modulo's runner on your cluster and bound the workspace
+  FAR-1051)**: run Farna Control's runner on your cluster and bound the workspace
   with *your* NetworkPolicy, RBAC (role-based access control), and admission policy. Its kind
   conformance gate is green (FAR-1053) but does not exercise workload
   identity or NetworkPolicy enforcement, and the scheduled managed-cluster
@@ -345,7 +345,7 @@ T1's deliberately permissive networking – bounded egress remains T3's job
 - `docs/security/bundled-runner-trust-boundary.md` – egress position,
   accepted no-bounded-egress gap, bridge-isolation caveat, allowlist
   table, FAR-1038 TLS matrix.
-- `docs/operations/network-egress.md` – Modulo's own outbound-egress
+- `docs/operations/network-egress.md` – Farna Control's own outbound-egress
   audit (components, not sandbox workspaces).
 - `deploy/compose/runner.yml` – the shipped socket-proxy overlay and the
   `modulo-runner-workspace` network declaration.

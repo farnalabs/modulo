@@ -75,7 +75,7 @@ first_node_dispatched`, `dispatcher = saq`. No retry occurred; the run-detail at
 ### 2. The deploy timeline matches to the second
 
 The deploy is GitHub Actions run **41817770086** (`Deploy: Staging + Prod`, `workflow_dispatch`,
-head `4fb7fec07232d921e39b865fbb0694fd14704f62`, "docs: position Modulo as a self-hosted software
+head `4fb7fec07232d921e39b865fbb0694fd14704f62`, "docs: position Farna Control as a self-hosted software
 factory (#2827)"):
 
 | Step | Started (UTC) | Completed (UTC) |
@@ -170,14 +170,14 @@ not captured; the run record therefore classifies delivered work as undelivered.
 Every one of the four retained triage entries reports:
 
 ```
-"pr_url": "https://github.com/farnalabs/modulo/pull/686"
+"pr_url": "https://github.com/farnalabs/farna-control/pull/686"
 ```
 
 PR #686 is unrelated (it is the September relocation of lessons into the workspace AGENTS.md). The
 only occurrence of that URL in the repository is `AGENTS.md:63`:
 
 ```
-> ([PR #686](https://github.com/farnalabs/modulo/pull/686)):
+> ([PR #686](https://github.com/farnalabs/farna-control/pull/686)):
 ```
 
 `node_runner._extract_pr_url` takes the **first** URL-shaped token in the retained stdout
@@ -185,7 +185,7 @@ only occurrence of that URL in the repository is `AGENTS.md:63`:
 early - the captured opening steps of `b9cae5f1` show a `cat AGENTS.md` call. The documentation at
 `api/routes/runs.py:408-413` already calls this heuristic
 "not anchored to `gh pr create`" and non-gating, but in practice it is misleading: for `7f2372be`
-the tail even contains `"url":"https://github.com/farnalabs/modulo/pull/2836"`, yet the projected
+the tail even contains `"url":"https://github.com/farnalabs/farna-control/pull/2836"`, yet the projected
 value is #686.
 
 This does not gate delivery, retry or cost, but it undermines the run-detail surface an operator
@@ -228,7 +228,7 @@ This is the only option that preserves the work rather than reporting its loss m
 The deploy already owns the decision point (the `Deploy to app-modulo` step), so the check belongs
 there:
 
-- before `fly deploy`, query Modulo for `runs.status = 'running'` with a sandbox dispatch
+- before `fly deploy`, query Farna Control for `runs.status = 'running'` with a sandbox dispatch
   (`dispatch_phase = 'first_node_dispatched'` and sandbox activity), or expose a small read-only
   "in-flight sandbox runs" endpoint / MCP read;
 - if any exist, **wait a bounded window** (e.g. 10 minutes, polling every 30s) before continuing;
@@ -288,7 +288,7 @@ opt-in per pipeline, not the default.
 
 ## Reproduction / verification commands
 
-Runtime evidence (Modulo MCP):
+Runtime evidence (Farna Control MCP):
 
 ```
 modulo_get_run_status(<run_id>, detail=True)     # all four: status, error_detail, deadline_triage

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This policy covers all runtime and development dependencies for the Modulo backend (`backend/pyproject.toml` + `backend/uv.lock`) and frontend (`frontend/package.json` + `frontend/pnpm-lock.yaml`).
+This policy covers all runtime and development dependencies for the Farna Control backend (`backend/pyproject.toml` + `backend/uv.lock`) and frontend (`frontend/package.json` + `frontend/pnpm-lock.yaml`).
 
 ## CVE Severity Classification
 
@@ -44,7 +44,7 @@ The gates above are the ones that actually stop a change: `pip-audit` fails on a
 
 ## How to Handle a False Positive
 
-1. **Verify**: Confirm the CVE does not apply in Modulo's deployment context (e.g., Windows-only vulnerability on Linux, feature not used).
+1. **Verify**: Confirm the CVE does not apply in Farna Control's deployment context (e.g., Windows-only vulnerability on Linux, feature not used).
 2. **Document**: Add a row to the approved exceptions table below with the CVE ID, affected package, reason, and reviewer.
 3. **Suppress**: Add the CVE ID to `pip-audit`'s `--ignore-vuln` list in the CI workflow. The repo uses `pip-audit` (not the `safety` tool), so there is no `.safety-policy.yml`.
 

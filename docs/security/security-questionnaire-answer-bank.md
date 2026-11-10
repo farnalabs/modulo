@@ -1,12 +1,12 @@
 # Security questionnaire answer bank
 
-Answers to the standard security questionnaire for a **self-hosted** Modulo
+Answers to the standard security questionnaire for a **self-hosted** Farna Control
 deployment. Every answer cites the artifact or document that supports it, so
 no answer is an unsupported claim.
 
 **Rules for using this bank**
 
-1. Never claim an attestation Modulo does not hold. There is no SOC 2, ISO
+1. Never claim an attestation Farna Control does not hold. There is no SOC 2, ISO
    27001/42001 or EU AI Act certificate. Say so plainly and point to the
    control-mapping pack instead.
 2. Every answer below is a statement about the product plus the deployment the
@@ -17,9 +17,9 @@ no answer is an unsupported claim.
 
 ## 1. Hosting model
 
-**Q: Is Modulo a SaaS product?**
+**Q: Is Farna Control a SaaS product?**
 
-A: No. Modulo is self-hosted only. The customer runs it on their own
+A: No. Farna Control is self-hosted only. The customer runs it on their own
 infrastructure. There is no Farnalabs-operated multi-tenant service and no
 hosted production offering. A read-only demo with sample data exists at
 `app.modulo.run/demo` for evaluation; it is not a hosted product and holds no
@@ -31,14 +31,14 @@ Evidence: `README.md`; `docs/architecture.md`; `docs/core-principles.md`
 **Q: Where does our data live?**
 
 A: In the customer's own PostgreSQL database, on infrastructure the customer
-controls. Modulo does not replicate customer data to Farnalabs. (Modulo has no
+controls. Farna Control does not replicate customer data to Farnalabs. (Farna Control has no
 object-storage integration; there is no bucket to configure or to place
 evidence in.)
 
 Evidence: `docs/architecture.md` (Self-hosted constraint);
 `docs/operations/network-egress.md` (default zero egress).
 
-**Q: What does Modulo send outbound?**
+**Q: What does Farna Control send outbound?**
 
 A: Nothing by default. The base runtime has no telemetry endpoint and no
 phone-home. Outbound calls happen only to systems the customer explicitly
@@ -48,18 +48,18 @@ collector if the operator enables one (disabled by default).
 
 Evidence: `docs/operations/network-egress.md`; `docs/security/secret-management.md`.
 
-**Q: How is Modulo licensed?**
+**Q: How is Farna Control licensed?**
 
 A: BUSL-1.1 (source-available, not OSI open source). The license restricts
-offering Modulo, or any modified version or derivative work you create, to
+offering Farna Control, or any modified version or derivative work you create, to
 third parties as a paid hosted or managed service providing substantially the
-same functionality as Modulo.
+same functionality as Farna Control.
 
 Evidence: `backend/pyproject.toml` (project license); repository `LICENSE`.
 
 ## 2. Data flows
 
-**Q: What data does Modulo process?**
+**Q: What data does Farna Control process?**
 
 A: Pipeline definitions and their immutable snapshots; run inputs, outputs and
 node telemetry; audit events; HITL decisions; evaluation results; connector and
@@ -68,10 +68,10 @@ model credentials (encrypted); organization, team and user records.
 Evidence: `docs/architecture.md` ("Database Schema", "Key Components");
 `docs/product-map/` feature entries.
 
-**Q: Does Modulo read our source code or repositories?**
+**Q: Does Farna Control read our source code or repositories?**
 
 A: Only through a connector the customer configures, and only the data that
-connector's operations request. Modulo does not receive a copy of the
+connector's operations request. Farna Control does not receive a copy of the
 repository; there is no Farnalabs-side mirror.
 
 Evidence: `docs/product-map/configure/connectors.md`;
@@ -91,7 +91,7 @@ Evidence: `docs/model-backend-authoring.md`;
 
 **Q: Is data encrypted in transit?**
 
-A: Modulo serves HTTP and is normally deployed behind the customer's TLS
+A: Farna Control serves HTTP and is normally deployed behind the customer's TLS
 terminating proxy. TLS configuration, certificate management and the cipher
 policy are the customer's responsibility in a self-hosted deployment; the
 product ships guidance and a hardening checklist, not a certificate.
@@ -100,10 +100,10 @@ Evidence: `docs/deployment-security.md`; `docs/deployment.md`.
 
 **Q: Is data encrypted at rest?**
 
-A: Credentials Modulo stores (connector and model-backend secrets) are
+A: Credentials Farna Control stores (connector and model-backend secrets) are
 encrypted with Fernet using `FERNET_KEY`. Database and disk encryption at rest
 are provided by the customer's platform (Postgres volume encryption, disk
-encryption), not by Modulo. Startup refuses to run if `FERNET_KEY` or
+encryption), not by Farna Control. Startup refuses to run if `FERNET_KEY` or
 `SECRET_KEY` is absent or shorter than 32 bytes.
 
 Evidence: `docs/security/secret-management.md`;
@@ -286,7 +286,7 @@ Evidence: `docs/offline-verifiable-evidence.md`;
 
 **Q: How does this map to our compliance framework?**
 
-A: The shipped control-mapping pack maps Modulo's controls and evidence to SOC
+A: The shipped control-mapping pack maps Farna Control's controls and evidence to SOC
 2 TSC (CC6, CC7, CC8 and the evidence layer), ISO/IEC 42001 and the EU AI Act,
 with per-row coverage and provenance. `GET /api/v1/compliance/evidence-index`
 generates the per-instance evidence index for an auditor.
@@ -350,7 +350,7 @@ Evidence: `docs/security/incident-response-playbook.md`;
 
 **Q: How would a security incident in the product be disclosed to us?**
 
-A: Modulo has no phone-home channel, so a self-hosted deployment cannot push a
+A: Farna Control has no phone-home channel, so a self-hosted deployment cannot push a
 security advisory to the customer. Security-relevant fixes are recorded in
 `CHANGELOG.md` and the GitHub Release for each version; the customer must watch
 releases (or track the repository) to learn about them. This is a real
@@ -362,7 +362,7 @@ Evidence: `CHANGELOG.md`; `docs/release-process.md`;
 
 **Q: How are serious incidents reported under the EU AI Act?**
 
-A: Modulo does not detect or report serious incidents as the Act defines them.
+A: Farna Control does not detect or report serious incidents as the Act defines them.
 The control-mapping pack marks this `customer-responsibility` - the obligation
 as provider/deployer stays entirely with the customer. The shipped
 incident-response playbook includes incident-communication and post-mortem
@@ -439,7 +439,7 @@ Evidence: `docs/operations/backup.md`.
 
 **Q: How often, and how is restore tested?**
 
-A: Backup frequency and restore drills are the operator's runbook. Modulo ships
+A: Backup frequency and restore drills are the operator's runbook. Farna Control ships
 the tooling and the procedure; it does not schedule, execute or evidence the
 customer's backups. This is marked `customer-responsibility` in the
 control-mapping pack (SOC 2 CC7.5).
@@ -475,7 +475,7 @@ Evidence: `docs/security/compliance-control-mapping.md`;
 **Q: Can you complete our security questionnaire?**
 
 A: Yes - this document is the answer bank. Answers that depend on the
-customer's deployment are marked as such; answers Modulo cannot support are
+customer's deployment are marked as such; answers Farna Control cannot support are
 stated as limitations rather than filled with a plausible claim.
 
 Evidence: this document.

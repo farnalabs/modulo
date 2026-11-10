@@ -1,9 +1,9 @@
-# Penetration Test Plan: Modulo
+# Penetration Test Plan: Farna Control
 
 | Field | Value |
 |---|---|
 | Document owner | Security Team |
-| Applies to | Modulo (self-hosted Delivery Governance Platform for governing automated work across the software development lifecycle) |
+| Applies to | Farna Control (self-hosted Delivery Governance Platform for governing automated work across the software development lifecycle) |
 | Classification | Internal (Confidential) |
 | Version | 1.0 |
 | Last updated | 2026-06-28 |
@@ -14,7 +14,7 @@
 
 ### 1.1 Purpose
 
-This document defines the methodology, schedule, scope, and reporting framework for penetration testing of the Modulo platform. Testing validates the effectiveness of existing security controls and identifies vulnerabilities before they can be exploited in production.
+This document defines the methodology, schedule, scope, and reporting framework for penetration testing of the Farna Control platform. Testing validates the effectiveness of existing security controls and identifies vulnerabilities before they can be exploited in production.
 
 ### 1.2 In Scope
 
@@ -25,7 +25,7 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://app.modulo.run/ws/` |
 | **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `app.modulo.run` |
 | **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
-| **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/modulo` |
+| **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/farna-control` |
 | **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/modulo` |
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
 
@@ -41,10 +41,10 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | Cloudflare infrastructure (WAF, DDoS, CDN, DNS) | Managed by Cloudflare; inherits SOC 2 compliance |
 | GitHub infrastructure | Managed by GitHub; inherits SOC 2/ISO 27001 |
 | Fly.io control plane | Managed by Fly.io; inherits SOC 2 |
-| Physical security | Cloud-hosted; no physical assets under Modulo control |
+| Physical security | Cloud-hosted; no physical assets under Farna Control control |
 | End-user endpoints (browsers, OS) | Out of control boundary |
 | Third-party SaaS (Linear, Notion, Sentry) | Covered by their respective security postures |
-| Social engineering of Modulo staff | Separate engagement if needed |
+| Social engineering of Farna Control staff | Separate engagement if needed |
 
 ---
 
@@ -73,7 +73,7 @@ Full external penetration tests are conducted **quarterly** (every 3 months). A 
 
 ### 2.3 Rules of Engagement
 
-- Testing is limited to `app.modulo.run`, `*.modulo.run`, and the Modulo GitHub organization
+- Testing is limited to `app.modulo.run`, `*.modulo.run`, and the Farna Control GitHub organization
 - No denial-of-service attacks against production without 48-hour written approval
 - No exfiltration of production customer data beyond what is minimally necessary to demonstrate a finding
 - All testing must use a dedicated test organization/tenant with synthetic data
@@ -276,7 +276,7 @@ The technical report must include:
 
 ### 6.3 Remediation Tracking
 
-- All findings are entered into the **Modulo delivery plan** as backlog items with T-shirt size estimates
+- All findings are entered into the **Farna Control delivery plan** as backlog items with T-shirt size estimates
 - Critical and High findings are auto-escalated to the on-call engineer and the CTO
 - Remediation progress is tracked weekly in the security review
 - Re-testing is scheduled within 5 business days of the remediation deadline

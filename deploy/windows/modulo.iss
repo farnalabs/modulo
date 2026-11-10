@@ -428,14 +428,14 @@ begin
   else
     LogDisplay := '(no log was created - the installer failed before logging started)';
   Msg := #13#10 +
-    '----- Modulo install failed: support reference ' + SupportRef + ' -----' + #13#10 +
+    '----- Farna Control install failed: support reference ' + SupportRef + ' -----' + #13#10 +
     '  Install target   : ' + Redact(TargetDesc) + #13#10 +
     '  Failing stage    : ' + Redact(CurrentStage) + #13#10 +
     '  Install log      : ' + Redact(LogDisplay) + #13#10 +
     '  Support reference: ' + SupportRef + #13#10 + #13#10 +
     'Send this block AND the install log file above to Modulo support so the' + #13#10 +
     'failure can be diagnosed: https://github.com/farnalabs/modulo/issues' + #13#10 +
-    '----- end of Modulo install support block -----' + #13#10;
+    '----- end of Farna Control install support block -----' + #13#10;
   WriteInstallLog(Msg);
   { MsgBox from [Code] is not suppressible by /SUPPRESSMSGBOXES (Inno Setup
     documents it among the five non-suppressible boxes), so an unattended

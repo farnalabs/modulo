@@ -1,6 +1,6 @@
-# Deployment Journeys – Three Paths to Running Modulo
+# Deployment Journeys – Three Paths to Running Farna Control
 
-Modulo supports three distinct deployment scenarios. Every user starts on one
+Farna Control supports three distinct deployment scenarios. Every user starts on one
 path and can graduate to the next as their needs grow – all three use the same
 codebase, same Docker images, same RuntimeProvider ABC.
 
@@ -52,17 +52,17 @@ without managing servers or databases.
 ### The pattern
 
 ```
-┌─────────────────────────────────────────────┐
-│  Fly.io / Railway                            │
-│                                              │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │ Postgres  │  │  Redis   │  │ Modulo App │ │
-│  │ (managed) │  │(managed) │  │(Docker)    │ │
-│  └──────────┘  └──────────┘  └─────┬──────┘ │
-│                                     │        │
-│                LocalRuntimeProvider │(in-proc)│
-│                max_concurrency = 2  │        │
-└─────────────────────────────────────┴────────┘
+┌──────────────────────────────────────────────────┐
+│  Fly.io / Railway                                │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌─────────────────┐ │
+│  │ Postgres │  │  Redis   │  │ Farna Control   │ │
+│  │(managed) │  │(managed) │  │ App (Docker)    │ │
+│  └──────────┘  └──────────┘  └────────┬────────┘ │
+│                                       │          │
+│                  LocalRuntimeProvider │(in-proc) │
+│                   max_concurrency = 2 │          │
+└───────────────────────────────────────┴──────────┘
 ```
 
 ### Option A: Fly.io (recommended)
@@ -126,21 +126,21 @@ or want to deploy on your own infrastructure (Docker Compose / VM).
 Podman, VMs), have a VPC (Virtual Private Cloud), use AWS/GCP, have compliance requirements (SOC 2,
 data residency, air-gapped).
 
-**Goal:** deploy Modulo into existing infra with maximum control.
+**Goal:** deploy Farna Control into existing infra with maximum control.
 
 ### The pattern
 
 ```
-┌──────────┐  ┌──────────┐  ┌──────────────────┐
-│Postgres  │  │  Redis   │  │  Modulo Backend  │
-│(existing)│  │(existing)│  │  (Docker/Podman) │
-└──────────┘  └──────────┘  └────────┬─────────┘
-                                     │
-                                     ▼
-                        ┌──────────────────────┐
-                        │    E2B Runtime       │
-                        │    (sandboxed)       │
-                        └──────────────────────┘
+┌──────────┐  ┌──────────┐  ┌───────────────────────┐
+│Postgres  │  │  Redis   │  │ Farna Control Backend │
+│(existing)│  │(existing)│  │  (Docker/Podman)      │
+└──────────┘  └──────────┘  └───────────┬───────────┘
+                                        │
+                                        ▼
+                            ┌──────────────────────┐
+                            │    E2B Runtime       │
+                            │    (sandboxed)       │
+                            └──────────────────────┘
 ```
 
 ### Deployment options
@@ -182,9 +182,9 @@ These are not future plans – they are built and tested today:
 
 ### When you need a hosted SaaS (modulo-cloud)
 
-A hosted SaaS wrapping Modulo core, adding multi-org billing, subdomain
+A hosted SaaS wrapping Farna Control core, adding multi-org billing, subdomain
 routing, and a public community library registry. Only needed if/when
-you want to offer Modulo as a service to external teams.
+you want to offer Farna Control as a service to external teams.
 
 ---
 

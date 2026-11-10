@@ -1,6 +1,6 @@
 # Get support
 
-Modulo runs on your infrastructure. Nobody at Farnalabs can see your instance
+Farna Control runs on your infrastructure. Nobody at Farnalabs can see your instance
 unless you deliberately send us something. This page tells you what to send
 when something breaks, what the file contains, and how to check it before you
 send it.
@@ -119,7 +119,7 @@ pasting into a ticket. These are the exact shapes.
 
 ```text
 run 3f0c1a2e-6d7b-4f6a-8c1e-2b9d5a7f0e31 · pipeline 0b6e4c1d-9a2f-4d3b-8e5c-1f7a2d9b6c40 (Nightly release) · status failed · error provider.unavailable
-url <the address you use to reach Modulo>/runs/3f0c1a2e-6d7b-4f6a-8c1e-2b9d5a7f0e31
+url <the address you use to reach Farna Control>/runs/3f0c1a2e-6d7b-4f6a-8c1e-2b9d5a7f0e31
 ```
 
 The `url` line is the origin your browser is using, so the line works without
@@ -134,12 +134,12 @@ error 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f · fingerprint 9f8e7d6c5b4a · level 
 **A failed install** (printed as the installer's last output):
 
 ```text
------ Modulo install failed: support reference 4f2a91c0 -----
+----- Farna Control install failed: support reference 4f2a91c0 -----
   Install target   : bundle-v0.3.324 (linux-x86_64)
   Failing stage    : verify
   Install log      : /home/you/.local/state/modulo/install-20261102T101500Z-4f2a91c0.log
   Support reference: 4f2a91c0
------ end of Modulo install support block -----
+----- end of Farna Control install support block -----
 ```
 
 **A bundle** (printed by `modulo support` and by the bundle module when the zip
@@ -177,7 +177,7 @@ without a format-version change, so the list below is the contract.
 |---|---|---|
 | `MANIFEST.txt` | Format version, reference, every member with its byte count and what it carries, redaction substitution counts, a `withheld:` list for anything the redaction gate removed, and a `missing:` list for anything that could not be collected. | All |
 | `report.json` | The same inventory, machine-readable: format version, members and bytes, per-layer redaction counts, missing sources, and `withheld` records (`member`, `items`, `reason`, `scope`). | All |
-| `version.txt` | Modulo version, build commit, Python version, OS, architecture, UTC offset and clock drift. | All |
+| `version.txt` | Farna Control version, build commit, Python version, OS, architecture, UTC offset and clock drift. | All |
 | `doctor.txt` | Output of the launcher doctor checks. | Native (recorded as missing in a container) |
 | `health.json` | Health check names, statuses and error codes only. No check detail strings. | All |
 | `settings.txt` | Full settings **key inventory**. Values only for a reviewed safe-list (`MODULO_DB`, the public and frontend URLs, ports, worker pool and concurrency counts), plus the plan tier and feature flags. Every other key is shown as `set` or `unset`. | All |
@@ -232,7 +232,7 @@ which is why you should read it first.
 2. Look at the short members first: `version.txt`, `deployment.txt`,
    `settings.txt` and `db.txt` are a few dozen lines each. The log tails are the
    long ones.
-3. If the Modulo package is available where you are, `--list` and `--show`
+3. If the Farna Control package is available where you are, `--list` and `--show`
    inspect a bundle without unpacking it. In a Compose install the app
    container already has it:
 
@@ -256,7 +256,7 @@ which is why you should read it first.
 
 ## 6. What we do with it
 
-Nothing in Modulo uploads a bundle automatically. There is no Farnalabs
+Nothing in Farna Control uploads a bundle automatically. There is no Farnalabs
 endpoint, no phone-home and no upload step: every member is built locally by
 the command you ran and written to the path you chose. Until you send it, the
 bundle lives only on the machine that produced it.
@@ -279,7 +279,7 @@ collection path sends it to a model or to a pipeline.
 
 ## 7. If you are not the operator
 
-If you use Modulo but do not run the instance, forward this page - or the
+If you use Farna Control but do not run the instance, forward this page - or the
 reference line you copied - to whoever operates it. The commands need access to
 the host (native or Compose) or the cluster (Kubernetes), so the operator is
 usually the only person who can run them. Send the bundle only to that operator
@@ -294,5 +294,5 @@ or to `support@modulo.run`, never to anyone who asks for it unprompted.
 - [Upgrade process](./upgrade-process.md) - upgrading an existing instance.
 
 This page is also published at
-[modulo.run/docs/support](https://modulo.run/docs/support). Where the two
+[farna.dev/control/docs/support](https://farna.dev/control/docs/support). Where the two
 differ, this page wins: it ships with the version you are running.

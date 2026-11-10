@@ -121,7 +121,7 @@ guarded against tampering at both the ORM and the database layer.
       `GET /api/v1/admin/audit/verification-key` publishes the org's public
       key + `key_id` fingerprint. A party holding ONLY the artifact + the
       pre-published key verifies authorship, re-derives every file digest and
-      re-derives the embedded audit chain with no Modulo service and no login
+      re-derives the embedded audit chain with no Farna Control service and no login
       (the `modulo evidence verify` CLI); any tampered file, mutated event,
       falsified chain claim or swapped key fails as `valid=false`. The event
       hash lives in `core/audit_logger/hashing.py` so the offline verifier

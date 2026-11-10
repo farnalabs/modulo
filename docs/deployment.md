@@ -124,8 +124,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 The root `docker-compose.yml` ships a **`watchdog` service** - a [Gatus](https://gatus.io)
 instance that runs **by default**, so `docker compose up -d` starts it along with
-the rest of the stack. It exists for the one failure Modulo cannot report about
-itself: Modulo being down. (Like the rest of that file it needs a valid
+the rest of the stack. It exists for the one failure Farna Control cannot report about
+itself: Farna Control being down. (Like the rest of that file it needs a valid
 `FERNET_KEY` in `.env` - see the README quick start.)
 
 | | |
@@ -232,7 +232,7 @@ WebSocket connections use the correct origin.
 ## Migration
 
 The `modulo-migrate` CLI tool exports, imports, and verifies organization data
-between Modulo instances. It is installed as a console script entry point.
+between Farna Control instances. It is installed as a console script entry point.
 
 ### Authentication
 
@@ -413,7 +413,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 
 ## Deployment Modes
 
-Modulo supports three deployment modes depending on your needs.
+Farna Control supports three deployment modes depending on your needs.
 
 ### Standalone (single-user, local)
 
@@ -442,7 +442,7 @@ seeds the initial admin user (optional but recommended for first login); `MODULO
 selects the SQLite backend so no separate database server is needed.
 
 ```bash
-git clone https://github.com/farnalabs/modulo   # or install the farnalabs-modulo package
+git clone https://github.com/farnalabs/farna-control   # or install the farnalabs-modulo package
 cd backend
 uv sync
 DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
@@ -579,7 +579,7 @@ Download it to a file and run it rather than streaming it into a shell:
 `curl ... | bash` pipe skips that verification entirely.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+curl -fsSL https://raw.githubusercontent.com/farnalabs/farna-control/main/scripts/install.sh -o modulo-install.sh
 bash modulo-install.sh
 ```
 
@@ -654,7 +654,7 @@ reports `dispatcher_reconcile: ok`.
 ### Kubernetes (production, multi-replica)
 
 A maintained, vendor-neutral Helm chart ships in this repository at
-`deploy/helm/modulo/`. It deploys the **Modulo stack** - backend API, SAQ
+`deploy/helm/modulo/`. It deploys the **Farna Control stack** - backend API, SAQ
 runner and system workers, frontend, and an optional in-cluster Redis, against
 an external PostgreSQL - and includes ResourceQuota, LimitRange, optional HPA,
 ingress and namespace templates. `deploy/helm/modulo/values.eks.example.yaml`
@@ -676,12 +676,12 @@ secrets are not provisioned - so no managed cluster is claimed
 proves). Chart setup and validation status: `deploy/helm/modulo/README.md`.
 The reader-facing guide covering both halves - installing the stack and
 running agent workspaces as pods - is published at
-https://modulo.run/docs/kubernetes.
+https://farna.dev/control/docs/kubernetes.
 
 **Supported paths remain unchanged:** Docker Compose
 (`deploy/compose/docker-compose.prod.yml`) is the default server/production
 install, and the native install (`scripts/install.sh`) is the workstation
-path. Modulo's own managed deployment runs on Fly.io.
+path. Farna Control's own managed deployment runs on Fly.io.
 
 ---
 
