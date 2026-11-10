@@ -195,7 +195,7 @@ environment variable.
 ## Project Structure
 
 ```
-modulo/
+farna-control/
 ├── backend/
 │   ├── src/
 │   │   └── modulo/

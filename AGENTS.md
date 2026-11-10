@@ -13,7 +13,7 @@ Product requirements and behaviour spec live in `docs/` and the product map
 ## Repository structure
 
 ```
-modulo/
+farna-control/
   backend/                   # Python 3.12, uv, FastAPI
     src/modulo/
       api/                   # FastAPI routes, WebSocket, MCP server

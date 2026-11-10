@@ -162,7 +162,7 @@ uses the published `scripts/install.sh` bundle path. macOS signed and notarized
 `bundle-v0.3.325` release includes Apple Silicon (`macos-arm64`) only, and does
 not include an Intel (`macos-x86_64`) artifact. Rosetta is not required for the
 published Apple Silicon artifact. Check the public [installation
-documentation](https://modulo.run/docs/installation) and the release assets for
+documentation](https://farna.dev/control/docs/installation) and the release assets for
 current platform availability, requirements, and installation steps.
 
 Docker Compose remains the supported path for self-hosted server and production
