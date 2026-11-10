@@ -1,4 +1,4 @@
-# FAR-2380 — four Prompt-to-PR runs lost to a production worker deploy
+# FAR-2380 - four Prompt-to-PR runs lost to a production worker deploy
 
 **Status:** investigation complete, no code change made
 **Date:** 2026-11-04
@@ -24,7 +24,7 @@ The incident does expose two real product gaps, both secondary to the loss itsel
    deploys were frequent enough in this window that long runs are highly likely to collide;
 2. a run that had already delivered a merged PR is recorded as `failed` with
    `delivery_done: false`, and the retained-triage `pr_url` on all four runs points at an
-   unrelated PR — so the run record actively under-reports and mis-attributes delivery.
+   unrelated PR - so the run record actively under-reports and mis-attributes delivery.
 
 ## Impact
 
@@ -103,7 +103,7 @@ while the new version was still booting. No other deploy workflow overlapped tha
 
 The 43-second gap is also consistent with the code: SAQ's `_SHUTDOWN_GRACE_PERIOD_S = 30` from the
 SIGTERM at 12:00:50 puts the start of cancellation at ~12:01:20, and the shutdown callback (the
-handoff) runs after the cancelled task set unwinds — 13 seconds later at 12:01:33.
+handoff) runs after the cancelled task set unwinds - 13 seconds later at 12:01:33.
 
 ### 3. Why the handoff terminalised instead of re-dispatching
 
@@ -138,7 +138,7 @@ re-dispatch leg.
 
 The run-detail evidence for Improve Public Docs (`1a5b5a33-4a5d-41e1-b642-bcc42138fded`) shows
 run `3c76ee2c-9003-415e-a70e-4e3f1e1def31`: started 11:50:05Z, completed **12:01:36.283Z**, also
-`harness.worker_lost` with the same "durable sandbox activity" detail — three seconds after the
+`harness.worker_lost` with the same "durable sandbox activity" detail - three seconds after the
 four Prompt-to-PR runs. That is the same worker-shutdown event.
 
 Analytics (`modulo_query_analytics`, `error_code=harness.worker_lost`, hourly buckets for
@@ -146,7 +146,7 @@ Analytics (`modulo_query_analytics`, `error_code=harness.worker_lost`, hourly bu
 Improve Public Docs 1, PR Reviewer Agent 1, plus PR Housekeeper 1 and PR Reviewer Agent 1 in the
 12:00 bucket. The hourly bucket is the run's start hour, so those counts span the two deploy workflows that
 overlapped the window (the workflow created at 10:08 completed at 11:08, and the workflow created
-at 10:58 completed at 12:04) — not a single event — but the pattern is the same: a deploy kills
+at 10:58 completed at 12:04) - not a single event - but the pattern is the same: a deploy kills
 whatever sandbox work is executing on the prod worker.
 
 The same error code has a recurring daily history: 18 runs on 2026-10-21, 7 on 2026-10-22,
@@ -182,7 +182,7 @@ only occurrence of that URL in the repository is `AGENTS.md:63`:
 
 `node_runner._extract_pr_url` takes the **first** URL-shaped token in the retained stdout
 (`_PR_URL_PATTERN.search`, node_runner.py:2240), and a Prompt-to-PR run reads the repo `AGENTS.md`
-early — the captured opening steps of `b9cae5f1` show a `cat AGENTS.md` call. The documentation at
+early - the captured opening steps of `b9cae5f1` show a `cat AGENTS.md` call. The documentation at
 `api/routes/runs.py:408-413` already calls this heuristic
 "not anchored to `gh pr create`" and non-gating, but in practice it is misleading: for `7f2372be`
 the tail even contains `"url":"https://github.com/farnalabs/modulo/pull/2836"`, yet the projected
@@ -199,8 +199,8 @@ open the PR as soon as the first push succeeds, then keep working on the same br
 tails at 12:00-12:01 show skill reading and coverage analysis, not delivery. By contrast, the two
 runs that did deliver had opened PRs 93 and 13 seconds before the kill.
 
-This is an agent-compliance observation, not the cause of the loss — the deploy would have killed
-all four either way — but it materially changed the outcome from "4 delivered, 4 recorded failed"
+This is an agent-compliance observation, not the cause of the loss - the deploy would have killed
+all four either way - but it materially changed the outcome from "4 delivered, 4 recorded failed"
 to "2 delivered, 2 lost".
 
 ## What this is not
@@ -222,7 +222,7 @@ Ranked by durability per unit of risk. None was implemented here: the first is a
 deployment-policy change, and the second changes delivery evidence semantics; neither is safe to
 land as a drive-by under an investigation ticket.
 
-### 1. Primary — stop a production deploy from rolling the worker while sandbox runs are in flight
+### 1. Primary - stop a production deploy from rolling the worker while sandbox runs are in flight
 
 This is the only option that preserves the work rather than reporting its loss more accurately.
 The deploy already owns the decision point (the `Deploy to app-modulo` step), so the check belongs
@@ -241,11 +241,11 @@ Given the observed deploy cadence (multiple prod deploys per hour in this window
 node budgets of 55 minutes, a long unbounded wait would be unacceptable; the bounded
 wait-plus-override shape is the compromise.
 
-The alternative — a second always-on worker and a blue-green replace — does **not** fix this on its
+The alternative - a second always-on worker and a blue-green replace - does **not** fix this on its
 own: Fly still sends SIGTERM to the old worker, and the handoff still terminalises observed-activity
 runs after the drain window. It only removes the ~2.5-minute no-worker gap.
 
-### 2. Complement — make the run record tell the truth about delivery
+### 2. Complement - make the run record tell the truth about delivery
 
 Two independent changes, both small and testable:
 
@@ -264,7 +264,7 @@ Suggested regression coverage: a unit test that feeds a raw-output stream contai
 selected; and a worker-handoff test asserting that a sentinel observed before cancellation
 produces `delivery_done=True` on the triage marker.
 
-### 3. Operational — do not dispatch long Prompt-to-PR batches into a deploy window
+### 3. Operational - do not dispatch long Prompt-to-PR batches into a deploy window
 
 The four runs were dispatched at 11:33, while deploy run 41817770086 was already in flight
 (its job started at 11:09, the staging deploy ran 11:39-11:45 and staging E2E until 11:58); the
@@ -283,7 +283,7 @@ observed-activity gate wins first. Re-executing a sandbox node starts a fresh E2
 repeats all model work and side effects; the Prompt-to-PR prompt's one-branch/one-PR guard would
 limit duplicate PRs, but the cost and the risk of a second branch are real. Loosening that gate
 would be a product policy decision, not a bug fix. If it is ever revisited, the natural scope is
-`idempotent: true` graphs plus `single_pr_per_run`, bounded by the retry budget — and it should be
+`idempotent: true` graphs plus `single_pr_per_run`, bounded by the retry budget - and it should be
 opt-in per pipeline, not the default.
 
 ## Reproduction / verification commands

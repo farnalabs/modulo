@@ -1246,7 +1246,7 @@ The adapter is pure (constructs new objects), so extra wire keys are dropped.
 4. Regenerate `frontend/src/lib/api/schema.ts` via `pnpm dlx openapi-typescript@7.13.0`.
 5. If the field is UI-relevant, add it to `projectGraphNode`/`projectGraphEdge`.
 6. If the field is UI-only (layout, styling), add it to `CanvasNodeUiState`
-   instead — it does not belong in the wire contract.
+   instead - it does not belong in the wire contract.
 
 Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
 (not just line coverage) over `src/modulo`, and `[tool.coverage.report]` sets
