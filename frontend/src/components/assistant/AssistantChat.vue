@@ -950,16 +950,16 @@ function renderMarkdown(text: string): string {
 }
 @keyframes skill-shimmer {
   0%, 100% {
-    color: #00FFD1;
-    text-shadow: 0 0 4px rgba(0, 255, 209, 0.3);
+    color: #0d9488;
+    text-shadow: 0 0 4px rgba(13, 148, 136, 0.3);
   }
   33% {
-    color: #4DFFCB;
-    text-shadow: 0 0 6px rgba(77, 255, 203, 0.2);
+    color: #14b8a6;
+    text-shadow: 0 0 6px rgba(20, 184, 166, 0.2);
   }
   66% {
-    color: #00CCA8;
-    text-shadow: 0 0 4px rgba(0, 204, 168, 0.3);
+    color: #0f766e;
+    text-shadow: 0 0 4px rgba(15, 118, 110, 0.3);
   }
 }
 
