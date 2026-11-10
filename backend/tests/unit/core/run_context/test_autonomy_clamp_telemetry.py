@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.run_context import autonomy_telemetry as at
+from farna.core.run_context import autonomy_telemetry as at
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,14 +45,14 @@ def _session_factory() -> Any:
 
 
 async def test_clamp_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -96,14 +96,14 @@ async def test_clamp_emits_event_with_expected_payload(monkeypatch: pytest.Monke
     # The event type must be registered so it flows through product-analytics
     # ingest (asserted here rather than in a sync test under the module-level
     # asyncio mark).
-    from modulo.core.product_analytics.metrics_constants import VALID_EVENT_TYPES
+    from farna.core.product_analytics.metrics_constants import VALID_EVENT_TYPES
 
     assert at.AUTONOMY_RECOMMENDATION_CLAMPED in VALID_EVENT_TYPES
     assert "run.autonomy_recommendation_clamped" in VALID_EVENT_TYPES
 
 
 async def test_clamp_noop_when_session_factory_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     mock = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", mock)
@@ -121,7 +121,7 @@ async def test_clamp_noop_when_session_factory_missing(monkeypatch: pytest.Monke
 
 
 async def test_clamp_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     mock = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", mock)
@@ -139,7 +139,7 @@ async def test_clamp_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_clamp_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("db down")
@@ -147,8 +147,8 @@ async def test_clamp_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(al, "append_audit_event", _boom)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     # Must not raise — telemetry failures must never break a run.
     await at.emit_autonomy_clamp_telemetry(
@@ -168,14 +168,14 @@ async def test_clamp_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_clamp_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     async def _cancel(*args: Any, **kwargs: Any) -> None:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(al, "append_audit_event", _cancel)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     # Documented contract: cancellation is NOT a telemetry failure.
     with pytest.raises(asyncio.CancelledError):
@@ -198,13 +198,13 @@ async def test_clamp_payload_construction_failure_is_fail_open(monkeypatch: pyte
     blowing up) must be swallowed with the clamp ``failure_message`` — never
     propagate into gate evaluation and break a run.
     """
-    import modulo.core.audit_logger as al
-    import modulo.core.audit_logger.labels as labels
+    import farna.core.audit_logger as al
+    import farna.core.audit_logger.labels as labels
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     def _boom_short_id(run_id: object) -> str:
         raise RuntimeError("labels module broken")

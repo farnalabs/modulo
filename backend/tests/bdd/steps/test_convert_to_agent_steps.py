@@ -32,7 +32,7 @@ def change_node_type(node_id: str, from_type: str, to_type: str, ctx, client, re
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value={
                 "nodes": [{"id": node_id, "node_type": to_type}],
                 "edges": [],
@@ -57,7 +57,7 @@ def assign_schema_to_node(schema_name: str, ctx, client, request):
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value={
                 "nodes": [{"id": ctx["node_id"], "output_schema_id": str(schema_id)}],
                 "edges": [],
@@ -81,7 +81,7 @@ def bind_connector(connector_name: str, ctx, client, request):
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value={
                 "nodes": [
                     {

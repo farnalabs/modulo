@@ -16,13 +16,13 @@ import pytest
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from modulo.api.routes.run_ws import (
+from farna.api.routes.run_ws import (
     _consume_run_ws_token,
     _forward_run_events,
     _sanitize_event,
     run_websocket,
 )
-from modulo.core.pipeline_engine.event_broker import RunEvent
+from farna.core.pipeline_engine.event_broker import RunEvent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -142,9 +142,9 @@ async def test_consume_token_success():
     fake_redis = AsyncMock()
     payload = _ws_payload()
     with (
-        patch("modulo.api.routes.run_ws.Redis") as mock_redis_cls,
+        patch("farna.api.routes.run_ws.Redis") as mock_redis_cls,
         patch(
-            "modulo.api.routes.run_ws.consume_ws_token",
+            "farna.api.routes.run_ws.consume_ws_token",
             new_callable=AsyncMock,
             return_value=payload,
         ) as mock_consume,
@@ -158,13 +158,13 @@ async def test_consume_token_success():
 
 @pytest.mark.asyncio
 async def test_consume_token_expired():
-    from modulo.auth.ws_token import WsTokenExpiredError
+    from farna.auth.ws_token import WsTokenExpiredError
 
     fake_redis = AsyncMock()
     with (
-        patch("modulo.api.routes.run_ws.Redis") as mock_redis_cls,
+        patch("farna.api.routes.run_ws.Redis") as mock_redis_cls,
         patch(
-            "modulo.api.routes.run_ws.consume_ws_token",
+            "farna.api.routes.run_ws.consume_ws_token",
             new_callable=AsyncMock,
             side_effect=WsTokenExpiredError(),
         ),
@@ -179,9 +179,9 @@ async def test_consume_token_expired():
 async def test_consume_token_generic_exception():
     fake_redis = AsyncMock()
     with (
-        patch("modulo.api.routes.run_ws.Redis") as mock_redis_cls,
+        patch("farna.api.routes.run_ws.Redis") as mock_redis_cls,
         patch(
-            "modulo.api.routes.run_ws.consume_ws_token",
+            "farna.api.routes.run_ws.consume_ws_token",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ),
@@ -316,7 +316,7 @@ async def test_ws_no_token_closes_4001():
 @pytest.mark.asyncio
 async def test_ws_expired_token_closes_4001():
     ws = _FakeWebSocket()
-    with patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=None):
+    with patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=None):
         await run_websocket(ws, uuid.uuid4(), token="bad")
     assert ws.close_code == 4001
 
@@ -325,7 +325,7 @@ async def test_ws_expired_token_closes_4001():
 async def test_ws_negative_seq_closes_4001():
     ws = _FakeWebSocket()
     payload = {"sub": "u", "org_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4()), "org_role": "admin"}
-    with patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload):
+    with patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload):
         await run_websocket(ws, uuid.uuid4(), since_event_seq=-1, token="tok")
     assert ws.close_code == 4001
 
@@ -348,12 +348,12 @@ async def test_ws_programming_error_sends_migration_msg():
     }
     with (
         patch(
-            "modulo.api.routes.run_ws._consume_run_ws_token",
+            "farna.api.routes.run_ws._consume_run_ws_token",
             new_callable=AsyncMock,
             return_value=payload,
         ),
         patch(
-            "modulo.api.routes.run_ws._load_run_with_rls",
+            "farna.api.routes.run_ws._load_run_with_rls",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("no table", None, None),
         ),
@@ -376,12 +376,12 @@ async def test_ws_sqlalchemy_error_sends_db_unavailable():
     }
     with (
         patch(
-            "modulo.api.routes.run_ws._consume_run_ws_token",
+            "farna.api.routes.run_ws._consume_run_ws_token",
             new_callable=AsyncMock,
             return_value=payload,
         ),
         patch(
-            "modulo.api.routes.run_ws._load_run_with_rls",
+            "farna.api.routes.run_ws._load_run_with_rls",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("down"),
         ),
@@ -397,7 +397,7 @@ async def test_ws_session_contract_error_sends_specific_frame():
     the shared REST message — never a retry-inviting outage frame."""
     from sqlalchemy.exc import InvalidRequestError
 
-    from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
+    from farna.api.db_error_handling import MSG_SESSION_CONTRACT
 
     ws = _FakeWebSocket()
     payload = {
@@ -408,12 +408,12 @@ async def test_ws_session_contract_error_sends_specific_frame():
     }
     with (
         patch(
-            "modulo.api.routes.run_ws._consume_run_ws_token",
+            "farna.api.routes.run_ws._consume_run_ws_token",
             new_callable=AsyncMock,
             return_value=payload,
         ),
         patch(
-            "modulo.api.routes.run_ws._load_run_with_rls",
+            "farna.api.routes.run_ws._load_run_with_rls",
             new_callable=AsyncMock,
             side_effect=InvalidRequestError("Autobegin is disabled on this Session"),
         ),
@@ -435,12 +435,12 @@ async def test_ws_generic_exception_sends_internal_error():
     }
     with (
         patch(
-            "modulo.api.routes.run_ws._consume_run_ws_token",
+            "farna.api.routes.run_ws._consume_run_ws_token",
             new_callable=AsyncMock,
             return_value=payload,
         ),
         patch(
-            "modulo.api.routes.run_ws._load_run_with_rls",
+            "farna.api.routes.run_ws._load_run_with_rls",
             new_callable=AsyncMock,
             side_effect=RuntimeError("surprise"),
         ),
@@ -461,8 +461,8 @@ async def test_ws_run_not_found_closes_4004():
     run_id = uuid.uuid4()
     payload = {"sub": "u", "org_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4()), "org_role": "admin"}
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=None),
     ):
         await run_websocket(ws, run_id, token="tok")
     assert ws.close_code == 4004
@@ -475,8 +475,8 @@ async def test_ws_terminal_run_sends_terminal_and_closes():
     run_id = uuid.uuid4()
     payload = {"sub": "u", "org_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4()), "org_role": "admin"}
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("complete")),
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("complete")),
     ):
         await run_websocket(ws, run_id, token="tok")
     assert ws.sent[0]["status"] == "terminal"
@@ -499,9 +499,9 @@ async def test_ws_happy_path_subscribes_and_forwards():
     fake_broker = _FakeBroker(replay=[ev], live_items=[None])
 
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
-        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("farna.api.routes.run_ws.get_registry") as mock_get_reg,
     ):
         mock_reg = MagicMock()
         mock_reg.get_or_create.return_value = fake_broker
@@ -523,9 +523,9 @@ async def test_ws_clamps_large_since_event_seq_to_zero():
     fake_broker = _FakeBroker(replay=[], live_items=[None])
 
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
-        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("farna.api.routes.run_ws.get_registry") as mock_get_reg,
     ):
         mock_reg = MagicMock()
         mock_reg.get_or_create.return_value = fake_broker
@@ -640,9 +640,9 @@ async def test_ws_default_since_event_seq_zero():
     fake_broker = _FakeBroker(replay=[ev], live_items=[None])
 
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
-        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("farna.api.routes.run_ws.get_registry") as mock_get_reg,
     ):
         mock_reg = MagicMock()
         mock_reg.get_or_create.return_value = fake_broker
@@ -668,9 +668,9 @@ async def test_ws_since_event_seq_exact_boundary_not_clamped():
     fake_broker = _FakeBroker(replay=[], live_items=[None])
 
     with (
-        patch("modulo.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
-        patch("modulo.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
-        patch("modulo.api.routes.run_ws.get_registry") as mock_get_reg,
+        patch("farna.api.routes.run_ws._consume_run_ws_token", new_callable=AsyncMock, return_value=payload),
+        patch("farna.api.routes.run_ws._load_run_with_rls", new_callable=AsyncMock, return_value=_FakeRun("running")),
+        patch("farna.api.routes.run_ws.get_registry") as mock_get_reg,
     ):
         mock_reg = MagicMock()
         mock_reg.get_or_create.return_value = fake_broker

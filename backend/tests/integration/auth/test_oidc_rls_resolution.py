@@ -63,13 +63,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.auth.sso import _resolve_oidc_provider
-from modulo.db.crud.sso_provider import (
+from farna.auth.sso import _resolve_oidc_provider
+from farna.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
-from modulo.db.rls import set_rls_org
-from modulo.settings import Settings
+from farna.db.rls import set_rls_org
+from farna.settings import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -224,7 +224,7 @@ class TestSystemLegResolution:
         org — here the SECOND-created org, which a first-org-bound app session
         could never see. The app session must come out transaction-less (its
         own scoped fallback never opened)."""
-        with patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()):
+        with patch("farna.auth.sso.validate_outbound_url_async", AsyncMock()):
             async with app_session_factory() as app_session:
                 resolved = await _resolve_oidc_provider(two_orgs["oidc_b"], system_session, app_session, _settings())
         client_id, _secret, discovery_url, _scopes, db_provider = resolved
@@ -276,8 +276,8 @@ class TestSystemLegResolution:
             await set_rls_org(session, uuid.UUID(two_orgs["org_a_id"]))
 
         with (
-            patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()),
-            patch("modulo.auth.sso._set_default_rls_org", new=_bind_org_a),
+            patch("farna.auth.sso.validate_outbound_url_async", AsyncMock()),
+            patch("farna.auth.sso._set_default_rls_org", new=_bind_org_a),
         ):
             async with app_session_factory() as app_session:
                 resolved_a = await _resolve_oidc_provider(two_orgs["oidc_a"], None, app_session, _settings())
@@ -331,9 +331,9 @@ async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session:
     - ``modulo_multi_org_enabled=True`` (org-login routes otherwise 404 per ADR 005),
     - a REAL system-session override (exercises the modulo_system leg),
     - an anonymous plan-context override (pre-auth feature gate)."""
-    from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -378,8 +378,8 @@ async def test_per_provider_oidc_login_resolves_cross_org_and_redirects_to_idp(
         "issuer": "https://idp.example.com",
     }
     with (
-        patch("modulo.auth.sso._fetch_discovery_pinned", discovery),
-        patch("modulo.auth.sso.validate_outbound_url_async", AsyncMock()),
+        patch("farna.auth.sso._fetch_discovery_pinned", discovery),
+        patch("farna.auth.sso.validate_outbound_url_async", AsyncMock()),
     ):
         resp = await multi_org_client.get(f"/api/v1/auth/oidc/{two_orgs['oidc_b']}/login", follow_redirects=False)
     assert resp.status_code == 307, resp.text

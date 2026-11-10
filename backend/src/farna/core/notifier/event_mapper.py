@@ -1,0 +1,670 @@
+"""Notification event mapping — maps platform events to in-app Notification records.
+
+Event categories and their notification config (every event configured here;
+the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
+``api/routes/admin_notifications.py``, which MUST stay a subset of these keys):
+  - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
+  - run_failed        → level: error,  scope: org,   category: "run.failed"
+  - run_stalled       → level: warning, scope: org,   category: "run.stalled"
+  - provider_failure  → level: error,  scope: admin, category: "provider.failure"
+                        (FAR-2006 — a non-retryable 401/402 refusal; admin
+                        scope because the fix is a provider key/balance
+                        action, not a pipeline edit)
+  - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
+  - circuit_breaker_tripped → level: warning, scope: admin, category: "costs.circuit_breaker_tripped"
+  - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
+  - hitl_overdue      → level: warning, scope: admin
+  - hitl_deadline_warning → level: warning, scope: admin (FAR-1295)
+  - hitl_approve_sweep_suspected → level: warning, scope: admin (FAR-611)
+  - hitl_review_removed / hitl_review_removal_denied → scope: admin (hitl-gate guard)
+  - eval_regression   → level: warning, scope: org
+  - eval_blocked      → level: error,  scope: org
+  - trigger_deactivated → level: warning, scope: org (FAR-190; wording is
+                          payload-driven per trigger_type — FAR-1410)
+  - trigger_streak_alert → level: warning, scope: org (FAR-1410, a notify-only
+                          cron streak trip that deactivated NOTHING)
+  - org_triggers_auto_paused → level: warning, scope: admin (FAR-1183)
+  - guardrail_enforcement_gap / guardrail_kill_switch / guardrail_unexpected_skip → scope: admin (FAR-223)
+  - queue_pressure_notice / queue_pressure_warning / queue_pressure_critical
+    → level: info/warning/error, scope: org (FAR-1344)
+  - capacity_backpressure → level: warning, scope: org (FAR-1344)
+  - capacity_saturation → level: warning, scope: admin (FAR-1344)
+  - capacity_recovered → level: info, scope: org (FAR-1344)
+  - capacity_redis_pressure → level: warning, scope: admin (FAR-2002)
+  - pipeline_decay → level: warning, scope: org (FAR-2116; one alert per
+                     webhook pipeline whose 2h rolling success rate collapses
+                     or whose node-deadline watchdog keeps firing)
+  - pipeline_decay_recovered → level: info, scope: org (FAR-2116, the closure
+                     edge — an operator is never left with a stale alert)
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.core.notifier import (
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_CAPACITY_BACKPRESSURE,
+    EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_REDIS_PRESSURE,
+    EVENT_CAPACITY_SATURATION,
+    EVENT_CIRCUIT_BREAKER_TRIPPED,
+    EVENT_CLAIM_EXPIRED,
+    EVENT_EVAL_BLOCKED,
+    EVENT_EVAL_REGRESSION,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP,
+    EVENT_GUARDRAIL_KILL_SWITCH,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP,
+    EVENT_HITL_APPROVE_SWEEP,
+    EVENT_HITL_AWAITING,
+    EVENT_HITL_DEADLINE_WARNING,
+    EVENT_HITL_OVERDUE,
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED,
+    EVENT_PIPELINE_DECAY,
+    EVENT_PIPELINE_DECAY_RECOVERED,
+    EVENT_PROVIDER_FAILURE,
+    EVENT_QUEUE_PRESSURE_CRITICAL,
+    EVENT_QUEUE_PRESSURE_NOTICE,
+    EVENT_QUEUE_PRESSURE_WARNING,
+    EVENT_RUN_FAILED,
+    EVENT_RUN_STALLED,
+    EVENT_TRIGGER_DEACTIVATED,
+    EVENT_TRIGGER_STREAK_ALERT,
+)
+from farna.db.crud.notifications import create_notification
+from farna.db.models.notification import Notification
+
+_log = logging.getLogger(__name__)
+
+# Deep-link template shared by every run-scoped notification action URL.
+_RUN_DETAIL_URL = "/runs/{run_id}"
+
+# FAR-1344 — the capacity/queue-pressure panel lives on /analytics (the
+# FAR-1343 read surface); capacity alerts deep-link there so an operator can
+# act without reading logs.
+_CAPACITY_PANEL_URL = "/analytics"
+
+# HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
+# emitted by the service-layer backstop as AuditEvents; the config registration
+# keeps the in-app Notification surface aware of them (scope: admin).
+EVENT_HITL_REVIEW_REMOVED = "hitl_review_removed"
+EVENT_HITL_REVIEW_REMOVAL_DENIED = "hitl_review_removal_denied"
+
+_EVENT_CONFIG: dict[str, dict[str, Any]] = {
+    EVENT_HITL_AWAITING: {
+        "level": "info",
+        "scope": "org",
+        "category": "hitl.awaiting",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_RUN_FAILED: {
+        "level": "error",
+        "scope": "org",
+        "category": "run.failed",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-2006: a provider auth/billing refusal is terminal and never retried,
+    # and its remedy is an ADMIN action (rotate/fund the provider key), hence
+    # admin scope. Level error so it reaches the in-app surface and any
+    # subscribed pager; TTL matches the other long-lived failure alerts.
+    EVENT_PROVIDER_FAILURE: {
+        "level": "error",
+        "scope": "admin",
+        "category": "provider.failure",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_RUN_STALLED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "run.stalled",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_BUDGET_EXCEEDED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "run.budget_exceeded",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_CLAIM_EXPIRED: {
+        "level": "info",
+        "scope": "org",
+        "category": "hitl.claim_expired",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
+    EVENT_HITL_OVERDUE: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.overdue",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-1295 — approaching-deadline warning (the webhook / in-app leg of the
+    # FAR-1270 email sweep). Mirrors hitl_overdue's operator-alert shape
+    # (warning / admin scope / org-admin dismissal); the TTL matches
+    # claim_expired (24h) because the warning is only actionable until the
+    # deadline passes, after which the terminaliser owns the gate.
+    EVENT_HITL_DEADLINE_WARNING: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.deadline_warning",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
+    EVENT_HITL_APPROVE_SWEEP: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.approve_sweep",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_REVIEW_REMOVED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.gate_removed",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: {
+        "level": "error",
+        "scope": "admin",
+        "category": "hitl.gate_removal_denied",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_EVAL_REGRESSION: {
+        "level": "warning",
+        "scope": "org",
+        "category": "eval.regression",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 336,
+    },
+    EVENT_EVAL_BLOCKED: {
+        "level": "error",
+        "scope": "org",
+        "category": "eval.blocked",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_TRIGGER_DEACTIVATED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "triggers.auto_deactivated",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-1410 — a notify-only cron no-delivery streak trip (FAR-1387): the
+    # threshold was reached and NOTHING was deactivated, so it gets its own
+    # render config + category rather than borrowing the deactivation's
+    # (operators filtering on triggers.auto_deactivated must never see a trip
+    # that took no action).
+    EVENT_TRIGGER_STREAK_ALERT: {
+        "level": "warning",
+        "scope": "org",
+        "category": "triggers.streak_alert",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-1183 — org cost-controls auto-stop ("Auto-stop on budget exceeded") tripped.
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "triggers.auto_paused",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-105 §8.10 — the per-pipeline monthly spend circuit breaker tripped
+    # (triggers paused until an admin resets it). Mirrors the
+    # ORG_TRIGGERS_AUTO_PAUSED operator-alert shape (warning / admin scope /
+    # org-admin dismissal). This entry was missing while the event was already
+    # dispatched by cost_controller.trip_pipeline_circuit_breaker, so the
+    # in-app leg hit the mapper's unknown-event no-op and never rendered.
+    EVENT_CIRCUIT_BREAKER_TRIPPED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "costs.circuit_breaker_tripped",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.enforcement_gap",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_KILL_SWITCH: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "guardrails.kill_switch",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.unexpected_skip",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # FAR-1344 — the capacity queue-pressure ladder. One event type per rung
+    # (see the notifier __init__ rationale): the level escalates
+    # notice=info → warning=warning → critical=error while the category stays
+    # org-scoped and the action deep-links to the capacity panel. TTL is long
+    # enough (48h) that an unresolved queue alert outlives a weekend; the
+    # sweep's auto-clear (capacity_recovered) is what retires it early.
+    EVENT_QUEUE_PRESSURE_NOTICE: {
+        "level": "info",
+        "scope": "org",
+        "category": "capacity.queue_notice",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 48,
+    },
+    EVENT_QUEUE_PRESSURE_WARNING: {
+        "level": "warning",
+        "scope": "org",
+        "category": "capacity.queue_warning",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_QUEUE_PRESSURE_CRITICAL: {
+        "level": "error",
+        "scope": "org",
+        "category": "capacity.queue_critical",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    # Backpressure is an org-scoped, pipeline-level admission refusal: the
+    # operator (not only an admin) owns the queue, so it is org scoped.
+    EVENT_CAPACITY_BACKPRESSURE: {
+        "level": "warning",
+        "scope": "org",
+        "category": "capacity.backpressure",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    # Saturation is an ORG-wide infrastructure condition (a shared limit is
+    # fully held) — admin scope, paired with the other org-capacity operator
+    # alerts (org_triggers_auto_paused / circuit_breaker_tripped).
+    EVENT_CAPACITY_SATURATION: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "capacity.saturation",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_CAPACITY_RECOVERED: {
+        "level": "info",
+        "scope": "org",
+        "category": "capacity.recovered",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
+    # FAR-2002 — the SAQ queue's Redis store is at its maxmemory bound. Admin
+    # scope: the fix is an operator/deployment change (raise REDIS_MAXMEMORY or
+    # the Redis tier), and it is raised per org with pending work at risk.
+    EVENT_CAPACITY_REDIS_PRESSURE: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "capacity.redis_pressure",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    # FAR-2116 — pipeline health. ORG scope: the pipeline's owner acts on it
+    # (investigate the failures / the node-deadline kills), so the whole org
+    # should see it rather than only admins. TTL is long enough (72h) that an
+    # unreviewed degradation outlives a weekend; the sweep's recovery event is
+    # what retires it early.
+    EVENT_PIPELINE_DECAY: {
+        "level": "warning",
+        "scope": "org",
+        "category": "pipeline.decay",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_PIPELINE_DECAY_RECOVERED: {
+        "level": "info",
+        "scope": "org",
+        "category": "pipeline.decay_recovered",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
+}
+
+_TITLE_TEMPLATES: dict[str, str] = {
+    EVENT_HITL_AWAITING: "HITL review needed — {pipeline_name}",
+    EVENT_RUN_FAILED: "Run failed — {pipeline_name}",
+    EVENT_RUN_STALLED: "Run stalled — {pipeline_name}",
+    EVENT_PROVIDER_FAILURE: "Model provider refused runs — {error_code}",
+    EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
+    EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
+    EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_HITL_DEADLINE_WARNING: "HITL review deadline approaching — {pipeline_name}",
+    EVENT_HITL_APPROVE_SWEEP: "HITL approve sweep suspected",
+    EVENT_HITL_REVIEW_REMOVED: "HITL review weakened — {pipeline_name}",
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: "HITL review removal denied",
+    EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
+    EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
+    EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
+    EVENT_TRIGGER_STREAK_ALERT: "No-delivery streak detected — {pipeline_name}",
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: "Triggers paused — budget exceeded",
+    EVENT_CIRCUIT_BREAKER_TRIPPED: "Circuit breaker tripped — {pipeline_name}",
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
+    EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
+    EVENT_QUEUE_PRESSURE_NOTICE: "Queue building up — {pipeline_name}",
+    EVENT_QUEUE_PRESSURE_WARNING: "Queue not draining — {pipeline_name}",
+    EVENT_QUEUE_PRESSURE_CRITICAL: "Queue stalled — {pipeline_name}",
+    EVENT_CAPACITY_BACKPRESSURE: "New runs refused (backpressure) — {pipeline_name}",
+    EVENT_CAPACITY_SATURATION: "Capacity saturation — {limit_label} fully held",
+    EVENT_CAPACITY_RECOVERED: "Capacity recovered — {subject_label}",
+    EVENT_CAPACITY_REDIS_PRESSURE: "Queue store at memory bound — {used_percent}% used",
+    EVENT_PIPELINE_DECAY: "Pipeline degraded — {pipeline_name}",
+    EVENT_PIPELINE_DECAY_RECOVERED: "Pipeline recovered — {pipeline_name}",
+}
+
+_BODY_TEMPLATES: dict[str, str] = {
+    EVENT_HITL_AWAITING: 'Pipeline "{pipeline_name}" is waiting for human review.',
+    EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
+    EVENT_RUN_STALLED: (
+        'Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'
+    ),
+    EVENT_PROVIDER_FAILURE: (
+        'Pipeline "{pipeline_name}" was refused by the model provider with {error_code}. '
+        "This failure is NOT retried — re-dispatching cannot succeed. Check the provider account: "
+        "the API key may be invalid, expired or revoked, or the account balance/quota may be exhausted."
+    ),
+    EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
+    EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
+    EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_HITL_DEADLINE_WARNING: (
+        'HITL gate "{gate_label}" on "{pipeline_name}" is due in {minutes_remaining} minutes. '
+        "Unreviewed, the run is cancelled at the deadline."
+    ),
+    EVENT_HITL_APPROVE_SWEEP: (
+        "{approve_count} HITL reviews across {distinct_pipeline_count} pipelines were approved by "
+        "actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."
+    ),
+    EVENT_HITL_REVIEW_REMOVED: 'A HITL review on "{pipeline_name}" was weakened or removed.',
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL review was denied.",
+    EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
+    EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
+    EVENT_TRIGGER_DEACTIVATED: (
+        'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
+        "(threshold {threshold})."
+    ),
+    EVENT_TRIGGER_STREAK_ALERT: (
+        'Cron trigger "{pipeline_name}" reached {streak} consecutive no-delivery runs (threshold {threshold}). '
+        "No action was taken — the trigger was not deactivated. Auto-deactivation for a cron trigger is opt-in "
+        "via no_delivery_auto_deactivate."
+    ),
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: (
+        "All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD "
+        "(limit {limit_usd} USD). In-flight runs are finishing; resume triggers from the admin org settings."
+    ),
+    EVENT_CIRCUIT_BREAKER_TRIPPED: (
+        'The monthly spend circuit breaker for "{pipeline_name}" tripped: its triggers are paused, so no '
+        "new trigger-initiated runs start. An admin reset re-enables them."
+    ),
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
+        'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
+    ),
+    EVENT_GUARDRAIL_KILL_SWITCH: (
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
+        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
+    ),
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: (
+        'Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by '
+        "a soft-deleted pinned guardrail. See the run for details."
+    ),
+    # FAR-1344 — capacity alert bodies. Every placeholder here is always present
+    # in the payload the sweep builds (it fills safe defaults), so a capacity
+    # alert never renders "[unknown]".
+    EVENT_QUEUE_PRESSURE_NOTICE: (
+        'Pipeline "{pipeline_name}" has {pending_depth} queued run(s), oldest waiting '
+        "{oldest_pending_age_minutes} min — the queue is growing. Binding limit: {limit_label} "
+        "({current_value}/{limit_value}). {suggested_action}"
+    ),
+    EVENT_QUEUE_PRESSURE_WARNING: (
+        'Pipeline "{pipeline_name}" queue is not draining: {pending_depth} queued, oldest waiting '
+        "{oldest_pending_age_minutes} min. Binding limit: {limit_label} ({current_value}/{limit_value}). "
+        "{suggested_action}"
+    ),
+    EVENT_QUEUE_PRESSURE_CRITICAL: (
+        'Pipeline "{pipeline_name}" queue is stalled: {pending_depth} queued and still climbing with no '
+        "drain, oldest waiting {oldest_pending_age_minutes} min. Binding limit: {limit_label} "
+        "({current_value}/{limit_value}). {suggested_action}"
+    ),
+    EVENT_CAPACITY_BACKPRESSURE: (
+        'New runs for "{pipeline_name}" are being refused by backpressure ({reason_label}) — '
+        "{pending_depth} queued locally. {suggested_action}"
+    ),
+    EVENT_CAPACITY_SATURATION: (
+        "{limit_label} has been fully held at {limit_value} for over {sustained_minutes} min with "
+        "{pending_depth} run(s) queued org-wide. {suggested_action}"
+    ),
+    EVENT_CAPACITY_RECOVERED: (
+        "Capacity has recovered for {subject_label}: the queue is draining again and the "
+        "{previous_level} capacity alert is cleared."
+    ),
+    EVENT_CAPACITY_REDIS_PRESSURE: (
+        "The Redis store backing the SAQ queue is using {used_memory_label} of its "
+        "{maxmemory_label} maxmemory bound ({used_percent}%; policy {policy}). Queued job "
+        "hashes are being evicted/shed and re-dispatched by the reconciler — raise "
+        "REDIS_MAXMEMORY (or the Redis tier's memory) before the bound starts refusing enqueues."
+    ),
+    # FAR-2116 — pipeline health. Every placeholder is always present in the
+    # sweep's payload (it fills "n/a" defaults), so the render never falls back
+    # to "[unknown]". The body names the failing measure, its figure, the
+    # threshold and the window so the alert is actionable without a lookup.
+    EVENT_PIPELINE_DECAY: (
+        'Webhook-triggered pipeline "{pipeline_name}" is degraded: {reason_label}. '
+        "Window: last {window_minutes} minutes. Success rate {success_rate_percent}% "
+        "({runs_complete} of {runs_total} terminal runs completed); node-deadline watchdog "
+        "fired {watchdog_firings} time(s)."
+    ),
+    EVENT_PIPELINE_DECAY_RECOVERED: (
+        'Webhook-triggered pipeline "{pipeline_name}" has recovered: {reason_label} '
+        "(window: last {window_minutes} minutes). The degradation alert is cleared."
+    ),
+}
+
+_ACTION_URL_TEMPLATES: dict[str, str | None] = {
+    EVENT_HITL_AWAITING: _RUN_DETAIL_URL,
+    EVENT_RUN_FAILED: _RUN_DETAIL_URL,
+    EVENT_RUN_STALLED: _RUN_DETAIL_URL,
+    EVENT_PROVIDER_FAILURE: _RUN_DETAIL_URL,
+    EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
+    EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
+    EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
+    EVENT_HITL_DEADLINE_WARNING: _RUN_DETAIL_URL,
+    EVENT_HITL_REVIEW_REMOVED: None,
+    EVENT_HITL_APPROVE_SWEEP: None,
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: None,
+    EVENT_EVAL_REGRESSION: "/evals",
+    EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
+    EVENT_TRIGGER_DEACTIVATED: None,
+    EVENT_TRIGGER_STREAK_ALERT: "/settings/triggers",
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: None,
+    # No deep link: there is no /pipelines/{id} detail route (only the editor),
+    # mirroring the sibling auto-pause event's None action.
+    EVENT_CIRCUIT_BREAKER_TRIPPED: None,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: _RUN_DETAIL_URL,
+    EVENT_GUARDRAIL_KILL_SWITCH: None,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: _RUN_DETAIL_URL,
+    # FAR-1344 — the capacity panel on /analytics is the operator's action
+    # surface (FAR-1343 read); every capacity alert deep-links there.
+    EVENT_QUEUE_PRESSURE_NOTICE: _CAPACITY_PANEL_URL,
+    EVENT_QUEUE_PRESSURE_WARNING: _CAPACITY_PANEL_URL,
+    EVENT_QUEUE_PRESSURE_CRITICAL: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_BACKPRESSURE: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_SATURATION: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_RECOVERED: _CAPACITY_PANEL_URL,
+    EVENT_CAPACITY_REDIS_PRESSURE: _CAPACITY_PANEL_URL,
+    # FAR-2116 — the pipeline-decay figures are the /analytics success rate;
+    # deep-link the panel pre-filtered to the pipeline so the operator can
+    # reproduce the number the alert quotes.
+    EVENT_PIPELINE_DECAY: "/analytics?pipeline_id={pipeline_id}",
+    EVENT_PIPELINE_DECAY_RECOVERED: "/analytics?pipeline_id={pipeline_id}",
+}
+
+# FAR-1410 — payload-driven wording overrides, selected from the payload's
+# ``trigger_type`` before the base templates above. ``trigger_deactivated``'s
+# base copy is ongoing-worded (FAR-190), but the same event also fires for a
+# CRON trigger that opted in to auto-deactivation via
+# ``no_delivery_auto_deactivate`` (FAR-1387), where "Ongoing trigger" would be
+# wrong. An (event_type, trigger_type) pair with no override falls back to the
+# base template, so the ongoing case renders byte-identically to before.
+_TRIGGER_TYPE_TEMPLATE_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
+    EVENT_TRIGGER_DEACTIVATED: {
+        "cron": {
+            "title": "Cron trigger auto-deactivated — {pipeline_name}",
+            "body": (
+                'Cron trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery '
+                "runs (threshold {threshold}). Auto-deactivation was enabled for this trigger via "
+                "no_delivery_auto_deactivate."
+            ),
+        },
+    },
+}
+
+
+def _template_override(event_type: str, payload: dict[str, Any], field: str) -> str | None:
+    """FAR-1410 — the payload-driven template variant for ``field`` ("title" /
+    "body"), or ``None`` when the base template applies."""
+    variants = _TRIGGER_TYPE_TEMPLATE_OVERRIDES.get(event_type)
+    if variants is None:
+        return None
+    override = variants.get(str(payload.get("trigger_type") or ""))
+    if override is None:
+        return None
+    return override.get(field)
+
+
+def notification_categories() -> frozenset[str]:
+    """All valid Notification.category values, derived from _EVENT_CONFIG.
+
+    Single source of truth for preference validation/response shaping — never
+    hardcode the category list (FAR-247). Includes every configured category
+    (org/admin/user scoped), so users can opt out of each one.
+    """
+    return frozenset(cfg["category"] for cfg in _EVENT_CONFIG.values())
+
+
+class NotificationEventMapper:
+    """Maps platform events to in-app notifications and creates DB records."""
+
+    async def create_from_event(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        event_type: str,
+        payload: dict[str, Any],
+        target_user_id: uuid.UUID | None = None,
+    ) -> Notification | None:
+        """Create a notification record from a platform event.
+
+        Returns None if the event type is not recognised.
+        """
+        config = _EVENT_CONFIG.get(event_type)
+        if config is None:
+            _log.debug("mapper.unknown_event_type", extra={"event_type": event_type})
+            return None
+
+        # FAR-1410 — title/body wording may vary by the payload's trigger_type
+        # (e.g. trigger_deactivated renders ongoing- or cron-worded copy);
+        # ``or`` falls back to the base template when no override applies.
+        title = self._resolve_template(
+            _template_override(event_type, payload, "title") or _TITLE_TEMPLATES.get(event_type, event_type),
+            payload,
+        )
+        body = self._resolve_template(
+            _template_override(event_type, payload, "body") or _BODY_TEMPLATES.get(event_type, ""),
+            payload,
+        )
+        action_url = _ACTION_URL_TEMPLATES.get(event_type)
+        if action_url is not None:
+            action_url = self._resolve_template(action_url, payload)
+
+        ttl_hours = config.get("ttl_hours")
+        expires_at = None
+        if ttl_hours is not None and ttl_hours > 0:
+            expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours)
+
+        notification = await create_notification(
+            session=session,
+            org_id=org_id,
+            scope=config["scope"],
+            level=config["level"],
+            category=config["category"],
+            title=title,
+            body=body,
+            action_url=action_url,
+            dismiss_strategy=config["dismiss_strategy"],
+            dismissible_at_scope=config["dismissible_at_scope"],
+            target_user_id=target_user_id,
+            expires_at=expires_at,
+        )
+        _log.info(
+            "mapper.notification_created",
+            extra={
+                "org_id": str(org_id),
+                "event_type": event_type,
+                "notification_id": str(notification.id),
+            },
+        )
+        return notification
+
+    def _resolve_template(self, template: str, payload: dict[str, Any]) -> str:
+        try:
+            return template.format(**payload)
+        except KeyError as exc:
+            _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
+            result = template.replace(f"{{{exc.args[0]}}}", "[unknown]")
+            try:
+                return result.format(**payload)
+            except KeyError:
+                return result
+        except (ValueError, IndexError, TypeError):
+            _log.warning("mapper.template_format_error", extra={"template": template})
+            return template

@@ -29,9 +29,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.cli.apply.executor import ApplyExecutor
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.models import PipelineEntity
+from farna.cli.apply.executor import ApplyExecutor
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.models import PipelineEntity
 from tests.unit.cli.test_apply_pipeline import _mock_current_with_pipelines, _pipeline_item
 
 _EXISTING_ID = "00000000-0000-0000-0000-0000000000aa"

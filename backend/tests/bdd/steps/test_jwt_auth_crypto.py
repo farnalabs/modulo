@@ -21,7 +21,7 @@ import jwt as pyjwt
 from jwt import InvalidTokenError as JWTError
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth import jwt as jwt_mod
+from farna.auth import jwt as jwt_mod
 
 scenarios("../features/auth/jwt_auth_crypto.feature")
 

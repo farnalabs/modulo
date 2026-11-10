@@ -141,8 +141,8 @@ def ingest_valid(client, ctx, request):
     ctx["last_group_id"] = group_id
 
     with (
-        patch("modulo.api.routes.errors._key_store") as ks,
-        patch("modulo.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
+        patch("farna.api.routes.errors._key_store") as ks,
+        patch("farna.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
     ):
         ks.verify_hmac = AsyncMock(return_value=True)
         ingest.return_value = [result]
@@ -182,8 +182,8 @@ def ingest_duplicate(client, ctx, request):
     ctx["duplicate_group_id"] = group_id
 
     with (
-        patch("modulo.api.routes.errors._key_store") as ks,
-        patch("modulo.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
+        patch("farna.api.routes.errors._key_store") as ks,
+        patch("farna.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
     ):
         ks.verify_hmac = AsyncMock(return_value=True)
         ingest.side_effect = [[first_result], [second_result]]
@@ -232,7 +232,7 @@ def ingest_empty_message(client, request):
         ]
     }
     with (
-        patch("modulo.api.routes.errors._key_store") as ks,
+        patch("farna.api.routes.errors._key_store") as ks,
     ):
         ks.verify_hmac = AsyncMock(return_value=True)
         resp = client.post(
@@ -257,8 +257,8 @@ def ingest_batch_5(client, ctx, request):
     results_list = [{"group_id": str(uuid.uuid4()), "is_new": True} for _ in range(5)]
 
     with (
-        patch("modulo.api.routes.errors._key_store") as ks,
-        patch("modulo.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
+        patch("farna.api.routes.errors._key_store") as ks,
+        patch("farna.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
     ):
         ks.verify_hmac = AsyncMock(return_value=True)
         ingest.return_value = results_list
@@ -293,8 +293,8 @@ def ingest_with_breadcrumbs(client, ctx, request):
     result = {"group_id": str(uuid.uuid4()), "is_new": True}
 
     with (
-        patch("modulo.api.routes.errors._key_store") as ks,
-        patch("modulo.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
+        patch("farna.api.routes.errors._key_store") as ks,
+        patch("farna.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
     ):
         ks.verify_hmac = AsyncMock(return_value=True)
         ingest.return_value = [result]
@@ -343,10 +343,10 @@ def list_groups(client, ctx, request):
     total = ctx.get("group_count", 0)
 
     with (
-        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.errors.get_error_groups", new_callable=AsyncMock) as get_grps,
-        patch("modulo.api.routes.errors.count_error_groups", new_callable=AsyncMock) as count_grps,
-        patch("modulo.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
+        patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.errors.get_error_groups", new_callable=AsyncMock) as get_grps,
+        patch("farna.api.routes.errors.count_error_groups", new_callable=AsyncMock) as count_grps,
+        patch("farna.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
     ):
         get_grps.return_value = groups
         count_grps.return_value = total
@@ -373,10 +373,10 @@ def filter_by_status(client, ctx, request):
         filtered = [_make_group(status="new")]
 
     with (
-        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.errors.get_error_groups", new_callable=AsyncMock) as get_grps,
-        patch("modulo.api.routes.errors.count_error_groups", new_callable=AsyncMock) as count_grps,
-        patch("modulo.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
+        patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.errors.get_error_groups", new_callable=AsyncMock) as get_grps,
+        patch("farna.api.routes.errors.count_error_groups", new_callable=AsyncMock) as count_grps,
+        patch("farna.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
     ):
         get_grps.return_value = filtered
         count_grps.return_value = len(filtered)
@@ -396,8 +396,8 @@ def check_filtered_status(expected, ctx):
 @when("I request a non-existent error group")
 def get_nonexistent_group(ctx, request):
     with (
-        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.errors.get_error_group", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.errors.get_error_group", new_callable=AsyncMock, return_value=None),
         session_client() as client,
     ):
         resp = client.get(f"/api/v1/errors/{uuid.uuid4()}")
@@ -412,9 +412,9 @@ def get_group_detail(client, ctx, request, group_id):
     group = _make_group(id=uuid.UUID(gid))
 
     with (
-        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.errors.get_error_group", new_callable=AsyncMock) as get_grp,
-        patch("modulo.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
+        patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.errors.get_error_group", new_callable=AsyncMock) as get_grp,
+        patch("farna.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
     ):
         get_grp.return_value = group
         sample.return_value = _make_event(message=group.fingerprint)
@@ -440,9 +440,9 @@ def patch_group_status(client, ctx, request, group_id, status):
     updated = _make_group(id=uuid.UUID(gid), status=status)
 
     with (
-        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.errors.update_error_group", new_callable=AsyncMock) as upd,
-        patch("modulo.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
+        patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.errors.update_error_group", new_callable=AsyncMock) as upd,
+        patch("farna.api.routes.errors._fetch_sample_event", new_callable=AsyncMock) as sample,
     ):
         upd.return_value = updated
         sample.return_value = _make_event()
@@ -499,7 +499,7 @@ def only_one_alert(ctx):
 
 def _window_rule_session(rule_count: int) -> MagicMock:
     """Session whose rule query returns one rule and window queries return *rule_count*."""
-    from modulo.db.models.error_notification_rule import ErrorNotificationRule
+    from farna.db.models.error_notification_rule import ErrorNotificationRule
 
     rule = MagicMock(spec=ErrorNotificationRule)
     rule.id = uuid.uuid4()
@@ -531,7 +531,7 @@ def _window_rule_session(rule_count: int) -> MagicMock:
 def _evaluate_window(ctx, rule_count: int) -> None:
     import asyncio
 
-    from modulo.core.error_tracking.alerting import AlertEngine
+    from farna.core.error_tracking.alerting import AlertEngine
 
     engine = AlertEngine(redis_client=MagicMock())
     alerts = asyncio.run(
@@ -578,8 +578,8 @@ def rule_without_window(ctx):
 def lifetime_count_two(ctx):
     import asyncio
 
-    from modulo.core.error_tracking.alerting import AlertEngine
-    from modulo.db.models.error_notification_rule import ErrorNotificationRule
+    from farna.core.error_tracking.alerting import AlertEngine
+    from farna.db.models.error_notification_rule import ErrorNotificationRule
 
     rule = MagicMock(spec=ErrorNotificationRule)
     rule.id = uuid.uuid4()
@@ -630,7 +630,7 @@ def _shaper_rule_session(count: int) -> Callable[[MagicMock], None]:
 def _pose_notification_rule(count: int, request, ctx) -> None:
     with (
         session_client(shaper=_shaper_rule_session(count)) as client,
-        patch("modulo.api.routes.error_notification_rules.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.error_notification_rules.set_rls_org", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/errors/notification-rules",

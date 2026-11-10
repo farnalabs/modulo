@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine.graph_cache import (
     _make_conditional_router,
     _make_gate_kickback_router,
     build_graph_from_json,

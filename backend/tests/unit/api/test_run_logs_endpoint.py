@@ -18,19 +18,19 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_OBSERVED, PROVENANCE_REPORTED
-from modulo.core.run_log_correlation import (
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_OBSERVED, PROVENANCE_REPORTED
+from farna.core.run_log_correlation import (
     LOG_TAIL_EXCERPT_CHARS,
     SOURCE_NODE_TELEMETRY,
     SOURCE_STRUCTURED_EVENT,
     SOURCE_WORKSPACE_LOG_TAIL,
     correlate_run_logs,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -226,9 +226,9 @@ def test_logs_404_on_foreign_org_run(client: TestClient, mock_session: AsyncMock
     """A run id belonging to another organisation answers 404, not 200 []."""
     mock_session.execute = AsyncMock(return_value=_audit_result([]))
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
-        patch("modulo.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
-        patch("modulo.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
+        patch("farna.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
+        patch("farna.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
     ):
         mock_get_run.return_value = None
         response = client.get(f"/api/v1/runs/{_RUN_ID}/logs")
@@ -253,9 +253,9 @@ def test_logs_returns_provenance_typed_entries(client: TestClient, mock_session:
     markers = {f"run:{_RUN_ID}:node:{_NODE_ID}:1": {"node_id": _NODE_ID, "sandbox_log_tail": "tail line"}}
     telemetry = {_NODE_ID: {"status": "success", "sandbox_log_tail": "tail line"}}
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
-        patch("modulo.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
-        patch("modulo.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
+        patch("farna.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
+        patch("farna.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
     ):
         mock_get_run.return_value = MagicMock()
         mock_markers.return_value = markers
@@ -275,9 +275,9 @@ def test_logs_audit_query_carries_org_predicate(client: TestClient, mock_session
     """The audit-event select is pinned to the caller's organisation_id."""
     mock_session.execute = AsyncMock(return_value=_audit_result([]))
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
-        patch("modulo.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
-        patch("modulo.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run,
+        patch("farna.api.routes.runs.read_run_markers", new_callable=AsyncMock) as mock_markers,
+        patch("farna.api.routes.runs.read_run_telemetry", new_callable=AsyncMock) as mock_telemetry,
     ):
         mock_get_run.return_value = MagicMock()
         mock_markers.return_value = {}

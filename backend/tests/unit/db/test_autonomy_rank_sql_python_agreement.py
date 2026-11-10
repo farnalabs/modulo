@@ -37,14 +37,14 @@ from types import ModuleType
 import pytest
 from sqlalchemy import CheckConstraint
 
-from modulo.core.run_context.autonomy import AUTONOMY_LEVEL_VALUES, AutonomyLevel, autonomy_level_rank
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.core.run_context.autonomy import AUTONOMY_LEVEL_VALUES, AutonomyLevel, autonomy_level_rank
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 _M0264 = "0264_pipelines_max_autonomy_ge_default"
 _M0270 = "0270_pipeline_snapshots_max_autonomy_ge_default"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 #: A ``CASE <column> WHEN '<level>' THEN <rank> ... END`` block. Both the CHECK
 #: predicate and the repair's WHERE spell the rank map out inline (never

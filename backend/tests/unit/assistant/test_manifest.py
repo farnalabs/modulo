@@ -40,7 +40,7 @@ SAMPLE_MANIFEST = {
 
 
 def _reset_manifest():
-    import modulo.core.manifest as m
+    import farna.core.manifest as m
 
     m._MANIFEST = None
 
@@ -48,7 +48,7 @@ def _reset_manifest():
 class TestManifestLoad:
     def test_load_yaml_successfully(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         assert manifest is not None
@@ -60,7 +60,7 @@ class TestManifestLoad:
 
     def test_load_yaml_contains_expected_routes(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         routes = manifest.get("routes", {})
@@ -75,7 +75,7 @@ class TestManifestLoad:
 
     def test_manifest_sidebar_groups(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         groups = manifest.get("sidebar_groups", {})
@@ -91,7 +91,7 @@ class TestManifestLoad:
 
     def test_returns_empty_dicts_when_file_missing(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_path = Path(tmpdir) / "nonexistent.yaml"
@@ -101,7 +101,7 @@ class TestManifestLoad:
 
     def test_get_manifest_returns_cached(self):
         _reset_manifest()
-        from modulo.core.manifest import get_manifest
+        from farna.core.manifest import get_manifest
 
         first = get_manifest()
         assert first is not None
@@ -110,7 +110,7 @@ class TestManifestLoad:
 
     def test_dynamic_route_has_pattern_and_params(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         run_detail = manifest["routes"].get("/runs/:id", {})
@@ -123,7 +123,7 @@ class TestManifestLoad:
 
     def test_yaml_anchors_resolve(self):
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
@@ -147,7 +147,7 @@ class TestManifestLoad:
         authoring surfaces) — by test_community_routes_roles_are_admin_only.
         """
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
@@ -188,7 +188,7 @@ class TestManifestLoad:
         the separate ``system_maps_access`` grant.
         """
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         dev_gate_permissions = {
             "in_dev": "library.search.in_dev",
@@ -249,7 +249,7 @@ class TestManifestLoad:
         `["admin"]` still fails here.
         """
         _reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         viewer_visible_admin_routes = {"/admin/errors", "/admin/errors/:id"}
         manifest = load_manifest()
@@ -271,7 +271,7 @@ class TestManifestEndpoint:
     @pytest.mark.asyncio
     async def test_manifest_endpoint_returns_valid_json(self):
         _reset_manifest()
-        from modulo.api.routes.manifest import manifest_endpoint
+        from farna.api.routes.manifest import manifest_endpoint
 
         response = await manifest_endpoint()
         assert isinstance(response, dict)
@@ -280,7 +280,7 @@ class TestManifestEndpoint:
         assert "sidebar_groups" in response
 
     def test_manifest_yaml_is_valid_yaml(self):
-        from modulo.core.manifest import get_manifest_path
+        from farna.core.manifest import get_manifest_path
 
         path = get_manifest_path()
         assert path.exists(), f"Manifest file not found at {path}"
@@ -292,13 +292,13 @@ class TestManifestEndpoint:
 
 class TestGetManifestPathFiltering:
     def _reset_manifest(self):
-        import modulo.core.manifest as m
+        import farna.core.manifest as m
 
         m._MANIFEST = None
 
     def test_returns_full_manifest_when_no_path(self):
         self._reset_manifest()
-        from modulo.core.manifest import get_manifest
+        from farna.core.manifest import get_manifest
 
         manifest = get_manifest()
         assert "routes" in manifest
@@ -308,7 +308,7 @@ class TestGetManifestPathFiltering:
 
     def test_returns_route_and_elements_for_known_path(self):
         self._reset_manifest()
-        from modulo.core.manifest import get_manifest
+        from farna.core.manifest import get_manifest
 
         manifest = get_manifest()
         path = "/"
@@ -320,7 +320,7 @@ class TestGetManifestPathFiltering:
 
     def test_returns_none_for_unknown_path(self):
         self._reset_manifest()
-        from modulo.core.manifest import get_manifest
+        from farna.core.manifest import get_manifest
 
         manifest = get_manifest()
         path = "/nonexistent/route"
@@ -332,13 +332,13 @@ class TestGetManifestPathFiltering:
 
 class TestManifestErrorHandling:
     def _reset_manifest(self):
-        import modulo.core.manifest as m
+        import farna.core.manifest as m
 
         m._MANIFEST = None
 
     def test_raises_on_malformed_yaml(self):
         self._reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         with tempfile.TemporaryDirectory() as tmpdir:
             bad_yaml = Path(tmpdir) / "manifest.yaml"
@@ -351,7 +351,7 @@ class TestManifestErrorHandling:
 
     def test_returns_empty_on_missing_file(self):
         self._reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         with tempfile.TemporaryDirectory() as tmpdir:
             missing = Path(tmpdir) / "no-such-file.yaml"
@@ -362,13 +362,13 @@ class TestManifestErrorHandling:
 
 class TestDuplicateKeyDetection:
     def _reset_manifest(self):
-        import modulo.core.manifest as m
+        import farna.core.manifest as m
 
         m._MANIFEST = None
 
     def test_duplicate_route_key_raises(self):
         self._reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         dup_yaml = """
 routes:
@@ -388,7 +388,7 @@ routes:
 
     def test_duplicate_sidebar_group_key_raises(self):
         self._reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         dup_yaml = """
 sidebar_groups:
@@ -409,7 +409,7 @@ sidebar_groups:
     def test_anchor_merge_override_still_works(self):
         """A route overriding an anchored field via merge keys is NOT a duplicate."""
         self._reset_manifest()
-        from modulo.core.manifest import load_manifest
+        from farna.core.manifest import load_manifest
 
         yaml_text = """
 x-community: &community

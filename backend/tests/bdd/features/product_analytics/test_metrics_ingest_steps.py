@@ -168,7 +168,7 @@ def _ingest(client: Any, ctx: dict[str, Any], events: list[dict]) -> Any:
     org = ctx.get("org", _org_with_consent("all"))
     api_error_count = ctx.get("api_error_count", 0)
 
-    import modulo.api.routes.metrics_ingest as metrics_module
+    import farna.api.routes.metrics_ingest as metrics_module
 
     with (
         patch.object(metrics_module, "set_rls_org", new_callable=AsyncMock),

@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 from sqlalchemy.exc import InvalidRequestError
 
-from modulo.core.library_service import community as community_module
-from modulo.core.library_service.community import (
+from farna.core.library_service import community as community_module
+from farna.core.library_service.community import (
     get_community_entry,
     install_community_entry,
     list_community_entries,

@@ -16,14 +16,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.unit.rate_limiter.helpers import make_auth_limiter, make_mock_request, make_settings
 
-from modulo.api.middleware.rate_limiter import (
+from farna.api.middleware.rate_limiter import (
     RATELIMIT_BYPASS_HEADER,
     AuthRateLimitMiddleware,
     get_auth_rate_limiter,
     shutdown_rate_limiters,
 )
-from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
-from modulo.settings import Settings
+from farna.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
+from farna.settings import Settings
 
 
 def _make_app(
@@ -80,7 +80,7 @@ class TestGetAuthRateLimiter:
 
     def test_redis_connect_failure_returns_none(self, monkeypatch):
         """A Redis connect error must degrade to None (rate limiting skipped), not raise."""
-        from modulo.api.middleware import rate_limiter as rl_mod
+        from farna.api.middleware import rate_limiter as rl_mod
 
         before_clients = set(rl_mod._redis_clients)
         monkeypatch.setattr(
@@ -94,7 +94,7 @@ class TestGetAuthRateLimiter:
 
     def test_redis_cancelled_error_propagates(self, monkeypatch):
         """asyncio.CancelledError must never be swallowed by get_auth_rate_limiter."""
-        from modulo.api.middleware import rate_limiter as rl_mod
+        from farna.api.middleware import rate_limiter as rl_mod
 
         before_clients = set(rl_mod._redis_clients)
         monkeypatch.setattr(
@@ -447,7 +447,7 @@ class TestAuthRateLimiterCore:
 
 class TestShutdownRateLimiters:
     async def test_shutdown_closes_all_clients(self):
-        from modulo.api.middleware import rate_limiter as rl_mod
+        from farna.api.middleware import rate_limiter as rl_mod
 
         client1 = AsyncMock()
         client2 = AsyncMock()
@@ -458,7 +458,7 @@ class TestShutdownRateLimiters:
         assert not rl_mod._redis_clients
 
     async def test_shutdown_survives_close_errors(self):
-        from modulo.api.middleware import rate_limiter as rl_mod
+        from farna.api.middleware import rate_limiter as rl_mod
 
         failing = MagicMock()
         failing.aclose = AsyncMock(side_effect=ConnectionError("boom"))
@@ -471,7 +471,7 @@ class TestShutdownRateLimiters:
 
     async def test_shutdown_propagates_cancelled_error(self):
         """asyncio.CancelledError from aclose must propagate, not be logged."""
-        from modulo.api.middleware import rate_limiter as rl_mod
+        from farna.api.middleware import rate_limiter as rl_mod
 
         failing = MagicMock()
         failing.aclose = AsyncMock(side_effect=asyncio.CancelledError())

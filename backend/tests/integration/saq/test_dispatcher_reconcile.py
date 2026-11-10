@@ -19,8 +19,8 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from modulo.core import cron_helpers as ch
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.core import cron_helpers as ch
+from farna.db.soft_delete import register_soft_delete_filter
 
 # FAR-2076 / soft-delete semantics: the global filter is installed by an IMPORT
 # SIDE EFFECT (``modulo.db.session``). Assert the precondition in the module that
@@ -161,7 +161,7 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
     redis_client = aioredis.from_url(saq_settings_env)
     try:
         q = RedisQueue(redis_client, name="runs")
-        job = await q.enqueue("modulo.core.saq_worker.execute_run", key=f"run:{run_id}")
+        job = await q.enqueue("farna.core.saq_worker.execute_run", key=f"run:{run_id}")
         assert job is not None
         await redis_client.delete(job.id)  # evict the job hash
     finally:
@@ -197,7 +197,7 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     redis_client = aioredis.from_url(saq_settings_env)
     try:
         q = RedisQueue(redis_client, name="runs")
-        job = await q.enqueue("modulo.core.saq_worker.execute_run", key=f"run:{run_id}")
+        job = await q.enqueue("farna.core.saq_worker.execute_run", key=f"run:{run_id}")
         await redis_client.delete(job.id)
     finally:
         await redis_client.aclose()
@@ -289,7 +289,7 @@ async def test_live_job_not_repaired(
     redis_client = aioredis.from_url(saq_settings_env)
     try:
         q = RedisQueue(redis_client, name="runs")
-        await q.enqueue("modulo.core.saq_worker.execute_run", key=f"run:{run_id}")
+        await q.enqueue("farna.core.saq_worker.execute_run", key=f"run:{run_id}")
     finally:
         await redis_client.aclose()
 
@@ -315,7 +315,7 @@ async def test_two_connections_no_double_redispatch(
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from modulo.core import pipeline_execution as pe
+    from farna.core import pipeline_execution as pe
 
     run_id, _ = await _seed_saq_run(
         db_engine,

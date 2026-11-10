@@ -11,7 +11,7 @@ these direct unit tests keep the changed-lines coverage gate green.
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.library_service.uninstall import (
+from farna.core.library_service.uninstall import (
     _check_unmodified,
     _delete_entity,
     _detach_entity,

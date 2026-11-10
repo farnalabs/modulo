@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.reports.quality_report import _format_trend_section, deliver_quality_report
+from farna.core.reports.quality_report import _format_trend_section, deliver_quality_report
 
 scenarios("../../features/reports/quality_report_delivery.feature")
 
-_SCHEDULER_PATH = "modulo.core.reports.scheduler"
+_SCHEDULER_PATH = "farna.core.reports.scheduler"
 _DOWN_ARROW = "\u2193"
 _UP_ARROW = "\u2191"
 
@@ -154,7 +154,7 @@ def delivery_has_no_signature_header(request) -> None:
 
 @then(parsers.parse('the signature matches an HMAC-SHA256 of the sent bytes computed with "{secret}"'))
 def delivery_signature_matches(secret: str, request) -> None:
-    from modulo.core.reports.scheduler import _serialize_json_body, _sign_payload
+    from farna.core.reports.scheduler import _serialize_json_body, _sign_payload
 
     call = request.node._delivery_client.post.await_args
     assert call is not None

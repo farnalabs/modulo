@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.util import WorkspaceNetworkValidationError, validate_workspace_network
+from farna.util import WorkspaceNetworkValidationError, validate_workspace_network
 
 # ---------------------------------------------------------------------------
 # validate_workspace_network — the single source of truth
@@ -143,7 +143,7 @@ def _profile(provider_type: str, **kwargs: object) -> SimpleNamespace:
 
 def test_dispatch_rejects_host_network_mode() -> None:
     """Structural test: _workspace_spec_for_dispatch must reject host."""
-    from modulo.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
+    from farna.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
 
     profile = _profile("runner_docker", config_json={"workspace_network": "host"})
     with pytest.raises(WorkspaceNetworkValidationError, match="host"):
@@ -158,7 +158,7 @@ def test_dispatch_rejects_host_network_mode() -> None:
 
 def test_dispatch_rejects_container_sharing() -> None:
     """Structural test: _workspace_spec_for_dispatch must reject container:*."""
-    from modulo.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
+    from farna.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
 
     profile = _profile("runner_docker", config_json={"workspace_network": "container:abc123"})
     with pytest.raises(WorkspaceNetworkValidationError, match="container:"):
@@ -173,7 +173,7 @@ def test_dispatch_rejects_container_sharing() -> None:
 
 def test_dispatch_rejects_bridge_network() -> None:
     """Structural test: _workspace_spec_for_dispatch must reject bridge."""
-    from modulo.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
+    from farna.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
 
     profile = _profile("runner_docker", config_json={"workspace_network": "bridge"})
     with pytest.raises(WorkspaceNetworkValidationError, match="bridge"):
@@ -188,7 +188,7 @@ def test_dispatch_rejects_bridge_network() -> None:
 
 def test_dispatch_rejects_default_network() -> None:
     """Structural test: _workspace_spec_for_dispatch must reject default."""
-    from modulo.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
+    from farna.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
 
     profile = _profile("runner_docker", config_json={"workspace_network": "default"})
     with pytest.raises(WorkspaceNetworkValidationError, match="default"):
@@ -203,7 +203,7 @@ def test_dispatch_rejects_default_network() -> None:
 
 def test_dispatch_accepts_valid_network() -> None:
     """Valid network name passes through dispatch."""
-    from modulo.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
+    from farna.core.bundled_runner.runner_dispatch import _workspace_spec_for_dispatch
 
     profile = _profile("runner_docker", config_json={"workspace_network": "modulo-runner-workspace"})
     spec = _workspace_spec_for_dispatch(
@@ -223,8 +223,8 @@ def test_dispatch_accepts_valid_network() -> None:
 
 def test_docker_provider_rejects_host_network_mode() -> None:
     """Structural test: _resolve_network_mode must reject host at the provider boundary."""
-    from modulo.core.runtime_provider import WorkspaceSpec
-    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+    from farna.core.runtime_provider import WorkspaceSpec
+    from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
     provider = DockerRuntimeProvider()
     spec = WorkspaceSpec(
@@ -238,8 +238,8 @@ def test_docker_provider_rejects_host_network_mode() -> None:
 
 def test_docker_provider_rejects_container_sharing() -> None:
     """Structural test: _resolve_network_mode must reject container:* at the provider boundary."""
-    from modulo.core.runtime_provider import WorkspaceSpec
-    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+    from farna.core.runtime_provider import WorkspaceSpec
+    from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
     provider = DockerRuntimeProvider()
     spec = WorkspaceSpec(
@@ -253,8 +253,8 @@ def test_docker_provider_rejects_container_sharing() -> None:
 
 def test_docker_provider_rejects_bridge() -> None:
     """Structural test: _resolve_network_mode must reject bridge."""
-    from modulo.core.runtime_provider import WorkspaceSpec
-    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+    from farna.core.runtime_provider import WorkspaceSpec
+    from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
     provider = DockerRuntimeProvider()
     spec = WorkspaceSpec(
@@ -268,8 +268,8 @@ def test_docker_provider_rejects_bridge() -> None:
 
 def test_docker_provider_accepts_valid_network() -> None:
     """Valid network name passes through the Docker provider."""
-    from modulo.core.runtime_provider import WorkspaceSpec
-    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+    from farna.core.runtime_provider import WorkspaceSpec
+    from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
     provider = DockerRuntimeProvider()
     spec = WorkspaceSpec(
@@ -282,8 +282,8 @@ def test_docker_provider_accepts_valid_network() -> None:
 
 def test_docker_provider_defaults_to_configured_network() -> None:
     """None workspace_network falls back to the provider default."""
-    from modulo.core.runtime_provider import WorkspaceSpec
-    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+    from farna.core.runtime_provider import WorkspaceSpec
+    from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
     provider = DockerRuntimeProvider(workspace_network="my-custom-network")
     spec = WorkspaceSpec(
@@ -301,7 +301,7 @@ def test_docker_provider_defaults_to_configured_network() -> None:
 
 def test_crud_validate_profile_workspace_network_rejects_host() -> None:
     """CRUD boundary must reject host in config_json.workspace_network."""
-    from modulo.db.crud.environment_profile import validate_profile_workspace_network
+    from farna.db.crud.environment_profile import validate_profile_workspace_network
 
     with pytest.raises(WorkspaceNetworkValidationError, match="host"):
         validate_profile_workspace_network({"workspace_network": "host"})
@@ -309,7 +309,7 @@ def test_crud_validate_profile_workspace_network_rejects_host() -> None:
 
 def test_crud_validate_profile_workspace_network_rejects_container() -> None:
     """CRUD boundary must reject container:* in config_json.workspace_network."""
-    from modulo.db.crud.environment_profile import validate_profile_workspace_network
+    from farna.db.crud.environment_profile import validate_profile_workspace_network
 
     with pytest.raises(WorkspaceNetworkValidationError, match="container:"):
         validate_profile_workspace_network({"workspace_network": "container:xyz"})
@@ -317,20 +317,20 @@ def test_crud_validate_profile_workspace_network_rejects_container() -> None:
 
 def test_crud_validate_profile_workspace_network_accepts_valid() -> None:
     """Valid network name passes CRUD validation."""
-    from modulo.db.crud.environment_profile import validate_profile_workspace_network
+    from farna.db.crud.environment_profile import validate_profile_workspace_network
 
     assert validate_profile_workspace_network({"workspace_network": "modulo-runner-workspace"}) is None
 
 
 def test_crud_validate_profile_workspace_network_none_config() -> None:
     """None config_json is fine."""
-    from modulo.db.crud.environment_profile import validate_profile_workspace_network
+    from farna.db.crud.environment_profile import validate_profile_workspace_network
 
     assert validate_profile_workspace_network(None) is None
 
 
 def test_crud_validate_profile_workspace_network_no_key() -> None:
     """config_json without workspace_network key is fine."""
-    from modulo.db.crud.environment_profile import validate_profile_workspace_network
+    from farna.db.crud.environment_profile import validate_profile_workspace_network
 
     assert validate_profile_workspace_network({"timeout_seconds": 3600}) is None

@@ -9,8 +9,8 @@ import inspect
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.hitl_manager import DEFAULT_OVERDUE_THRESHOLD_MINUTES, HITLManager
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.core.hitl_manager import DEFAULT_OVERDUE_THRESHOLD_MINUTES, HITLManager
+from farna.db.models.hitl_claim import HitlClaim
 
 _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
@@ -35,7 +35,7 @@ def _session_for_create(existing: HitlClaim | MagicMock | None = None) -> AsyncM
 
 class TestCreateGateEmailHook:
     async def test_create_gate_schedules_dispatch_with_gate_label(self) -> None:
-        with patch("modulo.core.hitl_email_alerts.schedule_hitl_email_dispatch") as mock_schedule:
+        with patch("farna.core.hitl_email_alerts.schedule_hitl_email_dispatch") as mock_schedule:
             gate = await HITLManager().create_gate(
                 _session_for_create(),
                 run_id=_RUN,
@@ -50,7 +50,7 @@ class TestCreateGateEmailHook:
 
     async def test_idempotent_reentry_does_not_reschedule(self) -> None:
         existing = MagicMock(spec=HitlClaim)
-        with patch("modulo.core.hitl_email_alerts.schedule_hitl_email_dispatch") as mock_schedule:
+        with patch("farna.core.hitl_email_alerts.schedule_hitl_email_dispatch") as mock_schedule:
             gate = await HITLManager().create_gate(
                 _session_for_create(existing),
                 run_id=_RUN,
@@ -63,7 +63,7 @@ class TestCreateGateEmailHook:
 
     async def test_schedule_failure_does_not_break_gate_creation(self) -> None:
         with patch(
-            "modulo.core.hitl_email_alerts.schedule_hitl_email_dispatch",
+            "farna.core.hitl_email_alerts.schedule_hitl_email_dispatch",
             side_effect=RuntimeError("scheduler exploded"),
         ):
             gate = await HITLManager().create_gate(

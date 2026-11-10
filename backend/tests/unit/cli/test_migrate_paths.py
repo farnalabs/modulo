@@ -12,8 +12,8 @@ import click
 import pytest
 from click.testing import CliRunner
 
-import modulo.cli.migrate as migrate_mod
-from modulo.cli.migrate import (
+import farna.cli.migrate as migrate_mod
+from farna.cli.migrate import (
     _filter_scope,
     _find_existing_row,
     _hash_record,
@@ -51,10 +51,10 @@ class TestAdminAuth:
         with (
             patch.dict("os.environ", env, clear=False),
             patch(
-                "modulo.cli.migrate.get_settings",
+                "farna.cli.migrate.get_settings",
                 MagicMock(return_value=MagicMock(secret_key="secret-material")),
             ),
-            patch("modulo.cli.migrate.decode_principal", return_value=principal) as decode,
+            patch("farna.cli.migrate.decode_principal", return_value=principal) as decode,
         ):
             assert _resolve_admin_auth("valid-jwt") == str(_ADMIN_ID)
         decode.assert_called_once_with("valid-jwt", "secret-material")
@@ -62,9 +62,9 @@ class TestAdminAuth:
     def test_non_admin_jwt_rejected(self) -> None:
         principal = MagicMock(org_role="runner")
         with (
-            patch("modulo.cli.migrate.decode_principal", return_value=principal),
+            patch("farna.cli.migrate.decode_principal", return_value=principal),
             patch(
-                "modulo.cli.migrate.get_settings",
+                "farna.cli.migrate.get_settings",
                 MagicMock(return_value=MagicMock(secret_key="secret-material")),
             ),
             pytest.raises(click.ClickException, match="not an admin-level JWT"),
@@ -73,9 +73,9 @@ class TestAdminAuth:
 
     def test_unparseable_jwt_rejected(self) -> None:
         with (
-            patch("modulo.cli.migrate.decode_principal", MagicMock(side_effect=ValueError("bad"))),
+            patch("farna.cli.migrate.decode_principal", MagicMock(side_effect=ValueError("bad"))),
             patch(
-                "modulo.cli.migrate.get_settings",
+                "farna.cli.migrate.get_settings",
                 MagicMock(return_value=MagicMock(secret_key="secret-material")),
             ),
             pytest.raises(click.ClickException, match="Invalid admin JWT"),
@@ -85,13 +85,13 @@ class TestAdminAuth:
 
 class TestVerifyAdminAccess:
     async def test_admin_secret_bypasses_db(self) -> None:
-        with patch("modulo.cli.migrate.get_account_by_id", AsyncMock()) as get_account:
+        with patch("farna.cli.migrate.get_account_by_id", AsyncMock()) as get_account:
             await _verify_admin_access(MagicMock(), _ORG_ID, "__admin_secret__")
         get_account.assert_not_awaited()
 
     async def test_account_missing_raises(self) -> None:
         with (
-            patch("modulo.cli.migrate.get_account_by_id", AsyncMock(return_value=None)),
+            patch("farna.cli.migrate.get_account_by_id", AsyncMock(return_value=None)),
             pytest.raises(click.ClickException, match="Admin account not found"),
         ):
             await _verify_admin_access(MagicMock(), _ORG_ID, str(_ADMIN_ID))
@@ -99,9 +99,9 @@ class TestVerifyAdminAccess:
     async def test_membership_missing_raises(self) -> None:
         account = MagicMock(id=_ADMIN_ID)
         with (
-            patch("modulo.cli.migrate.get_account_by_id", AsyncMock(return_value=account)),
+            patch("farna.cli.migrate.get_account_by_id", AsyncMock(return_value=account)),
             patch(
-                "modulo.cli.migrate.get_membership_by_account_and_org",
+                "farna.cli.migrate.get_membership_by_account_and_org",
                 AsyncMock(return_value=None),
             ),
             pytest.raises(click.ClickException, match="belong to the target organisation"),
@@ -112,9 +112,9 @@ class TestVerifyAdminAccess:
         account = MagicMock(id=_ADMIN_ID)
         membership = MagicMock(role="runner")
         with (
-            patch("modulo.cli.migrate.get_account_by_id", AsyncMock(return_value=account)),
+            patch("farna.cli.migrate.get_account_by_id", AsyncMock(return_value=account)),
             patch(
-                "modulo.cli.migrate.get_membership_by_account_and_org",
+                "farna.cli.migrate.get_membership_by_account_and_org",
                 AsyncMock(return_value=membership),
             ),
             pytest.raises(click.ClickException, match="admin-level access"),
@@ -127,8 +127,8 @@ class TestVerifyAdminAccess:
         get_account = AsyncMock(return_value=account)
         get_membership = AsyncMock(return_value=membership)
         with (
-            patch("modulo.cli.migrate.get_account_by_id", get_account),
-            patch("modulo.cli.migrate.get_membership_by_account_and_org", get_membership),
+            patch("farna.cli.migrate.get_account_by_id", get_account),
+            patch("farna.cli.migrate.get_membership_by_account_and_org", get_membership),
         ):
             await _verify_admin_access(MagicMock(), _ORG_ID, str(_ADMIN_ID))
         get_account.assert_awaited_once()
@@ -308,7 +308,7 @@ class TestFindExistingRow:
         assert await _find_existing_row(session, MagicMock(), "id", None, _ORG_ID) is None
 
     async def test_found_row_returned(self) -> None:
-        from modulo.db.models.account import Account
+        from farna.db.models.account import Account
 
         session = MagicMock()
         found = MagicMock(scalar_one_or_none=MagicMock(return_value="row"))

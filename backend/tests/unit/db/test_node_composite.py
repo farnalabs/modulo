@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.node_composite import get_child_nodes, set_parent_node
-from modulo.db.models.node import Node
+from farna.db.crud.node_composite import get_child_nodes, set_parent_node
+from farna.db.models.node import Node
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

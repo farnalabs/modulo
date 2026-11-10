@@ -11,7 +11,7 @@ import pytest
 from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.core.logging_config import (
+from farna.core.logging_config import (
     CorrelationIdFilter,
     ErrorTrackingLogHandler,
     SensitiveFieldFilter,
@@ -156,7 +156,7 @@ def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter(fmt="%(message)s"))
 
-    test_logger = logging.getLogger("modulo.core.pipeline_engine.executor")
+    test_logger = logging.getLogger("farna.core.pipeline_engine.executor")
     test_logger.setLevel(logging.DEBUG)
     test_logger.addHandler(handler)
 
@@ -257,22 +257,22 @@ class TestResolveLogLevel:
     def test_defaults_to_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
         monkeypatch.delenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO", raising=False)
-        assert _resolve_log_level("modulo.core.foo") == "INFO"
+        assert _resolve_log_level("farna.core.foo") == "INFO"
 
     def test_global_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_LOG_LEVEL", "DEBUG")
         monkeypatch.delenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO", raising=False)
-        assert _resolve_log_level("modulo.core.foo") == "DEBUG"
+        assert _resolve_log_level("farna.core.foo") == "DEBUG"
 
     def test_per_module_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_LOG_LEVEL", "WARNING")
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO", "ERROR")
-        assert _resolve_log_level("modulo.core.foo") == "ERROR"
+        assert _resolve_log_level("farna.core.foo") == "ERROR"
 
     def test_dotted_module_path_becomes_underscored_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_API_ROUTES_RUNS", "WARNING")
-        assert _resolve_log_level("modulo.api.routes.runs") == "WARNING"
+        assert _resolve_log_level("farna.api.routes.runs") == "WARNING"
 
 
 async def _completed_future(exc: BaseException | None = None) -> asyncio.Future[None]:
@@ -296,13 +296,13 @@ async def _completed_future(exc: BaseException | None = None) -> asyncio.Future[
 class TestLogAsyncEmitError:
     async def test_logs_exception_when_present(self, caplog: pytest.LogCaptureFixture) -> None:
         future: asyncio.Future[None] = await _completed_future(exc=ValueError("boom"))
-        with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
+        with caplog.at_level(logging.ERROR, logger="farna.core.logging_config"):
             _log_async_emit_error(future)
         assert any("async_emit_failed" in r.getMessage() for r in caplog.records)
 
     async def test_no_exception_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
         future: asyncio.Future[None] = await _completed_future()
-        with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
+        with caplog.at_level(logging.ERROR, logger="farna.core.logging_config"):
             _log_async_emit_error(future)
         assert not caplog.records
 
@@ -339,7 +339,7 @@ class TestErrorTrackingLogHandlerEmit:
         handler = ErrorTrackingLogHandler()
         token = org_id_var.set(None)
         try:
-            with caplog.at_level(logging.WARNING, logger="modulo.core.logging_config"):
+            with caplog.at_level(logging.WARNING, logger="farna.core.logging_config"):
                 handler.emit(_record(level=logging.ERROR))
         finally:
             org_id_var.reset(token)
@@ -351,7 +351,7 @@ class TestErrorTrackingLogHandlerEmit:
         handler._pending_tasks = handler._backlog_limit
         token = org_id_var.set("org-1")
         try:
-            with caplog.at_level(logging.WARNING, logger="modulo.core.logging_config"):
+            with caplog.at_level(logging.WARNING, logger="farna.core.logging_config"):
                 handler.emit(_record(level=logging.ERROR))
         finally:
             org_id_var.reset(token)
@@ -408,10 +408,10 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         service: MagicMock,
         session: MagicMock,
     ) -> None:
-        from modulo import version as version_mod
-        from modulo.api import dependencies as deps_mod
-        from modulo.core import error_tracking as et_mod
-        from modulo.db import rls as rls_mod
+        from farna import version as version_mod
+        from farna.api import dependencies as deps_mod
+        from farna.core import error_tracking as et_mod
+        from farna.db import rls as rls_mod
 
         monkeypatch.setattr(deps_mod, "get_or_create_engine", MagicMock(return_value=AsyncMock()))
         monkeypatch.setattr(
@@ -522,7 +522,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         handler = ErrorTrackingLogHandler()
         token = org_id_var.set("not-a-uuid")
         try:
-            with caplog.at_level(logging.WARNING, logger="modulo.core.logging_config"):
+            with caplog.at_level(logging.WARNING, logger="farna.core.logging_config"):
                 await handler._async_emit(_record(level=logging.ERROR))
         finally:
             org_id_var.reset(token)
@@ -547,7 +547,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from modulo.db import rls as rls_mod
+        from farna.db import rls as rls_mod
 
         service = MagicMock()
         service.ingest = AsyncMock()
@@ -559,7 +559,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         handler = ErrorTrackingLogHandler()
         token = org_id_var.set(self._ORG)
         try:
-            with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
+            with caplog.at_level(logging.ERROR, logger="farna.core.logging_config"):
                 await handler._async_emit(_record(level=logging.ERROR))
         finally:
             org_id_var.reset(token)
@@ -572,7 +572,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from modulo import version as version_mod
+        from farna import version as version_mod
 
         service = MagicMock()
         service.ingest = AsyncMock()
@@ -582,7 +582,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         handler = ErrorTrackingLogHandler()
         token = org_id_var.set(self._ORG)
         try:
-            with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
+            with caplog.at_level(logging.ERROR, logger="farna.core.logging_config"):
                 await handler._async_emit(_record(level=logging.ERROR))
         finally:
             org_id_var.reset(token)
@@ -593,7 +593,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
 class TestApplyPerModuleLevels:
     def test_sets_level_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO", "WARNING")
-        logger = logging.getLogger("modulo.core.foo")
+        logger = logging.getLogger("farna.core.foo")
         logger.setLevel(logging.NOTSET)
         try:
             _apply_per_module_levels()
@@ -603,7 +603,7 @@ class TestApplyPerModuleLevels:
 
     def test_unknown_level_falls_back_to_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO", "BOGUSLEVEL")
-        logger = logging.getLogger("modulo.core.foo")
+        logger = logging.getLogger("farna.core.foo")
         logger.setLevel(logging.NOTSET)
         try:
             _apply_per_module_levels()
@@ -614,7 +614,7 @@ class TestApplyPerModuleLevels:
     def test_duplicate_module_paths_deduped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO_BAR", "ERROR")
         monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO.BAR", "DEBUG")
-        logger = logging.getLogger("modulo.core.foo.bar")
+        logger = logging.getLogger("farna.core.foo.bar")
         logger.setLevel(logging.NOTSET)
         try:
             _apply_per_module_levels()
@@ -629,13 +629,13 @@ def test_resolve_log_level_per_module_override_wins(
     """A per-module MODULO_LOG_LEVEL_<MODULE> override beats the global default."""
     monkeypatch.setenv("MODULO_LOG_LEVEL", "ERROR")
     monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
-    assert _resolve_log_level("modulo.core.pipeline_engine") == "WARNING"
+    assert _resolve_log_level("farna.core.pipeline_engine") == "WARNING"
 
 
 def test_resolve_log_level_falls_back_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without a per-module override the global MODULO_LOG_LEVEL applies."""
     monkeypatch.setenv("MODULO_LOG_LEVEL", "DEBUG")
-    assert _resolve_log_level("modulo.core.unrelated") == "DEBUG"
+    assert _resolve_log_level("farna.core.unrelated") == "DEBUG"
 
 
 def test_resolve_log_level_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -669,8 +669,8 @@ def test_apply_per_module_levels_sets_logger_level(
     """MODULO_LOG_LEVEL_<MODULE> env vars map to the matching logger's level."""
     monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
     _apply_per_module_levels()
-    assert logging.getLogger("modulo.core.pipeline.engine").level == logging.WARNING
-    logging.getLogger("modulo.core.pipeline.engine").setLevel(logging.NOTSET)
+    assert logging.getLogger("farna.core.pipeline.engine").level == logging.WARNING
+    logging.getLogger("farna.core.pipeline.engine").setLevel(logging.NOTSET)
 
 
 def test_apply_per_module_levels_invalid_level_falls_back_to_info(
@@ -679,8 +679,8 @@ def test_apply_per_module_levels_invalid_level_falls_back_to_info(
     """An unrecognised level string falls back to INFO rather than raising."""
     monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "VERBOSE")
     _apply_per_module_levels()
-    assert logging.getLogger("modulo.core.pipeline.engine").level == logging.INFO
-    logging.getLogger("modulo.core.pipeline.engine").setLevel(logging.NOTSET)
+    assert logging.getLogger("farna.core.pipeline.engine").level == logging.INFO
+    logging.getLogger("farna.core.pipeline.engine").setLevel(logging.NOTSET)
 
 
 def test_apply_per_module_levels_ignores_dup_module_paths(

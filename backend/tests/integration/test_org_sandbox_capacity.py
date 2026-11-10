@@ -16,9 +16,9 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.pipeline_execution import stale_run_recovery_sweep
-from modulo.db.rls import set_rls_org
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_execution import stale_run_recovery_sweep
+from farna.db.rls import set_rls_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -185,7 +185,7 @@ async def _seed_run(
 ) -> uuid.UUID:
     from sqlalchemy import column, insert, inspect, table
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -321,7 +321,7 @@ def patched_redispatch(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     integration container. Every sweep test gets a deterministic AsyncMock so
     the branch's firing (or not) is observable without a broker.
     """
-    from modulo.core import pipeline_execution as pe
+    from farna.core import pipeline_execution as pe
 
     mock = AsyncMock(return_value="enqueued")
     monkeypatch.setattr(pe, "_re_dispatch_capacity_blocked", mock)
@@ -935,7 +935,7 @@ async def test_org_run_capacity_defers_excess_at_dispatch(
     """run_concurrency_limit=1: an org already executing one run defers the next
     dispatch — pending, dispatched_at NULL, error_code org_capacity_limited."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
-    from modulo.core import dispatch as dispatch_mod
+    from farna.core import dispatch as dispatch_mod
 
     org_id = await _seed_org(
         db_engine,
@@ -951,7 +951,7 @@ async def test_org_run_capacity_defers_excess_at_dispatch(
     pending = await _seed_run(db_engine, org_id, pipe, snap)
 
     with patch(
-        "modulo.core.dispatch._enqueue_saq",
+        "farna.core.dispatch._enqueue_saq",
         new_callable=AsyncMock,
         return_value=("saq:job:runs:dispatch-cap", False),
     ) as enqueue:
@@ -980,7 +980,7 @@ async def test_org_run_capacity_admits_when_under_cap(
     """run_concurrency_limit=5 with one executing run: a new dispatch proceeds
     (enqueued, dispatched_at set, dispatcher='saq', no capacity marker)."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
-    from modulo.core import dispatch as dispatch_mod
+    from farna.core import dispatch as dispatch_mod
 
     org_id = await _seed_org(
         db_engine,
@@ -996,7 +996,7 @@ async def test_org_run_capacity_admits_when_under_cap(
     new_run = await _seed_run(db_engine, org_id, pipe, snap)
 
     with patch(
-        "modulo.core.dispatch._enqueue_saq",
+        "farna.core.dispatch._enqueue_saq",
         new_callable=AsyncMock,
         return_value=("saq:job:runs:dispatch-free", False),
     ):
@@ -1019,7 +1019,7 @@ async def test_org_run_capacity_isolation_between_orgs(
 ):
     """Org B saturated at its run cap must not block Org A's dispatch."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
-    from modulo.core import dispatch as dispatch_mod
+    from farna.core import dispatch as dispatch_mod
 
     org_a, user_a = await _seed_org_account(
         db_engine,
@@ -1044,7 +1044,7 @@ async def test_org_run_capacity_isolation_between_orgs(
 
     run_a = await _seed_run(db_engine, org_a, pipe_a, snap_a)
     with patch(
-        "modulo.core.dispatch._enqueue_saq",
+        "farna.core.dispatch._enqueue_saq",
         new_callable=AsyncMock,
         return_value=("saq:job:runs:dispatch-isolated-a", False),
     ):
@@ -1074,7 +1074,7 @@ async def test_org_run_capacity_preserves_resume_run_status_at_cap(
     the worker.
     """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
-    from modulo.core import dispatch as dispatch_mod
+    from farna.core import dispatch as dispatch_mod
 
     org_id = await _seed_org(
         db_engine,
@@ -1090,7 +1090,7 @@ async def test_org_run_capacity_preserves_resume_run_status_at_cap(
     resumed = await _seed_run(db_engine, org_id, pipe, snap, status="running")
 
     with patch(
-        "modulo.core.dispatch._enqueue_saq",
+        "farna.core.dispatch._enqueue_saq",
         new_callable=AsyncMock,
         return_value=("saq:job:runs:dispatch-resume", False),
     ) as enqueue:
@@ -1123,7 +1123,7 @@ async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
     continuation of an already-admitted run; the org cap is re-enforced at
     claim time in the executor)."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
-    from modulo.core import dispatch as dispatch_mod
+    from farna.core import dispatch as dispatch_mod
 
     org_id = await _seed_org(
         db_engine,
@@ -1139,7 +1139,7 @@ async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
     awaiting = await _seed_run(db_engine, org_id, pipe, snap, status="awaiting_human")
 
     with patch(
-        "modulo.core.dispatch._enqueue_saq",
+        "farna.core.dispatch._enqueue_saq",
         new_callable=AsyncMock,
         return_value=("saq:job:runs:dispatch-hitl", False),
     ):
@@ -1189,7 +1189,7 @@ async def _seed_saq_running_run(
     """
     from sqlalchemy import insert
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     run_id = uuid.uuid4()
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -1237,7 +1237,7 @@ async def _terminalize_count(
     Terminalizers return the terminalized run ids (``UPDATE ... RETURNING id``),
     so the count is ``len(...)`` of that list.
     """
-    from modulo.db.rls import set_rls_org
+    from farna.db.rls import set_rls_org
 
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -1253,7 +1253,7 @@ async def test_claim_cap_terminalizes_stale_capped_run_under_rls(
     """A running SAQ run at claim_count >= cap with a STALE heartbeat is
     terminal-failed ``claim_cap_exhausted`` (B5) — selected INDEPENDENTLY of
     the reconcile predicates, under the NOBYPASSRLS role."""
-    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+    from farna.core.cron_helpers import _terminalize_claim_cap_exhausted
 
     org_id, user_id = await _seed_org_account(db_engine, "CapTermOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeCapTerm", user_id)
@@ -1291,7 +1291,7 @@ async def test_claim_cap_spares_live_capped_run_with_fresh_heartbeat(
     it must NOT be terminalised (the stale-heartbeat gate is the live-run
     guard; claim_count increments on EVERY claim, so the cap alone is not
     proof of death)."""
-    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+    from farna.core.cron_helpers import _terminalize_claim_cap_exhausted
 
     org_id, user_id = await _seed_org_account(db_engine, "CapLiveOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeCapLive", user_id)
@@ -1332,7 +1332,7 @@ async def test_claim_cap_terminalizes_stale_capped_pending_run_under_rls(
     this regression fix, was outside the ``running``-only predicate (every
     enqueue was a silent no-op that wedged it ``pending`` forever).
     """
-    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+    from farna.core.cron_helpers import _terminalize_claim_cap_exhausted
 
     org_id, user_id = await _seed_org_account(db_engine, "CapPendingOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeCapPending", user_id)
@@ -1371,7 +1371,7 @@ async def test_claim_cap_spares_stale_pending_run_below_the_cap(
     STALE heartbeat is still CLAIMABLE (the claim SQL only requires
     ``claim_count < cap``), so it must be left alone — widening the predicate
     to ``pending`` must not weaken the recoverability boundary."""
-    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+    from farna.core.cron_helpers import _terminalize_claim_cap_exhausted
 
     org_id, user_id = await _seed_org_account(db_engine, "CapBelowOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeCapBelow", user_id)
@@ -1414,7 +1414,7 @@ async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
     ``node_attempt_count > 0`` so it is a genuine mid-graph wedge (a
     ZERO-progress run is routed to the nodeless chokepoint instead — see
     ``test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph``)."""
-    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+    from farna.core.cron_helpers import _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "WedgeOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeWedge", user_id)
@@ -1454,8 +1454,8 @@ async def test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph(
     the zero-progress shape, and the router fails the run through
     ``_fail_nodeless_run`` (``executor_stalled`` -> ``agent.stall`,
     "Claimed by SAQ but dispatched no node")."""
-    from modulo.core import cron_helpers as ch
-    from modulo.core.cron_helpers import _terminalize_aged_nodeless_zombies, _terminalize_mid_graph_wedges
+    from farna.core import cron_helpers as ch
+    from farna.core.cron_helpers import _terminalize_aged_nodeless_zombies, _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "ZeroProgOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeZeroProg", user_id)
@@ -1507,12 +1507,12 @@ async def test_node_started_aged_run_routes_to_age_gate_not_nodeless(
     while the phase sat on the same row. With the FAR-1649 selection leg the
     same row is excluded from the nodeless router and collected by the age
     gate instead."""
-    from modulo.core import cron_helpers as ch
-    from modulo.core.cron_helpers import (
+    from farna.core import cron_helpers as ch
+    from farna.core.cron_helpers import (
         _terminalize_aged_nodeless_zombies,
         _terminalize_mid_graph_wedges,
     )
-    from modulo.core.pipeline_execution import PHASE_FIRST_NODE_DISPATCHED
+    from farna.core.pipeline_execution import PHASE_FIRST_NODE_DISPATCHED
 
     org_id, user_id = await _seed_org_account(db_engine, "NodeStartedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeNodeStarted", user_id)
@@ -1571,8 +1571,8 @@ async def test_slot_sweep_never_resets_node_started_stale_run(
     The FAR-1649 premise still holds — the row is never reset to ``pending``
     (never re-executed) — it now reaches a terminal state instead of waiting
     for the node deadline/age gate."""
-    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-    from modulo.core.run_admission import reconcile_pipeline_slots
+    from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+    from farna.core.run_admission import reconcile_pipeline_slots
 
     org_id, user_id = await _seed_org_account(db_engine, "SweepNodePhaseOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeSweepPhase", user_id)
@@ -1621,9 +1621,9 @@ async def test_slot_sweep_terminal_fails_over_budget_node_started_run(
     terminal-failed by the sweep — terminal-fail re-executes nothing, and
     excluding it from this arm too would only delay the pipeline-slot release
     until the age gate collects the same row ~105 min later."""
-    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-    from modulo.core.run_admission import reconcile_pipeline_slots
-    from modulo.settings import get_settings
+    from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+    from farna.core.run_admission import reconcile_pipeline_slots
+    from farna.settings import get_settings
 
     over_budget = get_settings().heartbeat_stale_retry_budget + 1
     org_id, user_id = await _seed_org_account(db_engine, "SweepNodePhaseOverOrg", cap=None)
@@ -1655,7 +1655,7 @@ async def test_mid_graph_wedge_spares_recently_started_run(
 ) -> None:
     """A run started within the age-bound window (a genuinely executing run)
     is left untouched by the mid-graph wedge terminalizer."""
-    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+    from farna.core.cron_helpers import _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "WedgeLiveOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeWedgeLive", user_id)
@@ -1706,7 +1706,7 @@ async def _seed_far1803_run(
     """The observed FAR-1803 shape: node dispatched (phase + LIVE marker),
     ``node_attempt_count=1`` (so NOT zero-progress — the nodeless router
     cannot claim it), started far past the ~135 min age bound."""
-    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+    from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 
     return await _seed_saq_running_run(
         db_engine,
@@ -1737,7 +1737,7 @@ async def test_far1803_repro_dead_executor_node_started_row_now_collected(
     Uses the DEFAULT stale bound (no ``stale_seconds`` kwarg), proving the
     settings-derived ``2 * SAQ_JOB_HEARTBEAT`` resolution works on the real
     statement too."""
-    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+    from farna.core.cron_helpers import _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "Far1803ReproOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Repro", user_id)
@@ -1767,8 +1767,8 @@ async def test_far1803_class_is_never_mislabelled_as_never_dispatched(
     failed through the zero-node chokepoint — it must never wear the FALSE
     "Claimed by SAQ but dispatched no node" label (the FAR-1318/FAR-1649
     misdiagnosis). Guard on both sides of the fix."""
-    from modulo.core import cron_helpers as ch
-    from modulo.core.cron_helpers import _terminalize_aged_nodeless_zombies
+    from farna.core import cron_helpers as ch
+    from farna.core.cron_helpers import _terminalize_aged_nodeless_zombies
 
     org_id, user_id = await _seed_org_account(db_engine, "Far1803LabelOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Label", user_id)
@@ -1808,9 +1808,9 @@ async def test_far1803_age_gate_collects_dead_executor_node_started_row(
     the reconcile scan now admits the class under its own leg."""
     from sqlalchemy import select as sa_select
 
-    from modulo.core import cron_helpers as ch
-    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
-    from modulo.db.models.run import Run
+    from farna.core import cron_helpers as ch
+    from farna.core.cron_helpers import _terminalize_mid_graph_wedges
+    from farna.db.models.run import Run
 
     org_id, user_id = await _seed_org_account(db_engine, "Far1803FixOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Fix", user_id)
@@ -1865,7 +1865,7 @@ async def test_far1803_age_gate_still_shields_live_attempt_with_fresh_heartbeat(
     """FAR-1740 intent PRESERVED: a node-started row whose heartbeat is FRESH
     is a live attempt — the shield must still keep the age gate off it (the
     in-process node-deadline watchdog owns it), however old the row is."""
-    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+    from farna.core.cron_helpers import _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "Far1803LiveOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeFar1803Live", user_id)
@@ -1912,7 +1912,7 @@ async def _seed_hitl_claim(
 ) -> None:
     from sqlalchemy import insert
 
-    from modulo.db.models.hitl_claim import HitlClaim
+    from farna.db.models.hitl_claim import HitlClaim
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -1941,7 +1941,7 @@ async def test_expired_unclaimed_gate_terminalizes_awaiting_human_run(
     """An awaiting_human run whose gate expired UNCLAIMED + UNDECIDED past the
     grace window is a zombie holding an org slot — terminalized
     ``cancelled``/``hitl_review_expired`` (FAR-648)."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlExpireOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlExpire", user_id)
@@ -1977,7 +1977,7 @@ async def test_in_grace_gate_spares_awaiting_human_run(
 ) -> None:
     """A gate past ``expires_at`` but INSIDE the grace window is still live
     human work — the run stays ``awaiting_human``."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlGraceOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlGrace", user_id)
@@ -1999,7 +1999,7 @@ async def test_claimed_gate_spares_awaiting_human_run(
 ) -> None:
     """A CLAIMED gate (account_id set) past expiry is a reviewer actively
     working — the run is never terminalized under them."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlClaimedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlClaimed", user_id)
@@ -2029,7 +2029,7 @@ async def test_decided_gate_spares_awaiting_human_run(
 ) -> None:
     """A DECIDED gate is not undecided work — the run belongs to the F6a
     committed-decision recovery, never to the expiry terminalizer."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlDecidedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlDecided", user_id)
@@ -2061,7 +2061,7 @@ async def test_second_in_grace_gate_spares_awaiting_human_run(
     """Multi-gate safety (mirrors the park sweep): ONE expired-unclaimed gate
     plus ONE in-grace undecided gate means live human work still exists — the
     run must not be terminalized on the stale orphan alone."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMultiGateOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMultiGate", user_id)
@@ -2084,7 +2084,7 @@ async def test_cancellation_requested_run_spared_by_gate_expiry_terminalizer(
 ) -> None:
     """CANCEL-WINS precedence: a cancellation-requested run is owned by the
     cancel path — the terminalizer never writes ``cancelled`` over it."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlCancelWinsOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlCancelWins", user_id)
@@ -2116,7 +2116,7 @@ async def test_gate_expiry_terminalizer_is_org_scoped(
     correlation and the org-scoped UPDATE (the RLS org context alone would
     hide org A's rows, but the correlation is what keeps the SQL correct
     under any future bypass)."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_a, user_a = await _seed_org_account(db_engine, "HitlCrossOrgA", cap=None)
     pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlCrossA", user_a)
@@ -2163,7 +2163,7 @@ async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
     grace window is a true orphan (a legitimate in-flight gate ALWAYS has its
     claim row durably committed before the status flip) — terminalized
     ``cancelled``/``hitl_review_missing`` (FAR-721)."""
-    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
+    from farna.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissing", user_id)
@@ -2207,7 +2207,7 @@ async def test_zero_claim_awaiting_human_with_live_claim_spared(
     expired — and is NEVER collected by the zero-claim sweep (its NOT EXISTS
     predicate spares it). Acceptance: a run with a live HITL claim is never
     terminalized."""
-    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
+    from farna.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingClaimedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingClaimed", user_id)
@@ -2236,7 +2236,7 @@ async def test_zero_claim_awaiting_human_in_grace_spared(
 ) -> None:
     """A zero-claim run INSIDE the grace window is spared — the sweep only
     collects the genuinely-orphaned class once it has aged past the grace."""
-    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
+    from farna.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingGraceOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingGrace", user_id)
@@ -2264,7 +2264,7 @@ async def test_zero_claim_cancellation_requested_run_spared(
 ) -> None:
     """CANCEL-WINS precedence: a cancellation-requested zero-claim run is
     owned by the cancel path — the sweep never writes ``cancelled`` over it."""
-    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
+    from farna.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingCancelOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingCancel", user_id)
@@ -2297,7 +2297,7 @@ async def test_zero_claim_terminalizer_is_org_scoped(
     """Cross-org isolation: reconciling org B must never terminalize org A's
     identical zero-claim orphan. Pins the ``hc.organisation_id =
     runs.organisation_id`` correlation and the org-scoped UPDATE."""
-    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
+    from farna.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_a, user_a = await _seed_org_account(db_engine, "HitlMissingCrossOrgA", cap=None)
     pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlMissingCrossA", user_a)

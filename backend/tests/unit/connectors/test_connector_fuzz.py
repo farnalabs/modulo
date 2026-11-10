@@ -14,11 +14,11 @@ import respx
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from modulo.connectors.base import ConnectorQuery, ConnectorResult
-from modulo.connectors.github import GitHubConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.notion import NotionConnector
-from modulo.connectors.slack import SlackConnector
+from farna.connectors.base import ConnectorQuery, ConnectorResult
+from farna.connectors.github import GitHubConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.notion import NotionConnector
+from farna.connectors.slack import SlackConnector
 
 # ── Connector fixtures ───────────────────────────────────────────────────
 

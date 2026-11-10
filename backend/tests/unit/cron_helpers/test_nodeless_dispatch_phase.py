@@ -26,8 +26,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 
 _PHASE_ELAPSED_RE = re.compile(r"dispatch_phase_elapsed=([0-9]+\.[0-9])s")
 
@@ -313,7 +313,7 @@ class TestNodeStartedIsNotNodelessZombie:
 
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         # A bare MagicMock settings double: the floor resolver falls back to
         # its default-config derivation for a missing field.

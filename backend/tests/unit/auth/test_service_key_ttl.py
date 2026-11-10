@@ -15,13 +15,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.auth.api_key import (
+from farna.auth.api_key import (
     SERVICE_KEY_MAX_TTL_DAYS,
     ApiKeyTtlError,
     create_api_key,
     update_api_key,
 )
-from modulo.db.models.account import KIND_HUMAN, KIND_SERVICE
+from farna.db.models.account import KIND_HUMAN, KIND_SERVICE
 
 _ORG_ID = uuid.uuid4()
 _ACCOUNT_ID = uuid.uuid4()

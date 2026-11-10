@@ -15,8 +15,8 @@ import pytest
 import respx
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
-from modulo.core.library_sync.client import LibraryClient
-from modulo.registry.crypto import generate_keypair
+from farna.core.library_sync.client import LibraryClient
+from farna.registry.crypto import generate_keypair
 
 ENDPOINT = "https://library.modulo.run"
 
@@ -34,7 +34,7 @@ def _stub_pinned_client(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _build(_url: str, **kwargs: object) -> httpx.AsyncClient:
         return httpx.AsyncClient(**kwargs)
 
-    monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _build)
+    monkeypatch.setattr("farna.core.library_sync.client.pinned_async_client", _build)
 
 
 class TestFetchManifest:
@@ -107,7 +107,7 @@ class TestSsrfRejection:
         async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
             raise ValueError("blocked internal address")
 
-        monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _reject)
+        monkeypatch.setattr("farna.core.library_sync.client.pinned_async_client", _reject)
 
         manifest_route = respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json={}))
         sha256 = hashlib.sha256(b"payload").hexdigest()
@@ -176,7 +176,7 @@ class TestClientLifecycle:
             await asyncio.sleep(0)
             return httpx.AsyncClient(**kwargs)
 
-        monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _counting_build)
+        monkeypatch.setattr("farna.core.library_sync.client.pinned_async_client", _counting_build)
 
         first, second = await asyncio.gather(client._get_client(), client._get_client())
 

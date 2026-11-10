@@ -28,11 +28,11 @@ from unittest.mock import patch
 
 from sqlalchemy import String
 
-from modulo.db.models.run import EXECUTION_ORIGIN_DISPATCHED, EXECUTION_ORIGIN_VALUES, Run
-from modulo.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.run import EXECUTION_ORIGIN_DISPATCHED, EXECUTION_ORIGIN_VALUES, Run
+from farna.db.models.run_daily_facts import RunDailyFact
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"

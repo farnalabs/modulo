@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.library_sync.manifest import canonical_manifest_bytes
-from modulo.registry.crypto import generate_keypair, sign
+from farna.core.library_sync.manifest import canonical_manifest_bytes
+from farna.registry.crypto import generate_keypair, sign
 
 
 def signed_manifest(private_key_pem: str, **overrides: object) -> dict:

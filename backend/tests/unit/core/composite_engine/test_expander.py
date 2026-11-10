@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.composite_engine.expander import (
+from farna.core.composite_engine.expander import (
     _inject_parameters,
     expand_composite_node,
     expand_composites_in_graph,
 )
-from modulo.db.models.composite_template import CompositeTemplate
+from farna.db.models.composite_template import CompositeTemplate
 
 
 def _template(

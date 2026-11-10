@@ -19,15 +19,15 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.hitl_manager import DEFAULT_EXPIRY_SECONDS
-from modulo.db.crud.hitl_review_config import (
+from farna.core.hitl_manager import DEFAULT_EXPIRY_SECONDS
+from farna.db.crud.hitl_review_config import (
     HITL_REVIEW_WINDOW_MAX_SECONDS,
     HITL_REVIEW_WINDOW_MIN_SECONDS,
     ORG_HITL_REVIEW_WINDOW_KEY,
     org_hitl_review_window,
     resolve_hitl_review_window_seconds,
 )
-from modulo.settings import get_settings
+from farna.settings import get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +103,7 @@ class TestInstanceDefaultParity:
         ever to become unusable, the resolver must still return an in-envelope
         minimum rather than None/0. Pins that final branch."""
         monkeypatch.setattr(
-            "modulo.db.crud.hitl_review_config._instance_default_review_window_seconds",
+            "farna.db.crud.hitl_review_config._instance_default_review_window_seconds",
             lambda: None,
         )
         assert resolve_hitl_review_window_seconds(None, None) == HITL_REVIEW_WINDOW_MIN_SECONDS

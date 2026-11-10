@@ -31,11 +31,11 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import String
 
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.team_membership import TeamMembership
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.team_membership import TeamMembership
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_REVISION = "0312_memberships_active_lookups"
 _MIGRATION_DOWN_REVISION = "0311_library_cluster_schema_hygiene"
 

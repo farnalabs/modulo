@@ -25,10 +25,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-import modulo.core.error_tracking as et
-from modulo.core.error_tracking.alert_dispatcher import SmtpPasswordDecryptError, dispatch_alert
-from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
-from modulo.db.models.organisation import Organisation
+import farna.core.error_tracking as et
+from farna.core.error_tracking.alert_dispatcher import SmtpPasswordDecryptError, dispatch_alert
+from farna.core.error_tracking.alerting import AlertEngine, TriggeredAlert
+from farna.db.models.organisation import Organisation
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
@@ -151,8 +151,8 @@ class TestSmtpPasswordDecryptFailure:
         session = _dispatch_session(stored_password=foreign_token)
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email") as send,
             pytest.raises(SmtpPasswordDecryptError, match="could not be decrypted"),
         ):
             await dispatch_alert(_ORG_ID, _alert(), session)
@@ -167,9 +167,9 @@ class TestSmtpPasswordDecryptFailure:
         session = _dispatch_session(stored_password=foreign_token)
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email"),
-            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email"),
+            caplog.at_level("ERROR", logger="farna.core.error_tracking.alert_dispatcher"),
             pytest.raises(SmtpPasswordDecryptError),
         ):
             await dispatch_alert(_ORG_ID, _alert(), session)
@@ -183,10 +183,10 @@ class TestSmtpPasswordDecryptFailure:
         alert = _alert()
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
-            patch("modulo.core.error_tracking.alerting.record_error_alert"),
-            patch("modulo.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email") as send,
+            patch("farna.core.error_tracking.alerting.record_error_alert"),
+            patch("farna.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
         ):
             await AlertEngine().dispatch_all(_ORG_ID, [alert], session)
 
@@ -199,8 +199,8 @@ class TestSmtpPasswordDecryptFailure:
         session = _dispatch_session(stored_password=_token_encrypted_with(_FERNET_KEY, plaintext))
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
         ):
             await dispatch_alert(_ORG_ID, _alert(), session)
 
@@ -213,8 +213,8 @@ class TestSmtpPasswordDecryptFailure:
         session = _dispatch_session(stored_password=legacy)
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
         ):
             await dispatch_alert(_ORG_ID, _alert(), session)
 
@@ -236,8 +236,8 @@ class TestSmtpPasswordDecryptFailure:
         session.in_transaction = MagicMock(return_value=False)
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
         ):
             await dispatch_alert(_ORG_ID, _alert(), session)
 
@@ -277,7 +277,7 @@ class TestMissedFireRedisConstruction:
 
         with (
             patch.object(et, "get_settings", return_value=settings),
-            caplog.at_level("DEBUG", logger="modulo.core.error_tracking"),
+            caplog.at_level("DEBUG", logger="farna.core.error_tracking"),
         ):
             emitted = await et.check_missed_fire_alerts(aengine, org_id=_ORG_ID)
 

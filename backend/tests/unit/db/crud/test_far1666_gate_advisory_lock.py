@@ -12,9 +12,9 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock
 
-from modulo.api.routes import evals
-from modulo.db.crud import pipeline
-from modulo.db.crud._gate_advisory_lock import (
+from farna.api.routes import evals
+from farna.db.crud import pipeline
+from farna.db.crud._gate_advisory_lock import (
     GATE_LOCK_KEY_PREFIX,
     policy_gate_lock_key,
     with_gate_advisory_lock,

@@ -15,16 +15,16 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.model_backends import ModelBackendCreate
-from modulo.api.routes.schemas import SchemaCreate, SchemaVersionCreate
-from modulo.cli.apply.executor import (
+from farna.api.routes.model_backends import ModelBackendCreate
+from farna.api.routes.schemas import SchemaCreate, SchemaVersionCreate
+from farna.cli.apply.executor import (
     AUTH_HEADER,
     PAGE_SIZE,
     ApplyExecutor,
     ApplyHttpError,
     resolve_secret_refs,
 )
-from modulo.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.loader import parse_apply_documents
 
 CONFIG_TEXT = """
 api_version: modulo.dev/v1

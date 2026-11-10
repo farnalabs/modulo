@@ -16,11 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_mock_session
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -163,8 +163,8 @@ class TestCompositeEditor:
             },
         )
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
         assert resp.status_code == 200
@@ -175,8 +175,8 @@ class TestCompositeEditor:
 
     def test_get_editor_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{uuid.uuid4()}/editor")
         assert resp.status_code == 404
@@ -189,11 +189,11 @@ class TestCompositeEditor:
             },
         )
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
             patch(
-                "modulo.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)
+                "farna.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)
             ),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
@@ -208,8 +208,8 @@ class TestCompositeEditor:
 
     def test_save_editor_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{uuid.uuid4()}/editor",
@@ -224,8 +224,8 @@ class TestCompositePublish:
     def test_publish_sets_version_default(self, client: TestClient) -> None:
         template = _make_template(version="1.0.0")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish", json={})
         assert resp.status_code == 200
@@ -236,8 +236,8 @@ class TestCompositePublish:
     def test_publish_with_custom_version(self, client: TestClient) -> None:
         template = _make_template(version="2.0.0")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
@@ -249,8 +249,8 @@ class TestCompositePublish:
 
     def test_publish_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/composite-templates/{uuid.uuid4()}/publish", json={})
         assert resp.status_code == 404
@@ -276,10 +276,10 @@ class TestSaveAsComposite:
         ]
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-            patch("modulo.api.routes.pipelines.create_composite_template", return_value=template),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_composite_template", return_value=template),
         ):
             assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=empty_execute)
@@ -307,10 +307,10 @@ class TestSaveAsComposite:
         selected_ids = ["00000000-0000-0000-0000-000000000010"]
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-            patch("modulo.api.routes.pipelines.create_composite_template", return_value=template),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_composite_template", return_value=template),
         ):
             assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=scalars_result)
@@ -332,9 +332,9 @@ class TestSaveAsComposite:
         pipeline = _make_pipeline_mock()
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
@@ -347,9 +347,9 @@ class TestSaveAsComposite:
 
     def test_save_as_composite_pipeline_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
@@ -502,10 +502,10 @@ class TestSaveAsCompositeCredentialStorage:
         empty_execute.scalars.return_value.all.return_value = []
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_composite_template", new=create_mock),
         ):
             assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=empty_execute)
@@ -537,7 +537,7 @@ class TestSaveAsCompositeCredentialStorage:
     def test_save_as_composite_response_and_read_surface_carry_no_raw_secret(self, client: TestClient) -> None:
         """The read invariant survives: neither the 201 body nor a follow-up
         GET exposes the stored credential - the template read masks it."""
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         pipeline = self._credential_pipeline(env_token=self._FAKE_CREDENTIAL)
         # The GET masks on the sensitive-KEY tier (GITHUB_TOKEN), the tier that
@@ -569,10 +569,10 @@ class TestSaveAsCompositeCredentialStorage:
         empty_execute.scalars.return_value.all.return_value = []
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_composite_template", new=create_mock),
         ):
             assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=empty_execute)
@@ -589,10 +589,10 @@ class TestSaveAsCompositeCredentialStorage:
 
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template,
             ),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             read_resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
         assert read_resp.status_code == 200
@@ -602,7 +602,7 @@ class TestSaveAsCompositeCredentialStorage:
 
     def test_save_as_composite_rejects_mask_sentinel_with_422(self, client: TestClient) -> None:
         """A mask sentinel in the pipeline's nodes is refused before persisting."""
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         pipeline = self._credential_pipeline(env_token=SENSITIVE_VALUE_MASK)
         create_mock = AsyncMock()
@@ -610,10 +610,10 @@ class TestSaveAsCompositeCredentialStorage:
         empty_execute.scalars.return_value.all.return_value = []
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
-            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_composite_template", new=create_mock),
         ):
             assert _mock_session is not None
             _mock_session.execute = AsyncMock(return_value=empty_execute)

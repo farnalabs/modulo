@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _ctx_node_allowed_tools,
     resource_connectors,
     resource_hitl_review,
@@ -124,8 +124,8 @@ class TestResourceNodeScopeEnforcement(AuthContext):
         node-scope leg (before any DB work), not as a caught DB error.
         """
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", side_effect=AssertionError(f"DB reached for {uri}")),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", side_effect=AssertionError(f"DB reached for {uri}")),
             _node_scope(["create_pipeline"]),
         ):
             result = await handler(**kwargs)
@@ -134,9 +134,9 @@ class TestResourceNodeScopeEnforcement(AuthContext):
     @pytest.mark.asyncio
     async def test_in_scope_pipelines_resource_is_allowed(self) -> None:
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
             _node_scope(["list_pipelines"]),
         ):
             result = await resource_pipelines()
@@ -146,9 +146,9 @@ class TestResourceNodeScopeEnforcement(AuthContext):
     @pytest.mark.asyncio
     async def test_in_scope_library_resource_is_allowed(self) -> None:
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.api.mcp_server.list_primitives", new=AsyncMock(return_value=_LIBRARY_PAGE)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.api.mcp_server.list_primitives", new=AsyncMock(return_value=_LIBRARY_PAGE)),
             _node_scope(["search_library"]),
         ):
             result = await resource_library()
@@ -159,9 +159,9 @@ class TestResourceNodeScopeEnforcement(AuthContext):
     async def test_no_node_scope_is_unrestricted(self) -> None:
         """``None`` (legacy: no node scope) leaves the resource unrestricted."""
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
             _node_scope(None),
         ):
             result = await resource_pipelines()

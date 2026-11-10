@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.pipeline_engine.recovery import (
+from farna.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
     GuardrailOverrideRequiredError,
@@ -85,7 +85,7 @@ def _make_snapshot() -> MagicMock:
 
 
 def _blocked_false_outcome() -> Any:
-    from modulo.core.guardrails import GuardrailInterceptionOutcome
+    from farna.core.guardrails import GuardrailInterceptionOutcome
 
     return GuardrailInterceptionOutcome(payload={"foo": "bar"}, blocked=False)
 
@@ -115,7 +115,7 @@ def _stub_blob_reader(run: Any) -> Any:
     the run's PRE-state from the mock attrs — mirroring the pre-B1 ORM read
     the assertions were written against.
     """
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _read(_session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         outputs = (
@@ -153,13 +153,13 @@ async def test_recover_node_with_valid_input():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
         # Two binding points consume the reader: the module-level import in
         # recover_node and the in-function import in _apply_recovery_markers.
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
-        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
+        patch("farna.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -221,11 +221,11 @@ async def test_recover_node_audit_carries_dispatched_execution_origin():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
-        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -268,11 +268,11 @@ async def test_skip_node_on_awaiting_human():
     snap = _make_snapshot()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()),
-        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()),
+        patch("farna.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -314,14 +314,14 @@ async def test_recovery_audit_without_actor_resolves_to_system():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
         # Two binding points consume the reader: the module-level import in
         # recover_node and the in-function import in _apply_recovery_markers
         # (same shape as test_recover_node_with_valid_input).
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
-        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
+        patch("farna.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -359,7 +359,7 @@ async def test_recover_node_not_found():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=None),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=None),
         pytest.raises(RecoveryNotAllowedError) as exc_info,
     ):
         await recover_node(
@@ -379,7 +379,7 @@ async def test_recover_node_terminal_status():
     run = _make_run(status="complete")
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         # get_run after lock returns same run
@@ -408,7 +408,7 @@ async def test_recover_node_refuses_guardrail_blocked_run():
     run.error_code = "eval_blocked"
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
@@ -434,7 +434,7 @@ async def test_recover_node_eval_failed_non_blocked_still_rejected():
     run.error_code = "eval.blocked"  # output-side eval block, not guardrail-blocked
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
@@ -458,7 +458,7 @@ async def test_recover_nonexistent_node():
     snap = _make_snapshot()
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -490,7 +490,7 @@ async def test_recover_already_completed_node():
     snap = _make_snapshot()
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -505,7 +505,7 @@ async def test_recover_already_completed_node():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs",
+                "farna.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(NodeAlreadyCompletedError) as exc_info,
@@ -528,7 +528,7 @@ async def test_recover_skipped_node_not_recoverable():
     snap = _make_snapshot()
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -543,7 +543,7 @@ async def test_recover_skipped_node_not_recoverable():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs",
+                "farna.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(NodeAlreadyCompletedError) as exc_info,
@@ -566,7 +566,7 @@ async def test_concurrent_recovery_race():
     snap = _make_snapshot()
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -584,7 +584,7 @@ async def test_concurrent_recovery_race():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs",
+                "farna.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(ConcurrentRecoveryError) as exc_info,
@@ -606,7 +606,7 @@ async def test_recover_node_disappears_after_lock():
     run = _make_run(status="failed")
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
+    with patch("farna.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
@@ -629,7 +629,7 @@ async def test_recover_node_missing_snapshot():
     run = _make_run(status="failed")
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+    with patch("farna.core.pipeline_engine.recovery.get_run", return_value=run):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -660,14 +660,14 @@ async def test_recover_node_audit_failure_is_logged_not_fatal():
     snap = _make_snapshot()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("farna.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
         patch(
-            "modulo.core.pipeline_engine.recovery.append_audit_event",
+            "farna.core.pipeline_engine.recovery.append_audit_event",
             AsyncMock(side_effect=RuntimeError("db down")),
         ),
-        patch("modulo.db.crud.run.write_run_outputs_from_run", AsyncMock()),
+        patch("farna.db.crud.run.write_run_outputs_from_run", AsyncMock()),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -703,7 +703,7 @@ async def test_guardrail_override_run_not_found():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=None),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=None),
         pytest.raises(GuardrailOverrideError) as exc_info,
     ):
         await guardrail_override(
@@ -724,7 +724,7 @@ async def test_guardrail_override_disappears_after_lock():
     run.error_code = "eval_blocked"
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
+    with patch("farna.core.pipeline_engine.recovery.get_run", side_effect=[run, None]):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         session.execute = AsyncMock(side_effect=[pipeline_result])
@@ -749,16 +749,16 @@ async def test_guardrail_override_audit_failure_is_logged_not_fatal():
     session = _mock_session()
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.recovery.get_run", return_value=run),
         patch(
-            "modulo.core.pipeline_engine.recovery.append_audit_event",
+            "farna.core.pipeline_engine.recovery.append_audit_event",
             AsyncMock(side_effect=RuntimeError("db down")),
         ),
         patch(
-            "modulo.core.guardrails.run_interception_pass_async",
+            "farna.core.guardrails.run_interception_pass_async",
             AsyncMock(return_value=_blocked_false_outcome()),
         ),
-        patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[]),
+        patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[]),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()

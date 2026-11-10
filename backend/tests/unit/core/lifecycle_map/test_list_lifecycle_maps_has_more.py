@@ -17,10 +17,10 @@ import pytest
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.lifecycle_map.service import list_lifecycle_maps
-from modulo.db.models.base import Base
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.organisation import Organisation
+from farna.core.lifecycle_map.service import list_lifecycle_maps
+from farna.db.models.base import Base
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000a1")

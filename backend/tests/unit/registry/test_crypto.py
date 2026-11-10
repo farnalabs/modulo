@@ -9,13 +9,13 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from modulo.core.registry import _BUILTIN_REGISTRY, verify_primitive_signature
-from modulo.core.registry.crypto import (
+from farna.core.registry import _BUILTIN_REGISTRY, verify_primitive_signature
+from farna.core.registry.crypto import (
     generate_keypair,
     sign_primitive,
     verify_signature,
 )
-from modulo.registry import crypto as pem_crypto
+from farna.registry import crypto as pem_crypto
 
 
 def _rsa_keypair_pems() -> tuple[str, str]:
@@ -156,7 +156,7 @@ class TestCryptoV2:
             sign_primitive({"name": "test"}, "00" * 16)
 
     def test_canonical_json_rejects_non_serializable_values(self):
-        from modulo.core.registry.crypto import _canonical_json
+        from farna.core.registry.crypto import _canonical_json
 
         with pytest.raises(ValueError, match="non-serializable"):
             _canonical_json({"payload": object()})
@@ -175,7 +175,7 @@ class TestPublishPullVerifyFlow(_PreserveRegistry):
     """End-to-end tests for the v2 publish-pull-verify workflow via crypto module."""
 
     def test_full_publish_pull_verify_cycle(self):
-        from modulo.core.registry import get_registry_primitive, publish_primitive
+        from farna.core.registry import get_registry_primitive, publish_primitive
 
         kp = generate_keypair()
 

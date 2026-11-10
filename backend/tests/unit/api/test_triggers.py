@@ -7,8 +7,8 @@ mask. The trigger GET emits a RECURSIVE mask (``mask_config_json`` on nested
 echoes at every depth — not just top-level exact-equality.
 """
 
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes.triggers import _merge_trigger_config
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.api.routes.triggers import _merge_trigger_config
 
 
 class TestMergeTriggerConfigMaskRoundTrip:

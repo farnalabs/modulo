@@ -18,13 +18,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.guardrails.config import hash_config_set, load_config_set, to_eval_config
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.guardrails.config import hash_config_set, load_config_set, to_eval_config
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -268,19 +268,19 @@ def _patch_route(request) -> None:
 
     reconcile_mock = AsyncMock(return_value=[])
     pin_patch = patch(
-        "modulo.api.routes.guardrail_config.get_guardrail_pin",
+        "farna.api.routes.guardrail_config.get_guardrail_pin",
         new=AsyncMock(return_value=pin),
     )
     set_pin_patch = patch(
-        "modulo.api.routes.guardrail_config.set_guardrail_pin",
+        "farna.api.routes.guardrail_config.set_guardrail_pin",
         new=AsyncMock(return_value=None),
     )
     defs_patch = patch(
-        "modulo.api.routes.guardrail_config._load_guardrail_definitions",
+        "farna.api.routes.guardrail_config._load_guardrail_definitions",
         new=AsyncMock(return_value=definitions),
     )
     reconcile_patch = patch(
-        "modulo.api.routes.guardrail_config._reconcile_guardrail_rows",
+        "farna.api.routes.guardrail_config._reconcile_guardrail_rows",
         new=reconcile_mock,
     )
     for p in (pin_patch, set_pin_patch, defs_patch, reconcile_patch):

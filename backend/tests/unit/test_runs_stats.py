@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.run import _get_dialect_name, _percentile, get_run_heatmap, get_run_stats
+from farna.db.crud.run import _get_dialect_name, _percentile, get_run_heatmap, get_run_stats
 
 
 def _make_session(dialect: str) -> AsyncMock:
@@ -223,7 +223,7 @@ async def test_get_run_stats_generic_path_still_uses_percentile() -> None:
     res.scalars.return_value.all.return_value = runs
     session.execute = AsyncMock(return_value=res)
 
-    with patch("modulo.db.crud.run._percentile", return_value=42.0) as pctl:
+    with patch("farna.db.crud.run._percentile", return_value=42.0) as pctl:
         result = await get_run_stats(session, "30d")
 
     assert pctl.call_count == 3
@@ -315,7 +315,7 @@ async def test_get_run_stats_generic_period_mapping() -> None:
             _captured.append(cutoff)
             return _empty_stats()
 
-        with patch("modulo.db.crud.run._get_run_stats_python", side_effect=_fake_python):
+        with patch("farna.db.crud.run._get_run_stats_python", side_effect=_fake_python):
             await get_run_stats(session, period)
 
         expected_cutoff = now - timedelta(days=days)
@@ -348,7 +348,7 @@ async def test_get_run_stats_postgres_period_mapping() -> None:
             _captured.append(cutoff)
             return _empty_stats()
 
-        with patch("modulo.db.crud.run._get_run_stats_postgres", side_effect=_fake_postgres):
+        with patch("farna.db.crud.run._get_run_stats_postgres", side_effect=_fake_postgres):
             await get_run_stats(session, period)
 
         expected_cutoff = now - timedelta(days=days)

@@ -4,13 +4,13 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRunStatus,
     ConnectorPayload,
     ConnectorQuery,
     ConnectorType,
 )
-from modulo.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
+from farna.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
 
 
 @pytest.fixture

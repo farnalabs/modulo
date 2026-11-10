@@ -17,16 +17,16 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes.product_analytics_transparency import router as transparency_router
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_logger.append_only import (
+from farna.api.dependencies import get_db_session
+from farna.api.routes.product_analytics_transparency import router as transparency_router
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
 )
-from modulo.db.models.audit_event import AuditEvent
-from modulo.db.models.base import Base
+from farna.db.models.audit_event import AuditEvent
+from farna.db.models.base import Base
 from tests.bdd.conftest import (
     ORG_ID,
     USER_ID,
@@ -119,26 +119,26 @@ def _fetch_run_detail(client, request, run, otel_endpoint="trace-id"):
 
     with (
         patch(
-            "modulo.api.routes.runs._do_get_run_with_gate",
+            "farna.api.routes.runs._do_get_run_with_gate",
             new_callable=AsyncMock,
             return_value=(run, False),
         ),
         patch(
-            "modulo.api.routes.runs._do_get_child_run_rollup",
+            "farna.api.routes.runs._do_get_child_run_rollup",
             new_callable=AsyncMock,
             return_value=(Decimal(0), 0),
         ),
         patch(
-            "modulo.api.routes.runs._do_get_otel_endpoint",
+            "farna.api.routes.runs._do_get_otel_endpoint",
             new_callable=AsyncMock,
             return_value=otel_endpoint,
         ),
         patch(
-            "modulo.api.routes.runs._do_get_run_observability",
+            "farna.api.routes.runs._do_get_run_observability",
             new_callable=AsyncMock,
             return_value=(None, None, []),
         ),
-        patch("modulo.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
     ):
         return client.get(f"/api/v1/runs/{run.id}")
 
@@ -153,7 +153,7 @@ def _persona_post_run(client, request, ctx, pipeline_name):
 
 def _library_row(data):
     """LibraryPrimitive row for from-attributes response validation."""
-    from modulo.db.models.library_primitive import LibraryPrimitive
+    from farna.db.models.library_primitive import LibraryPrimitive
     from tests.bdd.conftest import ORG_ID, USER_ID
 
     defaults = {
@@ -271,15 +271,15 @@ def _persona_post_run_with(client, request, ctx, pipeline):
     request.node._mock_pipeline = pipeline
     run = make_mock_run(status="pending", pipeline_id=pipeline.id)
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=make_mock_snapshot(pipeline_id=pipeline.id),
         ),
-        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id), "input_payload": {}})
     request.node._mock_run = run
@@ -327,11 +327,11 @@ def _materialize_result():
 def _persona_import_confirm(client, request, ctx, bundle):
     """POST /api/v1/libraries/import/confirm (<400 stores _resp_body via _store_response)."""
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.library.materialize_import",
+            "farna.api.routes.library.materialize_import",
             new_callable=AsyncMock,
             return_value=_materialize_result(),
         ),
@@ -366,7 +366,7 @@ def ci_job_posts_run(ctx, request, client):
     carries the credential's own account exactly as the route stores it for an
     ``mk_`` key (FAR-620).
     """
-    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+    from farna.auth.dependencies import get_current_tenant_user_or_api_key
 
     pipeline_id = uuid.uuid4()
     pipeline = make_mock_pipeline(id=pipeline_id, name="changelog-generator")
@@ -386,15 +386,15 @@ def ci_job_posts_run(ctx, request, client):
     client.app.dependency_overrides[get_current_tenant_user_or_api_key] = _api_key_override
     try:
         with (
-            patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
             patch(
-                "modulo.api.routes.runs.create_snapshot_from_live_graph",
+                "farna.api.routes.runs.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=make_mock_snapshot(),
             ),
-            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
-            patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+            patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+            patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
         ):
             resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline_id), "input_payload": {}})
     finally:
@@ -486,9 +486,9 @@ def save_backend_configuration(ctx, client, request):
     mock_backend.api_key_ciphertext = ciphertext
 
     with (
-        patch("modulo.api.routes.model_backends.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.model_backends.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             return_value=mock_backend,
         ),
     ):
@@ -877,7 +877,7 @@ _MARCUS_OFFBOARD_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000082")
 
 
 def _marcus_offboard_settings():
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="sqlite+aiosqlite:///./test.db",
@@ -894,15 +894,15 @@ async def _marcus_offboard_mint(request) -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy.pool import StaticPool
 
-    from modulo.auth.jwt import (
+    from farna.auth.jwt import (
         create_access_token,
         create_refresh_token,
         decode_principal,
     )
-    from modulo.db.models.account import Account
-    from modulo.db.models.org_membership import OrgMembership
-    from modulo.db.models.organisation import Organisation
-    from modulo.db.models.token_family import TokenFamily
+    from farna.db.models.account import Account
+    from farna.db.models.org_membership import OrgMembership
+    from farna.db.models.organisation import Organisation
+    from farna.db.models.token_family import TokenFamily
 
     # One STATIC connection backs every session across the separate
     # ``asyncio.run`` calls of the journey steps, so the in-memory DB is
@@ -1000,7 +1000,7 @@ def _marcus_uuid_bound_role_read():
     bound id type is normalised), so the ADR 047 ``deactivated_at IS NULL``
     filter and its deny semantics are unchanged.
     """
-    from modulo.db.crud import org_membership as _org_membership
+    from farna.db.crud import org_membership as _org_membership
 
     real_resolve = _org_membership.resolve_role_from_membership
 
@@ -1018,11 +1018,11 @@ async def _marcus_resolve_offboard(request, coro_factory) -> object:
     """
     with (
         patch(
-            "modulo.api.dependencies.get_or_create_engine",
+            "farna.api.dependencies.get_or_create_engine",
             return_value=request.node._offboard_engine,
         ),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=request.node._offboard_factory,
         ),
         _marcus_uuid_bound_role_read(),
@@ -1032,7 +1032,7 @@ async def _marcus_resolve_offboard(request, coro_factory) -> object:
 
 @given('user "engineer-bob" has an active JWT session')
 def marcus_bob_active_jwt_session(request):
-    from modulo.auth.dependencies import get_current_tenant_user
+    from farna.auth.dependencies import get_current_tenant_user
 
     asyncio.run(_marcus_offboard_mint(request))
 
@@ -1053,7 +1053,7 @@ def marcus_bob_removed_from_org(request):
 
     from sqlalchemy import select
 
-    from modulo.db.models.org_membership import OrgMembership
+    from farna.db.models.org_membership import OrgMembership
 
     async def _remove() -> None:
         async with request.node._offboard_factory() as session, session.begin():
@@ -1075,7 +1075,7 @@ def marcus_bob_removed_from_org(request):
 
 @then("Bob's JWT is invalidated on next API call")
 def marcus_bob_jwt_invalidated(request):
-    from modulo.auth.dependencies import (
+    from farna.auth.dependencies import (
         OrganisationMembershipNotFound,
         get_current_tenant_user,
     )
@@ -1094,7 +1094,7 @@ def marcus_bob_cannot_list(request):
 
     from fastapi.security import HTTPAuthorizationCredentials
 
-    from modulo.auth.dependencies import (
+    from farna.auth.dependencies import (
         OrganisationMembershipNotFound,
         get_current_tenant_user_or_api_key,
     )
@@ -1124,8 +1124,8 @@ def marcus_bob_refresh_revoked(request):
     from fastapi import HTTPException as FastAPIHTTPException
     from sqlalchemy import select
 
-    from modulo.api.routes.auth import _advance_refresh_sequence, _parse_refresh_token
-    from modulo.db.models.token_family import TokenFamily
+    from farna.api.routes.auth import _advance_refresh_sequence, _parse_refresh_token
+    from farna.db.models.token_family import TokenFamily
 
     async def _attempt() -> None:
         settings = _marcus_offboard_settings()
@@ -1236,11 +1236,11 @@ def _marcus_transparency_request(ctx, request, org_settings: dict | None = None)
     request.node._marcus_transparency_client = client
     with (
         patch(
-            "modulo.api.routes.product_analytics_transparency.get_config",
+            "farna.api.routes.product_analytics_transparency.get_config",
             side_effect=ctx["marcus_get_config"],
         ),
         patch(
-            "modulo.core.product_analytics.consent.get_config",
+            "farna.core.product_analytics.consent.get_config",
             side_effect=ctx["marcus_get_config"],
         ),
     ):
@@ -1629,15 +1629,15 @@ def jordan_community_library_contains_modules(ctx):
 
 @when("I browse the library")
 def jordan_search_library(ctx, client, request):
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
     items = ctx.get("browse_items") or _default_personas_library_items()
     rows = [_library_row(item) for item in items]
     page = PageResult(items=rows, total=len(rows), page=1, page_size=50)
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=page),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=page),
     ):
         resp = client.get("/api/v1/libraries")
     request.node._resp = resp
@@ -1681,7 +1681,7 @@ def jordan_community_library_has_workflow(ctx):
 
 @when("I fork the community workflow into my workspace")
 def jordan_copy_workflow_to_workspace(ctx, request, client):
-    from modulo.db.models.library_primitive import LibraryPrimitive
+    from farna.db.models.library_primitive import LibraryPrimitive
 
     workflow = ctx.get("library_workflow")
     assert workflow is not None, "No library workflow configured"
@@ -1691,10 +1691,10 @@ def jordan_copy_workflow_to_workspace(ctx, request, client):
     _copy_primitive_fields(original, forked)
     forked.forked_from = original.id
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
     ):
         resp = client.post(f"/api/v1/libraries/{original.id}/adapt", json={"target_team_id": None})
     request.node._resp = resp
@@ -1949,7 +1949,7 @@ def jordan_new_release_published(ctx):
 
 @when("the webhook trigger fires")
 def jordan_webhook_trigger_fires(ctx, request, client):
-    from modulo.core import trigger_engine as trigger_engine_module
+    from farna.core import trigger_engine as trigger_engine_module
     from tests.bdd.conftest import make_mock_run, make_mock_snapshot
 
     payload = ctx.get("release_event", {})
@@ -1963,25 +1963,25 @@ def jordan_webhook_trigger_fires(ctx, request, client):
     mock_session.add = MagicMock()
     with (
         patch(
-            "modulo.api.routes.webhooks.system_engine_is_fallback",
+            "farna.api.routes.webhooks.system_engine_is_fallback",
             lambda: False,
         ),
         patch(
-            "modulo.api.routes.webhooks.load_trigger_and_org_global",
+            "farna.api.routes.webhooks.load_trigger_and_org_global",
             new_callable=AsyncMock,
             return_value=(MagicMock(active=True, config_json={}), ORG_ID),
         ),
-        patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=make_mock_snapshot(),
         ),
         patch.object(trigger_engine_module.TriggerEngine, "handle_webhook", handle_webhook),
-        patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
-        patch("modulo.api.routes.webhooks.verify_timestamp", lambda *a, **k: 1700000000),
-        patch("modulo.api.routes.webhooks.verify_hmac", lambda *a, **k: True),
+        patch("farna.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("farna.api.routes.webhooks.verify_timestamp", lambda *a, **k: 1700000000),
+        patch("farna.api.routes.webhooks.verify_hmac", lambda *a, **k: True),
     ):
         headers = {
             "X-Modulo-Timestamp": "1700000000",
@@ -2105,10 +2105,10 @@ def resume_run(request, client, ctx):
     recovered = make_mock_run(status="pending", pipeline_id=mock_run.pipeline_id, error_detail=None)
     recovered.id = mock_run.id
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=recovered),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job-1")),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=recovered),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job-1")),
     ):
         resp = client.post(f"/api/v1/runs/{mock_run.id}/nodes/{failed_at}/recover", json={})
     request.node._resp = resp
@@ -2166,11 +2166,11 @@ def export_yaml_bundle(request, client, ctx):
     }
     request.node._bundle = bundle
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
         patch(
-            "modulo.api.routes.library.export_pipeline_bundle_v2",
+            "farna.api.routes.library.export_pipeline_bundle_v2",
             new_callable=AsyncMock,
             return_value=yaml.safe_dump(bundle),
         ),
@@ -2245,7 +2245,7 @@ def claim_gate(ctx):
 
 @when("I approve the gate with my decision")
 def approve_gate(client, request, ctx):
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     if not ctx.get("gate_claimed"):
         ctx["gate_claimed"] = True
@@ -2253,8 +2253,8 @@ def approve_gate(client, request, ctx):
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
     with (
-        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+        patch("farna.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
     ):
         mock_exec_cls.return_value.resume = AsyncMock()
         resp = client.post(
@@ -2323,7 +2323,7 @@ def no_mcp_can_approve(ctx):
 
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(side_effect=PermissionError("human_only"))
-    with patch("modulo.core.hitl_manager.HITLManager", return_value=mock_mgr):
+    with patch("farna.core.hitl_manager.HITLManager", return_value=mock_mgr):
         import asyncio
 
         with pytest.raises(PermissionError):
@@ -2396,16 +2396,16 @@ def alice_create_connector_instance(request, ctx, client):
 
     row = _connector_row(ORG_ID, "GitLab", "git-host", "active")
     with (
-        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.connectors.create_connector_instance",
+            "farna.api.routes.connectors.create_connector_instance",
             new_callable=AsyncMock,
             return_value=row,
         ),
         patch(
-            "modulo.api.routes.connectors._encrypt",
+            "farna.api.routes.connectors._encrypt",
             return_value=b"ciphertext-for-gitlab-token",
         ),
     ):
@@ -2439,19 +2439,19 @@ def alice_update_connector_binding(provider_name: str, request, ctx, client):
         "connector_binding": {"type": provider_name.lower(), "instance_id": str(row.id)},
     }
     with (
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=pipeline),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
-        patch("modulo.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
+        patch("farna.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new_callable=AsyncMock,
             return_value=([node], []),
         ),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
     ):
         resp = client.put(f"/api/v1/pipelines/{pipeline.id}/graph", json={"nodes": [node], "edges": []})
     request.node._resp = resp
@@ -2496,7 +2496,7 @@ def webhook_post_to_slack(ctx):
 
     mock_notifier = MagicMock()
     mock_notifier.send = AsyncMock(return_value=True)
-    with patch("modulo.core.notifier.Notifier", return_value=mock_notifier):
+    with patch("farna.core.notifier.Notifier", return_value=mock_notifier):
         import asyncio
 
         result = asyncio.run(
@@ -2530,7 +2530,7 @@ def library_contains_workflow(name: str, request):
 
 @when("I copy the workflow to my workspace")
 def copy_workflow_to_workspace(request, ctx, client):
-    from modulo.db.models.library_primitive import LibraryPrimitive
+    from farna.db.models.library_primitive import LibraryPrimitive
 
     wf = getattr(request.node, "_library_workflow", None) or ctx.get("library_workflow") or {}
     assert wf, "No library workflow configured by the given step"
@@ -2540,10 +2540,10 @@ def copy_workflow_to_workspace(request, ctx, client):
     _copy_primitive_fields(original, forked)
     forked.forked_from = original.id
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
     ):
         resp = client.post(f"/api/v1/libraries/{original.id}/adapt", json={"target_team_id": None})
     request.node._resp = resp
@@ -2557,16 +2557,16 @@ def configure_github_connector(request, ctx, client):
 
     row = _connector_row(ORG_ID, "GitHub", "github", "active")
     with (
-        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors._verify_github_credentials", new_callable=AsyncMock, return_value=True),
+        patch("farna.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors._verify_github_credentials", new_callable=AsyncMock, return_value=True),
         patch(
-            "modulo.api.routes.connectors._encrypt",
+            "farna.api.routes.connectors._encrypt",
             return_value=b"ciphertext-for-github-token",
         ),
         patch(
-            "modulo.api.routes.connectors.create_connector_instance",
+            "farna.api.routes.connectors.create_connector_instance",
             new_callable=AsyncMock,
             return_value=row,
         ),
@@ -2720,19 +2720,19 @@ def add_new_node_between(node_name: str, prev_node: str, next_node: str, request
         "router_config": {"rules": [{"default": True, "target": node_id}]},
     }
     with (
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=mock_pipeline),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
-        patch("modulo.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=mock_pipeline),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
+        patch("farna.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new_callable=AsyncMock,
             return_value=([node], []),
         ),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
     ):
         resp = client.put(f"/api/v1/pipelines/{mock_pipeline.id}/graph", json={"nodes": [node], "edges": []})
     request.node._resp = resp
@@ -2895,7 +2895,7 @@ def start_compose_stack(ctx):
     from testcontainers.community.postgres import PostgresContainer
     from testcontainers.community.redis import RedisContainer
 
-    from modulo.api.main import app
+    from farna.api.main import app
 
     # Start Postgres
     pg = PostgresContainer("postgres:16-alpine")

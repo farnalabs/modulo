@@ -11,13 +11,13 @@ from typing import Any
 import pytest
 from langgraph.errors import GraphInterrupt
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.pipeline_engine.graph_cache import (
     _make_conditional_router,
     _make_gate_kickback_router,
     build_graph_from_json,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _evaluate_eval_condition,
     _is_truthy,
     make_hitl_review_fn,

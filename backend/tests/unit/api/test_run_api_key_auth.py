@@ -8,9 +8,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from modulo.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
-from modulo.auth.jwt import create_access_token
-from modulo.settings import get_settings
+from farna.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
+from farna.auth.jwt import create_access_token
+from farna.settings import get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -66,14 +66,14 @@ def _credentials(token: str) -> HTTPAuthorizationCredentials:
 async def test_api_key_runner_principal_is_accepted() -> None:
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()) as engine_patch,
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()) as engine_patch,
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
@@ -92,16 +92,16 @@ async def test_api_key_runner_principal_is_accepted() -> None:
 
 @pytest.mark.asyncio
 async def test_api_key_invalid_raises_401() -> None:
-    from modulo.auth.api_key import ApiKeyInvalidError
+    from farna.auth.api_key import ApiKeyInvalidError
 
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", side_effect=ApiKeyInvalidError("bad key")),
+        patch("farna.auth.api_key.validate_api_key", side_effect=ApiKeyInvalidError("bad key")),
         pytest.raises(InvalidToken),
     ):
         await get_current_tenant_user_or_api_key(
@@ -114,22 +114,22 @@ async def test_api_key_invalid_raises_401() -> None:
 async def test_api_key_grants_unavailable_raises_503() -> None:
     """FAR-1477: a grant-flag read failure on the REST auth path fails CLOSED
     with a retryable 503, not a 401 that looks like a bad key."""
-    from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+    from farna.auth.api_key import ApiKeyGrantsUnavailableError
 
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("runner", "human")),
         ),
         patch(
-            "modulo.auth.api_key.resolve_key_grants",
+            "farna.auth.api_key.resolve_key_grants",
             new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
         ),
         pytest.raises(HTTPException) as exc,
@@ -150,12 +150,12 @@ async def test_api_key_unknown_prefix_raises_401() -> None:
     session = _make_session()
     session.execute.return_value.scalar_one_or_none.return_value = None
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(session),
         ),
-        patch("modulo.auth.api_key.validate_api_key") as validate_patch,
+        patch("farna.auth.api_key.validate_api_key") as validate_patch,
         pytest.raises(InvalidToken),
     ):
         await get_current_tenant_user_or_api_key(
@@ -176,14 +176,14 @@ async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
     session.get_bind.return_value.dialect.name = "postgresql"
 
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(session),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
@@ -202,14 +202,14 @@ async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
 async def test_api_key_operator_role_principal_is_accepted() -> None:
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("operator", "human")),
         ),
     ):
@@ -229,14 +229,14 @@ async def test_api_key_minted_operator_live_runner_is_demoted() -> None:
     """A key minted as operator whose live membership is runner must degrade to runner."""
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
@@ -253,14 +253,14 @@ async def test_api_key_minted_runner_live_operator_does_not_escalate() -> None:
     """A runner key must never escalate to a higher live role (min-by-hierarchy)."""
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("operator", "human")),
         ),
     ):
@@ -277,14 +277,14 @@ async def test_api_key_minted_operator_live_admin_does_not_escalate_to_admin() -
     """An operator key must never escalate to admin even if the live role is admin."""
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=("admin", "human")),
         ),
     ):
@@ -301,14 +301,14 @@ async def test_api_key_removed_member_raises_401() -> None:
     """A key whose account has no live membership (removed/deactivated) is denied (401)."""
     settings = get_settings()
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(_make_session()),
         ),
-        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            "farna.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=None),
         ),
         pytest.raises(HTTPException) as exc_info,
@@ -329,9 +329,9 @@ async def test_api_key_db_error_returns_503() -> None:
     session = _make_session()
     session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
         patch(
-            "modulo.api.dependencies.get_or_create_session_factory",
+            "farna.api.dependencies.get_or_create_session_factory",
             return_value=_FakeFactory(session),
         ),
         pytest.raises(HTTPException) as exc_info,
@@ -355,7 +355,7 @@ async def test_jwt_principal_still_accepted() -> None:
         org_role="admin",
         client_kind="browser",
     )
-    with patch("modulo.auth.dependencies._verify_identity", new=AsyncMock(return_value=None)):
+    with patch("farna.auth.dependencies._verify_identity", new=AsyncMock(return_value=None)):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(token),
             settings=settings,

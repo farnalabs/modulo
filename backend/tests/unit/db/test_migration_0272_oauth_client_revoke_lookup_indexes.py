@@ -31,10 +31,10 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import Index
 
-from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from farna.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0271_org_api_keys_revocation_sweep_indexes"

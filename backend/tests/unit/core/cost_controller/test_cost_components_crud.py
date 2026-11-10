@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.cost_components import (
+from farna.api.routes.cost_components import (
     validate_component_fields,
     validate_component_formula,
     validate_rate_fallback,
 )
-from modulo.core.cost_controller.breakdown.formula import CostFormulaError
-from modulo.core.cost_controller.breakdown.params import REGISTERED_RATE_FALLBACKS
-from modulo.core.seed_data.cost_components import DEFAULT_COST_COMPONENTS, seed_cost_components_for_org
-from modulo.db.crud.cost_component import create_cost_component
+from farna.core.cost_controller.breakdown.formula import CostFormulaError
+from farna.core.cost_controller.breakdown.params import REGISTERED_RATE_FALLBACKS
+from farna.core.seed_data.cost_components import DEFAULT_COST_COMPONENTS, seed_cost_components_for_org
+from farna.db.crud.cost_component import create_cost_component
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -150,7 +150,7 @@ def test_rate_with_both_sources_ok() -> None:
 # --- CRUD guards (mocked session) ---------------------------------------------
 
 
-@patch("modulo.db.crud.cost_component._duplicate_exists")
+@patch("farna.db.crud.cost_component._duplicate_exists")
 async def test_create_org_cap_enforced(mock_dup: AsyncMock) -> None:
     mock_dup.return_value = False
     session = _mock_session()
@@ -161,7 +161,7 @@ async def test_create_org_cap_enforced(mock_dup: AsyncMock) -> None:
         await create_cost_component(session, **_component_args())
 
 
-@patch("modulo.db.crud.cost_component._duplicate_exists")
+@patch("farna.db.crud.cost_component._duplicate_exists")
 async def test_create_duplicate_is_409(mock_dup: AsyncMock) -> None:
     mock_dup.return_value = True
     session = _mock_session()

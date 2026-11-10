@@ -35,14 +35,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.db.crud.pipeline import (
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.db.crud.pipeline import (
     _clone_snapshots,
     _snapshot_to_dict,
     clone_pipeline,
 )
-from modulo.db.models.eval import Eval
-from modulo.db.models.policy_gate import PolicyGate
+from farna.db.models.eval import Eval
+from farna.db.models.policy_gate import PolicyGate
 from tests.unit.api.mock_session import configure_mock_session
 
 _ASYNCIO = pytest.mark.asyncio(loop_scope="module")
@@ -233,7 +233,7 @@ def _cloned_snapshot(main_session: AsyncMock) -> Any:
 @_ASYNCIO
 class TestCloneStripsPolicyGatePins:
     async def test_clone_nulls_policy_gate_pin_pair(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             main_session, _ = await _clone(_source_snapshot_row())
 
         cloned_snapshot = _cloned_snapshot(main_session)
@@ -241,14 +241,14 @@ class TestCloneStripsPolicyGatePins:
         assert cloned_snapshot.policy_gate_pins_fingerprint is None
 
     async def test_clone_discloses_the_dropped_pins(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             await _clone(_source_snapshot_row())
 
         assert "policy_gate pin(s) dropped on clone of pipeline" in caplog.text
         assert "1 pin(s) on snapshot v7" in caplog.text
 
     async def test_clone_keeps_guardrail_pins_verbatim(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             main_session, _ = await _clone(_source_snapshot_row())
 
         cloned_snapshot = _cloned_snapshot(main_session)
@@ -260,7 +260,7 @@ class TestCloneStripsPolicyGatePins:
         snapshot_row.policy_gate_pins_json = None
         snapshot_row.policy_gate_pins_fingerprint = None
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             main_session, _ = await _clone(snapshot_row)
 
         cloned_snapshot = _cloned_snapshot(main_session)
@@ -282,7 +282,7 @@ class TestCloneRunGateResolution:
         eval is unpinned — the gate silently degrades to warn and no
         PolicyGateDecision can be written.
         """
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             main_session, _ = await _clone(_source_snapshot_row())
         cloned_snapshot = _cloned_snapshot(main_session)
 
@@ -376,7 +376,7 @@ class TestCloneSnapshotsWriterStripsPins:
         must not leak them onto the clone.
         """
         session = _main_session()
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             count = await _clone_snapshots(
                 session,
                 [_source_snapshot_dict()],

@@ -45,7 +45,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION_0113 = "0113_guardrail_summary"
 _REVISION_0116 = "0116_guardrail_trust_pr_b"
@@ -272,7 +272,7 @@ class TestModelMigrationConsistency:
     """
 
     def test_pipeline_snapshot_model_matches_0116_schema(self) -> None:
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+        from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
         column = PipelineSnapshot.__table__.c.guardrail_pins_fingerprint
         assert isinstance(column.type, sa.String)
@@ -280,7 +280,7 @@ class TestModelMigrationConsistency:
         assert column.nullable
 
     def test_run_model_matches_0113_schema(self) -> None:
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         column = Run.__table__.c.guardrail_summary_json
         assert isinstance(column.type, sa.JSON)
@@ -289,8 +289,8 @@ class TestModelMigrationConsistency:
     def test_drift_guard_trust_surface_consistent_both_directions(self) -> None:
         # A future mismatch is caught here: a trust column that exists on one
         # side (model OR migration) but not the other fails this test.
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-        from modulo.db.models.run import Run
+        from farna.db.models.pipeline_snapshot import PipelineSnapshot
+        from farna.db.models.run import Run
 
         model_columns = {
             "eval_definitions": set(),
@@ -308,8 +308,8 @@ class TestModelMigrationConsistency:
         # drifts. Feed synthetic mismatches — a trust column removed from its
         # owning migration, and a migration column absent from its model —
         # and assert the guard raises instead of silently passing.
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-        from modulo.db.models.run import Run
+        from farna.db.models.pipeline_snapshot import PipelineSnapshot
+        from farna.db.models.run import Run
 
         model_columns = {
             "eval_definitions": set(),

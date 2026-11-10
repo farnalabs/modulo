@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.routes.events import _test_reset_connections
-from modulo.core.events.event_bus import EventBus, get_event_bus
+from farna.api.routes.events import _test_reset_connections
+from farna.core.events.event_bus import EventBus, get_event_bus
 
 _features_dir = str(Path(__file__).resolve().parent.parent / "features" / "events")
 scenarios(_features_dir)
@@ -78,7 +78,7 @@ def _queue_empty_with_timeout(q, timeout: float = 0.3) -> None:
 @pytest.fixture(autouse=True)
 def _reset_event_bus():
     """Reset EventBus singleton + connection tracking before each scenario."""
-    import modulo.core.events.event_bus as eb
+    import farna.core.events.event_bus as eb
 
     eb._event_bus = None
     _test_reset_connections()

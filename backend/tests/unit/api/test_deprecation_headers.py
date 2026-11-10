@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
+from farna.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
 
 FUTURE_SUNSET = "2099-12-31"
 PAST_SUNSET = "2020-01-01"

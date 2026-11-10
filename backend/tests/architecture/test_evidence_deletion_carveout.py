@@ -22,7 +22,7 @@ from pathlib import Path
 from tests.unit._source_scan import iter_source_text
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = BACKEND_ROOT / "src" / "modulo"
+SRC_ROOT = BACKEND_ROOT / "src" / "farna"
 
 _SANCTIONED_RELPATH = "core/evidence_retention.py"
 _ORM_PATTERNS = ("delete(Evidence", "session.delete(Evidence", "Evidence.__table__.delete")
@@ -146,7 +146,7 @@ def test_scanner_catches_reassignment_table_delete_pattern(tmp_path: Path) -> No
         {
             "core/evidence_retention.py": "",
             "api/sneaky.py": (
-                "from modulo.db.models.evidence import Evidence\n\n"
+                "from farna.db.models.evidence import Evidence\n\n"
                 "def wipe():\n"
                 "    t = Evidence.__table__\n"
                 "    t.delete()\n"

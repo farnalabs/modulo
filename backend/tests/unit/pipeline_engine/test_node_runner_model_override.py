@@ -40,7 +40,7 @@ class _RecordingHub:
 
 async def _run_node(state: dict[str, Any]) -> tuple[dict[str, Any], _RecordingHub]:
     """Build an agent node and run it, returning the result and the recording hub."""
-    from modulo.core.pipeline_engine.node_runner import make_node_fn
+    from farna.core.pipeline_engine.node_runner import make_node_fn
 
     node_def = {
         "id": "agent-1",
@@ -52,11 +52,11 @@ async def _run_node(state: dict[str, Any]) -> tuple[dict[str, Any], _RecordingHu
     node_fn = make_node_fn(node_def)
     with (
         patch(
-            "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+            "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
             return_value=None,
         ),
         patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ),
     ):
@@ -206,7 +206,7 @@ async def _run_sandbox_with_model_override(
     Returns the wrapped command actually dispatched to the E2B sandbox
     (``sandbox.commands.run.call_args.args[0]``).
     """
-    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
     node_def = {
         "id": "sbx-1",
@@ -272,7 +272,7 @@ async def test_sandbox_agent_command_undefined_model_falls_back_verbatim() -> No
     that references the override MUST supply it, otherwise the run is safely
     skipped rather than dispatched with a mangled command.
     """
-    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
     node_def = {
         "id": "sbx-2",
@@ -307,7 +307,7 @@ async def _run_sandbox_agent(node_def: dict[str, Any], state: dict[str, Any]) ->
     Returns ``(result, sandbox)`` — ``sandbox.commands.run.call_args.args[0]``
     is the wrapped command actually dispatched when the run completes.
     """
-    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
     fn = make_sandbox_agent_fn(node_def)
 

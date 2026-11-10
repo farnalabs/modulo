@@ -219,7 +219,7 @@ async def _drain_eligible_checkpoints(db_engine: AsyncEngine) -> None:
     its own org; draining the eligible set first makes the candidate selection
     deterministic for the threads the test then seeds.
     """
-    from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+    from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
@@ -231,7 +231,7 @@ async def _drain_eligible_checkpoints(db_engine: AsyncEngine) -> None:
 
 class TestRequestOrgDeletion:
     async def test_raises_when_org_not_found(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -243,7 +243,7 @@ class TestRequestOrgDeletion:
                 )
 
     async def test_raises_when_already_deleted(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "already-deleted")
         user_id = await _create_user(db_engine, org_id, "gone@test.com")
@@ -268,7 +268,7 @@ class TestRequestOrgDeletion:
                 await request_org_deletion(session, org_id, user_id)
 
     async def test_soft_deletes_org_and_sets_token(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "soft-delete")
         user_id = await _create_user(db_engine, org_id, "soft@test.com")
@@ -295,7 +295,7 @@ class TestRequestOrgDeletion:
         assert state["export_bundle_json"] is not None
 
     async def test_soft_delete_retains_child_rows(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "child-rows")
         user_id = await _create_user(db_engine, org_id, "child@test.com")
@@ -326,7 +326,7 @@ class TestRequestOrgDeletion:
             assert result.scalar_one() == 1
 
     async def test_export_bundle_contains_all_sections(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "export-test")
         user_id = await _create_user(db_engine, org_id, "export@test.com")
@@ -359,7 +359,7 @@ class TestRequestOrgDeletion:
 
     async def test_soft_deleted_pipeline_included_in_export(self, db_engine: AsyncEngine) -> None:
         """Soft-deleted pipelines must appear in the export bundle (FAR-1758)."""
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "softdel-pipeline")
         user_id = await _create_user(db_engine, org_id, "softdel@test.com")
@@ -393,7 +393,7 @@ class TestRequestOrgDeletion:
 
 class TestConfirmOrgDeletion:
     async def test_raises_when_org_not_found(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -401,7 +401,7 @@ class TestConfirmOrgDeletion:
                 await confirm_org_deletion(session, org_id=uuid.uuid4(), token="anything")
 
     async def test_raises_when_token_invalid(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "invalid-token")
         user_id = await _create_user(db_engine, org_id, "invalid@test.com")
@@ -420,7 +420,7 @@ class TestConfirmOrgDeletion:
                 await confirm_org_deletion(session, org_id=org_id, token="wrong-token")
 
     async def test_confirms_with_correct_token(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "confirm-ok")
         user_id = await _create_user(db_engine, org_id, "confirm@test.com")
@@ -448,7 +448,7 @@ class TestConfirmOrgDeletion:
             assert row.scalar_one() == 0
 
     async def test_immediate_skips_token_check(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "immediate")
         user_id = await _create_user(db_engine, org_id, "immediate@test.com")
@@ -468,7 +468,7 @@ class TestConfirmOrgDeletion:
         assert result["deleted_organisation_id"] == str(org_id)
 
     async def test_raises_when_token_expired(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         org_id = await _create_org(db_engine, "expired-token")
 
@@ -496,7 +496,7 @@ class TestConfirmOrgDeletion:
 
     async def test_refuses_when_non_terminal_run_exists(self, db_engine: AsyncEngine) -> None:
         """B7 guard: confirm refuses the hard-delete while a live run exists."""
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "live-run")
         user_id = await _create_user(db_engine, org_id, "live-run@test.com")
@@ -534,7 +534,7 @@ class TestConfirmOrgDeletion:
 
     async def test_force_proceeds_with_non_terminal_run(self, db_engine: AsyncEngine) -> None:
         """B7 guard: force=True proceeds (destructive) despite the live run."""
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "force-delete")
         user_id = await _create_user(db_engine, org_id, "force@test.com")
@@ -579,7 +579,7 @@ class TestConfirmOrgDeletion:
         """A confirmed token is single-use — a second confirm with the same
         token fails (the org row is gone, so the token check raises
         ``Organisation not found`` / the org no longer exists)."""
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "single-use-confirm")
         user_id = await _create_user(db_engine, org_id, "single@test.com")
@@ -605,7 +605,7 @@ class TestConfirmOrgDeletion:
     async def test_cancel_invalidates_token_single_use(self, db_engine: AsyncEngine) -> None:
         """A cancelled deletion's token is invalidated — the same token can no
         longer confirm, and a fresh request mints a NEW token."""
-        from modulo.db.crud.org_deletion import (
+        from farna.db.crud.org_deletion import (
             cancel_org_deletion,
             confirm_org_deletion,
             request_org_deletion,
@@ -657,7 +657,7 @@ class TestConfirmOrgDeletion:
         cascade, so the cascade only churns a small remaining set (deadlock
         avoidance). A young terminal run survives the batch pass and is removed
         by the cascade — either way the org ends up fully deleted."""
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "batch-runs")
         user_id = await _create_user(db_engine, org_id, "batch@test.com")
@@ -733,7 +733,7 @@ class TestConfirmOrgDeletion:
 
 class TestExportOrgData:
     async def test_raises_when_org_not_found(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -741,7 +741,7 @@ class TestExportOrgData:
                 await export_org_data(session, org_id=uuid.uuid4())
 
     async def test_returns_existing_bundle(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "existing-bundle")
 
@@ -761,7 +761,7 @@ class TestExportOrgData:
         assert bundle["organisation"][0]["name"] == "Cached Org"
 
     async def test_collects_live_data_when_no_bundle(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "live-export")
         user_id = await _create_user(db_engine, org_id, "live-export@test.com")
@@ -791,10 +791,10 @@ class TestExportOrgData:
         import asyncio
         from types import SimpleNamespace
 
-        from modulo.db.crud.org_deletion import export_org_data
-        from modulo.db.crud.organisation import update_org_settings_patch
-        from modulo.db.rls import set_rls_org
-        from modulo.db.soft_delete import register_soft_delete_filter
+        from farna.db.crud.org_deletion import export_org_data
+        from farna.db.crud.organisation import update_org_settings_patch
+        from farna.db.rls import set_rls_org
+        from farna.db.soft_delete import register_soft_delete_filter
 
         register_soft_delete_filter()
 
@@ -802,7 +802,7 @@ class TestExportOrgData:
         export_in_snapshot = asyncio.Event()
 
         # Monkeypatch _collect_org_export to wait on the event (deterministic sync).
-        import modulo.db.crud.org_deletion as org_deletion_mod
+        import farna.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export
 
@@ -836,7 +836,7 @@ class TestExportOrgData:
 
         # Bound the wait at 300ms so the test proves "non-blocking" quickly.
         monkeypatch.setattr(
-            "modulo.db.crud.row_lock.get_settings",
+            "farna.db.crud.row_lock.get_settings",
             lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
         )
 
@@ -869,10 +869,10 @@ class TestExportOrgData:
         import asyncio
         from types import SimpleNamespace
 
-        from modulo.db.crud.org_deletion import request_org_deletion
-        from modulo.db.crud.organisation import update_org_settings_patch
-        from modulo.db.rls import set_rls_org
-        from modulo.db.soft_delete import register_soft_delete_filter
+        from farna.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.organisation import update_org_settings_patch
+        from farna.db.rls import set_rls_org
+        from farna.db.soft_delete import register_soft_delete_filter
 
         register_soft_delete_filter()
 
@@ -880,7 +880,7 @@ class TestExportOrgData:
         export_in_snapshot = asyncio.Event()
 
         # Monkeypatch _collect_org_export to wait on the event (deterministic sync).
-        import modulo.db.crud.org_deletion as org_deletion_mod
+        import farna.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export
 
@@ -917,7 +917,7 @@ class TestExportOrgData:
 
         # Bound the wait at 300ms so the test proves "non-blocking" quickly.
         monkeypatch.setattr(
-            "modulo.db.crud.row_lock.get_settings",
+            "farna.db.crud.row_lock.get_settings",
             lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
         )
 
@@ -946,8 +946,8 @@ class TestExportOrgData:
         the org state, the re-check must catch it and raise.
         """
 
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
-        from modulo.db.soft_delete import register_soft_delete_filter
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.db.soft_delete import register_soft_delete_filter
 
         register_soft_delete_filter()
 
@@ -960,7 +960,7 @@ class TestExportOrgData:
         snapshot_ran = {"value": False}
 
         # Wrap _collect_org_export_in_snapshot to mark that it ran.
-        import modulo.db.crud.org_deletion as org_deletion_mod
+        import farna.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export_in_snapshot
 
@@ -1027,7 +1027,7 @@ class TestExportOrgData:
         the collector by monkeypatching _collect_org_export to run queries that
         return the current transaction isolation level and read-only state.
         """
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         org_id = await _create_org(db_engine, "snapshot-isolation")
         user_id = await _create_user(db_engine, org_id, "snapshot@test.com")
@@ -1037,7 +1037,7 @@ class TestExportOrgData:
         captured_isolation: dict[str, str] = {}
         captured_read_only: dict[str, str] = {}
 
-        import modulo.db.crud.org_deletion as org_deletion_mod
+        import farna.db.crud.org_deletion as org_deletion_mod
 
         original_collect = org_deletion_mod._collect_org_export
 
@@ -1086,7 +1086,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         saver tables. ``thread-fresh``'s run is still ``running``, so its
         rows — even though they are also fresh — are untouched.
         """
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         old_ts = datetime.now(UTC) - timedelta(days=31)
         fresh_ts = datetime.now(UTC)
@@ -1208,7 +1208,7 @@ class TestBatchDeleteLanggraphCheckpoints:
 
     async def test_batches_until_all_expired_rows_removed(self, db_engine: AsyncEngine) -> None:
         """The batch loop repeats until fewer than ``batch_size`` rows remain."""
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         old_ts = datetime.now(UTC) - timedelta(days=31)
         org = uuid.uuid4()
@@ -1251,7 +1251,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         Purging it would make LangGraph restart the graph from scratch,
         re-running side-effectful nodes (duplicate PRs/emails/notifications).
         """
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         org_id = await _create_org(db_engine, "live-ckpt")
         user_id = await _create_user(db_engine, org_id, "live@test.com")
@@ -1332,7 +1332,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         for the fresh checkpoint. Blobs are only purged when NO checkpoint
         remains in their thread.
         """
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         org_id = await _create_org(db_engine, "idle-ckpt")
         user_id = await _create_user(db_engine, org_id, "idle@test.com")
@@ -1405,7 +1405,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         SEPARATE connection already sees the deletions without any explicit
         ``session.commit()`` (committed per batch).
         """
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         await _drain_eligible_checkpoints(db_engine)
 
@@ -1452,7 +1452,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         commit per batch. The introspection is monkeypatched to the deployed
         answer so this test exercises exactly the production query variant.
         """
-        from modulo.db.crud import org_deletion as org_deletion_mod
+        from farna.db.crud import org_deletion as org_deletion_mod
 
         async def _no_created_at(_session: Any) -> bool:
             return False
@@ -1509,7 +1509,7 @@ class TestBatchDeleteLanggraphCheckpoints:
         live-run guard must match the ``created_at``-present class. The positive
         control (an aged terminal thread with no live run) is still purged.
         """
-        from modulo.db.crud import org_deletion as org_deletion_mod
+        from farna.db.crud import org_deletion as org_deletion_mod
 
         async def _no_created_at(_session: Any) -> bool:
             return False

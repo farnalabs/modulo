@@ -3,8 +3,8 @@ id: feat-analytics
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/analytics.py
-  - backend/src/modulo/core/analytics
+  - backend/src/farna/api/routes/analytics.py
+  - backend/src/farna/core/analytics
 unit-tests:
   - backend/tests/unit/test_analytics_builder.py
   - backend/tests/unit/test_analytics_delta.py

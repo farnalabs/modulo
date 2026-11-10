@@ -8,9 +8,9 @@ from uuid import uuid4
 import pytest
 from langgraph.errors import GraphInterrupt
 
-from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
+from farna.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
+from farna.core.pipeline_engine.node_runner import (
     _build_hitl_review_artifact,
     _evaluate_eval_condition,
     _hitl_review_autonomy_result,
@@ -19,7 +19,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_hitl_review_fn,
     make_manual_node_fn,
 )
-from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
+from farna.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +84,7 @@ async def test_hitl_review_first_call_preserves_existing_hitl_reviews():
 
 async def test_hitl_review_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.interrupt",
+        "farna.core.pipeline_engine.node_runner.interrupt",
         lambda _payload: {"action": "approved", "review_id": "review-step", "notes": "Command resume"},
     )
     node_fn = make_hitl_review_fn({"review_id": "review-step"})
@@ -175,7 +175,7 @@ async def test_manual_node_first_call_raises_interrupt():
 
 async def test_manual_node_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.interrupt",
+        "farna.core.pipeline_engine.node_runner.interrupt",
         lambda _payload: {"review_id": "manual-step", "output": {"answer": "provided"}},
     )
     node_fn = make_manual_node_fn({"id": "manual-step", "manual_prompt": "Provide output"})
@@ -1134,7 +1134,7 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
     """
     import uuid as _uuid
 
-    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+    from farna.db.models.eval_result import EvalResult as EvalResultModel
 
     org_id = _uuid.UUID("00000000-0000-0000-0000-0000000000a1")
     run_id = _uuid.UUID("00000000-0000-0000-0000-0000000000b2")
@@ -1146,10 +1146,10 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
     async def _fake_factory():
         yield session
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     gate_config = {"review_id": "persist-gate"}
     eval_def = EvalDefinition(
@@ -1206,10 +1206,10 @@ async def test_eval_before_interrupt_persist_failure_does_not_block_interrupt(mo
         raise RuntimeError("db unavailable")
         yield  # pragma: no cover - make asynccontextmanager a valid generator
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     eval_def = EvalDefinition(
         id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
@@ -1248,10 +1248,10 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
     async def _fake_factory():
         yield session
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
     eval_def = EvalDefinition(
         id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
@@ -1608,7 +1608,7 @@ async def test_hitl_review_emits_clamp_telemetry_on_auto_approve_path(
     clamp with requested/effective/ceiling/review_id."""
     clamp_mock = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
     node_fn = make_hitl_review_fn({"review_id": "clamp-notify", "human_only": False})
@@ -1645,7 +1645,7 @@ async def test_hitl_review_emits_clamp_telemetry_on_fired_path(
     normal level-applied telemetry."""
     clamp_mock = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
     node_fn = make_hitl_review_fn({"review_id": "clamp-fired", "human_only": False})
@@ -1678,7 +1678,7 @@ async def test_hitl_review_no_clamp_emits_no_clamp_telemetry(
     """No recommendation (or a lowering one) means no clamp event."""
     clamp_mock = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
     node_fn = make_hitl_review_fn({"review_id": "no-clamp", "human_only": False})
@@ -1702,7 +1702,7 @@ async def test_hitl_review_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
     ``pipeline_id: null`` while the unit tests passed it explicitly."""
     telemetry_mock = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
         telemetry_mock,
     )
     node_fn = make_hitl_review_fn({"review_id": "telemetry-skip", "human_only": False})
@@ -1729,7 +1729,7 @@ async def test_hitl_review_autonomy_telemetry_forwards_pipeline_id_on_fired_path
     """The fired (interrupt) level-applied event forwards ``_pipeline_id`` too."""
     telemetry_mock = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
         telemetry_mock,
     )
     node_fn = make_hitl_review_fn({"review_id": "telemetry-fired", "human_only": False})
@@ -1813,20 +1813,20 @@ def _wire_gate_live_read(
 ) -> AsyncMock:
     """Patch the gate-time read seams; return the ``get_pipeline`` spy."""
     get_pipeline = AsyncMock(return_value=_earned_pipeline(live_level))
-    monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", get_pipeline)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.crud.pipeline.get_pipeline", get_pipeline)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
     monkeypatch.setattr(
-        "modulo.core.feature_flags.get_registry",
+        "farna.core.feature_flags.get_registry",
         lambda: _StaticFlagRegistry(gating),
     )
     # Keep the test hermetic — telemetry and the audit write are irrelevant here.
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
         AsyncMock(),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        "farna.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         AsyncMock(),
     )
     return get_pipeline
@@ -1896,16 +1896,16 @@ class TestGateTimeEarnedAutonomyRead:
         skipped entirely, leaving S0 behaviour byte-identical."""
         read_mock = AsyncMock(return_value="manual_approval")
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.read_live_earned_autonomy",
+            "farna.core.pipeline_engine.node_runner.read_live_earned_autonomy",
             read_mock,
         )
         flag_mock = AsyncMock(return_value=False)
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
+            "farna.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
             flag_mock,
         )
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+            "farna.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
             AsyncMock(),
         )
         node_fn = make_hitl_review_fn(
@@ -1935,15 +1935,15 @@ class TestGateTimeEarnedAutonomyRead:
         awaited exactly once and its level feeds resolution."""
         read_mock = AsyncMock(return_value="manual_approval")
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.read_live_earned_autonomy",
+            "farna.core.pipeline_engine.node_runner.read_live_earned_autonomy",
             read_mock,
         )
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
+            "farna.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
             AsyncMock(return_value=True),
         )
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+            "farna.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
             AsyncMock(),
         )
         node_fn = make_hitl_review_fn(

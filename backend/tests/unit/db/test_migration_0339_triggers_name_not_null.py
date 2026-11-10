@@ -25,9 +25,9 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from modulo.db.models.trigger import Trigger
+from farna.db.models.trigger import Trigger
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _REVISION = "0339_triggers_name_not_null"
 
 _ID_A = "aaaaaaaa11112222333344445555aaaa"

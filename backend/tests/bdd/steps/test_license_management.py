@@ -14,14 +14,14 @@ from tests.bdd.conftest import harden_session_double
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/license_management.feature")
 
-from modulo.core.license import (
+from farna.core.license import (
     LICENCE_GRACE_DAYS,
     clear_license,
     parse_and_verify,
     set_public_key,
     store_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from farna.core.registry.crypto import generate_keypair, sign_primitive
 
 _TEST_KP = generate_keypair()
 _TEST_PRIV = _TEST_KP["private_key"]
@@ -82,12 +82,12 @@ def _make_mock_session() -> Any:
 
 
 def _setup_client(ctx: dict[str, Any]) -> None:
-    from modulo.api.dependencies import _get_engine as _eng
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine as _eng
+    from farna.api.dependencies import get_db_session
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.settings import Settings, get_settings
 
     set_public_key(_TEST_PUB)
 
@@ -153,7 +153,7 @@ def ctx() -> dict[str, Any]:
 def client() -> Any:
     from fastapi.testclient import TestClient
 
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return TestClient(app)
 

@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.exc import UnboundExecutionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import (
+from farna.db.rls import (
     _RLS_CONFIG_NAMES,
     _read_guc_org,
     _set_config_statement,
@@ -102,7 +102,7 @@ class TestRegisterRlsResetHook:
         engine.dialect.name = "postgresql"
         engine.sync_engine = MagicMock()
 
-        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+        with patch("farna.db.rls.event.listens_for") as mock_listens:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_called_once_with(engine.sync_engine, "checkout")
@@ -152,7 +152,7 @@ def _capture_checkout_listener(engine: MagicMock) -> Any:
 
         return _decorator
 
-    with patch("modulo.db.rls.event.listens_for", side_effect=_fake_listens_for):
+    with patch("farna.db.rls.event.listens_for", side_effect=_fake_listens_for):
         register_rls_reset_hook(engine)
 
     assert "fn" in captured, "register_rls_reset_hook did not register a listener"
@@ -189,7 +189,7 @@ class TestCheckoutResetListener:
     def test_logs_warning_when_cursor_api_unavailable(self, caplog: pytest.LogCaptureFixture) -> None:
         connection = object()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.rls"):
             self._listener()(connection, MagicMock(), MagicMock())
 
         assert any("sync cursor API not available" in message for message in caplog.messages)
@@ -211,7 +211,7 @@ class TestCheckoutResetListener:
         connection = MagicMock()
         connection.cursor.return_value = cursor
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.rls"):
             self._listener()(connection, MagicMock(), MagicMock())
 
         assert any("failed to clear RLS session context" in message for message in caplog.messages)
@@ -300,7 +300,7 @@ class TestReadRlsOrgDialectOrder:
         guc_org = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
         session = _UnreadableDialectSessionDouble(info={"org_id": str(_ORG_ID)}, guc_value=str(guc_org))
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.rls"):
             result = await read_rls_org(session)
 
         assert result == guc_org

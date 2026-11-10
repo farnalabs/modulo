@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager import HITLManager, sweep_alarm
-from modulo.core.hitl_manager.sweep_alarm import AUDIT_EVENT_TYPE, maybe_alarm_approve_sweep
-from modulo.core.notifier.event_mapper import NotificationEventMapper
+from farna.core.hitl_manager import HITLManager, sweep_alarm
+from farna.core.hitl_manager.sweep_alarm import AUDIT_EVENT_TYPE, maybe_alarm_approve_sweep
+from farna.core.notifier.event_mapper import NotificationEventMapper
 
 from .conftest import _session_decide
 from .test_hitl_manager import _GATE, _ORG, _RUN, _USER, _gate
@@ -76,9 +76,9 @@ def _sweep_patches():
     transaction (hitl_overdue sibling pattern, FAR-611 review fix).
     """
     with (
-        patch("modulo.core.hitl_manager.sweep_alarm.append_audit_event", new_callable=AsyncMock) as mock_audit,
+        patch("farna.core.hitl_manager.sweep_alarm.append_audit_event", new_callable=AsyncMock) as mock_audit,
         patch.object(NotificationEventMapper, "create_from_event", new_callable=AsyncMock) as mock_notify,
-        patch("modulo.core.hitl_manager.sweep_alarm._schedule_sweep_webhook") as mock_webhook,
+        patch("farna.core.hitl_manager.sweep_alarm._schedule_sweep_webhook") as mock_webhook,
     ):
         yield mock_audit, mock_notify, mock_webhook
 
@@ -276,7 +276,7 @@ class TestFailureIsolation:
         """A raising audit append is swallowed — the decision is never affected."""
         session = _alarm_session(6, 2)
         with patch(
-            "modulo.core.hitl_manager.sweep_alarm.append_audit_event",
+            "farna.core.hitl_manager.sweep_alarm.append_audit_event",
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit db down"),
         ):
@@ -289,7 +289,7 @@ class TestFailureIsolation:
         """A failed emission must not suppress the NEXT real crossing."""
         t0 = datetime.now(UTC)
         with patch(
-            "modulo.core.hitl_manager.sweep_alarm.append_audit_event",
+            "farna.core.hitl_manager.sweep_alarm.append_audit_event",
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit db down"),
         ):
@@ -358,8 +358,8 @@ class TestManagerWiring:
         session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
         with (
-            patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
-            patch("modulo.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
+            patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
+            patch("farna.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
         ):
             mgr = HITLManager()
             await mgr.approve(
@@ -384,8 +384,8 @@ class TestManagerWiring:
         session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
         with (
-            patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
-            patch("modulo.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
+            patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
+            patch("farna.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
         ):
             mgr = HITLManager()
             await mgr.approve_with_modification(
@@ -414,8 +414,8 @@ class TestManagerWiring:
         session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
         with (
-            patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
-            patch("modulo.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
+            patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
+            patch("farna.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
         ):
             mgr = HITLManager()
             await mgr.deliver_manual(
@@ -441,9 +441,9 @@ class TestManagerWiring:
         session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
         with (
-            patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
+            patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
             patch(
-                "modulo.core.hitl_manager.maybe_alarm_approve_sweep",
+                "farna.core.hitl_manager.maybe_alarm_approve_sweep",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("alarm exploded"),
             ),

@@ -23,21 +23,21 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from tests.unit.api.mock_session import configure_rls_preamble
 
-import modulo.api.routes.external_agents as ext_mod
-import modulo.api.routes.mcp_servers as mcp_mod
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.mcp.tool_pinning import ObservationResult, ToolPinningError
-from modulo.db.crud.base import PageResult
-from modulo.db.models.external_agent import ExternalAgent
-from modulo.db.models.mcp_server import (
+import farna.api.routes.external_agents as ext_mod
+import farna.api.routes.mcp_servers as mcp_mod
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.mcp.tool_pinning import ObservationResult, ToolPinningError
+from farna.db.crud.base import PageResult
+from farna.db.models.external_agent import ExternalAgent
+from farna.db.models.mcp_server import (
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_UNAPPROVED,
     McpServer,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

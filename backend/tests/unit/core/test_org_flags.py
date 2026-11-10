@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.runtime_config import org_flags
-from modulo.core.runtime_config.org_flags import (
+from farna.core.runtime_config import org_flags
+from farna.core.runtime_config.org_flags import (
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     clear_org_flag_cache,
     is_org_flag_enabled,
@@ -167,7 +167,7 @@ class TestSetOrgFlag:
             captured["delete_keys"] = delete_keys
             return dict(patch or {})
 
-        with patch("modulo.db.crud.organisation.update_org_settings_patch", new=_fake_patch):
+        with patch("farna.db.crud.organisation.update_org_settings_patch", new=_fake_patch):
             await set_org_flag(session, ORG_ID, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED, True)
         assert captured["org_id"] == ORG_ID
         assert captured["patch"] == {FLAG_WORK_ITEM_AGENT_MINTING_ENABLED: True}

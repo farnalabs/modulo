@@ -36,10 +36,10 @@ from unittest.mock import patch
 
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0292_audit_events_resource_lookup"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0291_invitations_lookup_constraints"

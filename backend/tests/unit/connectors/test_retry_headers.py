@@ -12,7 +12,7 @@ import time
 import httpx
 import pytest
 
-from modulo.connectors._retry_headers import (
+from farna.connectors._retry_headers import (
     MAX_RETRY_AFTER_SECONDS,
     RETRYABLE_STATUSES,
     CancellationPhase,
@@ -28,7 +28,7 @@ from modulo.connectors._retry_headers import (
     rest_retry_decision,
     retry_after_seconds,
 )
-from modulo.core.pipeline_engine.error_codes import known_error_codes, map_legacy_code
+from farna.core.pipeline_engine.error_codes import known_error_codes, map_legacy_code
 
 RATE_LIMIT_HEADERS = (
     "X-RateLimit-Limit",

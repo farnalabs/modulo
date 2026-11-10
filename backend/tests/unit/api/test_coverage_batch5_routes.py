@@ -12,12 +12,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -88,7 +88,7 @@ class TestCommunityLibraryRoutes:
     def test_list_includes_manifest_timestamp(self) -> None:
         from fastapi import FastAPI
 
-        from modulo.api.routes.community_library import router
+        from farna.api.routes.community_library import router
 
         route_app = FastAPI()
         route_app.include_router(router)
@@ -104,15 +104,15 @@ class TestCommunityLibraryRoutes:
         )
         with (
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new=AsyncMock(return_value=True),
             ),
             patch(
-                "modulo.api.routes.community_library.list_community_entries",
+                "farna.api.routes.community_library.list_community_entries",
                 new=AsyncMock(return_value=[{"slug": "demo/item"}]),
             ),
             patch(
-                "modulo.api.routes.community_library.get_cached_manifest",
+                "farna.api.routes.community_library.get_cached_manifest",
                 new=AsyncMock(return_value={"generated_at": "2026-01-01T00:00:00Z"}),
             ),
         ):
@@ -123,15 +123,15 @@ class TestCommunityLibraryRoutes:
     def test_get_entry_parses_content(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new=AsyncMock(return_value=True),
             ),
             patch(
-                "modulo.api.routes.community_library.get_community_entry",
+                "farna.api.routes.community_library.get_community_entry",
                 new=AsyncMock(return_value={"content_sha256": "sha"}),
             ),
             patch(
-                "modulo.api.routes.community_library._fetch_entry_content",
+                "farna.api.routes.community_library._fetch_entry_content",
                 new=AsyncMock(return_value={"ok": True}),
             ),
         ):
@@ -142,15 +142,15 @@ class TestCommunityLibraryRoutes:
     def test_install_maps_fetch_failure(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new=AsyncMock(return_value=True),
             ),
             patch(
-                "modulo.api.routes.community_library.get_community_entry",
+                "farna.api.routes.community_library.get_community_entry",
                 new=AsyncMock(return_value={"id": "entry", "type": "agent"}),
             ),
             patch(
-                "modulo.api.routes.community_library.install_community_entry",
+                "farna.api.routes.community_library.install_community_entry",
                 new=AsyncMock(side_effect=ValueError("blob fetch failed")),
             ),
         ):
@@ -161,15 +161,15 @@ class TestCommunityLibraryRoutes:
         """An unresolvable community entry is a 404, not a 500."""
         with (
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new=AsyncMock(return_value=True),
             ),
             patch(
-                "modulo.api.routes.community_library.get_community_entry",
+                "farna.api.routes.community_library.get_community_entry",
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "modulo.api.routes.community_library.install_community_entry",
+                "farna.api.routes.community_library.install_community_entry",
                 new=AsyncMock(),
             ) as mock_install,
         ):
@@ -197,7 +197,7 @@ class TestAdminTiersRoute:
         redis = MagicMock()
         redis.get = AsyncMock(return_value='{"tiers":[{"name":"cached"}]}')
         redis.aclose = AsyncMock()
-        with patch("modulo.api.routes.admin_tiers.Redis.from_url", return_value=redis):
+        with patch("farna.api.routes.admin_tiers.Redis.from_url", return_value=redis):
             response = client.get("/api/v1/admin/tiers")
         assert response.status_code == 200
         assert response.json()["tiers"][0]["name"] == "cached"
@@ -207,9 +207,9 @@ class TestAdminTiersRoute:
         redis.get = AsyncMock(return_value=None)
         redis.aclose = AsyncMock()
         with (
-            patch("modulo.api.routes.admin_tiers.Redis.from_url", return_value=redis),
+            patch("farna.api.routes.admin_tiers.Redis.from_url", return_value=redis),
             patch(
-                "modulo.api.routes.admin_tiers.list_tiers",
+                "farna.api.routes.admin_tiers.list_tiers",
                 new=AsyncMock(side_effect=ProgrammingError("migration", {}, None)),
             ),
         ):
@@ -266,7 +266,7 @@ class TestScimRoutes:
             created_at=None,
             updated_at=None,
         )
-        with patch("modulo.api.routes.scim.scim_list_users", new=AsyncMock(return_value=([account], 5))):
+        with patch("farna.api.routes.scim.scim_list_users", new=AsyncMock(return_value=([account], 5))):
             response = client.get("/scim/v2/Users?startIndex=3&count=1")
         assert response.status_code == 200
         assert response.json()["totalResults"] == 5
@@ -276,15 +276,15 @@ class TestScimRoutes:
         assert client.get("/scim/v2/Users/not-a-uuid").status_code == 422
 
     def test_database_error_returns_503(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.scim.scim_list_users", new=AsyncMock(side_effect=SQLAlchemyError("down"))):
+        with patch("farna.api.routes.scim.scim_list_users", new=AsyncMock(side_effect=SQLAlchemyError("down"))):
             response = client.get("/scim/v2/Users")
         assert response.status_code == 503
 
 
 @pytest.mark.asyncio
 async def test_route_error_paths_and_helpers() -> None:
-    from modulo.api.routes.dashboard import _period_metric
-    from modulo.api.routes.metrics import (
+    from farna.api.routes.dashboard import _period_metric
+    from farna.api.routes.metrics import (
         WebVitalBatchItem,
         WebVitalBatchRequest,
         get_web_vitals_summary,

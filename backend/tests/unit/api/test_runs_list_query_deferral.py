@@ -31,10 +31,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import JSON, Text
 
-from modulo.db.crud.pagination import CursorPaginator
-from modulo.db.crud.run import _RUNS_LIST_DEFERRED_COLUMNS
-from modulo.db.crud.run import list_runs as db_list_runs
-from modulo.db.models.run import Run
+from farna.db.crud.pagination import CursorPaginator
+from farna.db.crud.run import _RUNS_LIST_DEFERRED_COLUMNS
+from farna.db.crud.run import list_runs as db_list_runs
+from farna.db.models.run import Run
 
 _MUST_STAY_LOADED = ("input_payload",)
 

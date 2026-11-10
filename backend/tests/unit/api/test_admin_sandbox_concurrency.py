@@ -7,10 +7,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
@@ -155,8 +155,8 @@ async def test_put_patches_only_its_own_key_without_prelatching_the_org_row(clie
         return dict(patch or {})
 
     with (
-        patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
-        patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
+        patch("farna.api.routes.admin._record_org_audit", new=AsyncMock()),
     ):
         resp = await client_admin.put(
             "/api/v1/admin/org/sandbox-concurrency",
@@ -245,7 +245,7 @@ def _raise(exc: Exception):
 async def test_get_programming_error_returns_501(client_admin):
     """Migration-required errors on GET surface as 501."""
     with patch(
-        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        "farna.api.routes.admin.get_sandbox_concurrency_limit",
         new=_raise(ProgrammingError("stmt", {}, Exception("missing table"))),
     ):
         resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
@@ -256,7 +256,7 @@ async def test_get_programming_error_returns_501(client_admin):
 async def test_get_sqlalchemy_error_returns_503(client_admin):
     """Generic SQLAlchemy errors on GET surface as 503."""
     with patch(
-        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        "farna.api.routes.admin.get_sandbox_concurrency_limit",
         new=_raise(SQLAlchemyError("mock", {}, "")),
     ):
         resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
@@ -272,7 +272,7 @@ async def test_get_integrity_error_returns_503_not_409(client_admin):
     conflict, and must not surface the write-handler 409 boilerplate.
     """
     with patch(
-        "modulo.api.routes.admin.get_sandbox_concurrency_limit",
+        "farna.api.routes.admin.get_sandbox_concurrency_limit",
         new=_raise(IntegrityError("stmt", {}, Exception("fk violation"))),
     ):
         resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")

@@ -15,7 +15,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.spend_anomaly import record_or_get_anomaly
+from farna.db.crud.spend_anomaly import record_or_get_anomaly
 
 pytestmark = pytest.mark.integration
 

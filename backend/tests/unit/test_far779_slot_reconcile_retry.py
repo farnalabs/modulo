@@ -39,9 +39,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.run_admission as ra
-from modulo.core.run_admission import reconcile_pipeline_slots
-from modulo.settings import get_settings
+import farna.core.run_admission as ra
+from farna.core.run_admission import reconcile_pipeline_slots
+from farna.settings import get_settings
 
 # Mirrors the settings default (HEARTBEAT_STALE_RETRY_BUDGET), raised 1 -> 3
 # by FAR-812. Tests key fixture rows off this so boundary cases pin the exact
@@ -336,7 +336,7 @@ class TestSlotSaturationBackpressure:
 
     async def test_near_saturated_pipeline_defers_run(self) -> None:
         """Active >= 90% of max -> deferred."""
-        from modulo.core import dispatch
+        from farna.core import dispatch
 
         pipeline = SimpleNamespace(max_concurrent_runs=10)
         run = SimpleNamespace(
@@ -348,15 +348,15 @@ class TestSlotSaturationBackpressure:
         mock_settings = MagicMock(saq_runs_queue="runs")
 
         with (
-            patch("modulo.core.dispatch.get_settings", return_value=mock_settings),
-            patch("modulo.core.dispatch._open_session") as mock_open,
+            patch("farna.core.dispatch.get_settings", return_value=mock_settings),
+            patch("farna.core.dispatch._open_session") as mock_open,
         ):
             mock_open.return_value = self._make_session(pipeline)
 
             with (
-                patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
-                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=9),
-                patch("modulo.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
+                patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=9),
+                patch("farna.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
             ):
                 outcome, _ = await dispatch.dispatch_run(str(uuid.uuid4()), str(ORG_ID), queue="runs")
 
@@ -364,7 +364,7 @@ class TestSlotSaturationBackpressure:
 
     async def test_just_below_saturation_admits_run(self) -> None:
         """Active = 80% of max -> admitted (below the 90% threshold)."""
-        from modulo.core import dispatch
+        from farna.core import dispatch
 
         pipeline = SimpleNamespace(max_concurrent_runs=10)
         run = SimpleNamespace(
@@ -376,15 +376,15 @@ class TestSlotSaturationBackpressure:
         mock_settings = MagicMock(saq_runs_queue="runs")
 
         with (
-            patch("modulo.core.dispatch.get_settings", return_value=mock_settings),
-            patch("modulo.core.dispatch._open_session") as mock_open,
+            patch("farna.core.dispatch.get_settings", return_value=mock_settings),
+            patch("farna.core.dispatch._open_session") as mock_open,
         ):
             mock_open.return_value = self._make_session(pipeline)
 
             with (
-                patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
-                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=8),
-                patch("modulo.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
+                patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=8),
+                patch("farna.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
                 patch.object(
                     dispatch,
                     "_enqueue_with_retry",
@@ -400,7 +400,7 @@ class TestSlotSaturationBackpressure:
 
     async def test_unlimited_pipeline_bypasses_saturation_check(self) -> None:
         """max_concurrent_runs=0 (unlimited) -> no saturation check."""
-        from modulo.core import dispatch
+        from farna.core import dispatch
 
         pipeline = SimpleNamespace(max_concurrent_runs=0)
         run = SimpleNamespace(
@@ -412,15 +412,15 @@ class TestSlotSaturationBackpressure:
         mock_settings = MagicMock(saq_runs_queue="runs")
 
         with (
-            patch("modulo.core.dispatch.get_settings", return_value=mock_settings),
-            patch("modulo.core.dispatch._open_session") as mock_open,
+            patch("farna.core.dispatch.get_settings", return_value=mock_settings),
+            patch("farna.core.dispatch._open_session") as mock_open,
         ):
             mock_open.return_value = self._make_session(pipeline)
 
             with (
-                patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
-                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=999),
-                patch("modulo.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
+                patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=999),
+                patch("farna.db.crud.run.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
                 patch.object(
                     dispatch,
                     "_enqueue_with_retry",

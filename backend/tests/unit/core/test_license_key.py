@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import modulo.core.license as license_module
-from modulo.core.license import (
+import farna.core.license as license_module
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     DEV_ANCHOR_NOT_TRUSTED_ERROR,
     DEV_ANCHOR_STARTUP_ERROR,
@@ -33,7 +33,7 @@ from modulo.core.license import (
     store_license,
     verify_license_key,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from farna.core.registry.crypto import generate_keypair, sign_primitive
 
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
 
@@ -186,7 +186,7 @@ class TestDevAnchorIsNotATrustAnchorOutsideDebug:
 
     def test_shared_licence_ladder_rung_rejects_it(self, dev_anchor: dict) -> None:
         """``feature_flags._verified_license_key`` - the ladder - inherits the gate."""
-        from modulo.core.feature_flags import resolve_effective_license
+        from farna.core.feature_flags import resolve_effective_license
 
         clear_license()
         settings = SimpleNamespace(modulo_license_key=_team_licence(dev_anchor))
@@ -242,13 +242,13 @@ def _startup_settings(**overrides: object) -> SimpleNamespace:
 
 class TestStartupFailsClosedOnLicenceWithoutProductionKey:
     def test_licence_key_without_public_key_fails_startup(self) -> None:
-        from modulo.api import main as main_module
+        from farna.api import main as main_module
 
         with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
             main_module._configure_license_and_otel(_startup_settings(modulo_license_key="a.b"))
 
     def test_explicitly_configured_dev_key_fails_startup(self) -> None:
-        from modulo.api import main as main_module
+        from farna.api import main as main_module
 
         with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
             main_module._configure_license_and_otel(
@@ -257,7 +257,7 @@ class TestStartupFailsClosedOnLicenceWithoutProductionKey:
 
     def test_community_boot_without_a_licence_key_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The ticket's hard constraint: unlicensed Community self-hosting still boots."""
-        from modulo.api import main as main_module
+        from farna.api import main as main_module
 
         mock_setup_otel = MagicMock()
         monkeypatch.setattr(main_module, "setup_otel", mock_setup_otel)
@@ -266,7 +266,7 @@ class TestStartupFailsClosedOnLicenceWithoutProductionKey:
         mock_setup_otel.assert_called_once()
 
     def test_debug_with_a_licence_key_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import main as main_module
+        from farna.api import main as main_module
 
         mock_setup_otel = MagicMock()
         monkeypatch.setattr(main_module, "setup_otel", mock_setup_otel)
@@ -275,7 +275,7 @@ class TestStartupFailsClosedOnLicenceWithoutProductionKey:
         mock_setup_otel.assert_called_once()
 
     def test_production_key_with_a_licence_key_boots(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import main as main_module
+        from farna.api import main as main_module
 
         monkeypatch.setattr(main_module, "setup_otel", lambda **_kwargs: None)
         monkeypatch.setattr(main_module, "is_telemetry_enabled", lambda: False)
@@ -508,7 +508,7 @@ class TestVerifyLicenseKey:
         def _raise(_key: str) -> None:
             raise RuntimeError("unexpected parse failure")
 
-        monkeypatch.setattr("modulo.core.license.parse_and_verify", _raise)
+        monkeypatch.setattr("farna.core.license.parse_and_verify", _raise)
         assert verify_license_key("any-key") is None
 
 
@@ -611,7 +611,7 @@ class TestLicenseStore:
 class TestCheckProductionPublicKey:
     def test_dev_key_logs_critical_when_not_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         set_public_key(_ORIGINAL_KEY)
-        with caplog.at_level("CRITICAL", logger="modulo.core.license"):
+        with caplog.at_level("CRITICAL", logger="farna.core.license"):
             check_production_public_key(SimpleNamespace(debug=False))
         assert "LICENSE_CRITICAL" in caplog.text
         assert "DEVELOPMENT licence anchor" in caplog.text
@@ -619,13 +619,13 @@ class TestCheckProductionPublicKey:
 
     def test_dev_key_silent_when_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         set_public_key(_ORIGINAL_KEY)
-        with caplog.at_level("CRITICAL", logger="modulo.core.license"):
+        with caplog.at_level("CRITICAL", logger="farna.core.license"):
             check_production_public_key(SimpleNamespace(debug=True))
         assert "LICENSE_CRITICAL" not in caplog.text
 
     def test_configured_key_silent_when_not_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
-        with caplog.at_level("CRITICAL", logger="modulo.core.license"):
+        with caplog.at_level("CRITICAL", logger="farna.core.license"):
             check_production_public_key(SimpleNamespace(debug=False))
         assert "LICENSE_CRITICAL" not in caplog.text

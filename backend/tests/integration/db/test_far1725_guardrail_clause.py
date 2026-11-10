@@ -33,15 +33,15 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
-from modulo.db.crud.eval_run import (
+from farna.core.eval_engine.eval_definition_write import create_or_update_eval
+from farna.db.crud.eval_run import (
     get_evals_for_runs,
     get_run_evals,
     non_guardrail_eval_results_clause,
 )
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.soft_delete import register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
 

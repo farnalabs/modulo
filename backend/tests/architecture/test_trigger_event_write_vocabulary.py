@@ -39,10 +39,10 @@ import ast
 from pathlib import Path
 from typing import NamedTuple
 
-from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
+from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 #: The ORM model builds ``TriggerEvent(validation_result=...)``.
 _CONSTRUCTOR = "TriggerEvent"

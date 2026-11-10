@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import modulo.launcher.platform as platform_module
+import farna.launcher.platform as platform_module
 
 
 def test_linux_data_dir_preserves_xdg_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -17,11 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -91,8 +91,8 @@ def unauth_client() -> Generator[TestClient, None, None]:
 def _patch_status(status: dict[str, Any]) -> Any:
     """Patch the route's status source and the shared engine it is handed."""
     return (
-        patch("modulo.db.session.get_shared_engine", new=MagicMock(return_value="engine")),
-        patch("modulo.api.routes.admin_capacity.db_capacity_status", new=AsyncMock(return_value=status)),
+        patch("farna.db.session.get_shared_engine", new=MagicMock(return_value="engine")),
+        patch("farna.api.routes.admin_capacity.db_capacity_status", new=AsyncMock(return_value=status)),
     )
 
 
@@ -119,9 +119,9 @@ def test_source_is_serialised(client: TestClient, source: str) -> None:
 
 def test_fail_open_when_the_measurement_raises(client: TestClient) -> None:
     # A broken measurement degrades the banner to quiet - never a 5xx.
-    engine_patch = patch("modulo.db.session.get_shared_engine", new=MagicMock(return_value="engine"))
+    engine_patch = patch("farna.db.session.get_shared_engine", new=MagicMock(return_value="engine"))
     status_patch = patch(
-        "modulo.api.routes.admin_capacity.db_capacity_status",
+        "farna.api.routes.admin_capacity.db_capacity_status",
         new=AsyncMock(side_effect=RuntimeError("measurement blew up")),
     )
     with engine_patch, status_patch:

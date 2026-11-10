@@ -28,11 +28,11 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.bdd.conftest import harden_session_double
 
 scenarios("../features/connectors/connector_crud.feature")
@@ -173,8 +173,8 @@ def _body(request: Any) -> dict[str, Any]:
 def _standard_patches() -> list[Any]:
     """RLS seams every covered endpoint touches."""
     return [
-        patch("modulo.api.routes.connectors.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.connectors.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.connectors.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.connectors.set_rls_user_context", new=AsyncMock()),
     ]
 
 
@@ -309,13 +309,13 @@ def _when_create_connector(request: Any, name: str, conn_type: str) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.connectors.validate_owner_team_for_create",
+            "farna.api.routes.connectors.validate_owner_team_for_create",
             new=AsyncMock(),
         ),
     ]
     store_mock = ctx.get("store_mock")
     if store_mock is not None:
-        ctx["patchers"].append(patch("modulo.api.routes.connectors.create_connector_instance", new=store_mock))
+        ctx["patchers"].append(patch("farna.api.routes.connectors.create_connector_instance", new=store_mock))
     _dispatch(request, "POST", "/api/v1/connectors", json=body)
 
 
@@ -326,7 +326,7 @@ def _when_get_connector(request: Any, connector_id: str) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             new=AsyncMock(return_value=ctx.get("connector")),
         ),
     ]
@@ -340,7 +340,7 @@ def _when_list_connectors(request: Any) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.connectors.list_connector_instances",
+            "farna.api.routes.connectors.list_connector_instances",
             new=AsyncMock(return_value=ctx.get("page_result")),
         ),
     ]
@@ -357,11 +357,11 @@ def _when_update_connector(request: Any, connector_id: str, token: str) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             new=AsyncMock(return_value=existing),
         ),
         patch(
-            "modulo.api.routes.connectors.update_connector_instance",
+            "farna.api.routes.connectors.update_connector_instance",
             new=_capturing_update(ctx["store_ciphertext"], existing),
         ),
     ]
@@ -382,11 +382,11 @@ def _when_delete_connector(request: Any, connector_id: str) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             new=AsyncMock(return_value=connector),
         ),
         patch(
-            "modulo.api.routes.connectors.delete_connector_instance",
+            "farna.api.routes.connectors.delete_connector_instance",
             new=AsyncMock(return_value=delete_return),
         ),
     ]

@@ -12,13 +12,13 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.db.crud.organisation_cost_state import (
+from farna.db.crud.organisation_cost_state import (
     get_org_cost_state,
     increment_org_cumulative_spend,
     upsert_org_cost_state,
 )
-from modulo.db.models.organisation_cost_state import OrganisationCostState
-from modulo.db.rls import set_rls_org
+from farna.db.models.organisation_cost_state import OrganisationCostState
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

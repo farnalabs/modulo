@@ -16,7 +16,7 @@ import uuid
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from modulo.api.models.team_visibility import TeamVisibilityMixin
+from farna.api.models.team_visibility import TeamVisibilityMixin
 
 TEAM_ID = "123e4567-e89b-12d3-a456-426614174000"
 

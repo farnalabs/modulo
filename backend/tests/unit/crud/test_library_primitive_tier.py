@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.db.crud.library_primitive import copy_to_adapt, list_library_primitives
-from modulo.db.models.library_primitive import LibraryPrimitive
+from farna.db.crud.library_primitive import copy_to_adapt, list_library_primitives
+from farna.db.models.library_primitive import LibraryPrimitive
 from tests.unit.crud.helpers import (
     compile_sql,
     executed_sql,
@@ -142,7 +142,7 @@ async def test_cursor_pagination_applies_filters() -> None:
         )
     )
 
-    with patch("modulo.db.crud.library_primitive.CursorPaginator", return_value=paginator):
+    with patch("farna.db.crud.library_primitive.CursorPaginator", return_value=paginator):
         result = await list_library_primitives(
             session,
             org_id=ORG_ID,
@@ -187,7 +187,7 @@ async def test_copy_to_adapt_propagates_the_source_tier(source_tier: str) -> Non
     session.execute = AsyncMock(return_value=copied_row)
 
     with patch(
-        "modulo.db.crud.library_primitive.get_library_primitive",
+        "farna.db.crud.library_primitive.get_library_primitive",
         new_callable=AsyncMock,
         return_value=source,
     ):

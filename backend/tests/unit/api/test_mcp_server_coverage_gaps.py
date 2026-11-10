@@ -24,8 +24,8 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import modulo.api.mcp_server as ms
-from modulo.api.mcp_server import (
+import farna.api.mcp_server as ms
+from farna.api.mcp_server import (
     _analytics_deep_link,
     _append_mcp_hitl_denial_audit,
     _assert_pass_threshold,
@@ -123,18 +123,18 @@ from modulo.api.mcp_server import (
     validate_current_auth,
     validate_payload,
 )
-from modulo.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
-from modulo.core.analytics.builder import (
+from farna.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
+from farna.core.analytics.builder import (
     AnalyticsGroupBy,
     AnalyticsStatus,
     AnalyticsTriggerType,
 )
-from modulo.core.analytics.service import AnalyticsParams
-from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
-from modulo.db.capacity import StorageExhaustedError
-from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
+from farna.core.analytics.service import AnalyticsParams
+from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+from farna.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
+from farna.core.mcp.scope_validator import MCPAuthorizationError
+from farna.db.capacity import StorageExhaustedError
+from farna.db.crud.pipeline import ManualNodeOutputSchemaError
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -508,7 +508,7 @@ class TestValidateOauthLive(_AuthContext):
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
             patch.object(ms, "get_settings", return_value=MagicMock(secret_key="k")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
             patch.object(ms, "_revalidate_live_role", new=AsyncMock(return_value="admin")),
         ):
             assert await _validate_oauth_live(_API_KEY) is True
@@ -518,7 +518,7 @@ class TestValidateOauthLive(_AuthContext):
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
             patch.object(ms, "get_settings", return_value=MagicMock(secret_key="k")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(side_effect=JWTError("bad"))),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(side_effect=JWTError("bad"))),
         ):
             assert await _validate_oauth_live(_API_KEY) is False
 
@@ -565,8 +565,8 @@ def _mock_api_key(role: str = "operator", run_id: uuid.UUID | None = None) -> Ma
 
 
 class TestAuthenticateApiKey:
-    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
-    @patch("modulo.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None))
+    @patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
+    @patch("farna.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None))
     async def test_postgres_lookup_and_success(self) -> None:
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
@@ -582,7 +582,7 @@ class TestAuthenticateApiKey:
         assert err is None
         assert ms._ctx_org_id.get() == _ORG_ID
 
-    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="sqlite"))
+    @patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="sqlite"))
     async def test_unknown_key_returns_401(self) -> None:
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
@@ -592,7 +592,7 @@ class TestAuthenticateApiKey:
         assert err is not None
         assert err.status_code == 401
 
-    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
+    @patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
     async def test_dead_membership_denies_key(self) -> None:
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
@@ -608,8 +608,8 @@ class TestAuthenticateApiKey:
         assert err is not None
         assert err.status_code == 401
 
-    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
-    @patch("modulo.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None))
+    @patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
+    @patch("farna.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None))
     async def test_demoted_key_degrades_and_succeeds(self) -> None:
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
@@ -633,11 +633,11 @@ class TestAuthenticateApiKey:
         assert err is not None
         assert err.status_code == 503
 
-    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
+    @patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
     async def test_grants_unavailable_returns_503(self) -> None:
         """FAR-1477: an unreadable grants flag fails CLOSED as 503 (retryable),
         never as a 401 that would look like an invalid key."""
-        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+        from farna.auth.api_key import ApiKeyGrantsUnavailableError
 
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
@@ -667,7 +667,7 @@ class TestAuthenticateOauthJwt:
         settings = MagicMock(secret_key="k")
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal(org_id=None))),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal(org_id=None))),
         ):
             handled, err, claims = await _authenticate_oauth_jwt(_mock_request(), _API_KEY, settings)
         assert handled is False
@@ -679,7 +679,7 @@ class TestAuthenticateOauthJwt:
         settings = MagicMock(secret_key="k")
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal(org_role=None))),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal(org_role=None))),
         ):
             _handled, err, _claims = await _authenticate_oauth_jwt(_mock_request(), _API_KEY, settings)
         assert err is not None
@@ -689,7 +689,7 @@ class TestAuthenticateOauthJwt:
         settings = MagicMock(secret_key="k")
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
             patch.object(ms, "_session", side_effect=SQLAlchemyError("down")),
         ):
             _handled, err, _claims = await _authenticate_oauth_jwt(_mock_request(), _API_KEY, settings)
@@ -700,7 +700,7 @@ class TestAuthenticateOauthJwt:
         settings = MagicMock(secret_key="k")
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value=None)),
         ):
@@ -713,7 +713,7 @@ class TestAuthenticateOauthJwt:
         request = _mock_request()
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=self._principal())),
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="runner")),
         ):
@@ -863,15 +863,15 @@ class TestOauthAuthorizeHandler:
 
     async def test_settings_error_when_public_url_missing(self) -> None:
         response = await self._call(
-            patches={"modulo.api.mcp_server.get_settings": {"return_value": MagicMock(modulo_public_url=None)}}
+            patches={"farna.api.mcp_server.get_settings": {"return_value": MagicMock(modulo_public_url=None)}}
         )
         assert response.status_code == 500
 
     async def test_unknown_client(self) -> None:
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
-                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=None)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "farna.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=None)},
             }
         )
         assert response.status_code == 400
@@ -882,9 +882,9 @@ class TestOauthAuthorizeHandler:
         client.redirect_uris = "https://app.example.com/callback"
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
-                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
-                "modulo.auth.oauth.normalize_scopes": {"side_effect": InvalidGrantError("bad scope")},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "farna.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+                "farna.auth.oauth.normalize_scopes": {"side_effect": InvalidGrantError("bad scope")},
             }
         )
         assert response.status_code == 400
@@ -895,8 +895,8 @@ class TestOauthAuthorizeHandler:
         response = await self._call(
             params={**self._VALID_PARAMS, "redirect_uri": "https://app.example.com/callback/extra"},
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
-                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "farna.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
             },
         )
         assert response.status_code == 400
@@ -910,8 +910,8 @@ class TestOauthAuthorizeHandler:
         response = await self._call(
             params={**self._VALID_PARAMS, "redirect_uri": "javascript:alert(1)"},
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
-                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "farna.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
             },
         )
         assert response.status_code == 400
@@ -923,7 +923,7 @@ class TestOauthAuthorizeHandler:
         session.begin.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
             }
         )
         assert response.status_code == 501
@@ -933,7 +933,7 @@ class TestOauthAuthorizeHandler:
         session.begin.side_effect = SQLAlchemyError("down")
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
             }
         )
         assert response.status_code == 503
@@ -943,7 +943,7 @@ class TestOauthAuthorizeHandler:
         session.begin.side_effect = RuntimeError("boom")
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(session)},
             }
         )
         assert response.status_code == 500
@@ -954,18 +954,18 @@ class TestOauthAuthorizeHandler:
         client.organisation_id = _ORG_ID
         response = await self._call(
             patches={
-                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
-                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+                "farna.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "farna.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
                 # FAR-1639 (FAR-1629 sweep): normalize_scopes / validate_client_scopes are
                 # SYNC oauth helpers (auth/oauth.py) — patching them as AsyncMock yields
                 # dangling never-awaited coroutines at _oauth_authorize's call site.
-                "modulo.auth.oauth.normalize_scopes": {"new": MagicMock(return_value=["trigger:run"])},
-                "modulo.auth.oauth.validate_client_scopes": {"new": MagicMock(return_value=["trigger:run"])},
-                "modulo.auth.oauth.create_consent_state": {"new": AsyncMock(return_value=None)},
-                "modulo.api.mcp_server.set_rls_org": {"new": AsyncMock(return_value=None)},
+                "farna.auth.oauth.normalize_scopes": {"new": MagicMock(return_value=["trigger:run"])},
+                "farna.auth.oauth.validate_client_scopes": {"new": MagicMock(return_value=["trigger:run"])},
+                "farna.auth.oauth.create_consent_state": {"new": AsyncMock(return_value=None)},
+                "farna.api.mcp_server.set_rls_org": {"new": AsyncMock(return_value=None)},
                 # FAR-1283: the authorize leg enforces the kill switch; this test
                 # covers the enabled-path redirect, so the flag is on.
-                "modulo.api.mcp_server._mcp_server_flag_enabled": {"new": AsyncMock(return_value=True)},
+                "farna.api.mcp_server._mcp_server_flag_enabled": {"new": AsyncMock(return_value=True)},
             }
         )
         assert response.status_code == 302
@@ -979,7 +979,7 @@ class TestOauthTokenAndRefreshHandlers:
     async def test_token_impl_runtime_error_when_form_parse_degenerate(self) -> None:
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=(None, None)),
             ),
             pytest.raises(RuntimeError),
@@ -989,11 +989,11 @@ class TestOauthTokenAndRefreshHandlers:
     async def test_token_impl_settings_error(self) -> None:
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "authorization_code"}, None)),
             ),
-            patch("modulo.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
-            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url=None)),
+            patch("farna.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
+            patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url=None)),
         ):
             response = await _oauth_token_impl(self._request())
         assert response.status_code == 500
@@ -1001,13 +1001,13 @@ class TestOauthTokenAndRefreshHandlers:
     async def test_token_impl_propagates_exchange_error(self) -> None:
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "authorization_code"}, None)),
             ),
-            patch("modulo.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
-            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url="https://x")),
+            patch("farna.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
+            patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url="https://x")),
             patch(
-                "modulo.api.mcp_server._exchange_authorization_code",
+                "farna.api.mcp_server._exchange_authorization_code",
                 new=AsyncMock(return_value=(None, MagicMock())),
             ),
         ):
@@ -1018,10 +1018,10 @@ class TestOauthTokenAndRefreshHandlers:
         error = MagicMock()
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
-            patch("modulo.api.mcp_server._extract_oauth_refresh_credentials", return_value=({}, error)),
+            patch("farna.api.mcp_server._extract_oauth_refresh_credentials", return_value=({}, error)),
         ):
             assert await _oauth_token_impl(self._request()) is error
 
@@ -1029,60 +1029,60 @@ class TestOauthTokenAndRefreshHandlers:
         error = MagicMock()
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
             patch(
-                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                "farna.api.mcp_server._extract_oauth_refresh_credentials",
                 return_value=({"refresh_token": "r"}, None),
             ),
-            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, error))),
+            patch("farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, error))),
         ):
             assert await _oauth_token_impl(self._request()) is error
 
     async def test_token_impl_refresh_degenerate_exchange(self) -> None:
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
             patch(
-                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                "farna.api.mcp_server._extract_oauth_refresh_credentials",
                 return_value=({"refresh_token": "r"}, None),
             ),
-            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, None))),
+            patch("farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, None))),
             pytest.raises(RuntimeError),
         ):
             await _oauth_token_impl(self._request())
 
     async def test_token_http_exception_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_token_impl", side_effect=StarletteHTTPException(422, "nope")):
+        with patch("farna.api.mcp_server._oauth_token_impl", side_effect=StarletteHTTPException(422, "nope")):
             response = await _oauth_token(self._request())
         assert response.status_code == 422
 
     async def test_token_programming_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_token_impl", side_effect=ProgrammingError("s", {}, Exception())):
+        with patch("farna.api.mcp_server._oauth_token_impl", side_effect=ProgrammingError("s", {}, Exception())):
             response = await _oauth_token(self._request())
         assert response.status_code == 501
 
     async def test_token_sqlalchemy_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_token_impl", side_effect=SQLAlchemyError("down")):
+        with patch("farna.api.mcp_server._oauth_token_impl", side_effect=SQLAlchemyError("down")):
             response = await _oauth_token(self._request())
         assert response.status_code == 503
 
     async def test_token_unexpected_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_token_impl", side_effect=RuntimeError("boom")):
+        with patch("farna.api.mcp_server._oauth_token_impl", side_effect=RuntimeError("boom")):
             response = await _oauth_token(self._request())
         assert response.status_code == 500
 
     async def test_refresh_impl_parse_error(self) -> None:
         error = MagicMock()
-        with patch("modulo.api.mcp_server._parse_oauth_form", new=AsyncMock(return_value=(None, error))):
+        with patch("farna.api.mcp_server._parse_oauth_form", new=AsyncMock(return_value=(None, error))):
             assert await _oauth_refresh_impl(self._request()) is error
 
     async def test_refresh_impl_degenerate_parse(self) -> None:
         with (
-            patch("modulo.api.mcp_server._parse_oauth_form", new=AsyncMock(return_value=(None, None))),
+            patch("farna.api.mcp_server._parse_oauth_form", new=AsyncMock(return_value=(None, None))),
             pytest.raises(RuntimeError),
         ):
             await _oauth_refresh_impl(self._request())
@@ -1091,10 +1091,10 @@ class TestOauthTokenAndRefreshHandlers:
         error = MagicMock()
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
-            patch("modulo.api.mcp_server._extract_oauth_refresh_credentials", return_value=({}, error)),
+            patch("farna.api.mcp_server._extract_oauth_refresh_credentials", return_value=({}, error)),
         ):
             assert await _oauth_refresh_impl(self._request()) is error
 
@@ -1102,59 +1102,59 @@ class TestOauthTokenAndRefreshHandlers:
         error = MagicMock()
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
             patch(
-                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                "farna.api.mcp_server._extract_oauth_refresh_credentials",
                 return_value=({"refresh_token": "r"}, None),
             ),
-            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, error))),
+            patch("farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, error))),
         ):
             assert await _oauth_refresh_impl(self._request()) is error
 
     async def test_refresh_impl_degenerate_exchange(self) -> None:
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
             ),
             patch(
-                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                "farna.api.mcp_server._extract_oauth_refresh_credentials",
                 return_value=({"refresh_token": "r"}, None),
             ),
-            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, None))),
+            patch("farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, None))),
             pytest.raises(RuntimeError),
         ):
             await _oauth_refresh_impl(self._request())
 
     async def test_refresh_value_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=ValueError("bad token")):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=ValueError("bad token")):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 400
 
     async def test_refresh_jwt_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=JWTError("expired")):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=JWTError("expired")):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 400
 
     async def test_refresh_http_exception_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=StarletteHTTPException(400, "x")):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=StarletteHTTPException(400, "x")):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 400
 
     async def test_refresh_programming_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=ProgrammingError("s", {}, Exception())):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=ProgrammingError("s", {}, Exception())):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 501
 
     async def test_refresh_sqlalchemy_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=SQLAlchemyError("down")):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=SQLAlchemyError("down")):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 503
 
     async def test_refresh_unexpected_error_handler(self) -> None:
-        with patch("modulo.api.mcp_server._oauth_refresh_impl", side_effect=RuntimeError("boom")):
+        with patch("farna.api.mcp_server._oauth_refresh_impl", side_effect=RuntimeError("boom")):
             response = await _oauth_refresh(self._request())
         assert response.status_code == 500
 
@@ -1169,7 +1169,7 @@ class TestOauthTokenAndRefreshHandlers:
 class TestMcpAsgiApp:
     @pytest.fixture
     def app(self) -> Any:
-        with patch("modulo.core.rate_limiter.RateLimiterRegistry.check", new=AsyncMock(return_value=True)):
+        with patch("farna.core.rate_limiter.RateLimiterRegistry.check", new=AsyncMock(return_value=True)):
             yield build_mcp_asgi_app()
 
     def test_healthz_bypasses_auth(self, app: Any) -> None:
@@ -1216,7 +1216,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_list_pipelines_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.pipeline.list_pipelines", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.pipeline.list_pipelines", side_effect=RuntimeError("boom")),
         ):
             result = await list_pipelines_tool()
         assert result["error"] == "server_error"
@@ -1224,7 +1224,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_create_pipeline_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.pipeline.create_pipeline", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.pipeline.create_pipeline", side_effect=RuntimeError("boom")),
         ):
             result = await create_pipeline(name="p")
         assert result["error"] == "server_error"
@@ -1258,7 +1258,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_get_pipeline_graph_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.pipeline.get_pipeline_graph", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.pipeline.get_pipeline_graph", side_effect=RuntimeError("boom")),
         ):
             result = await get_pipeline_graph_tool(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
@@ -1282,7 +1282,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_create_agent_migration_required(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.agent.create_agent", side_effect=ProgrammingError("s", {}, Exception())),
+            patch("farna.db.crud.agent.create_agent", side_effect=ProgrammingError("s", {}, Exception())),
         ):
             result = await create_agent(name="a", prompt_template="p")
         assert result["error"] == "migration_required"
@@ -1298,7 +1298,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_get_org_config_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.system_config.list_config", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.system_config.list_config", side_effect=RuntimeError("boom")),
         ):
             result = await get_org_config()
         assert result["error"] == "server_error"
@@ -1309,7 +1309,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         cfg_limits = MagicMock(key="rate_limits:y", value=long_value)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[cfg_assistant, cfg_limits])),
+            patch("farna.db.crud.system_config.list_config", new=AsyncMock(return_value=[cfg_assistant, cfg_limits])),
         ):
             result = await get_org_config(section="rate_limits")
         assert result["count"] == 1
@@ -1320,8 +1320,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "get_settings", return_value=MagicMock()),
-            patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
-            patch("modulo.core.feature_flags.resolve_plan_context", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
+            patch("farna.core.feature_flags.resolve_plan_context", side_effect=RuntimeError("boom")),
         ):
             result = await get_available_features()
         assert result["error"] == "server_error"
@@ -1352,17 +1352,17 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         settings = MagicMock(modulo_dev_mode=True)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=settings),
+            patch("farna.settings.get_settings", return_value=settings),
             patch(
-                "modulo.db.crud.model_backend.list_model_backends", side_effect=ProgrammingError("s", {}, Exception())
+                "farna.db.crud.model_backend.list_model_backends", side_effect=ProgrammingError("s", {}, Exception())
             ),
         ):
             result = await infer_schema(input_sample={"a": 1})
         assert result["error"] == "migration_required"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=settings),
-            patch("modulo.db.crud.model_backend.list_model_backends", side_effect=RuntimeError("boom")),
+            patch("farna.settings.get_settings", return_value=settings),
+            patch("farna.db.crud.model_backend.list_model_backends", side_effect=RuntimeError("boom")),
         ):
             result = await infer_schema(input_sample={"a": 1})
         assert result["error"] == "server_error"
@@ -1386,13 +1386,13 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             # FAR-1879: pass the in-body system-admin gate to reach the body.
             patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
-            patch("modulo.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
+            patch("farna.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
         ):
             result = await list_housekeeping()
         assert result["error"] == "server_error"
 
     async def test_perform_housekeeping_deletes_and_reports_unknown(self) -> None:
-        from modulo.db.models.secret import Secret
+        from farna.db.models.secret import Secret
 
         existing = MagicMock()
         session = _mock_session()
@@ -1405,8 +1405,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             # FAR-1879: the tool's in-body system-admin gate is separate from
             # the (stubbed-here) scope chokepoint; bypass it to reach the body.
             patch.object(ms, "_ctx_is_system_admin_val", return_value=True),
-            patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret}),
-            patch("modulo.core.housekeeping.NON_DELETABLE_ENTITY_TYPES", set()),
+            patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret}),
+            patch("farna.core.housekeeping.NON_DELETABLE_ENTITY_TYPES", set()),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await perform_housekeeping(
@@ -1492,7 +1492,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.pagination.CursorPaginator.paginate",
+                "farna.db.crud.pagination.CursorPaginator.paginate",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ),
         ):
@@ -1530,7 +1530,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "_session") as session_cm,
             patch.object(ms, "db_create_model_backend", new=create_mock),
             patch(
-                "modulo.core.mcp_setup_handoff.create_handoff",
+                "farna.core.mcp_setup_handoff.create_handoff",
                 new=AsyncMock(return_value={"setup_url": "https://x/setup"}),
             ),
         ):
@@ -1577,10 +1577,10 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "db_create_model_backend", new=AsyncMock(return_value=mb)),
-            patch("modulo.core.mcp_setup_handoff.create_handoff", new=AsyncMock(return_value={})),
+            patch("farna.core.mcp_setup_handoff.create_handoff", new=AsyncMock(return_value={})),
             patch.object(ms, "_session"),
-            patch("modulo.api.mcp_server._ctx_org_id_val", return_value=uuid.uuid4()),
-            patch("modulo.api.mcp_server._ctx_user_id_val", return_value=uuid.uuid4()),
+            patch("farna.api.mcp_server._ctx_org_id_val", return_value=uuid.uuid4()),
+            patch("farna.api.mcp_server._ctx_user_id_val", return_value=uuid.uuid4()),
         ):
             result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
         assert result["status"] == "pending_setup"
@@ -1588,8 +1588,8 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_delete_pipeline_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.soft_delete_pipeline", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.soft_delete_pipeline", side_effect=RuntimeError("boom")),
         ):
             result = await delete_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
@@ -1597,7 +1597,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_delete_connector_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.connector_instance.delete_connector_instance", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.connector_instance.delete_connector_instance", side_effect=RuntimeError("boom")),
         ):
             result = await delete_connector(connector_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
@@ -1605,17 +1605,17 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_create_secret_error_envelopes(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="k")),
+            patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
             patch(
-                "modulo.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
+                "farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
             ),
         ):
             result = await create_secret(key="k", value="v")
         assert result["error"] == "migration_required"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="k")),
-            patch("modulo.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
+            patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
+            patch("farna.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
         ):
             result = await create_secret(key="k", value="v")
         assert result["error"] == "server_error"
@@ -1633,17 +1633,17 @@ class TestSimpleToolErrorHandlers(_AuthContext):
     async def test_delete_secret_error_envelopes(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="k")),
+            patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
             patch(
-                "modulo.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
+                "farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
             ),
         ):
             result = await delete_secret(key="k")
         assert result["error"] == "migration_required"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="k")),
-            patch("modulo.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
+            patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
+            patch("farna.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
         ):
             result = await delete_secret(key="k")
         assert result["error"] == "server_error"
@@ -1784,7 +1784,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         bogus_model.model_validate = MagicMock(side_effect=_validate)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.pipelines.PipelineGraphUpdate", bogus_model),
+            patch("farna.api.routes.pipelines.PipelineGraphUpdate", bogus_model),
         ):
             result = await update_pipeline_graph(
                 pipeline_id=str(uuid.uuid4()),
@@ -1813,9 +1813,9 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.pipeline.replace_pipeline_graph", new=replace),
         ):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
@@ -1868,9 +1868,9 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.core.agent_command_sync.sync_agent_row_commands", new=sync),
-            patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=replace),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.core.agent_command_sync.sync_agent_row_commands", new=sync),
+            patch("farna.db.crud.pipeline.replace_pipeline_graph", new=replace),
         ):
             result = await update_pipeline_graph(pipeline_id=pipeline_id, nodes=nodes, edges=edges)
 
@@ -1920,10 +1920,10 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
             patch(
-                "modulo.db.crud.pipeline.replace_pipeline_graph",
+                "farna.db.crud.pipeline.replace_pipeline_graph",
                 new=AsyncMock(return_value=(nodes, [])),
             ) as replace_graph,
         ):
@@ -1973,7 +1973,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         )
         with (
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock(return_value=None)) as mock_audit,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock(return_value=None)) as mock_audit,
         ):
             await _append_mcp_hitl_denial_audit(_ORG_ID, uuid.uuid4(), exc)
         assert mock_audit.await_count == 1
@@ -1982,7 +1982,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         exc = ms.HitlReviewWeakeningDenied(reason_code="gate_removed", payload_json=None)
         with (
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=asyncio.CancelledError),
+            patch("farna.core.audit_logger.append_audit_event", side_effect=asyncio.CancelledError),
             pytest.raises(asyncio.CancelledError),
         ):
             await _append_mcp_hitl_denial_audit(_ORG_ID, uuid.uuid4(), exc)
@@ -2018,7 +2018,7 @@ class TestBindConnectorToNode(_AuthContext):
     async def test_connector_not_found(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=None)),
         ):
             result = await bind_connector_to_node(
                 pipeline_id=str(uuid.uuid4()),
@@ -2035,7 +2035,7 @@ class TestBindConnectorToNode(_AuthContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=connector)),
+            patch("farna.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=connector)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await bind_connector_to_node(
@@ -2058,7 +2058,7 @@ class TestBindConnectorToNode(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.connector_instance.get_connector_instance",
+                "farna.db.crud.connector_instance.get_connector_instance",
                 side_effect=ProgrammingError("s", {}, Exception()),
             ),
         ):
@@ -2071,7 +2071,7 @@ class TestBindConnectorToNode(_AuthContext):
         assert result["error"] == "migration_required"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.connector_instance.get_connector_instance", side_effect=RuntimeError("boom")),
+            patch("farna.db.crud.connector_instance.get_connector_instance", side_effect=RuntimeError("boom")),
         ):
             result = await bind_connector_to_node(
                 pipeline_id=str(uuid.uuid4()),
@@ -2128,12 +2128,12 @@ class TestSnapshotLockBusyIsRetryable(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.connector_instance.get_connector_instance",
+                "farna.db.crud.connector_instance.get_connector_instance",
                 new=AsyncMock(return_value=connector),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+                "farna.db.crud.pipeline_snapshot.create_snapshot_edit",
                 new=AsyncMock(side_effect=SnapshotLockNotAvailableError("snapshot lock busy")),
             ),
         ):
@@ -2185,12 +2185,12 @@ class TestBindConnectorEditSnapshot(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.connector_instance.get_connector_instance",
+                "farna.db.crud.connector_instance.get_connector_instance",
                 new=AsyncMock(return_value=connector),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+                "farna.db.crud.pipeline_snapshot.create_snapshot_edit",
                 new=AsyncMock(return_value=snap_return),
             ) as snap_mock,
         ):
@@ -2276,7 +2276,7 @@ class TestTriggerPipelinePaths(_AuthContext):
         pipeline.owner_team_id = None
         with (
             patch.object(ms, "get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new=AsyncMock(return_value=None)),
         ):
             _run_id, _thread_id, err = await _create_manual_run(
                 _mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {}
@@ -2292,7 +2292,7 @@ class TestTriggerPipelinePaths(_AuthContext):
         with (
             patch.object(ms, "get_pipeline", new=AsyncMock(return_value=pipeline)),
             patch(
-                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
                 new=AsyncMock(return_value=snapshot),
             ),
         ):
@@ -2458,7 +2458,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.core.eval_engine.eval_definition_write.validate_guardrail_request",
+                "farna.core.eval_engine.eval_definition_write.validate_guardrail_request",
                 side_effect=StarletteHTTPException(422, "bad guardrail"),
             ),
         ):
@@ -2472,7 +2472,7 @@ class TestEvalDefinitionTools(_AdminContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("farna.api.routes.evals._validate_guardrail_request", return_value=None),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
@@ -2497,8 +2497,8 @@ class TestEvalDefinitionTools(_AdminContext):
             session.execute.side_effect = exc
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
-            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
+            patch("farna.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("farna.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await create_eval_definition(
@@ -2515,9 +2515,9 @@ class TestEvalDefinitionTools(_AdminContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("farna.api.routes.evals._validate_guardrail_request", return_value=None),
             patch(
-                "modulo.api.routes.evals._eval_def_to_dict",
+                "farna.api.routes.evals._eval_def_to_dict",
                 side_effect=StarletteHTTPException(500, "serialize fail"),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2533,7 +2533,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+                "farna.core.eval_engine.eval_definition_write.create_or_update_eval",
                 side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}]),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2559,7 +2559,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+                "farna.core.eval_engine.eval_definition_write.create_or_update_eval",
                 side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}]),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2624,8 +2624,8 @@ class TestEvalDefinitionTools(_AdminContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
-            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
+            patch("farna.api.routes.evals._validate_guardrail_request", return_value=None),
+            patch("farna.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await update_eval_definition(
@@ -2704,7 +2704,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.core.eval_engine.eval_definition_write.validate_guardrail_request",
+                "farna.core.eval_engine.eval_definition_write.validate_guardrail_request",
                 side_effect=StarletteHTTPException(422, "bad guardrail"),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2722,7 +2722,7 @@ class TestEvalDefinitionTools(_AdminContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+                "farna.core.eval_engine.eval_definition_write.create_or_update_eval",
                 side_effect=StarletteHTTPException(422, "stamp fail"),
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
@@ -2771,7 +2771,7 @@ class TestEvalDefinitionTools(_AdminContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=RuntimeError("audit down")),
+            patch("farna.core.audit_logger.append_audit_event", side_effect=RuntimeError("audit down")),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await delete_eval_definition(eval_id=str(uuid.uuid4()))
@@ -2908,7 +2908,7 @@ class TestTriggerToolGaps(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_load_trigger_row", new=AsyncMock(return_value=trigger)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
         ):
             result = await get_trigger(trigger_id=str(uuid.uuid4()))
         assert result["error"] == "team_boundary_violation"
@@ -2993,7 +2993,7 @@ class TestTriggerToolGaps(_AuthContext):
         pipeline.max_concurrent_runs = 5
         session = _mock_session()
         session.get.return_value = pipeline
-        with patch("modulo.core.trigger_validation.validate_ongoing_config", return_value=None):
+        with patch("farna.core.trigger_validation.validate_ongoing_config", return_value=None):
             changed, err = await _validate_ongoing_trigger_update(
                 session, trigger, None, None, {"scan_interval_seconds": 90}, None, False
             )
@@ -3015,8 +3015,8 @@ class TestTriggerToolGaps(_AuthContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=trigger)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.trigger.soft_delete_trigger", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.trigger.soft_delete_trigger", new=AsyncMock(return_value=None)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await delete_trigger(trigger_id=str(uuid.uuid4()))
@@ -3046,8 +3046,8 @@ class TestTriggerToolGaps(_AuthContext):
         org.triggers_paused_at = None
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=ValueError("audit down")),
+            patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
+            patch("farna.core.audit_logger.append_audit_event", side_effect=ValueError("audit down")),
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
         ):
             result = await set_org_triggers_paused(paused=True)
@@ -3057,7 +3057,7 @@ class TestTriggerToolGaps(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.organisation.get_organisation",
+                "farna.db.crud.organisation.get_organisation",
                 new=AsyncMock(side_effect=ProgrammingError("s", {}, Exception())),
             ),
         ):
@@ -3066,7 +3066,7 @@ class TestTriggerToolGaps(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
-                "modulo.db.crud.organisation.get_organisation",
+                "farna.db.crud.organisation.get_organisation",
                 new=AsyncMock(side_effect=StarletteHTTPException(404, "no org")),
             ),
         ):
@@ -3074,7 +3074,7 @@ class TestTriggerToolGaps(_AuthContext):
         assert result["error"] == "not_found"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await set_org_triggers_paused(paused=True)
         assert result["error"] == "server_error"
@@ -3094,7 +3094,7 @@ class TestTriggerToolGaps(_AuthContext):
         cp.next_cursor = "cursor-token"
         cp.has_more = True
         paginator_cls.return_value.paginate = AsyncMock(return_value=cp)
-        with patch("modulo.db.crud.pagination.CursorPaginator", paginator_cls):
+        with patch("farna.db.crud.pagination.CursorPaginator", paginator_cls):
             items, next_cursor, has_more = await _paginate_trigger_events(
                 _mock_session(), MagicMock(), cursor="abc", lim=10
             )
@@ -3213,9 +3213,9 @@ class TestResourceGaps(_AuthContext):
         snap.created_at = _NOW
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.list_snapshots",
+                "farna.db.crud.pipeline_snapshot_versioning.list_snapshots",
                 new=AsyncMock(return_value=([snap], 1)),
             ) as list_snapshots_mock,
         ):
@@ -3231,9 +3231,9 @@ class TestResourceGaps(_AuthContext):
         snap.created_at = _NOW
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.list_snapshots",
+                "farna.db.crud.pipeline_snapshot_versioning.list_snapshots",
                 new=AsyncMock(return_value=([snap], 1)),
             ),
         ):
@@ -3288,9 +3288,9 @@ class TestResourceGaps(_AuthContext):
         snap.connector_bindings_json = {}
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
+                "farna.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
                 new=AsyncMock(return_value=snap),
             ),
         ):
@@ -3302,9 +3302,9 @@ class TestResourceGaps(_AuthContext):
     async def test_resource_snapshot_detail_not_found(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
+                "farna.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
                 new=AsyncMock(return_value=None),
             ),
         ):
@@ -3338,8 +3338,8 @@ class TestResourceGaps(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.run.get_child_run_rollup", new=AsyncMock(return_value={})),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.run.get_child_run_rollup", new=AsyncMock(return_value={})),
         ):
             result = await resource_run(str(run.id))
         assert f"Run: {run.id}" in result
@@ -3414,7 +3414,7 @@ class TestResourceGaps(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
         ):
             result = await resource_hitl_review(str(uuid.uuid4()), "gate")
         assert "Gate: gate" in result
@@ -3489,8 +3489,8 @@ class TestResourceGaps(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
-            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.hitl_review_config.get_run", new=AsyncMock(return_value=snapshot_run)),
+            patch("farna.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.hitl_review_config.get_run", new=AsyncMock(return_value=snapshot_run)),
         ):
             result = await resource_hitl_review(str(uuid.uuid4()), "hitl_review_src-1_tgt-2")
         assert "Description: Snapshot briefing." in result
@@ -3570,12 +3570,12 @@ class TestRemainingAuthPathGaps(_AuthContext):
         request = _make_starlette_request(method="POST", path="/mcp/oauth/token")
         with (
             patch(
-                "modulo.api.mcp_server._parse_oauth_form",
+                "farna.api.mcp_server._parse_oauth_form",
                 new=AsyncMock(return_value=({"grant_type": "authorization_code"}, None)),
             ),
-            patch("modulo.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
-            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url="https://x")),
-            patch("modulo.api.mcp_server._exchange_authorization_code", new=AsyncMock(return_value=(None, None))),
+            patch("farna.api.mcp_server._extract_oauth_client_credentials", return_value=({"code": "c"}, None)),
+            patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_public_url="https://x")),
+            patch("farna.api.mcp_server._exchange_authorization_code", new=AsyncMock(return_value=(None, None))),
             pytest.raises(RuntimeError),
         ):
             await _oauth_token_impl(request)
@@ -3635,7 +3635,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
 
     async def test_in_bounds_queue_timeout_threaded_to_crud(self) -> None:
         pipeline = self._pipeline_double()
-        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
+        with patch("farna.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
             result = await ms.create_pipeline(name="p", queue_timeout_seconds=3600)
         assert result["id"] == str(pipeline.id)
         assert create.await_args.kwargs["queue_timeout_seconds"] == 3600
@@ -3643,7 +3643,7 @@ class TestCreatePipelineQueueTimeout(_AuthContext):
     async def test_omitted_queue_timeout_threads_null(self) -> None:
         """Omitting the argument means NULL (never expire), the shipped default."""
         pipeline = self._pipeline_double()
-        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
+        with patch("farna.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
             await ms.create_pipeline(name="p")
         assert create.await_args.kwargs["queue_timeout_seconds"] is None
 
@@ -3694,9 +3694,9 @@ class TestLockTimeoutMapping(_AuthContext):
         schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
         with (
             patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
-            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
-            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
-            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=_lock_timeout_error())),
+            patch("farna.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("farna.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("farna.db.crud.parameter_set.update_set", AsyncMock(side_effect=_lock_timeout_error())),
         ):
             result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
 
@@ -3710,9 +3710,9 @@ class TestLockTimeoutMapping(_AuthContext):
         schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
         with (
             patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
-            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
-            patch("modulo.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
-            patch("modulo.db.crud.parameter_set.update_set", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+            patch("farna.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("farna.db.crud.parameter_set.get_set", AsyncMock(return_value=pset)),
+            patch("farna.db.crud.parameter_set.update_set", AsyncMock(side_effect=SQLAlchemyError("dead"))),
         ):
             result = await update_parameter_set(schema_id=str(sid), set_id=str(pset.id), version=1)
 
@@ -3723,8 +3723,8 @@ class TestLockTimeoutMapping(_AuthContext):
         schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
         with (
             patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
-            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
-            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=_lock_timeout_error())),
+            patch("farna.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("farna.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=_lock_timeout_error())),
         ):
             result = await update_parameter_schema(schema_id=str(sid), version=1)
 
@@ -3737,8 +3737,8 @@ class TestLockTimeoutMapping(_AuthContext):
         schema = SimpleNamespace(id=sid, organisation_id=_ORG_ID)
         with (
             patch.object(ms, "validate_current_auth", AsyncMock(return_value=True)),
-            patch("modulo.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
-            patch("modulo.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=SQLAlchemyError("dead"))),
+            patch("farna.db.crud.parameter_schema.get_schema", AsyncMock(return_value=schema)),
+            patch("farna.db.crud.parameter_schema.update_schema", AsyncMock(side_effect=SQLAlchemyError("dead"))),
         ):
             result = await update_parameter_schema(schema_id=str(sid), version=1)
 

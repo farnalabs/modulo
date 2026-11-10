@@ -35,16 +35,16 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown
-from modulo.core.cost_controller.breakdown.params import CostComponentConfig, RunCostTelemetry
-from modulo.core.node_output_split import _split_sandbox_agent
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.cost_controller.breakdown.aggregate import build_cost_breakdown
+from farna.core.cost_controller.breakdown.params import CostComponentConfig, RunCostTelemetry
+from farna.core.node_output_split import _split_sandbox_agent
+from farna.core.pipeline_engine.node_runner import (
     _build_model_cost_fields,
     _build_sandbox_node_envelope,
     _build_token_usage_fields,
     _SandboxNodeOutput,
 )
-from modulo.core.provenance import PROVENANCE_KEY, PROVENANCE_REPORTED
+from farna.core.provenance import PROVENANCE_KEY, PROVENANCE_REPORTED
 
 _COST_JSON: dict[str, Any] = {
     "model_cost_usd": 0.04,

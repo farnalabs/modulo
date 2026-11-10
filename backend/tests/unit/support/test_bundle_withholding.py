@@ -23,9 +23,9 @@ from typing import Any, ClassVar
 
 import pytest
 
-import modulo.support.bundle as bundle
-from modulo.support.bundle import BundleSources, RedactionGateError, build_bundle, inspect_bundle
-from modulo.support.redaction import Redactor
+import farna.support.bundle as bundle
+from farna.support.bundle import BundleSources, RedactionGateError, build_bundle, inspect_bundle
+from farna.support.redaction import Redactor
 
 # The two real message shapes, with a plausible hashed build-artefact token.
 VITE_CSS_URL = "Unable to preload CSS for https://staging.modulo.run/assets/index-aB3dE5fG7hI9jK1lM3nO5pQ.css"

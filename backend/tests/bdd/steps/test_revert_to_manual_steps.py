@@ -38,7 +38,7 @@ def set_node_back_to_manual(node_id: str, node_type: str, ctx, client, request):
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value={"nodes": [{"id": node_id, "node_type": node_type}]},
         ),
     ):
@@ -77,11 +77,11 @@ def can_revert_to_snapshot(ctx, request):
 
     with (
         patch(
-            "modulo.api.routes.pipelines.get_snapshot_detail",
+            "farna.api.routes.pipelines.get_snapshot_detail",
             return_value=mock_snapshot,
         ),
         patch(
-            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            "farna.api.routes.pipelines.rollback_to_snapshot",
             return_value=mock_snapshot,
         ),
     ):
@@ -105,7 +105,7 @@ def restore_snapshot(snapshot_name: str, ctx, client, request):
 
     with (
         patch(
-            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            "farna.api.routes.pipelines.rollback_to_snapshot",
             return_value=make_mock_snapshot(
                 tag="rollback-v1",
                 notes=f"Rollback to snapshot version {snapshot.snapshot_version}",

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.schema_registry.migration import MigrationRegistry, SchemaMigration
+from farna.core.schema_registry.migration import MigrationRegistry, SchemaMigration
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/schema_migration.feature")
@@ -226,7 +226,7 @@ def step_migrate_plan(request, client):
     source_def = getattr(request.node, "_source_def", {})
     target_def = getattr(request.node, "_target_def", {})
 
-    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append:
+    with patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append:
         request.node._audit_append = mock_audit_append
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
@@ -240,8 +240,8 @@ def step_migrate_plan(request, client):
 
 @when("I POST /api/v1/schemas/migrate/plan unauthenticated")
 def step_migrate_plan_unauthenticated(request, unauth_client):
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 
     for dep in (get_current_user, get_current_tenant_user, get_current_tenant_user_or_api_key):
         app.dependency_overrides.pop(dep, None)
@@ -350,10 +350,10 @@ def _call_migrate(request, client, dry_run: bool = False, data_override: dict | 
     request.node._original_data = data_payload
 
     with (
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.get_schema") as mock_get_schema,
-        patch("modulo.api.routes.schemas._get_latest_version") as mock_latest,
-        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append,
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema") as mock_get_schema,
+        patch("farna.api.routes.schemas._get_latest_version") as mock_latest,
+        patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_audit_append,
     ):
         request.node._audit_append = mock_audit_append
 

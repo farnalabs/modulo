@@ -13,11 +13,11 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -61,7 +61,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted", tier: str = "nat
 
 @pytest.fixture(autouse=True)
 def _patch_secrets_backend() -> Generator[None, None, None]:
-    with patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()):
+    with patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()):
         yield
 
 
@@ -72,7 +72,7 @@ def _patch_health_check_on_save() -> Generator[None, None, None]:
     that lacks ``health_check``). Patch it to a canned healthy result instead of
     gating production behavior on a runtime ``isinstance`` check."""
     with patch(
-        "modulo.api.routes.model_backends._run_health_check_on_save",
+        "farna.api.routes.model_backends._run_health_check_on_save",
         new=AsyncMock(return_value=("ok", None)),
     ):
         yield
@@ -84,7 +84,7 @@ def _stub_get_model_backend() -> Generator[None, None, None]:
     the write CRUD, but the write-path tests only mock ``update_model_backend`` /
     ``delete_model_backend``. Supply a same-org entity so the ownership check
     passes for the legitimate (same-org) principal these tests use."""
-    with patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()):
+    with patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()):
         yield
 
 
@@ -209,7 +209,7 @@ def test_get_model_backend_survives_secrets_backend_construction_failure(client:
     an external secrets backend that cannot initialise) degrades to "no
     endpoint shown" instead of failing the whole request.
     """
-    with patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")):
+    with patch("farna.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
     assert resp.json()["base_url"] is None
@@ -222,10 +222,10 @@ def test_get_model_backend_reports_legacy_endpoint_when_secrets_backend_unavaila
     backend = _make_backend()
     backend.default_params = {"base_url": "https://legacy.example.com/v1"}
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
@@ -236,10 +236,10 @@ def test_list_model_backends_survives_secrets_backend_construction_failure(clien
     """A listing degrades to no endpoint rather than failing every row."""
     page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", side_effect=ValueError("bad key")),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 200
@@ -258,9 +258,9 @@ _CREATE_BODY = {
 def test_list_model_backends_returns_200(client: TestClient) -> None:
     page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 200
@@ -271,9 +271,9 @@ def test_list_model_backends_default_excludes_in_dev(client: TestClient) -> None
     """The list endpoint defaults to the CRUD in_dev exclusion (excluded_tiers=None)."""
     page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 200
@@ -286,9 +286,9 @@ def test_list_model_backends_include_in_dev_passes_empty_exclusions(client: Test
     in_dev = _make_backend(tier="in_dev")
     page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
     assert resp.status_code == 200
@@ -310,9 +310,9 @@ def test_list_model_backends_include_in_dev_operator_reveals_in_dev(client: Test
     in_dev = _make_backend(tier="in_dev")
     page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
     assert resp.status_code == 200
@@ -323,9 +323,9 @@ def test_list_model_backends_include_in_dev_false_keeps_exclusion(client: TestCl
     """?include_in_dev=false behaves exactly like omitting the parameter."""
     page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends", params={"include_in_dev": "false"})
     assert resp.status_code == 200
@@ -336,9 +336,9 @@ def test_list_model_backends_include_in_dev_false_keeps_exclusion(client: TestCl
 def test_create_model_backend_does_not_expose_credentials(client: TestClient) -> None:
     backend = _make_backend(credentials_ciphertext=b"encrypted_bytes")
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
 
@@ -360,9 +360,9 @@ def test_create_model_backend_with_fallback_ids(client_with_fallback_ids: TestCl
         return backend  # type: ignore[return-value]
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", new=fake_create),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         body = {**_CREATE_BODY, "fallback_backend_ids": [str(_FALLBACK_ID)]}
         resp = client_with_fallback_ids.post("/api/v1/model-backends", json=body)
@@ -375,9 +375,9 @@ def test_create_model_backend_with_fallback_ids(client_with_fallback_ids: TestCl
 def test_create_model_backend_unknown_fallback_returns_422(client: TestClient) -> None:
     """A fallback ID that references no existing org backend is rejected before any DB write."""
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend") as mock_create,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend") as mock_create,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         body = {**_CREATE_BODY, "fallback_backend_ids": [str(uuid.uuid4())]}
         resp = client.post("/api/v1/model-backends", json=body)
@@ -392,9 +392,9 @@ def test_create_model_backend_mixed_fallback_ids_reports_missing(client_with_fal
     """Only the missing fallback IDs are reported when some references exist."""
     missing = uuid.uuid4()
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend") as mock_create,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend") as mock_create,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         body = {**_CREATE_BODY, "fallback_backend_ids": [str(_FALLBACK_ID), str(missing)]}
         resp = client_with_fallback_ids.post("/api/v1/model-backends", json=body)
@@ -423,9 +423,9 @@ def test_update_model_backend_with_fallback_ids(client_with_fallback_ids: TestCl
         return backend  # type: ignore[return-value]
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client_with_fallback_ids.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -444,9 +444,9 @@ def test_update_model_backend_self_reference_returns_422(client_with_fallback_id
     itself), so it is rejected before any DB write.
     """
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend") as mock_update,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend") as mock_update,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client_with_fallback_ids.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -461,9 +461,9 @@ def test_update_model_backend_self_reference_returns_422(client_with_fallback_id
 def test_update_model_backend_unknown_fallback_returns_422(client: TestClient) -> None:
     """Update with a fallback ID referencing no org backend is rejected."""
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend") as mock_update,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend") as mock_update,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -480,9 +480,9 @@ def test_update_model_backend_null_fallback_clears(client: TestClient) -> None:
     backend = _make_backend()
     backend.fallback_backend_ids = None
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"fallback_backend_ids": None})
     assert resp.status_code == 200
@@ -507,9 +507,9 @@ def test_update_model_backend_empty_list_removes_fallback(client_with_fallback_i
         return backend  # type: ignore[return-value]
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client_with_fallback_ids.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -526,12 +526,12 @@ def test_delete_model_backend_referenced_as_fallback_returns_409(client: TestCli
     referencing.name = "Primary Backend"
     with (
         patch(
-            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            "farna.api.routes.model_backends.list_backends_referencing_fallback",
             new=AsyncMock(return_value=[referencing]),
         ) as mock_referencing,
-        patch("modulo.api.routes.model_backends.delete_model_backend") as mock_delete,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.delete_model_backend") as mock_delete,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
 
@@ -544,10 +544,10 @@ def test_delete_model_backend_referenced_as_fallback_returns_409(client: TestCli
 def test_delete_model_backend_not_referenced_succeeds(client: TestClient) -> None:
     """A backend referenced by nothing deletes normally (204)."""
     with (
-        patch("modulo.api.routes.model_backends.list_backends_referencing_fallback", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_backends_referencing_fallback", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -561,9 +561,9 @@ def test_create_model_backend_encrypts_api_key(client: TestClient) -> None:
         return _make_backend(credentials_ciphertext=kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", new=fake_create),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         client.post("/api/v1/model-backends", json=_CREATE_BODY)
 
@@ -578,9 +578,9 @@ def test_create_model_backend_encrypts_api_key(client: TestClient) -> None:
 
 def test_get_model_backend_returns_200_without_credentials(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
@@ -596,9 +596,9 @@ def test_get_model_backend_with_fallback_ids_in_response(client: TestClient) -> 
     backend = _make_backend()
     backend.fallback_backend_ids = [str(fallback_id)]
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
@@ -607,9 +607,9 @@ def test_get_model_backend_with_fallback_ids_in_response(client: TestClient) -> 
 
 def test_get_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=None),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=None),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -619,9 +619,9 @@ def test_update_model_backend_returns_200(client: TestClient) -> None:
     backend = _make_backend()
     backend.name = "Updated"
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"name": "Updated"})
     assert resp.status_code == 200
@@ -692,12 +692,12 @@ def test_create_model_backend_writes_secret_inside_transaction(client: TestClien
 
     with (
         patch(
-            "modulo.api.routes.model_backends.create_secrets_backend",
+            "farna.api.routes.model_backends.create_secrets_backend",
             return_value=_TrackingSecretsBackend(in_txn, calls),
         ),
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
 
@@ -722,12 +722,12 @@ def test_update_model_backend_writes_secret_inside_transaction(client: TestClien
 
     with (
         patch(
-            "modulo.api.routes.model_backends.create_secrets_backend",
+            "farna.api.routes.model_backends.create_secrets_backend",
             return_value=_TrackingSecretsBackend(in_txn, calls),
         ),
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
 
@@ -741,9 +741,9 @@ def test_update_model_backend_writes_secret_inside_transaction(client: TestClien
 
 def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=None),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 404
@@ -751,9 +751,9 @@ def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
 
 def test_delete_model_backend_returns_204(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -761,9 +761,9 @@ def test_delete_model_backend_returns_204(client: TestClient) -> None:
 
 def test_delete_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=False),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -779,10 +779,10 @@ def test_create_model_backend_emits_model_backend_created_audit(client: TestClie
     backend = _make_backend()
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -810,10 +810,10 @@ def test_create_model_backend_audit_failure_does_not_block_creation(client: Test
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -825,10 +825,10 @@ def test_update_model_backend_emits_model_backend_updated_audit(client: TestClie
     backend = _make_backend()
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 200
@@ -845,10 +845,10 @@ def test_update_model_backend_credentials_emits_prd_credentials_audit(client: Te
     backend = _make_backend()
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
     assert resp.status_code == 200
@@ -871,10 +871,10 @@ def test_update_model_backend_audit_failure_does_not_block_update(client: TestCl
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 200
@@ -884,10 +884,10 @@ def test_update_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
     """An unknown-backend update returns 404 without firing an audit event."""
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=None),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 404
@@ -903,15 +903,15 @@ def test_delete_model_backend_emits_model_backend_deleted_audit(client: TestClie
     backend = _make_backend()
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=True),
         patch(
-            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            "farna.api.routes.model_backends.list_backends_referencing_fallback",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -933,15 +933,15 @@ def test_delete_model_backend_audit_failure_does_not_block_delete(client: TestCl
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=True),
         patch(
-            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            "farna.api.routes.model_backends.list_backends_referencing_fallback",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -951,10 +951,10 @@ def test_delete_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
     """An unknown-backend delete returns 404 without firing an audit event."""
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=False),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -968,9 +968,9 @@ def test_delete_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
 def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
     backend = _make_backend(credentials_ciphertext=b"")
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.json()["has_credentials"] is False
@@ -986,11 +986,11 @@ def test_list_model_backends_programming_error_returns_501(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.model_backends.list_model_backends",
+            "farna.api.routes.model_backends.list_model_backends",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 501
@@ -1002,11 +1002,11 @@ def test_create_model_backend_programming_error_returns_501(client: TestClient) 
 
     with (
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1026,10 +1026,10 @@ def test_get_model_backend_programming_error_returns_501(client: TestClient) -> 
 
     with (
         patch(
-            "modulo.api.routes.model_backends.get_model_backend", side_effect=ProgrammingError_("mock", "mock", "mock")
+            "farna.api.routes.model_backends.get_model_backend", side_effect=ProgrammingError_("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 501
@@ -1040,11 +1040,11 @@ def test_update_model_backend_programming_error_returns_501(client: TestClient) 
 
     with (
         patch(
-            "modulo.api.routes.model_backends.update_model_backend",
+            "farna.api.routes.model_backends.update_model_backend",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 501
@@ -1055,11 +1055,11 @@ def test_delete_model_backend_programming_error_returns_501(client: TestClient) 
 
     with (
         patch(
-            "modulo.api.routes.model_backends.delete_model_backend",
+            "farna.api.routes.model_backends.delete_model_backend",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 501
@@ -1078,9 +1078,9 @@ def test_create_model_backend_duplicate_name_returns_409(client: TestClient) -> 
     client.app.dependency_overrides[get_db_session] = override_session
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend"),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         body = {**_CREATE_BODY, "name": "duplicate"}
         resp = client.post("/api/v1/model-backends", json=body)
@@ -1100,12 +1100,12 @@ def test_create_model_backend_invalid_provider_returns_422(client: TestClient) -
 
 def test_create_model_backend_invalid_provider_returns_422_via_plugins(client: TestClient) -> None:
     """Provider that fails plugin registry check also returns 422."""
-    from modulo.api.routes.model_backends import _VALID_PROVIDERS
+    from farna.api.routes.model_backends import _VALID_PROVIDERS
 
     saved = dict.fromkeys(_VALID_PROVIDERS, True)
     try:
         _VALID_PROVIDERS.clear()
-        with patch("modulo.api.routes.model_backends.get_plugin_registry") as mock_reg:
+        with patch("farna.api.routes.model_backends.get_plugin_registry") as mock_reg:
             mock_reg.return_value.has_model_backend.return_value = False
             body = {**_CREATE_BODY, "provider": "unknown"}
             resp = client.post("/api/v1/model-backends", json=body)
@@ -1121,9 +1121,9 @@ def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> No
     backend.provider = "azure_openai"
     backend.model_id = "gpt-4-deployment"
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/model-backends", json=azure_body)
 
@@ -1146,9 +1146,9 @@ def test_create_custom_model_backend_round_trips(client: TestClient) -> None:
     backend.provider = "custom"
     backend.model_id = "demo-model"
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/model-backends", json=custom_body)
 
@@ -1166,10 +1166,10 @@ def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) ->
 
     with (
         patch(
-            "modulo.api.routes.model_backends.list_model_backends", side_effect=SQLAlchemyError_("mock", "mock", "mock")
+            "farna.api.routes.model_backends.list_model_backends", side_effect=SQLAlchemyError_("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 503
@@ -1180,11 +1180,11 @@ def test_create_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             side_effect=SQLAlchemyError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1224,9 +1224,9 @@ def test_create_model_backend_lock_timeout_returns_409(client: TestClient) -> No
         _PgError("55P03"),
     )
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=lock_timeout),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", side_effect=lock_timeout),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 409, resp.text
@@ -1238,10 +1238,10 @@ def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> N
 
     with (
         patch(
-            "modulo.api.routes.model_backends.get_model_backend", side_effect=SQLAlchemyError_("mock", "mock", "mock")
+            "farna.api.routes.model_backends.get_model_backend", side_effect=SQLAlchemyError_("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 503
@@ -1252,11 +1252,11 @@ def test_get_model_backend_integrity_error_returns_409(client: TestClient) -> No
 
     with (
         patch(
-            "modulo.api.routes.model_backends.get_model_backend",
+            "farna.api.routes.model_backends.get_model_backend",
             side_effect=IntegrityError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 409
@@ -1267,11 +1267,11 @@ def test_update_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.model_backends.update_model_backend",
+            "farna.api.routes.model_backends.update_model_backend",
             side_effect=SQLAlchemyError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 503
@@ -1282,11 +1282,11 @@ def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.model_backends.delete_model_backend",
+            "farna.api.routes.model_backends.delete_model_backend",
             side_effect=SQLAlchemyError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 503
@@ -1294,9 +1294,9 @@ def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
 def test_list_model_backends_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=TypeError("unexpected None")),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.list_model_backends", side_effect=TypeError("unexpected None")),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/model-backends")
     assert resp.status_code == 500
@@ -1305,9 +1305,9 @@ def test_list_model_backends_exception_returns_500(client: TestClient) -> None:
 
 def test_create_model_backend_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=KeyError("missing_field")),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", side_effect=KeyError("missing_field")),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1324,9 +1324,9 @@ def test_create_model_backend_exception_returns_500(client: TestClient) -> None:
 
 def test_get_model_backend_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=ValueError("bad state")),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", side_effect=ValueError("bad state")),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 500
@@ -1334,9 +1334,9 @@ def test_get_model_backend_exception_returns_500(client: TestClient) -> None:
 
 def test_update_model_backend_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=AttributeError("no attribute")),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.update_model_backend", side_effect=AttributeError("no attribute")),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
     assert resp.status_code == 500
@@ -1344,9 +1344,9 @@ def test_update_model_backend_exception_returns_500(client: TestClient) -> None:
 
 def test_delete_model_backend_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=RuntimeError("unexpected")),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.delete_model_backend", side_effect=RuntimeError("unexpected")),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 500
@@ -1357,9 +1357,9 @@ def test_get_model_backend_empty_fallback_ids_round_trips(client: TestClient) ->
     backend = _make_backend()
     backend.fallback_backend_ids = []
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
@@ -1371,10 +1371,10 @@ def test_create_model_backend_integrity_error_returns_409(client: TestClient) ->
     from sqlalchemy.exc import IntegrityError as IntegrityError_
 
     with (
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
         patch(
-            "modulo.api.routes.model_backends.create_model_backend", side_effect=IntegrityError_("mock", "mock", "mock")
+            "farna.api.routes.model_backends.create_model_backend", side_effect=IntegrityError_("mock", "mock", "mock")
         ),
     ):
         resp = client.post(
@@ -1402,7 +1402,7 @@ def test_update_model_backend_foreign_org_returns_404(client: TestClient) -> Non
     """IDOR regression: a foreign-org principal must not update a model backend
     it does not own. The ownership check must raise 404 before any write."""
     with patch(
-        "modulo.api.routes.model_backends.get_model_backend",
+        "farna.api.routes.model_backends.get_model_backend",
         return_value=_foreign_org_backend(),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={})
@@ -1413,7 +1413,7 @@ def test_delete_model_backend_foreign_org_returns_404(client: TestClient) -> Non
     """IDOR regression: a foreign-org principal must not delete a model backend
     it does not own."""
     with patch(
-        "modulo.api.routes.model_backends.get_model_backend",
+        "farna.api.routes.model_backends.get_model_backend",
         return_value=_foreign_org_backend(),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
@@ -1456,10 +1456,10 @@ def test_create_model_backend_resolves_secretref_api_key(client: TestClient) -> 
 
     stub = _StubSecretsBackend({"vault/openai": "sk-from-vault"})
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", new=fake_create),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.create_model_backend", new=fake_create),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1478,10 +1478,10 @@ def test_create_model_backend_literal_does_not_consult_vault(client: TestClient)
     backend = _make_backend()
     stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -1492,10 +1492,10 @@ def test_create_model_backend_missing_vault_key_fails_closed(client: TestClient)
     """A missing vault key is a typed 422 naming the key — nothing is written."""
     stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend") as create_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.create_model_backend") as create_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1522,10 +1522,10 @@ def test_update_model_backend_resolves_secretref_api_key(client: TestClient) -> 
 
     stub = _StubSecretsBackend({"vault/openai": "sk-rotated"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1579,10 +1579,10 @@ def test_create_persists_base_url_beside_api_key_and_returns_it(client: TestClie
     stub = _StubSecretsBackend({})
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1623,7 +1623,7 @@ def test_create_persists_base_url_beside_api_key_and_returns_it(client: TestClie
 )
 def test_create_rejects_metadata_and_noncanonical_hosts(client: TestClient, blocked: str) -> None:
     """Cloud metadata (incl. non-canonical literal encodings) is a hard deny."""
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post(
             "/api/v1/model-backends",
             json={**_CREATE_BODY, "base_url": blocked, "allow_insecure_http": True},
@@ -1644,7 +1644,7 @@ def test_create_rejects_metadata_and_noncanonical_hosts(client: TestClient, bloc
     ],
 )
 def test_create_rejects_invalid_base_url(client: TestClient, invalid: str) -> None:
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": invalid})
     assert resp.status_code == 422
     create_mock.assert_not_awaited()
@@ -1653,7 +1653,7 @@ def test_create_rejects_invalid_base_url(client: TestClient, invalid: str) -> No
 @pytest.mark.parametrize("host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "http://example.com/v1"])
 def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host: str) -> None:
     """Hostname shape never decides privacy — plain HTTP needs the explicit flag."""
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": host})
     assert resp.status_code == 422
     assert "allow_insecure_http" in str(resp.json()["detail"])
@@ -1666,9 +1666,9 @@ def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host
 def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str) -> None:
     backend = _make_backend()
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1681,7 +1681,7 @@ def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str)
 @pytest.mark.parametrize("provider", ["azure_openai", "bedrock", "vertexai", "watsonx", "custom"])
 def test_create_rejects_base_url_for_incapable_provider(client: TestClient, provider: str) -> None:
     """The hub capability map is the single source of truth — fail closed."""
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post(
             "/api/v1/model-backends",
             json={**_CREATE_BODY, "provider": provider, "base_url": _CUSTOM_BASE_URL},
@@ -1696,10 +1696,10 @@ def test_create_folds_legacy_default_params_base_url_and_strips_it(client: TestC
     backend = _make_backend()
     stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1712,7 +1712,7 @@ def test_create_folds_legacy_default_params_base_url_and_strips_it(client: TestC
 
 
 def test_create_rejects_conflicting_base_url_and_legacy_value(client: TestClient) -> None:
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post(
             "/api/v1/model-backends",
             json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL, "default_params": {"base_url": _LEGACY_BASE_URL}},
@@ -1723,7 +1723,7 @@ def test_create_rejects_conflicting_base_url_and_legacy_value(client: TestClient
 
 
 def test_create_rejects_legacy_http_without_opt_in(client: TestClient) -> None:
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post(
             "/api/v1/model-backends",
             json={**_CREATE_BODY, "default_params": {"base_url": "http://example.com/v1"}},
@@ -1746,10 +1746,10 @@ def test_update_endpoint_change_without_api_key_is_rejected(client: TestClient) 
     """A stored key must never be sent to a new host without re-supplying it."""
     stub = _secrets_with({"api_key": "sk-ORG-SECRET"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1771,15 +1771,15 @@ def test_update_endpoint_change_with_api_key_rebinds_and_health_checks_new_host(
         return backend
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            "farna.api.routes.model_backends._run_health_check_on_save_and_persist",
             new=AsyncMock(return_value=("ok", None)),
         ) as health_mock,
-        patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
+        patch("farna.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1813,11 +1813,11 @@ def test_update_unchanged_legacy_endpoint_is_migrated_without_losing_the_key(cli
     legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
     stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=legacy_backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=legacy_backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1843,11 +1843,11 @@ def test_update_replacing_default_params_preserves_a_legacy_endpoint(client: Tes
         return legacy_backend
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1867,10 +1867,10 @@ def test_update_rejects_migrating_a_plain_http_legacy_endpoint_without_opt_in(cl
     backend = _make_backend(credentials_ciphertext=Fernet(_FERNET_KEY.encode()).encrypt(b"sk-legacy"))
     backend.default_params = {"base_url": "http://legacy.internal.example/v1", "temperature": 0.1}
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1895,10 +1895,10 @@ def test_update_drops_an_unusable_legacy_endpoint_on_an_incapable_provider(clien
         return backend
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1925,11 +1925,11 @@ def test_update_null_base_url_clears_credential_and_legacy_locations(client: Tes
         return legacy_backend
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1950,11 +1950,11 @@ def test_update_rejects_base_url_for_incapable_provider(client: TestClient, prov
     backend.provider = provider
     stub = _secrets_with({"api_key": "sk-existing"})
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1969,10 +1969,10 @@ def test_update_rejects_conflicting_base_url_and_legacy_value(client: TestClient
     """Two different endpoints in one update request are ambiguous."""
     stub = _secrets_with({"api_key": "sk-existing"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -1990,10 +1990,10 @@ def test_update_rejects_conflicting_base_url_and_legacy_value(client: TestClient
 def test_update_rejects_legacy_http_endpoint_without_opt_in(client: TestClient) -> None:
     stub = _secrets_with({"api_key": "sk-existing"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -2018,11 +2018,11 @@ def test_base_url_masking_by_audience(
     stub = _secrets_with({"api_key": "sk-existing", "base_url": _CUSTOM_BASE_URL})
     page_result = MagicMock(items=[backend], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         if route == "list":
             resp = api_client.get("/api/v1/model-backends")
@@ -2044,10 +2044,10 @@ def test_base_url_masking_by_audience(
 def test_create_audit_records_the_credential_kind(client: TestClient) -> None:
     backend = _make_backend()
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()) as audit_mock,
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -2065,7 +2065,7 @@ def test_create_audit_records_the_credential_kind(client: TestClient) -> None:
 
 def test_create_with_base_url_rejects_a_vault_reference(client: TestClient) -> None:
     """A reference's owner never authorised the new destination (FAR-2046)."""
-    with patch("modulo.api.routes.model_backends.create_model_backend") as create_mock:
+    with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post(
             "/api/v1/model-backends",
             json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL, "api_key": "secretref://github-token"},
@@ -2079,12 +2079,12 @@ def test_update_endpoint_change_rejects_a_vault_reference(client: TestClient) ->
     """The binding rule cannot be satisfied with a server-resolved reference."""
     stub = _secrets_with({"api_key": "ghp_VAULT_SECRET"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            "farna.api.routes.model_backends._run_health_check_on_save_and_persist",
             new=AsyncMock(),
         ) as health_mock,
     ):
@@ -2103,12 +2103,12 @@ def test_update_endpoint_change_without_key_does_not_run_a_health_check(client: 
     """The 422 is raised before any outbound probe with the stored key."""
     stub = _secrets_with({"api_key": "sk-ORG-SECRET"})
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            "farna.api.routes.model_backends._run_health_check_on_save_and_persist",
             new=AsyncMock(),
         ) as health_mock,
     ):
@@ -2131,11 +2131,11 @@ def test_update_endpoint_refuses_to_write_when_the_key_cannot_be_recovered(clien
     legacy_backend.default_params = {"base_url": _LEGACY_BASE_URL}
     stub = _StubSecretsBackend({})
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=legacy_backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -2152,9 +2152,9 @@ def test_create_accepts_base_url_for_newly_capable_providers(client: TestClient,
     backend = _make_backend()
     backend.provider = provider
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -2178,10 +2178,10 @@ def test_update_drops_an_unchanged_legacy_echo_on_an_incapable_provider(client: 
         return backend
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -2203,10 +2203,10 @@ def test_update_rejects_a_new_legacy_value_on_an_incapable_provider(client: Test
     backend.provider = "azure_openai"
     backend.default_params = {}
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.update_model_backend", new=AsyncMock()) as update_mock,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/model-backends/{_BACKEND_ID}",
@@ -2224,10 +2224,10 @@ def test_get_does_not_report_an_ignored_legacy_endpoint_for_an_incapable_provide
     backend.provider = "azure_openai"
     backend.default_params = {"base_url": _LEGACY_BASE_URL}
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=_StubSecretsBackend({})),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=_StubSecretsBackend({})),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200

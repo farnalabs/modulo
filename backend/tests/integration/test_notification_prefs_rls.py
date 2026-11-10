@@ -26,9 +26,9 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.db.crud.notifications import get_opted_out_categories
-from modulo.db.models.notification import NotificationPreference
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.db.crud.notifications import get_opted_out_categories
+from farna.db.models.notification import NotificationPreference
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

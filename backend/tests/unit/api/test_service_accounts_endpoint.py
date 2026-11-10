@@ -18,15 +18,15 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.service_accounts import _list_service_accounts, _validate_service_org_role
-from modulo.auth.api_key import ApiKeyGrantsUnavailableError, ApiKeyTtlError
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.principals import KIND_SERVICE
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.service_accounts import _list_service_accounts, _validate_service_org_role
+from farna.auth.api_key import ApiKeyGrantsUnavailableError, ApiKeyTtlError
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.core.principals import KIND_SERVICE
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -183,14 +183,14 @@ class TestCreateServiceAccount:
         account = _service_account()
         with (
             patch(
-                "modulo.api.routes.service_accounts.create_service_account",
+                "farna.api.routes.service_accounts.create_service_account",
                 AsyncMock(return_value=account),
             ) as create,
             patch(
-                "modulo.api.routes.service_accounts.create_membership",
+                "farna.api.routes.service_accounts.create_membership",
                 AsyncMock(return_value=_membership("operator")),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             resp = admin_client.post("/api/v1/service-accounts", json={"name": "ci-bot", "role": "operator"})
 
@@ -206,12 +206,12 @@ class TestCreateServiceAccount:
         account = _service_account()
         audit = AsyncMock(return_value=MagicMock())
         with (
-            patch("modulo.api.routes.service_accounts.create_service_account", AsyncMock(return_value=account)),
+            patch("farna.api.routes.service_accounts.create_service_account", AsyncMock(return_value=account)),
             patch(
-                "modulo.api.routes.service_accounts.create_membership",
+                "farna.api.routes.service_accounts.create_membership",
                 AsyncMock(return_value=_membership("operator")),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             resp = admin_client.post("/api/v1/service-accounts", json={"name": "ci-bot"})
 
@@ -225,7 +225,7 @@ class TestCreateServiceAccount:
 
     def test_create_with_admin_role_is_rejected_structurally(self, admin_client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.service_accounts.create_service_account",
+            "farna.api.routes.service_accounts.create_service_account",
             AsyncMock(),
         ) as create:
             resp = admin_client.post("/api/v1/service-accounts", json={"name": "ci-bot", "role": "admin"})
@@ -257,7 +257,7 @@ class TestCreateServiceAccount:
 class TestReadAndUpdate:
     def test_list_returns_service_accounts(self, admin_client: TestClient) -> None:
         rows = [(_service_account(), _membership("operator"))]
-        with patch("modulo.api.routes.service_accounts._list_service_accounts", AsyncMock(return_value=(rows, 1))):
+        with patch("farna.api.routes.service_accounts._list_service_accounts", AsyncMock(return_value=(rows, 1))):
             resp = admin_client.get("/api/v1/service-accounts")
 
         assert resp.status_code == 200
@@ -269,11 +269,11 @@ class TestReadAndUpdate:
     def test_get_returns_one(self, admin_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -286,9 +286,9 @@ class TestReadAndUpdate:
         human = _service_account()
         human.kind = "human"
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=human)),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=human)),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -304,11 +304,11 @@ class TestReadAndUpdate:
         """
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -318,12 +318,12 @@ class TestReadAndUpdate:
     def test_patch_rename(self, admin_client: TestClient) -> None:
         account = _service_account()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=account)),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=account)),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
         ):
             resp = admin_client.patch(f"/api/v1/service-accounts/{_SA_ID}", json={"name": "renamed-bot"})
 
@@ -336,14 +336,14 @@ class TestReadAndUpdate:
         membership = _membership("viewer")
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=membership),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             resp = admin_client.patch(f"/api/v1/service-accounts/{_SA_ID}", json={"role": "runner"})
 
@@ -353,11 +353,11 @@ class TestReadAndUpdate:
     def test_patch_admin_role_is_rejected(self, admin_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -368,11 +368,11 @@ class TestReadAndUpdate:
     def test_patch_decommissioned_is_409(self, admin_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account(decommissioned=True)),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -453,12 +453,12 @@ class TestDecommission:
         audit = AsyncMock(return_value=MagicMock())
         try:
             with (
-                patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=account)),
+                patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=account)),
                 patch(
-                    "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                    "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                     AsyncMock(return_value=membership),
                 ),
-                patch("modulo.core.audit_logger.append_audit_event", new=audit),
+                patch("farna.core.audit_logger.append_audit_event", new=audit),
             ):
                 resp = TestClient(app).post(f"/api/v1/service-accounts/{_SA_ID}/decommission")
         finally:
@@ -477,11 +477,11 @@ class TestDecommission:
     def test_decommission_twice_is_409(self, admin_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account(decommissioned=True)),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -539,20 +539,20 @@ class TestMintServiceAccountKey:
         client, _ = mint_client
         key = _api_key()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="operator"),
             ),
             patch(
-                "modulo.api.routes.service_accounts.create_api_key",
+                "farna.api.routes.service_accounts.create_api_key",
                 AsyncMock(return_value=(key, "mk_full_key")),
             ) as mint,
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
         ):
             resp = client.post(f"/api/v1/service-accounts/{_SA_ID}/keys", json={"name": "ci key", "role": "runner"})
 
@@ -572,20 +572,20 @@ class TestMintServiceAccountKey:
         client, _ = self_mint_client
         key = _api_key()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="operator"),
             ),
             patch(
-                "modulo.api.routes.service_accounts.create_api_key",
+                "farna.api.routes.service_accounts.create_api_key",
                 AsyncMock(return_value=(key, "mk_full_key")),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             resp = client.post(f"/api/v1/service-accounts/{_SA_ID}/keys", json={"name": "ci key"})
 
@@ -608,17 +608,17 @@ class TestMintServiceAccountKey:
         client, _ = mint_client
         expires_at = (datetime.now(UTC) + timedelta(days=400)).isoformat()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="operator"),
             ),
             patch(
-                "modulo.api.routes.service_accounts.create_api_key",
+                "farna.api.routes.service_accounts.create_api_key",
                 AsyncMock(side_effect=ApiKeyTtlError("Keys owned by a service account expire within 365 days")),
             ),
         ):
@@ -633,11 +633,11 @@ class TestMintServiceAccountKey:
         client, _ = mint_client
         with (
             patch(
-                "modulo.api.routes.service_accounts.get_account_by_id",
+                "farna.api.routes.service_accounts.get_account_by_id",
                 AsyncMock(return_value=_service_account(decommissioned=True)),
             ),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
         ):
@@ -647,13 +647,13 @@ class TestMintServiceAccountKey:
     def test_role_above_target_live_role_is_403(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
         client, _ = mint_client
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="viewer"),
             ),
         ):
@@ -675,7 +675,7 @@ class TestMintServiceAccountKey:
 
     def test_grants_with_flag_off_are_rejected(self, mint_client: tuple[TestClient, AsyncMock]) -> None:
         client, _ = mint_client
-        with patch("modulo.api.routes.service_accounts.api_key_grants_enabled", AsyncMock(return_value=False)):
+        with patch("farna.api.routes.service_accounts.api_key_grants_enabled", AsyncMock(return_value=False)):
             resp = client.post(
                 f"/api/v1/service-accounts/{_SA_ID}/keys",
                 json={"name": "ci key", "grants": ["pipeline.list"]},
@@ -686,25 +686,25 @@ class TestMintServiceAccountKey:
         client, mock_session = mint_client
         key = _api_key()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="operator"),
             ),
-            patch("modulo.api.routes.service_accounts.api_key_grants_enabled", AsyncMock(return_value=True)),
+            patch("farna.api.routes.service_accounts.api_key_grants_enabled", AsyncMock(return_value=True)),
             patch(
-                "modulo.api.routes.service_accounts.enforce_grants_mint_cap_for",
+                "farna.api.routes.service_accounts.enforce_grants_mint_cap_for",
                 AsyncMock(),
             ) as grant_cap,
             patch(
-                "modulo.api.routes.service_accounts.create_api_key",
+                "farna.api.routes.service_accounts.create_api_key",
                 AsyncMock(return_value=(key, "mk_full_key")),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             resp = client.post(
                 f"/api/v1/service-accounts/{_SA_ID}/keys",
@@ -721,20 +721,20 @@ class TestMintServiceAccountKey:
         client, _ = mint_client
         naive = (datetime.now(UTC) + timedelta(days=30)).replace(tzinfo=None).isoformat()
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value="operator"),
             ),
             patch(
-                "modulo.api.routes.service_accounts.create_api_key",
+                "farna.api.routes.service_accounts.create_api_key",
                 AsyncMock(return_value=(_api_key(), "mk_full_key")),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             resp = client.post(
                 f"/api/v1/service-accounts/{_SA_ID}/keys",
@@ -760,7 +760,7 @@ class TestMintServiceAccountKey:
         """
         client, _ = mint_client
         with patch(
-            "modulo.api.routes.service_accounts.api_key_grants_enabled",
+            "farna.api.routes.service_accounts.api_key_grants_enabled",
             AsyncMock(side_effect=ApiKeyGrantsUnavailableError("down")),
         ):
             resp = client.post(
@@ -773,13 +773,13 @@ class TestMintServiceAccountKey:
         """A decommissioned/inactive target resolves no live role and is refused."""
         client, _ = mint_client
         with (
-            patch("modulo.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
+            patch("farna.api.routes.service_accounts.get_account_by_id", AsyncMock(return_value=_service_account())),
             patch(
-                "modulo.api.routes.service_accounts.get_membership_by_account_and_org",
+                "farna.api.routes.service_accounts.get_membership_by_account_and_org",
                 AsyncMock(return_value=_membership()),
             ),
             patch(
-                "modulo.api.routes.service_accounts.resolve_role_from_membership",
+                "farna.api.routes.service_accounts.resolve_role_from_membership",
                 AsyncMock(return_value=None),
             ),
         ):

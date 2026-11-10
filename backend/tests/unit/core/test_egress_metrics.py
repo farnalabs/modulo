@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core import egress_metrics, ssrf
+from farna.core import egress_metrics, ssrf
 
 
 @pytest.fixture(autouse=True)

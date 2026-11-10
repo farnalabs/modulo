@@ -22,10 +22,10 @@ import pytest
 from e2b.exceptions import RateLimitException, SandboxException
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import PipelineGraphNode
-from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine.node_runner import (
+from farna.api.routes.pipelines import PipelineGraphNode
+from farna.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine.node_runner import (
     SandboxCapacityExceededError,
     SandboxQueueTimeoutError,
     ScriptBudgetKilledError,
@@ -34,14 +34,14 @@ from modulo.core.pipeline_engine.node_runner import (
     _sandbox_issue_run_credential_for_sandbox,
     make_sandbox_agent_fn,
 )
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_egress_allowlist_config,
     _validate_sandbox_egress_config,
     _validate_sandbox_mode_config,
     _validate_sandbox_resource_limits_config,
     validate_sandbox_agent_command_jinja,
 )
-from modulo.db.crud.run import SandboxConcurrencyLimit
+from farna.db.crud.run import SandboxConcurrencyLimit
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -338,8 +338,8 @@ def test_node_runner_binds_shared_sandbox_jinja_environment():
     fails loudly, keeping the save-time parse and the run-time render
     guaranteed to share one environment.
     """
-    from modulo.core.pipeline_engine import node_runner
-    from modulo.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
+    from farna.core.pipeline_engine import node_runner
+    from farna.core.pipeline_engine.sandbox_mode import sandbox_jinja_environment
 
     assert node_runner.sandbox_jinja_environment is sandbox_jinja_environment
 
@@ -711,7 +711,7 @@ def test_script_mode_enforcement_reads_e2b_override(monkeypatch: pytest.MonkeyPa
     the bridge — the gate would read only os.environ and refuse), an explicit
     empty override disables the key, and the no-key case still fails closed.
     """
-    from modulo.core.runtime_config.store import get_runtime_config_store
+    from farna.core.runtime_config.store import get_runtime_config_store
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
@@ -859,8 +859,8 @@ async def test_script_mode_injects_run_api_key_env():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
-        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+        patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
+        patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
         result = await fn(_run_state_with_run_id())
 
@@ -883,7 +883,7 @@ async def test_script_mode_mint_failure_fails_open():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.auth.api_key.mint_run_api_key", new=_raise_boom),
+        patch("farna.auth.api_key.mint_run_api_key", new=_raise_boom),
     ):
         result = await fn(_run_state_with_run_id())
 
@@ -900,7 +900,7 @@ async def test_script_mode_mint_none_fails_open():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
+        patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
     ):
         result = await fn(_run_state_with_run_id())
 
@@ -946,8 +946,8 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
     factory = MagicMock(return_value=session)
 
     with (
-        patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
-        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+        patch("farna.auth.api_key.mint_run_api_key", new=_capture_mint),
+        patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
         issued = await _sandbox_issue_run_credential_for_sandbox(
             session_factory=factory,
@@ -987,8 +987,8 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
     factory = MagicMock(return_value=session)
 
     with (
-        patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
-        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+        patch("farna.auth.api_key.mint_run_api_key", new=_capture_mint),
+        patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
         issued = await _sandbox_issue_run_credential_for_sandbox(
             session_factory=factory,
@@ -1024,8 +1024,8 @@ async def test_llm_mode_injects_run_api_key():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
-        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+        patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
+        patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
         await fn(_run_state_with_run_id())
 
@@ -1038,7 +1038,7 @@ async def test_llm_mode_injects_run_api_key():
 # 7. FAR-296 Phase 3b-3: egress "selected" allowlist + platform-side resource killer
 # ---------------------------------------------------------------------------
 
-_BUDGET_PATCH = "modulo.core.pipeline_engine.node_runner._SANDBOX_BUDGET_POLL_INTERVAL_TICKS"
+_BUDGET_PATCH = "farna.core.pipeline_engine.node_runner._SANDBOX_BUDGET_POLL_INTERVAL_TICKS"
 
 
 def _killer_kill_timeouts(sandbox) -> set:
@@ -1191,7 +1191,7 @@ async def test_resource_killer_fails_open_on_metrics_error(caplog: pytest.LogCap
     sandbox.get_metrics = AsyncMock(side_effect=_boom)
     watchdog = _make_watchdog(sandbox, resource_limits={"cpu_usage_pct": 80})
 
-    logger = "modulo.core.pipeline_engine.node_runner"
+    logger = "farna.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is False
     assert watchdog.budget_killed is False
@@ -1256,7 +1256,7 @@ def test_script_mode_local_provider_refused_for_selected(monkeypatch: pytest.Mon
 # 8. FAR-296 Phase 4a: wall-clock spend budget + E2B rate-limit queueing
 # ---------------------------------------------------------------------------
 
-_WALLCLOCK_MONOTONIC_PATCH = "modulo.core.pipeline_engine.node_runner.time.monotonic"
+_WALLCLOCK_MONOTONIC_PATCH = "farna.core.pipeline_engine.node_runner.time.monotonic"
 
 
 async def test_wallclock_budget_kills_script():
@@ -1364,7 +1364,7 @@ async def test_e2b_rate_limit_retries_then_succeeds():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
     ):
         result = await fn(_run_state())
 
@@ -1382,7 +1382,7 @@ async def test_e2b_rate_limit_exhausts_retries():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
         pytest.raises(SandboxQueueTimeoutError, match="rate-limited"),
     ):
         await fn(_run_state())
@@ -1402,7 +1402,7 @@ async def test_e2b_rate_limit_retry_is_cancellable():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner.asyncio.sleep", side_effect=_cancelling_sleep),
+        patch("farna.core.pipeline_engine.node_runner.asyncio.sleep", side_effect=_cancelling_sleep),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
@@ -1468,20 +1468,20 @@ async def test_dispatch_capacity_denied_before_provisioning():
     with (
         patch("e2b.AsyncSandbox.create", new_callable=AsyncMock) as mock_create,
         patch(
-            "modulo.db.crud.run.count_active_runner_dispatches_for_org",
+            "farna.db.crud.run.count_active_runner_dispatches_for_org",
             new=_fake_count,
         ),
         patch(
-            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            "farna.db.crud.run.get_sandbox_concurrency_limit",
             new=_fake_get_limit,
         ),
-        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        patch("farna.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
         patch(
-            "modulo.db.rls.set_rls_org",
+            "farna.db.rls.set_rls_org",
             new=_noop_set_rls,
         ),
         patch(
-            "modulo.db.rls.set_rls_execution_context",
+            "farna.db.rls.set_rls_execution_context",
             new=_noop_set_rls,
         ),
         pytest.raises(SandboxCapacityExceededError, match="at capacity"),
@@ -1555,16 +1555,16 @@ async def test_dispatch_capacity_checked_for_llm_mode():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as mock_create,
         patch(
-            "modulo.db.crud.run.count_active_runner_dispatches_for_org",
+            "farna.db.crud.run.count_active_runner_dispatches_for_org",
             new=_fake_count,
         ),
         patch(
-            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            "farna.db.crud.run.get_sandbox_concurrency_limit",
             new=_fake_get_limit,
         ),
-        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
-        patch("modulo.db.rls.set_rls_org", new=_noop_set_rls),
-        patch("modulo.db.rls.set_rls_execution_context", new=_noop_set_rls),
+        patch("farna.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        patch("farna.db.rls.set_rls_org", new=_noop_set_rls),
+        patch("farna.db.rls.set_rls_execution_context", new=_noop_set_rls),
         pytest.raises(SandboxCapacityExceededError, match="at capacity"),
     ):
         await fn(_state)
@@ -1609,13 +1609,13 @@ async def test_e2b_rate_limit_exhaustion_maps_to_queue_timeout():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
         pytest.raises(SandboxQueueTimeoutError) as exc_info,
     ):
         await fn(_run_state())
 
     # Verify the exception class name resolves to sandbox.queue_timeout
-    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+    from farna.core.pipeline_engine.error_codes import map_legacy_code
 
     assert map_legacy_code(type(exc_info.value).__name__) == "sandbox.queue_timeout"
 
@@ -1763,7 +1763,7 @@ async def test_script_mode_rate_limited_retry_emits_event(mock_get_span):
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
     ):
         await fn(_run_state())
 

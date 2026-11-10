@@ -4,8 +4,8 @@ import uuid
 
 import pytest
 
-from modulo.otel_bridge import trace_id_for_run, trace_id_for_thread
-from modulo.otel_bridge.trace_id import trace_id_int_for_thread
+from farna.otel_bridge import trace_id_for_run, trace_id_for_thread
+from farna.otel_bridge.trace_id import trace_id_int_for_thread
 
 _NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 

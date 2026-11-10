@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import modulo.core.saq_worker as sw
+import farna.core.saq_worker as sw
 
 
 def test_system_registration_includes_demo_daily_refresh() -> None:
@@ -62,7 +62,7 @@ async def test_demo_daily_refresh_runs_seed_when_enabled(monkeypatch: pytest.Mon
     )
     monkeypatch.setattr(sw, "_make_session_factory", MagicMock(return_value=MagicMock()))
     seed = AsyncMock(return_value="org=demo user=demo@example.com")
-    monkeypatch.setattr("modulo.db.seed_demo.seed_demo_runtime", seed)
+    monkeypatch.setattr("farna.db.seed_demo.seed_demo_runtime", seed)
     result = await sw.demo_daily_refresh({})
     assert result == {"status": "refreshed", "summary": "org=demo user=demo@example.com"}
     seed.assert_called_once()
@@ -419,7 +419,7 @@ async def test_resume_run_accepts_claim_token_from_saq_retry(monkeypatch: pytest
     async def _fake_core(**_kwargs: Any) -> dict[str, Any]:
         return core_result
 
-    monkeypatch.setattr("modulo.core.pipeline_execution.resume_run", _fake_core)
+    monkeypatch.setattr("farna.core.pipeline_execution.resume_run", _fake_core)
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
 
     # Mimics SAQ retry re-invocation: claim_token arrives via **job.kwargs.

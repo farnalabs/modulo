@@ -39,14 +39,14 @@ import pytest
 from langgraph.errors import NodeCancelledError
 from sqlalchemy.exc import OperationalError
 
-from modulo.core import cron_helpers as ch
-from modulo.core import dispatch
-from modulo.core import pipeline_execution as pe
-from modulo.core.pipeline_engine import PipelineExecutor
-from modulo.core.pipeline_engine import executor as ex
-from modulo.core.pipeline_engine import retry_policy as retry_policy_module
-from modulo.core.pipeline_engine import watchdog_retry as wr
-from modulo.core.pipeline_engine.error_codes import (
+from farna.core import cron_helpers as ch
+from farna.core import dispatch
+from farna.core import pipeline_execution as pe
+from farna.core.pipeline_engine import PipelineExecutor
+from farna.core.pipeline_engine import executor as ex
+from farna.core.pipeline_engine import retry_policy as retry_policy_module
+from farna.core.pipeline_engine import watchdog_retry as wr
+from farna.core.pipeline_engine.error_codes import (
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
@@ -54,7 +54,7 @@ from modulo.core.pipeline_engine.error_codes import (
     known_error_codes,
     map_legacy_code,
 )
-from modulo.core.retry_budget import (
+from farna.core.retry_budget import (
     RETRY_POLICY_MAX_RETRIES,
     clamp_saq_retries,
     retry_budget_exhausted,
@@ -62,7 +62,7 @@ from modulo.core.retry_budget import (
     retry_max_executions,
     retry_policy_max_retries,
 )
-from modulo.core.worker_handoff import WORKER_LOST_ERROR_CODE, _node_started_policy_allows
+from farna.core.worker_handoff import WORKER_LOST_ERROR_CODE, _node_started_policy_allows
 
 ORG = uuid.uuid4()
 
@@ -130,8 +130,8 @@ def test_the_validator_accepts_the_shared_bound_and_rejects_above_it() -> None:
     ``graph_validator.X == X`` assertion cannot fail and would stay green even
     if the validator stopped using the shared constant entirely.
     """
-    from modulo.core import graph_validator
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core import graph_validator
+    from farna.core.graph_validator._types import ValidationResult
 
     at_bound = ValidationResult()
     graph_validator.GraphValidator.check_retry_policy(
@@ -205,7 +205,7 @@ def _patch_dispatch_run(*, run: Any, pipeline: Any) -> tuple[Any, Any]:
         patch.object(dispatch, "_org_capacity_deferred", AsyncMock(return_value=False)),
         patch.object(dispatch, "_slot_saturated", AsyncMock(return_value=False)),
         patch.object(dispatch, "_enqueue_saq", enqueue),
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=run)),
     ]
     return patches, enqueue, sessions
 
@@ -333,8 +333,8 @@ async def test_dispatch_fails_open_when_the_budget_read_errors(
         patch.object(dispatch, "_org_capacity_deferred", AsyncMock(return_value=False)),
         patch.object(dispatch, "_slot_saturated", AsyncMock(return_value=False)),
         patch.object(dispatch, "_enqueue_saq", enqueue),
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
-        caplog.at_level("WARNING", logger="modulo.core.dispatch"),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=run)),
+        caplog.at_level("WARNING", logger="farna.core.dispatch"),
     ):
         outcome, job_id = await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
 
@@ -363,7 +363,7 @@ async def test_dispatch_fails_open_when_the_run_row_is_missing() -> None:
         patch.object(dispatch, "_org_capacity_deferred", AsyncMock(return_value=False)),
         patch.object(dispatch, "_slot_saturated", AsyncMock(return_value=False)),
         patch.object(dispatch, "_enqueue_saq", enqueue),
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=None)),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=None)),
     ):
         outcome, job_id = await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
 
@@ -376,7 +376,7 @@ async def test_dispatch_clamp_cancellation_propagates() -> None:
     with (
         patch.object(dispatch, "_open_session", lambda: _FakeDispatchSession(None)),
         patch.object(dispatch, "get_settings", return_value=SimpleNamespace(saq_runs_queue="runs", saq_run_retries=5)),
-        patch("modulo.db.crud.run.get_run", AsyncMock(side_effect=asyncio.CancelledError())),
+        patch("farna.db.crud.run.get_run", AsyncMock(side_effect=asyncio.CancelledError())),
         pytest.raises(asyncio.CancelledError),
     ):
         await dispatch.dispatch_run(uuid.uuid4(), uuid.uuid4())
@@ -426,7 +426,7 @@ def _transient_executor(*, execution_attempt_count: int, claim_token: str = "tok
 
 async def _transient_decision(executor: Any, policy: Any) -> dict[str, Any]:
     broker = MagicMock()
-    with patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_run_retries=5)):
+    with patch("farna.settings.get_settings", return_value=SimpleNamespace(saq_run_retries=5)):
         return await executor._decide_transient_failure(
             exc=NodeCancelledError("transient sandbox failure"),
             run_id=uuid.uuid4(),
@@ -489,7 +489,7 @@ async def test_transient_requeue_logs_when_the_reset_times_out(
     executor = _transient_executor(execution_attempt_count=1)
     executor._fenced_pending_reset = AsyncMock(return_value=None)
 
-    with caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level("WARNING", logger="farna.core.pipeline_engine.executor"):
         decision = await _transient_decision(executor, _POLICY)
 
     assert decision["decision"] == "requeue"
@@ -511,9 +511,9 @@ async def test_policy_redispatch_logs_when_the_reset_times_out(
     executor._cleanup_run_resources = AsyncMock()
 
     with (
-        patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
+        patch("farna.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
         patch("asyncio.sleep", AsyncMock()),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.retry_policy"),
+        caplog.at_level("WARNING", logger="farna.core.pipeline_engine.retry_policy"),
         pytest.raises(ex.RunRetryPolicyError),
     ):
         await retry_policy_module._redispatch_after_policy(
@@ -1133,7 +1133,7 @@ async def _admit(
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
         patch.object(executor, "_claim_run_and_audit", claim),
         patch.object(ex, "update_run_status", update),
-        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", bump),
+        patch("farna.core.pipeline_execution.bump_execution_attempt_count", bump),
     ):
         result = await executor._claim_under_capacity(
             run_id=uuid.uuid4(),
@@ -1374,7 +1374,7 @@ async def test_at_ceiling_fence_rejection_maps_to_a_non_terminal_outcome() -> No
     """The wrapper must treat the refusal as a DEFERRAL: nothing executed and
     this attempt owns nothing, so it must not terminalise the run."""
     fail_run = AsyncMock()
-    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+    with patch("farna.core.pipeline_execution.fail_run_terminal", fail_run):
         outcome = await pe._handle_executor_failure(
             MagicMock(),
             str(uuid.uuid4()),
@@ -1418,7 +1418,7 @@ def test_retry_budget_exhausted_bare_spelling_canonicalizes() -> None:
 
 
 def test_readiness_detail_renders_the_retry_budget_counter() -> None:
-    from modulo.api.routes.health import _format_reconcile_detail
+    from farna.api.routes.health import _format_reconcile_detail
 
     detail = _format_reconcile_detail({"retry_budget_exhausted": 4})
     assert "retry_budget_exhausted=4" in detail

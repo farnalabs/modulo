@@ -24,18 +24,18 @@ from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.schema import CreateTable
 
-from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
-from modulo.db.crud.pipeline_snapshot import (
+from farna.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
+from farna.db.crud.pipeline_snapshot import (
     _build_policy_gate_pins,
     _load_policy_gate_rows_for_pipeline,
 )
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     POLICY_GATE_PIN_MISMATCH_MARKER,
     _stamp_guardrail_blocked_run,
     _verify_policy_gate_pin_fingerprint,
 )
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.policy_gate import PolicyGate
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.policy_gate import PolicyGate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,7 +93,7 @@ def _interception_request(
     one).  Passing ``None`` EXPLICITLY builds a snapshot-less request — the
     sentinel keeps ``None`` from being mistaken for "unspecified".
     """
-    from modulo.db.crud.run import _InterceptionRequest
+    from farna.db.crud.run import _InterceptionRequest
 
     resolved = uuid.uuid4() if snapshot_id is _AUTO_SNAPSHOT else snapshot_id
     return _InterceptionRequest(
@@ -126,7 +126,7 @@ def _policy_gate_row(
 def _stubbed_guardrail_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutralise the guardrail pass so the policy-gate branch is the only
     live logic under test in ``_intercept_guardrails`` runs."""
-    import modulo.db.crud.guardrail_config as guardrail_config
+    import farna.db.crud.guardrail_config as guardrail_config
 
     monkeypatch.setattr(
         guardrail_config,
@@ -134,7 +134,7 @@ def _stubbed_guardrail_env(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(
-        "modulo.db.crud.run._resolve_pinned_guardrail_state",
+        "farna.db.crud.run._resolve_pinned_guardrail_state",
         AsyncMock(
             return_value=MagicMock(
                 pinned_defs=[],
@@ -305,7 +305,7 @@ def test_verify_added_gate_fails_closed_with_truncated_actionable_message(
     recomputed = fingerprint_policy_gate_pins(tampered)
     snapshot_id = uuid.uuid4()
 
-    with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+    with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
         blocked, message = _verify_policy_gate_pin_fingerprint(
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
@@ -438,7 +438,7 @@ async def test_guardrail_override_refuses_pin_mismatch_runs(
     MECHANISM failure — no operator-supplied input can remediate it, so the
     override refuses (base ``GuardrailOverrideError`` → 409) BEFORE the
     guardrail re-run pass is even attempted."""
-    from modulo.core.pipeline_engine.recovery import (
+    from farna.core.pipeline_engine.recovery import (
         GuardrailOverrideError,
         guardrail_override,
     )
@@ -449,7 +449,7 @@ async def test_guardrail_override_refuses_pin_mismatch_runs(
     run = _override_run(error_detail=mismatch_detail)
     session = _override_session(run)
     load_rows = AsyncMock(return_value=[])
-    monkeypatch.setattr("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
+    monkeypatch.setattr("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
 
     with pytest.raises(GuardrailOverrideError) as exc_info:
         await guardrail_override(
@@ -476,7 +476,7 @@ async def test_guardrail_override_still_runs_for_plain_guardrail_blocks(
     refusal check and reaches the re-run pass — proven by landing on the
     re-block error (``GuardrailOverrideRejectedError``) instead of the
     refusal."""
-    from modulo.core.pipeline_engine.recovery import (
+    from farna.core.pipeline_engine.recovery import (
         GuardrailOverrideError,
         GuardrailOverrideRejectedError,
         guardrail_override,
@@ -485,7 +485,7 @@ async def test_guardrail_override_still_runs_for_plain_guardrail_blocks(
     run = _override_run(error_detail="Guardrail 'PII pattern' blocked the input")
     session = _override_session(run)
     load_rows = AsyncMock(return_value=[])
-    monkeypatch.setattr("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
+    monkeypatch.setattr("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
     re_run_pass = AsyncMock(
         return_value=MagicMock(
             blocked=True,
@@ -494,7 +494,7 @@ async def test_guardrail_override_still_runs_for_plain_guardrail_blocks(
             payload={},
         )
     )
-    monkeypatch.setattr("modulo.core.guardrails.run_interception_pass_async", re_run_pass)
+    monkeypatch.setattr("farna.core.guardrails.run_interception_pass_async", re_run_pass)
 
     with pytest.raises(GuardrailOverrideRejectedError) as exc_info:
         await guardrail_override(
@@ -528,7 +528,7 @@ def test_operator_control_has_one_implementation_in_the_executor_build() -> None
     single-sourcing exists to prevent."""
     import inspect
 
-    import modulo.db.crud.run as run_crud
+    import farna.db.crud.run as run_crud
 
     source = inspect.getsource(run_crud)
     assert "_filter_disabled_policy_gates" not in source
@@ -550,7 +550,7 @@ async def test_intercept_does_not_apply_operator_control_itself(
     lives at the executor build (wiring C8/C9)."""
     import logging
 
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request()
@@ -560,7 +560,7 @@ async def test_intercept_does_not_apply_operator_control_itself(
     session = AsyncMock(spec=AsyncSession)
     session.execute = AsyncMock(side_effect=[_row_result((pins, matching_fp, 3))])
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.crud.run"):
+    with caplog.at_level(logging.INFO, logger="farna.db.crud.run"):
         interception = await _intercept_guardrails(session, request)
 
     assert not interception.blocked
@@ -583,7 +583,7 @@ async def test_intercept_no_snapshot_never_touches_the_policy_gate_seam(
     anything — zero session queries, no block.  (Runs WITH a snapshot always
     verify — see the non-replay run-start tests below; ``is_replay`` no
     longer gates the seam, spec §3.4 / criteria 4 + 16.)"""
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request(is_replay=False, snapshot_id=None)
@@ -601,7 +601,7 @@ async def test_intercept_fingerprint_block_short_circuits_operator_control(
 ) -> None:
     """C4 wiring: a fingerprint mismatch blocks IMMEDIATELY at run start —
     nothing else is read past the failed pin verification."""
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request()
@@ -636,7 +636,7 @@ async def test_intercept_non_replay_mismatch_blocks_at_run_start(
     TRUNCATED digests, and the remediation; the FULL digests go to the log."""
     import logging
 
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request(is_replay=False)  # snapshot_id set, NOT a replay
@@ -649,7 +649,7 @@ async def test_intercept_non_replay_mismatch_blocks_at_run_start(
     session = AsyncMock(spec=AsyncSession)
     session.execute = AsyncMock(side_effect=[_row_result((tampered, stored, 7))])
 
-    with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+    with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
         interception = await _intercept_guardrails(session, request)
 
     assert interception.blocked, "a mismatch must block a non-replay run at run start"
@@ -684,7 +684,7 @@ async def test_intercept_non_replay_matching_fingerprint_proceeds(
     operator-control query lives here).  Together with the mismatch test
     above this proves the check is discriminating, not a blanket refusal
     (the always-block guard)."""
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request(is_replay=False)
@@ -708,7 +708,7 @@ async def test_intercept_non_replay_legacy_snapshot_falls_back_to_live(
     """C6 at run start: a legacy snapshot (no pins, no fingerprint) on a
     NON-replay run falls back to the live gates — no block, and no spurious
     case-(ii) verification (exactly one query: the pin read)."""
-    from modulo.db.crud.run import _intercept_guardrails
+    from farna.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request(is_replay=False)
@@ -853,7 +853,7 @@ def _creation_session(
         _scalars_result([]),  # guardrail rows
         _scalars_result(gate_rows),  # policy gate rows
     ]
-    return session, patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
+    return session, patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _simple_pipeline_and_edge() -> tuple[MagicMock, MagicMock]:
@@ -883,7 +883,7 @@ async def test_creation_writes_policy_gate_pins_and_fingerprint_to_snapshot() ->
     rows are serialised into ``policy_gate_pins_json`` and the snapshot's
     ``policy_gate_pins_fingerprint`` matches ``fingerprint_policy_gate_pins``
     of the STORED pins."""
-    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+    from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
     pipeline, edge = _simple_pipeline_and_edge()
     gate_rows = [
@@ -917,7 +917,7 @@ async def test_creation_zero_gates_store_empty_pin_set_with_digest() -> None:
     ``[]`` AND a fingerprint (the deterministic empty-set digest) — the
     deliberate "zero gates pinned" state, NOT ``None`` (which is reserved
     for genuinely pre-mechanism snapshots)."""
-    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+    from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
     pipeline, edge = _simple_pipeline_and_edge()
     session, lock_stub = _creation_session(pipeline, edge, [])

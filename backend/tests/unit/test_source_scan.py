@@ -1,7 +1,7 @@
 """Regression tests for the shared whole-tree source scanner.
 
 The vulture dead-code gate used to write a transient module into
-``backend/src/modulo`` and unlink it again. The probe is now staged in pytest's
+``backend/src/farna`` and unlink it again. The probe is now staged in pytest's
 ``tmp_path`` — outside the measured source tree and outside the repo — and passed
 to ``scripts/run_vulture.py`` as an extra scan target (FAR-2334), so that
 particular ``FileNotFoundError`` race can no longer occur and no fix is needed

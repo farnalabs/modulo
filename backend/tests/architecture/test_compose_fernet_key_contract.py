@@ -38,7 +38,7 @@ import pytest
 import yaml
 from cryptography.fernet import Fernet
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 # tests/architecture/ -> tests/ -> backend/ -> repo root.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent

@@ -17,12 +17,12 @@ from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.api.routes.mcp_setup import router
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.api.routes.mcp_setup import router
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -109,15 +109,15 @@ class TestCompleteModelBackendSetup:
             return updated
 
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
-            patch("modulo.api.routes.mcp_setup.update_model_backend", new=fake_update),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
+            patch("farna.api.routes.mcp_setup.update_model_backend", new=fake_update),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -136,9 +136,9 @@ class TestCompleteModelBackendSetup:
 
     def test_invalid_token_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.mcp_setup.consume_handoff", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.consume_handoff", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -156,13 +156,13 @@ class TestCompleteModelBackendSetup:
 
     def test_token_resource_mismatch_returns_400(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(resource_id=uuid.uuid4()),
             ),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -180,14 +180,14 @@ class TestCompleteModelBackendSetup:
 
     def test_backend_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=None),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=None),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -213,14 +213,14 @@ class TestCompleteModelBackendSetup:
         foreign_backend = _pending_backend()
         foreign_backend.organisation_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=foreign_backend),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=foreign_backend),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -242,14 +242,14 @@ class TestCompleteModelBackendSetup:
         backend = _pending_backend()
         backend.status = "active"
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=backend),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=backend),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -269,14 +269,14 @@ class TestCompleteModelBackendSetup:
         empty_key_settings = MagicMock()
         empty_key_settings.fernet_key = ""
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=empty_key_settings),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=empty_key_settings),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -294,14 +294,14 @@ class TestCompleteModelBackendSetup:
 
     def test_invalid_fernet_key_returns_500(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings(fernet_key="x" * 44)),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings(fernet_key="x" * 44)),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -319,15 +319,15 @@ class TestCompleteModelBackendSetup:
 
     def test_update_failure_returns_500(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 return_value=_consumed_token(),
             ),
-            patch("modulo.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
-            patch("modulo.api.routes.mcp_setup.update_model_backend", return_value=None),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.get_model_backend", return_value=_pending_backend()),
+            patch("farna.api.routes.mcp_setup.update_model_backend", return_value=None),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -347,13 +347,13 @@ class TestCompleteModelBackendSetup:
         from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError_("mock", "mock", "mock"),
             ),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -378,13 +378,13 @@ class TestCompleteModelBackendSetup:
         from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError_("mock", "mock", "mock"),
             ),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -403,13 +403,13 @@ class TestCompleteModelBackendSetup:
         from sqlalchemy.exc import IntegrityError as IntegrityError_
 
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 side_effect=IntegrityError_("mock", "mock", "mock"),
             ),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
@@ -430,13 +430,13 @@ class TestCompleteModelBackendSetup:
         reaches this arm genuinely is unknown — ``internal_error`` is correct
         here and is deliberately kept (FAR-1540)."""
         with (
-            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
-                "modulo.api.routes.mcp_setup.consume_handoff",
+                "farna.api.routes.mcp_setup.consume_handoff",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("boom"),
             ),
-            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+            patch("farna.api.routes.mcp_setup.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",

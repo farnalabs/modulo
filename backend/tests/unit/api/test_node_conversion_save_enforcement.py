@@ -53,7 +53,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.auth.jwt import TenantPrincipal
+from farna.auth.jwt import TenantPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -66,7 +66,7 @@ _PIPELINE_TEAM = uuid.UUID("55555555-5555-5555-5555-555555555555")
 #: The team that owns the connector in the cross-team case - deliberately NOT
 #: ``_PIPELINE_TEAM``.
 _OTHER_TEAM = uuid.UUID("66666666-6666-6666-6666-666666666666")
-_PREFIX = "modulo.api.routes.pipelines."
+_PREFIX = "farna.api.routes.pipelines."
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ async def _save(
     *,
     pipeline_owner_team: uuid.UUID | None = _PIPELINE_TEAM,
 ) -> tuple[list[dict[str, Any]], list[Any], list[Any]] | None:
-    from modulo.api.routes.pipelines import _save_locked_graph
+    from farna.api.routes.pipelines import _save_locked_graph
 
     return await _save_locked_graph(
         session,
@@ -546,7 +546,7 @@ def test_graph_nodes_as_models_skips_non_dict_entries() -> None:
     get typed and reference-checked. This drives the skip guard directly - the
     endpoint path filters through ``extract_connector_bindings`` first.
     """
-    from modulo.api.routes.pipelines import _graph_nodes_as_models
+    from farna.api.routes.pipelines import _graph_nodes_as_models
 
     models = _graph_nodes_as_models([_converted_node(), "not-a-node", 42, None])
 

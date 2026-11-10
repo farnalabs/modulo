@@ -3,10 +3,10 @@ id: feat-library
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/library.py
-  - backend/src/modulo/api/routes/community_library.py
-  - backend/src/modulo/core/library_service/community.py
-  - backend/src/modulo/core/library_sync
+  - backend/src/farna/api/routes/library.py
+  - backend/src/farna/api/routes/community_library.py
+  - backend/src/farna/core/library_service/community.py
+  - backend/src/farna/core/library_sync
   - frontend/src/views/CollectionCreateView.vue
   - frontend/src/views/CollectionDetailView.vue
 unit-tests:

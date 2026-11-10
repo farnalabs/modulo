@@ -12,13 +12,13 @@ import uuid
 
 import pytest
 
-from modulo.core.pipeline_engine.idempotency import (
+from farna.core.pipeline_engine.idempotency import (
     node_idempotency_key,
     read_before_write_ambiguous,
     read_before_write_suppression,
     stable_idempotency_key,
 )
-from modulo.db.crud.run import run_idempotency_key, run_idempotency_ref
+from farna.db.crud.run import run_idempotency_key, run_idempotency_ref
 
 
 def test_stable_idempotency_key_is_deterministic() -> None:

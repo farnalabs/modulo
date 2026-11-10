@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.codeclimate import CodeClimateConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.codeclimate import CodeClimateConnector
 
 TOKEN = "cc_test_token"
 _BASE = "https://api.codeclimate.com/v1"

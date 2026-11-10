@@ -23,7 +23,7 @@ class TestEvalResultCascadeConfig:
     """
 
     def test_eval_result_fk_cascades_on_eval_delete(self) -> None:
-        from modulo.db.models.eval_result import EvalResult
+        from farna.db.models.eval_result import EvalResult
 
         fk = next(iter(EvalResult.__table__.c.eval_id.foreign_keys))
         assert fk.ondelete == "CASCADE"
@@ -69,7 +69,7 @@ class TestBuildEvalDefsByNode:
     def test_pipeline_level_def_without_node_id_is_skipped(self) -> None:
         """An eval definition with no node_id is pipeline-level — the executor
         must NOT attach it to any node for eval-before-interrupt."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_uuid = uuid4()
         rows = [
@@ -87,14 +87,14 @@ class TestBuildEvalDefsByNode:
         assert attached[0].name == "node-scoped"
 
     def test_empty_rows_returns_empty_map(self) -> None:
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         by_node = PipelineExecutor._build_eval_defs_by_node([], uuid4(), uuid4())
         assert by_node == {}
 
     def test_node_id_used_as_dict_key(self) -> None:
         """The DTO key is the node id string — gate nodes use it to look up evals."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_uuid = uuid4()
         rows = [
@@ -110,7 +110,7 @@ class TestLoadEvalDefsForPipeline:
         """The executor's loading query filters to node_id IS NOT NULL — a
         pipeline-level def (no node_id) never reaches the eval-before-interrupt
         gate function."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         session = AsyncMock()
         node_scoped = _make_eval_row(node_id=uuid4(), name="node-eval")
@@ -147,13 +147,13 @@ def _interrupt_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
         raise GraphInterrupt((Interrupt(value=value),))
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
 
 
 class TestHitlReviewConditionFalsy:
     def test_condition_false_literal_skips_gate(self) -> None:
         """JMESPath condition evaluating to the ``False`` literal → falsy → skip."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "ready == `false`"})
@@ -164,7 +164,7 @@ class TestHitlReviewConditionFalsy:
 
     def test_condition_empty_list_skips_gate(self) -> None:
         """JMESPath condition returning an empty list → falsy → gate skipped."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items"})
@@ -175,7 +175,7 @@ class TestHitlReviewConditionFalsy:
 
     def test_condition_empty_dict_skips_gate(self) -> None:
         """JMESPath condition returning an empty dict → falsy → gate skipped."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "obj"})
@@ -188,7 +188,7 @@ class TestHitlReviewConditionFalsy:
         """A non-empty list is truthy — the gate proceeds to the interrupt."""
         from langgraph.errors import GraphInterrupt
 
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items"})
@@ -200,7 +200,7 @@ class TestHitlReviewConditionFalsy:
     def test_condition_invalid_expression_raises_value_error(self) -> None:
         """An unparseable JMESPath expression raises ValueError (percolates as
         a node error instead of silently treating the gate as pass-through)."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items[0"})
@@ -214,7 +214,7 @@ class TestHitlReviewConditionFalsy:
         propagates as a JMESPathError node error rather than being swallowed."""
         import jmespath
 
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
             node_fn = make_hitl_review_fn({"review_id": "g", "condition": "abs(score)"})
@@ -229,8 +229,8 @@ class TestEvalBlockShortCircuitsRemainingEvals:
         """A block-level eval failure short-circuits the eval loop — evals
         listed AFTER the failing one are never evaluated. This is the
         eval_block.feature "remaining evals are not evaluated" expectation."""
-        from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
             eval_blocking = EvalDefinition(

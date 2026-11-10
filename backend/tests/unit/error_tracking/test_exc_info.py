@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import error_tracking as et
+from farna.core import error_tracking as et
 from tests.unit.api.mock_session import make_session_scope
 
 
@@ -39,7 +39,7 @@ async def test_redis_failure_fails_open_and_logs(
     caplog: pytest.LogCaptureFixture, call: Callable[..., Awaitable[bool]], expected_log: str
 ) -> None:
     client = _redis_mock("set")
-    with caplog.at_level(logging.WARNING, logger="modulo.core.error_tracking"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.error_tracking"):
         result = await call(client)
     assert result is True
     records = _failure_records(caplog, expected_log)
@@ -53,7 +53,7 @@ async def test_check_missed_fire_alerts_redis_close_failure(caplog) -> None:
     with (
         patch.object(et, "AsyncRedis", MagicMock(from_url=lambda *a, **k: client)),
         patch.object(et, "get_settings", return_value=MagicMock(redis_url="redis://localhost")),
-        caplog.at_level(logging.WARNING, logger="modulo.core.error_tracking"),
+        caplog.at_level(logging.WARNING, logger="farna.core.error_tracking"),
     ):
         # ``aengine.connect()`` must yield a connection whose ``execute``
         # returns a real Result (sync readers) - a bare MagicMock chain leaks

@@ -21,12 +21,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.evidence_redaction import REDACTED_SENTINEL
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.evidence_redaction import REDACTED_SENTINEL
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -37,7 +37,7 @@ _EVIDENCE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000cc")
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
-_ROUTES = "modulo.api.routes.evidence"
+_ROUTES = "farna.api.routes.evidence"
 
 
 def _make_settings() -> Settings:
@@ -505,7 +505,7 @@ class TestRiskAssessmentDegradationRealPath:
     """
 
     async def test_load_rows_degrades_and_falls_back_to_unfiltered(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         session = _make_mock_session()
@@ -520,7 +520,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert session.execute.await_count == 2
 
     async def test_load_rows_re_raises_unrelated_programming_error(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         unrelated = ProgrammingError("stmt", "params", "syntax error")
@@ -531,7 +531,7 @@ class TestRiskAssessmentDegradationRealPath:
             await mod._load_risk_assessment_rows(session, _ORG_ID, action="block", limit=10)
 
     async def test_load_rows_with_action_uses_the_filtered_query(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         session = _make_mock_session()
@@ -544,7 +544,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert session.execute.await_count == 1
 
     async def test_load_rows_without_action_never_degrades(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         session = _make_mock_session()
@@ -557,7 +557,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert session.execute.await_count == 1
 
     async def test_count_degrades_to_unfiltered_count(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         missing_column = ProgrammingError("stmt", "params", "no column")
@@ -569,7 +569,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert total == 4
 
     async def test_count_with_action_uses_filtered_query(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_scalar_result(2))
@@ -580,7 +580,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert session.execute.await_count == 1
 
     async def test_count_by_action_degrades_all_to_zero(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         missing_column = ProgrammingError("stmt", "params", "no column")
@@ -595,7 +595,7 @@ class TestRiskAssessmentDegradationRealPath:
         assert session.execute.await_count == 1
 
     async def test_count_by_action_reraises_unrelated_programming_error(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         unrelated = ProgrammingError("stmt", "params", "syntax error")
@@ -606,7 +606,7 @@ class TestRiskAssessmentDegradationRealPath:
             await mod._count_risk_assessment_by_action(session, _ORG_ID)
 
     async def test_count_by_action_success(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(
@@ -628,7 +628,7 @@ class TestRiskAssessmentScopeClause:
     """The shared WHERE builder covers every filter combination."""
 
     async def test_rows_apply_key_prefix_and_pipeline_filters(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_rows_result([]))
@@ -650,7 +650,7 @@ class TestRiskAssessmentScopeClause:
         assert "LIKE" in sql
 
     async def test_count_applies_key_prefix_and_pipeline_filters(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_scalar_result(7))
@@ -665,7 +665,7 @@ class TestRiskAssessmentScopeClause:
         assert "LIKE" in sql
 
     async def test_by_action_applies_key_prefix_and_pipeline_filters(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_scalar_result(0))
@@ -683,7 +683,7 @@ class TestRiskAssessmentRowActions:
     """Per-row gate action resolution from the decision record."""
 
     async def test_resolves_run_and_node_actions_with_severity(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         node_id = uuid.uuid4()
         run_row = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(_RUN_ID))
@@ -713,7 +713,7 @@ class TestRiskAssessmentRowActions:
         assert resolved[node_row.id] == "block"
 
     async def test_no_rows_issues_no_query(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock()
@@ -725,7 +725,7 @@ class TestRiskAssessmentRowActions:
         session.execute.assert_not_awaited()
 
     async def test_degrades_when_run_id_column_missing(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         session = _make_mock_session()
@@ -739,7 +739,7 @@ class TestRiskAssessmentRowActions:
         assert degraded is True
 
     async def test_reraises_unrelated_programming_error(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         session = _make_mock_session()
@@ -751,7 +751,7 @@ class TestRiskAssessmentRowActions:
             await mod._load_risk_assessment_row_actions(session, _ORG_ID, [row])
 
     async def test_malformed_subjects_are_skipped(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         rows = [
             _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id="not-a-uuid"),
@@ -769,7 +769,7 @@ class TestRiskAssessmentRowActions:
         session.execute.assert_not_awaited()
 
     async def test_mixed_valid_and_malformed_rows_resolve_the_valid_ones(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         valid = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(_RUN_ID))
         unmatched = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(uuid.uuid4()))
@@ -786,7 +786,7 @@ class TestRiskAssessmentRowActions:
         assert resolved == {valid.id: "warn"}
 
     def test_most_severe_ordering(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         assert mod._most_severe(None, "continue") == "continue"
         assert mod._most_severe("continue", "escalate") == "escalate"
@@ -854,7 +854,7 @@ class TestRiskAssessmentSupportingEvidenceHelpers:
     """Cover the shared evidence and redaction paths used by this projection."""
 
     async def test_load_evidence_rows_supports_run_node_and_exact_key_filters(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_rows_result([]))
@@ -870,7 +870,7 @@ class TestRiskAssessmentSupportingEvidenceHelpers:
         assert "evidence.key =" in node_stmt
 
     async def test_load_single_row_and_rules_return_scalar_and_list(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         row = _fake_evidence()
         rule = _fake_rule()
@@ -881,7 +881,7 @@ class TestRiskAssessmentSupportingEvidenceHelpers:
         assert await mod._load_redaction_rules(session, _ORG_ID) == [rule]
 
     async def test_upsert_redaction_rule_creates_and_restores_existing_rule(self) -> None:
-        from modulo.api.routes import evidence as mod
+        from farna.api.routes import evidence as mod
 
         new_rule = _fake_rule()
         session = _make_mock_session()
@@ -904,7 +904,7 @@ class TestRiskAssessmentSupportingEvidenceHelpers:
     def test_redaction_rule_validator_rejects_unknown_and_deduplicates(self) -> None:
         from pydantic import ValidationError
 
-        from modulo.api.routes.evidence import RedactionRuleUpsert
+        from farna.api.routes.evidence import RedactionRuleUpsert
 
         with pytest.raises(ValidationError, match="Unknown redaction class"):
             RedactionRuleUpsert(

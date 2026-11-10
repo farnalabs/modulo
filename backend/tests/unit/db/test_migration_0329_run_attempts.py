@@ -36,14 +36,14 @@ from unittest.mock import MagicMock, patch
 
 import sqlalchemy as sa
 
-from modulo.db.models.run_attempt import (
+from farna.db.models.run_attempt import (
     ATTEMPT_TERMINAL_REASON_SQL,
     ATTEMPT_TERMINAL_REASON_VALUES,
     RunAttempt,
 )
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0329_run_attempts"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0328_evidence_index_aggregate_indexes"

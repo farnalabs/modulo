@@ -16,10 +16,10 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.settings import Settings
+from farna.api.dependencies import get_or_create_engine, get_or_create_session_factory
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.settings import Settings
 
 
 def _safe_output_dir(path: str) -> Path:

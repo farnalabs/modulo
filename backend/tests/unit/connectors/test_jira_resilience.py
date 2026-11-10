@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.jira import JiraConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.jira import JiraConnector
 
 _INSTANCE = "test-domain.atlassian.net"
 _BASE = f"https://{_INSTANCE}/rest/api/3"
@@ -26,7 +26,7 @@ def connector():
 
 def test_compute_delay_includes_jitter():
     """Verify _compute_delay adds random jitter to the backoff."""
-    from modulo.connectors.jira import _compute_delay
+    from farna.connectors.jira import _compute_delay
 
     delays = {_compute_delay(0) for _ in range(100)}
     # With jitter (0-1), each call produces a different value
@@ -35,7 +35,7 @@ def test_compute_delay_includes_jitter():
 
 def test_compute_delay_exponential():
     """Verify _compute_delay increases with attempt number."""
-    from modulo.connectors.jira import _compute_delay
+    from farna.connectors.jira import _compute_delay
 
     d0 = _compute_delay(0)
     d1 = _compute_delay(1)
@@ -45,7 +45,7 @@ def test_compute_delay_exponential():
 
 def test_compute_delay_capped():
     """Verify _compute_delay is capped at _MAX_DELAY (30s)."""
-    from modulo.connectors.jira import _MAX_DELAY, _compute_delay
+    from farna.connectors.jira import _MAX_DELAY, _compute_delay
 
     d = _compute_delay(10)  # would be ~1024s without cap
     assert d <= _MAX_DELAY
@@ -53,7 +53,7 @@ def test_compute_delay_capped():
 
 def test_compute_delay_respects_retry_after():
     """Verify _compute_delay returns Retry-After value when present."""
-    from modulo.connectors.jira import _compute_delay
+    from farna.connectors.jira import _compute_delay
 
     resp = httpx.Response(429, headers={"Retry-After": "5"})
     delay = _compute_delay(0, resp)
@@ -62,7 +62,7 @@ def test_compute_delay_respects_retry_after():
 
 def test_compute_delay_retry_after_capped():
     """Verify _compute_delay caps Retry-After at _MAX_DELAY."""
-    from modulo.connectors.jira import _MAX_DELAY, _compute_delay
+    from farna.connectors.jira import _MAX_DELAY, _compute_delay
 
     resp = httpx.Response(429, headers={"Retry-After": "60"})
     delay = _compute_delay(0, resp)
@@ -182,7 +182,7 @@ async def test_issue_comment_empty_key_rejected(connector):
 
 def test_parse_rate_limit_reset(monkeypatch):
     """X-RateLimit-Reset (epoch seconds) becomes a positive wait delay."""
-    from modulo.connectors.jira import _parse_rate_limit_reset
+    from farna.connectors.jira import _parse_rate_limit_reset
 
     monkeypatch.setattr("time.time", lambda: 1_000_000)
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"})
@@ -192,7 +192,7 @@ def test_parse_rate_limit_reset(monkeypatch):
 
 def test_parse_rate_limit_reset_missing(monkeypatch):
     """No X-RateLimit-Reset header -> None (blind backoff fallback)."""
-    from modulo.connectors.jira import _parse_rate_limit_reset
+    from farna.connectors.jira import _parse_rate_limit_reset
 
     monkeypatch.setattr("time.time", lambda: 1_000_000)
     assert _parse_rate_limit_reset(httpx.Response(429)) is None
@@ -200,7 +200,7 @@ def test_parse_rate_limit_reset_missing(monkeypatch):
 
 def test_parse_rate_limit_reset_invalid():
     """Non-numeric X-RateLimit-Reset -> None."""
-    from modulo.connectors.jira import _parse_rate_limit_reset
+    from farna.connectors.jira import _parse_rate_limit_reset
 
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "not-a-number"})
     assert _parse_rate_limit_reset(resp) is None
@@ -208,7 +208,7 @@ def test_parse_rate_limit_reset_invalid():
 
 def test_parse_rate_limit_reset_in_the_past(monkeypatch):
     """A reset epoch already elapsed -> None (no point waiting)."""
-    from modulo.connectors.jira import _parse_rate_limit_reset
+    from farna.connectors.jira import _parse_rate_limit_reset
 
     monkeypatch.setattr("time.time", lambda: 1_000_000)
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "999999"})
@@ -217,7 +217,7 @@ def test_parse_rate_limit_reset_in_the_past(monkeypatch):
 
 def test_rate_limit_detail_summarises_headers():
     """Quota headers are summarised for error/health detail strings."""
-    from modulo.connectors.jira import _rate_limit_detail
+    from farna.connectors.jira import _rate_limit_detail
 
     resp = httpx.Response(
         429,
@@ -231,14 +231,14 @@ def test_rate_limit_detail_summarises_headers():
 
 def test_rate_limit_detail_empty_when_absent():
     """No rate-limit headers -> empty detail string."""
-    from modulo.connectors.jira import _rate_limit_detail
+    from farna.connectors.jira import _rate_limit_detail
 
     assert not _rate_limit_detail(httpx.Response(429))
 
 
 def test_rate_limit_metadata_only_present_headers():
     """Only headers actually on the response are surfaced."""
-    from modulo.connectors.jira import _rate_limit_metadata
+    from farna.connectors.jira import _rate_limit_metadata
 
     resp = httpx.Response(200, headers={"X-RateLimit-Remaining": "42"})
     assert _rate_limit_metadata(resp) == {"X-RateLimit-Remaining": "42"}
@@ -314,7 +314,7 @@ async def test_429_exhausted_includes_quota_detail(connector, monkeypatch):
 
 def test_safe_int_non_finite_float_returns_default():
     """inf/nan floats must not crash pagination (int(inf) raises OverflowError)."""
-    from modulo.connectors.jira import _safe_int
+    from farna.connectors.jira import _safe_int
 
     assert _safe_int(float("inf"), 7) == 7
     assert _safe_int(float("-inf"), 7) == 7
@@ -323,7 +323,7 @@ def test_safe_int_non_finite_float_returns_default():
 
 def test_safe_int_rejects_bool_and_wrong_types():
     """Booleans and non-numeric types fall back to default (True == 1 is a footgun)."""
-    from modulo.connectors.jira import _safe_int
+    from farna.connectors.jira import _safe_int
 
     assert _safe_int(True, 7) == 7
     assert _safe_int(False, 7) == 7
@@ -333,7 +333,7 @@ def test_safe_int_rejects_bool_and_wrong_types():
 
 def test_safe_int_rejects_unparseable_strings():
     """Garbage strings (incl. 'inf'/'nan') fall back to default."""
-    from modulo.connectors.jira import _safe_int
+    from farna.connectors.jira import _safe_int
 
     assert _safe_int("not-a-number", 7) == 7
     assert _safe_int("inf", 7) == 7
@@ -342,7 +342,7 @@ def test_safe_int_rejects_unparseable_strings():
 
 def test_safe_int_coerces_valid_values():
     """Numeric strings, ints, and finite floats coerce to int."""
-    from modulo.connectors.jira import _safe_int
+    from farna.connectors.jira import _safe_int
 
     assert _safe_int("42", 7) == 42
     assert _safe_int(42, 7) == 42

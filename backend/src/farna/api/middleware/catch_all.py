@@ -1,0 +1,133 @@
+import logging
+import os
+import threading
+from collections.abc import Awaitable, Callable
+from contextvars import Token
+from typing import Any
+
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+from farna.api.models.problem import ProblemDetail, ProblemType
+from farna.core.logging_config import correlation_id_var, org_id_var
+from farna.version import get_version
+
+logger = logging.getLogger(__name__)
+
+_unhandled_exception_count: int = 0
+_unhandled_count_lock = threading.Lock()
+
+
+def _bind_request_org(request: Request) -> Token[str | None] | None:
+    """Bind the request's organisation into ``org_id_var`` for this error path (FAR-1417).
+
+    This middleware sits OUTSIDE the route's task context (BaseHTTPMiddleware
+    runs the downstream app in its own task), so the value the auth dependency
+    bound in the route's context is invisible here — an ERROR logged from this
+    ``except`` would otherwise be dropped for want of an organisation, which is
+    exactly the diagnostic this middleware exists to emit. ``request.state`` is
+    ASGI-scope-backed and therefore shared with every layer, so re-bind from it
+    before logging.
+
+    Returns the ``org_id_var`` token for the caller's ``finally`` reset, or
+    ``None`` when no organisation was ever resolved (pre-auth failures stay
+    stdout-only — see ``ErrorTrackingLogHandler.emit``).
+    """
+    org_id = getattr(request.state, "organisation_id", None)
+    if org_id is None:
+        return None
+    return org_id_var.set(str(org_id))
+
+
+class CatchAllMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        try:
+            return await call_next(request)
+        except HTTPException:
+            raise
+        except Exception:
+            global _unhandled_exception_count
+            with _unhandled_count_lock:
+                _unhandled_exception_count += 1
+
+            rid = getattr(request.state, "request_id", None)
+            org_token = _bind_request_org(request)
+            try:
+                logger.exception(
+                    "middleware.unhandled_exception",
+                    extra={
+                        "method": request.method,
+                        "path": str(request.url.path),
+                        "request_id": rid,
+                        "total_unhandled": _unhandled_exception_count,
+                    },
+                )
+                try:
+                    await _ingest_unhandled_error(request)
+                except Exception:
+                    # Best-effort ingest must never abort the 500 response. The helper
+                    # swallows most failures internally, but this guard guarantees the
+                    # catch-all contract (a structured 500 for every unhandled
+                    # exception) even if the ingest path itself raises.
+                    logger.exception("middleware.error_ingest_dispatch_failed")
+                return _make_500_response(rid)
+            finally:
+                if org_token is not None:
+                    org_id_var.reset(org_token)
+
+
+async def _ingest_unhandled_error(request: Request) -> None:
+    """Best-effort ingest of unhandled exceptions to error tracking."""
+    try:
+        from farna.api.dependencies import (
+            get_or_create_engine,
+            get_or_create_session_factory,
+        )
+        from farna.core.error_tracking import ErrorIngestionService
+        from farna.db.rls import set_rls_org
+        from farna.settings import get_settings
+
+        settings = get_settings()
+        engine = get_or_create_engine(settings)
+        factory = get_or_create_session_factory(engine)
+
+        org_id = getattr(request.state, "organisation_id", None)
+        user_id = getattr(request.state, "user_id", None)
+        correlation_id = correlation_id_var.get()
+
+        event_data: dict[str, Any] = {
+            "level": "error",
+            "message": f"Unhandled exception: {request.method} {request.url.path}",
+            "source": "backend",
+            "context_json": {
+                "method": request.method,
+                "path": str(request.url.path),
+                "correlation_id": correlation_id,
+                "user_id": str(user_id) if user_id else None,
+            },
+            "environment": os.environ.get("MODULO_ENV", "development"),
+            "version": get_version(),
+        }
+
+        service = ErrorIngestionService()
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            if org_id is not None:
+                await service.ingest(session, org_id, event_data)
+    except Exception:
+        logger.exception("middleware.error_ingest_failed")
+
+
+def _make_500_response(request_id: str | None) -> JSONResponse:
+    """Build a 500 response, defensively handling serialisation failures."""
+    try:
+        return ProblemDetail.from_type(
+            problem_type=ProblemType.INTERNAL_ERROR,
+            detail="An unexpected error occurred",
+            request_id=request_id,
+        ).to_response()
+    except Exception:
+        logger.exception("middleware.error_response_failed")
+        return ProblemDetail.fallback_internal_error(request_id)

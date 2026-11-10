@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.core.lifecycle_map.service import (
+from farna.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
     get_lifecycle_map,
@@ -15,8 +15,8 @@ from modulo.core.lifecycle_map.service import (
     restore_lifecycle_map,
     update_lifecycle_map,
 )
-from modulo.db.crud.base import PageResult
-from modulo.db.models.lifecycle_map import LifecycleMap
+from farna.db.crud.base import PageResult
+from farna.db.models.lifecycle_map import LifecycleMap
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -69,7 +69,7 @@ def _compiled_sql(statement: object) -> str:
 
 async def test_create_lifecycle_map_passes_all_fields(session: AsyncMock) -> None:
     created = _make_map()
-    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
+    with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
         result = await create_lifecycle_map(
             session,
             org_id=_ORG_ID,
@@ -100,7 +100,7 @@ async def test_create_lifecycle_map_passes_all_fields(session: AsyncMock) -> Non
 
 
 async def test_create_lifecycle_map_defaults(session: AsyncMock) -> None:
-    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=_make_map()) as model_cls:
+    with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=_make_map()) as model_cls:
         await create_lifecycle_map(session, org_id=_ORG_ID, name="Default", account_id=_ACCOUNT_ID)
 
     _, kwargs = model_cls.call_args
@@ -112,7 +112,7 @@ async def test_create_lifecycle_map_defaults(session: AsyncMock) -> None:
 
 
 async def test_create_lifecycle_map_none_content_becomes_empty_dict(session: AsyncMock) -> None:
-    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=_make_map()) as model_cls:
+    with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=_make_map()) as model_cls:
         await create_lifecycle_map(session, org_id=_ORG_ID, name="Empty", account_id=_ACCOUNT_ID, content_json=None)
 
     assert not model_cls.call_args.kwargs["content_json"]

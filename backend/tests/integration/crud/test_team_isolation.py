@@ -73,7 +73,7 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
     user_a = await _create_user(db_engine, org_a, "alice@team-iso.com")
     user_b = await _create_user(db_engine, org_b, "bob@team-iso.com")
 
-    from modulo.db.crud.team import create_team, list_teams
+    from farna.db.crud.team import create_team, list_teams
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -117,7 +117,7 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
     org = await _create_org(db_engine, f"unique-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "unique@test.com")
 
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -167,8 +167,8 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
     user_a2 = await _create_user(db_engine, org_a, "mem-a2@test.com")
     user_b = await _create_user(db_engine, org_b, "mem-b@test.com")
 
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member, list_team_members
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member, list_team_members
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -209,8 +209,8 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
     org = await _create_org(db_engine, f"dup-mem-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "dup@test.com")
 
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -236,7 +236,7 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
     org = await _create_org(db_engine, f"crud-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "crud@test.com")
 
-    from modulo.db.crud.team import (
+    from farna.db.crud.team import (
         create_team,
         delete_team,
         get_team,
@@ -289,7 +289,7 @@ async def test_soft_deleted_team_hidden_but_row_persists(db_engine: AsyncEngine)
     org = await _create_org(db_engine, f"softdel-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "softdel@test.com")
 
-    from modulo.db.crud.team import create_team, delete_team, get_team, get_team_by_name, list_teams
+    from farna.db.crud.team import create_team, delete_team, get_team, get_team_by_name, list_teams
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -325,7 +325,7 @@ async def test_team_name_reusable_after_soft_delete(db_engine: AsyncEngine) -> N
     org = await _create_org(db_engine, f"reuse-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "reuse@test.com")
 
-    from modulo.db.crud.team import create_team, delete_team
+    from farna.db.crud.team import create_team, delete_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -351,8 +351,8 @@ async def test_scim_list_groups_excludes_soft_deleted_teams(db_engine: AsyncEngi
     org = await _create_org(db_engine, f"scim-softdel-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "scim-softdel@test.com")
 
-    from modulo.db.crud.scim import scim_list_groups
-    from modulo.db.crud.team import create_team, delete_team
+    from farna.db.crud.scim import scim_list_groups
+    from farna.db.crud.team import create_team, delete_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -382,8 +382,8 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
     user_a = await _create_user(db_engine, org, "mem-crud-a@test.com")
     user_b = await _create_user(db_engine, org, "mem-crud-b@test.com")
 
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import (
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import (
         add_team_member,
         get_membership,
         get_membership_by_team_and_account,
@@ -432,7 +432,7 @@ async def test_count_owned_resources_reflects_resource_ownership(db_engine: Asyn
     org = await _create_org(db_engine, f"owned-cnt-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "owned-cnt@test.com")
 
-    from modulo.db.crud.team import count_owned_resources, create_team
+    from farna.db.crud.team import count_owned_resources, create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -527,7 +527,7 @@ async def test_notification_endpoints_persist_after_team_soft_delete(db_engine: 
     org = await _create_org(db_engine, f"ne-softdel-{uuid.uuid4().hex[:8]}")
     user = await _create_user(db_engine, org, "ne-softdel@test.com")
 
-    from modulo.db.crud.team import create_team, delete_team
+    from farna.db.crud.team import create_team, delete_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 

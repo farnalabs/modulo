@@ -12,8 +12,8 @@ from unittest.mock import MagicMock
 from sqlalchemy import select
 from sqlalchemy.orm import ORMExecuteState
 
-from modulo.db.models.agent import Agent
-from modulo.db.soft_delete import _apply_soft_delete_filter, include_soft_deleted
+from farna.db.models.agent import Agent
+from farna.db.soft_delete import _apply_soft_delete_filter, include_soft_deleted
 
 
 def _make_fake_state(

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.api.mcp_server as ms
+import farna.api.mcp_server as ms
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -47,7 +47,7 @@ def _set_credential(*, auth_type: str = "jwt") -> None:
 
 @pytest.fixture(autouse=True)
 def _ctx() -> Any:
-    from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
+    from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
 
     _set_credential()
     ms._ctx_user_keys_enabled.set(False)
@@ -92,7 +92,7 @@ class TestMcpMintAudit:
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="admin")),
             patch.object(ms, "auth_create_api_key", new=AsyncMock(return_value=(key, "mk_full"))),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit) as append,
+            patch("farna.core.audit_logger.append_audit_event", new=audit) as append,
         ):
             result = await ms.create_api_key(name="CI Key", role="runner")
         assert "error" not in result
@@ -128,7 +128,7 @@ class TestMcpMintAudit:
             patch.object(ms, "_session", new=MagicMock(side_effect=_factory)),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="admin")),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new=AsyncMock(side_effect=RuntimeError("audit boom")),
             ),
         ):
@@ -154,7 +154,7 @@ class TestMcpRevokeAudit:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", new=MagicMock(side_effect=_factory)),
             patch.object(ms, "auth_revoke_api_key", new=revoke),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit) as append,
+            patch("farna.core.audit_logger.append_audit_event", new=audit) as append,
         ):
             kid = key.id
             result = await ms.revoke_api_key(key_id=str(kid))
@@ -185,7 +185,7 @@ class TestMcpRevokeAudit:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", new=MagicMock(side_effect=_factory)),
             patch.object(ms, "auth_revoke_api_key", new=AsyncMock(return_value=None)),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             result = await ms.revoke_api_key(key_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"

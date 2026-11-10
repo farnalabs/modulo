@@ -56,11 +56,11 @@ def configure_openai(model: str, key: str, client, request):
     request.node._configured_backend = ("openai", model)
     with (
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             return_value=_make_mock_backend(name=f"openai-{model}", provider="openai", model_id=model),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -85,11 +85,11 @@ def configure_anthropic(model: str, key: str, client, request):
     request.node._configured_backend = ("anthropic", model)
     with (
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             return_value=_make_mock_backend(name=f"anthropic-{model}", provider="anthropic", model_id=model),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -109,11 +109,11 @@ def configure_stub(client, request):
     request.node._configured_backend = ("stub", "stub")
     with (
         patch(
-            "modulo.api.routes.model_backends.create_model_backend",
+            "farna.api.routes.model_backends.create_model_backend",
             return_value=_make_mock_backend(name="stub-backend", provider="stub", model_id="stub"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -134,15 +134,15 @@ def get_model_backends(client, request):
     mock_backend = _make_mock_backend(name=f"{provider}-{model}", provider=provider, model_id=model)
     with (
         patch(
-            "modulo.api.routes.model_backends.list_model_backends",
+            "farna.api.routes.model_backends.list_model_backends",
             return_value=_page_result([mock_backend]),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
         # FAR-2046: a read now resolves each backend's stored base_url from the
         # credential JSON; stub the secrets backend (this suite's settings use a
         # non-Fernet key and no credential read is under test here).
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = client.get("/api/v1/model-backends")
     request.node._resp = resp
@@ -183,15 +183,15 @@ def org_has_model_backend(org: str, name: str, model: str, request):
 @when(parsers.parse('I PATCH /api/model-backends/{name} with model "{model}"'))
 def patch_model_backend(name: str, model: str, client, request):
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_mock_backend(name=name)),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_mock_backend(name=name)),
         patch(
-            "modulo.api.routes.model_backends.update_model_backend",
+            "farna.api.routes.model_backends.update_model_backend",
             return_value=_make_mock_backend(name=name, model_id=model),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
         # FAR-2046: the update merges the stored base_url beside the API key.
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_backend_id_for(name)}", json={"model_id": model})
     request.node._resp = resp
@@ -286,23 +286,23 @@ def _post_health_check(request, mb, health_status, health_detail):
     """
     with (
         patch(
-            "modulo.api.routes.model_backends.get_model_backend",
+            "farna.api.routes.model_backends.get_model_backend",
             new=AsyncMock(return_value=mb),
         ),
         patch(
-            "modulo.api.routes.model_backends.decode_stored_secret_scoped",
+            "farna.api.routes.model_backends.decode_stored_secret_scoped",
             new=AsyncMock(return_value=getattr(request.node, "_mb_api_key", None)),
         ),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save_and_persist",
+            "farna.api.routes.model_backends._run_health_check_on_save_and_persist",
             new=AsyncMock(return_value=(health_status, health_detail)),
         ) as mock_health,
-        patch("modulo.api.routes.model_backends.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.model_backends.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
         # FAR-2046: the re-check also reads the stored base_url from the
         # credential JSON; stub the secrets backend (the test fernet key is not
         # a real Fernet key and no credential read is under test here).
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         resp = request.node._client.post(f"/api/v1/model-backends/{mb.id}/health-check")
     request.node._resp = resp
@@ -323,11 +323,11 @@ def check_health_of(name: str, client, request):
     mb = _make_mock_backend(name=name)
     with (
         patch(
-            "modulo.api.routes.model_backends.get_model_backend",
+            "farna.api.routes.model_backends.get_model_backend",
             new=AsyncMock(return_value=None),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.model_backends.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.model_backends.set_rls_user_context", new=AsyncMock()),
     ):
         resp = request.node._client.post(f"/api/v1/model-backends/{mb.id}/health-check")
     request.node._resp = resp

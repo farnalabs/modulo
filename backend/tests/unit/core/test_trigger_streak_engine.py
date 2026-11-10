@@ -37,8 +37,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
-from modulo.core import trigger_streak as ts
+from farna.core import cron_helpers as ch
+from farna.core import trigger_streak as ts
 from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
@@ -354,7 +354,7 @@ class TestMigrationBackfillGrace:
 
         from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-        versions_dir = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+        versions_dir = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
         source = (versions_dir / "0110_schema_pipeline_runtime.py").read_text(encoding="utf-8")
         # The reconciliation DDL adds the column with a server default (backfill).
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
@@ -485,7 +485,7 @@ class TestDeactivationAuditLabels:
         session = _RoutedSession()
         with (
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts.record_ongoing_deactivation_lifecycle(
                 session,
@@ -507,7 +507,7 @@ class TestDeactivationAuditLabels:
         with (
             patch.object(ch, "_open_factory", return_value=factory),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts._record_streak_notify_failed(ORG, data=_deactivated_data(), threshold=5, reason="no_delivery")
         assert append.await_count == 1
@@ -522,7 +522,7 @@ class TestDeactivationAuditLabels:
         with (
             patch.object(ch, "_open_factory", return_value=factory),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts._record_streak_mass_cascade(ORG, count=12)
         assert append.await_count == 1
@@ -839,7 +839,7 @@ class TestNotifyStreakDeactivation:
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _FakeNotifier),
+            patch("farna.core.notifier.Notifier", _FakeNotifier),
         ):
             ok = await ts._notify_streak_deactivation(
                 ORG,
@@ -874,7 +874,7 @@ class TestNotifyStreakDeactivation:
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _FakeNotifier),
+            patch("farna.core.notifier.Notifier", _FakeNotifier),
         ):
             await ts._notify_streak_deactivation(
                 ORG,
@@ -903,7 +903,7 @@ class TestNotifyStreakDeactivation:
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _RaisingNotifier),
+            patch("farna.core.notifier.Notifier", _RaisingNotifier),
             patch.object(ts, "_record_streak_notify_failed", new_callable=AsyncMock) as record_failed,
             patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as write_pending,
         ):
@@ -932,14 +932,14 @@ class TestNotifyStreakDeactivation:
                 pass
 
             async def dispatch_event(self, *args: Any, **kwargs: Any) -> list[Any]:
-                from modulo.core.notifier import DispatchResult
+                from farna.core.notifier import DispatchResult
 
                 return [DispatchResult(endpoint_id=uuid.uuid4(), status="dead_lettered", attempt_count=4)]
 
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _DeadLetterNotifier),
+            patch("farna.core.notifier.Notifier", _DeadLetterNotifier),
             patch.object(ts, "_record_streak_notify_failed", new_callable=AsyncMock) as record_failed,
             patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as write_pending,
         ):
@@ -965,14 +965,14 @@ class TestNotifyStreakDeactivation:
                 pass
 
             async def dispatch_event(self, *args: Any, **kwargs: Any) -> list[Any]:
-                from modulo.core.notifier import DispatchResult
+                from farna.core.notifier import DispatchResult
 
                 return [DispatchResult(endpoint_id=uuid.uuid4(), status="delivered", attempt_count=1)]
 
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _DeliveredNotifier),
+            patch("farna.core.notifier.Notifier", _DeliveredNotifier),
             patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as write_pending,
         ):
             ok = await ts._notify_streak_deactivation(
@@ -1004,7 +1004,7 @@ class TestNotifyStreakDeactivation:
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ts, "_STREAK_NOTIFY_TIMEOUT_SECONDS", 0.05),
-            patch("modulo.core.notifier.Notifier", _HangingNotifier),
+            patch("farna.core.notifier.Notifier", _HangingNotifier),
             patch.object(ts, "_record_streak_notify_failed", new_callable=AsyncMock) as record_failed,
             patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as write_pending,
         ):
@@ -1037,7 +1037,7 @@ class TestNotifyStreakDeactivation:
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _RaisingNotifier),
+            patch("farna.core.notifier.Notifier", _RaisingNotifier),
             patch.object(ts, "_record_streak_notify_failed", new_callable=AsyncMock) as record_failed,
             patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as write_pending,
         ):
@@ -1315,10 +1315,10 @@ class TestReenableAnchor:
         session = _RoutedSession()
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new_callable=AsyncMock),
+            patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new_callable=AsyncMock),
         ):
-            from modulo.core.cost_controller import reset_pipeline_circuit_breaker
-            from modulo.db.models.pipeline import Pipeline
+            from farna.core.cost_controller import reset_pipeline_circuit_breaker
+            from farna.db.models.pipeline import Pipeline
 
             pipeline = MagicMock(spec=Pipeline)
             pipeline.circuit_breaker_tripped = True
@@ -1366,11 +1366,11 @@ class TestReenableAnchor:
         session = _RoutedSession()
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new_callable=AsyncMock),
+            patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new_callable=AsyncMock),
             patch.object(ts, "clear_trigger_streak_after_reenable", new_callable=AsyncMock) as clear,
         ):
-            from modulo.core.cost_controller import reset_pipeline_circuit_breaker
-            from modulo.db.models.pipeline import Pipeline
+            from farna.core.cost_controller import reset_pipeline_circuit_breaker
+            from farna.db.models.pipeline import Pipeline
 
             pipeline = MagicMock(spec=Pipeline)
             pipeline.circuit_breaker_tripped = True
@@ -2168,7 +2168,7 @@ class TestCronTripClaim:
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             out = await ts._claim_cron_streak_alert(
                 factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
@@ -2188,7 +2188,7 @@ class TestCronTripClaim:
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             out = await ts._claim_cron_streak_alert(
                 factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=window_cutoff
@@ -2211,7 +2211,7 @@ class TestCronTripClaim:
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             out = await ts._claim_cron_streak_alert(
                 factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
@@ -2241,7 +2241,7 @@ class TestCronTripClaim:
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             out = await ts._claim_cron_streak_alert(
                 factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
@@ -2477,7 +2477,7 @@ class TestCronAuditStreams:
         session = _RoutedSession()
         with (
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts.record_ongoing_deactivation_lifecycle(
                 session,
@@ -2496,7 +2496,7 @@ class TestCronAuditStreams:
         # The ongoing default is byte-identical to the pre-FAR-1387 stream.
         with (
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts.record_ongoing_deactivation_lifecycle(
                 session, org_id=ORG, trigger_id=TRIGGER_ID, streak=5, threshold=5, reason="no_delivery"
@@ -2516,7 +2516,7 @@ class TestCronAuditStreams:
             with (
                 patch.object(ch, "_open_factory", return_value=factory),
                 patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-                patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+                patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
             ):
                 await ts._record_streak_notify_failed(ORG, data=data, threshold=5, reason="no_delivery")
             assert append.await_args.kwargs["event_type"] == expected
@@ -2527,7 +2527,7 @@ class TestCronAuditStreams:
         with (
             patch.object(ch, "_open_factory", return_value=factory),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
             await ts._record_streak_mass_cascade(ORG, 6, trigger_type="cron")
         assert append.await_args.kwargs["event_type"] == ts.CRON_STREAK_MASS_CASCADE_EVENT_TYPE
@@ -2570,7 +2570,7 @@ class TestCronNotifyPayload:
         with (
             patch.object(ch, "_get_engine", return_value=MagicMock()),
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.notifier.Notifier", _FakeNotifier),
+            patch("farna.core.notifier.Notifier", _FakeNotifier),
         ):
             ok = await ts._notify_streak_deactivation(
                 ORG,
@@ -2614,12 +2614,12 @@ class TestCronNotifyPayload:
 
     async def _render(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str]:
         """Render the ACTUAL dispatched payload through the real mapper."""
-        from modulo.core.notifier.event_mapper import NotificationEventMapper
-        from modulo.db.models.notification import Notification
+        from farna.core.notifier.event_mapper import NotificationEventMapper
+        from farna.db.models.notification import Notification
 
         session = AsyncMock()
         with patch(
-            "modulo.core.notifier.event_mapper.create_notification",
+            "farna.core.notifier.event_mapper.create_notification",
             new_callable=AsyncMock,
             return_value=MagicMock(spec=Notification),
         ) as mock_create:

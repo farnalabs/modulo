@@ -1,7 +1,7 @@
 """FAR-1825 structural guard: every swept category-C CRUD lock stays bounded.
 
 The FAR-1801 lock-point inventory (``docs/architecture/lock-point-inventory.md``)
-enumerates the row locks in ``backend/src/modulo``. Its §3 category **C** (entity
+enumerates the row locks in ``backend/src/farna``. Its §3 category **C** (entity
 CRUD) sites run in a CALLER-owned transaction, so they are only as bounded as
 their least careful caller. FAR-1825 swept the sites a request path can reach
 and gave each one a transaction-scoped ``set_mutation_row_lock_timeout`` (the
@@ -71,7 +71,7 @@ from tests.unit._source_scan import iter_source_text
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
-_SRC = _BACKEND_ROOT / "src" / "modulo"
+_SRC = _BACKEND_ROOT / "src" / "farna"
 _BOUND_FUNC = "set_mutation_row_lock_timeout"
 _LOCK_ATTR = "with_for_update"
 _LOCK_KWARG = "with_for_update"
@@ -221,16 +221,16 @@ _SWEPT_HELPER_MODULES: dict[str, frozenset[str]] = {
     # listing it discovered nothing. ``update_account_preferences`` /
     # ``set_hitl_email_preference`` are what ``api/routes/me.py`` and
     # ``api/routes/in_app_notifications.py`` actually call.
-    "modulo.db.crud.account": frozenset({"update_account_preferences", "set_hitl_email_preference"}),
-    "modulo.db.crud.agent": frozenset({"add_prompt_version", "rollback_prompt_version"}),
-    "modulo.db.crud.agent_runner_binding": frozenset({"replace_agent_bindings"}),
-    "modulo.db.crud.invitations": frozenset({"get_live_for_email", "get_valid_by_token_hash"}),
-    "modulo.db.crud.node_observation": frozenset({"observe_node"}),
-    "modulo.db.crud.parameter_schema": frozenset({"update_schema"}),
-    "modulo.db.crud.parameter_set": frozenset({"update_set"}),
-    "modulo.db.crud.sso_provider": frozenset({"create_provider", "update_provider"}),
-    "modulo.core.lifecycle_map.service": frozenset({"update_lifecycle_map", "save_map_version", "graduate_stage"}),
-    "modulo.core.assistant.context_source_service": frozenset({"set_user_override", "set_org_default"}),
+    "farna.db.crud.account": frozenset({"update_account_preferences", "set_hitl_email_preference"}),
+    "farna.db.crud.agent": frozenset({"add_prompt_version", "rollback_prompt_version"}),
+    "farna.db.crud.agent_runner_binding": frozenset({"replace_agent_bindings"}),
+    "farna.db.crud.invitations": frozenset({"get_live_for_email", "get_valid_by_token_hash"}),
+    "farna.db.crud.node_observation": frozenset({"observe_node"}),
+    "farna.db.crud.parameter_schema": frozenset({"update_schema"}),
+    "farna.db.crud.parameter_set": frozenset({"update_set"}),
+    "farna.db.crud.sso_provider": frozenset({"create_provider", "update_provider"}),
+    "farna.core.lifecycle_map.service": frozenset({"update_lifecycle_map", "save_map_version", "graduate_stage"}),
+    "farna.core.assistant.context_source_service": frozenset({"set_user_override", "set_org_default"}),
 }
 _SWEPT_HELPER_NAMES: frozenset[str] = frozenset(name for names in _SWEPT_HELPER_MODULES.values() for name in names)
 _HANDLE_DB_ERRORS_NAME = "handle_db_errors"
@@ -295,7 +295,7 @@ _NO_PRODUCTION_CALLER = (
     ("db/crud/node_composite.py", "set_parent_node"),
     ("core/workflow_import_export/__init__.py", "_get_existing_names"),
 )
-_NODE_COMPOSITE_MODULE = "modulo.db.crud.node_composite"
+_NODE_COMPOSITE_MODULE = "farna.db.crud.node_composite"
 _SET_PARENT_SYMBOL = "set_parent_node"
 
 
@@ -861,7 +861,7 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     # 1. `from X import helper` — the plain Name shape (me.py).
     source = textwrap.dedent(
         """
-        from modulo.db.crud.account import update_account_preferences
+        from farna.db.crud.account import update_account_preferences
 
         async def handler(session):
             await update_account_preferences(session, account_id=uuid.UUID(int=0))
@@ -869,12 +869,12 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
-    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+    assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
     # 1b. Same shape with an alias binding (asname).
     source = textwrap.dedent(
         """
-        from modulo.db.crud.account import update_account_preferences as update_prefs
+        from farna.db.crud.account import update_account_preferences as update_prefs
 
         async def handler(session):
             await update_prefs(session)
@@ -882,12 +882,12 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
-    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+    assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
     # 2. `from X import module as m` where X.module is itself a module.
     source = textwrap.dedent(
         """
-        from modulo.db.crud import account as account_module
+        from farna.db.crud import account as account_module
 
         async def handler(session):
             await account_module.update_account_preferences(session)
@@ -895,13 +895,13 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
-    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+    assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
     # 3. `import X.y.z` bare — binds the ROOT package, so the dotted receiver
     #    must NOT be double-prefixed (the historical resolver bug).
     source = textwrap.dedent(
         """
-        import modulo.db.crud.account
+        import farna.db.crud.account
 
         async def handler(session):
             await modulo.db.crud.account.update_account_preferences(session)
@@ -909,13 +909,13 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
-    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+    assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
     # 3b. Same bare import: a call through the root alone (`modulo.helper()`)
     #     resolves to owner "modulo", which is not a swept module — no hit.
     source = textwrap.dedent(
         """
-        import modulo.db.crud.account
+        import farna.db.crud.account
 
         async def handler(session):
             await modulo.update_account_preferences(session)
@@ -928,7 +928,7 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     # 4. `import X.y.z as alias` — pypi-style module alias (admin.py).
     source = textwrap.dedent(
         """
-        import modulo.db.crud.account as account_crud
+        import farna.db.crud.account as account_crud
 
         async def handler(session):
             await account_crud.update_account_preferences(session)
@@ -936,13 +936,13 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
-    assert _swept_helper_calls(function, module) == {"modulo.db.crud.account.update_account_preferences"}
+    assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
     # Negatives: a non-swept attribute on a swept owner is not a hit, and an
     # attribute call in a module that imports nothing swept is not a hit.
     source = textwrap.dedent(
         """
-        from modulo.db.crud import account as account_module
+        from farna.db.crud import account as account_module
 
         async def handler(session):
             await account_module.unrelated_helper(session)
@@ -979,7 +979,7 @@ def test_same_file_helper_hops_still_attribute_the_request_arm() -> None:
     """
     source = textwrap.dedent(
         """
-        from modulo.db.crud.account import update_account_preferences
+        from farna.db.crud.account import update_account_preferences
 
         @router.put("/providers/{provider_id}")
         async def arm_one_hop(session):
@@ -1000,7 +1000,7 @@ def test_same_file_helper_hops_still_attribute_the_request_arm() -> None:
         """
     )
     discovered = _swept_callers_in_module("api/routes/synthetic.py", ast.parse(source))
-    swept = {"modulo.db.crud.account.update_account_preferences"}
+    swept = {"farna.db.crud.account.update_account_preferences"}
 
     assert discovered[("api/routes/synthetic.py", "arm_one_hop")] == swept
     assert discovered[("api/routes/synthetic.py", "arm_two_hops")] == swept
@@ -1061,7 +1061,7 @@ def test_mapping_verdict_pins_the_helper_skip_and_the_local_arm_rule() -> None:
     """
     source = textwrap.dedent(
         """
-        from modulo.db.crud.account import update_account_preferences
+        from farna.db.crud.account import update_account_preferences
 
         @router.put("/providers/{provider_id}")
         async def arm_without_classifier(session):
@@ -1091,7 +1091,7 @@ def test_mapping_verdict_pins_the_helper_skip_and_the_local_arm_rule() -> None:
     )
     module = ast.parse(source)
     rel = "api/routes/synthetic.py"
-    swept = {"modulo.db.crud.account.update_account_preferences"}
+    swept = {"farna.db.crud.account.update_account_preferences"}
 
     def verdict(name: str) -> str | None:
         return _mapping_failure(rel, name, swept, _function_node(module, name))
@@ -1261,7 +1261,7 @@ async def test_library_import_inserts_the_map_before_the_first_c20_lock() -> Non
 
     import importlib
 
-    import_export = importlib.import_module("modulo.core.lifecycle_map.import_export")
+    import_export = importlib.import_module("farna.core.lifecycle_map.import_export")
     two_versions = [
         {"version": 1, "stages": [], "edges": [], "notes": ""},
         {"version": 2, "stages": [], "edges": [], "notes": ""},
@@ -1456,7 +1456,7 @@ def _begin_session() -> AsyncMock:
 
 async def test_replace_bindings_route_maps_55p03_to_409() -> None:
     """The agents replace-bindings arm classifies a bounded-lock 55P03."""
-    from modulo.api.routes import agents as agents_routes
+    from farna.api.routes import agents as agents_routes
 
     principal = SimpleNamespace(organisation_id=uuid.uuid4(), account_id=uuid.uuid4(), org_role="admin")
     agent = SimpleNamespace(organisation_id=principal.organisation_id)
@@ -1485,7 +1485,7 @@ async def test_in_app_notifications_update_preferences_maps_55p03_to_409() -> No
     first write (the preference DML) precedes the Account-row lock; a 55P03
     from that first bound must be a 409, not the arm's 500.
     """
-    from modulo.api.routes import in_app_notifications as notification_routes
+    from farna.api.routes import in_app_notifications as notification_routes
 
     principal = SimpleNamespace(organisation_id=uuid.uuid4(), account_id=uuid.uuid4(), org_role="admin")
     req = SimpleNamespace(dashboard_level=None, notification_opt_outs=None)
@@ -1516,7 +1516,7 @@ async def test_observe_node_bounds_the_observation_lock_before_its_query() -> No
     patch ``observe_node`` out — so without this direct test the bound is never
     executed by the unit suite (and the changed-lines gate cannot see it).
     """
-    from modulo.db.crud.node_observation import observe_node
+    from farna.db.crud.node_observation import observe_node
 
     existing = SimpleNamespace(id=uuid.uuid4())
     result = MagicMock()
@@ -1525,7 +1525,7 @@ async def test_observe_node_bounds_the_observation_lock_before_its_query() -> No
     session.execute = AsyncMock(return_value=result)
     bound = AsyncMock()
 
-    with patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", bound):
+    with patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", bound):
         observed = await observe_node(
             session,
             organisation_id=uuid.uuid4(),

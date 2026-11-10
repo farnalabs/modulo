@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.library_service import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -146,11 +146,11 @@ class TestCreateContribution:
 
         with (
             patch(
-                "modulo.api.routes.contributions.contribute_fixture",
+                "farna.api.routes.contributions.contribute_fixture",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 "/api/v1/library/contribute",
@@ -175,11 +175,11 @@ class TestCreateContribution:
 
         with (
             patch(
-                "modulo.api.routes.contributions.contribute_fixture",
+                "farna.api.routes.contributions.contribute_fixture",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 "/api/v1/library/contribute",
@@ -220,11 +220,11 @@ class TestCreateContribution:
 
         with (
             patch(
-                "modulo.api.routes.contributions.contribute_fixture",
+                "farna.api.routes.contributions.contribute_fixture",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_contribute,
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 "/api/v1/library/contribute",
@@ -257,11 +257,11 @@ class TestSubmitForReview:
 
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_for_review",
+                "farna.api.routes.contributions.submit_contribution_for_review",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/submit")
 
@@ -275,11 +275,11 @@ class TestSubmitForReview:
 
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_for_review",
+                "farna.api.routes.contributions.submit_contribution_for_review",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_submit,
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/submit")
 
@@ -290,11 +290,11 @@ class TestSubmitForReview:
     def test_submit_for_review_404(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_for_review",
+                "farna.api.routes.contributions.submit_contribution_for_review",
                 new_callable=AsyncMock,
                 side_effect=ContributionNotFoundError("not found"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{uuid.uuid4()}/submit")
 
@@ -303,11 +303,11 @@ class TestSubmitForReview:
     def test_submit_for_review_409(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_for_review",
+                "farna.api.routes.contributions.submit_contribution_for_review",
                 new_callable=AsyncMock,
                 side_effect=ContributionInvalidTransitionError("already published"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/submit")
 
@@ -320,11 +320,11 @@ class TestPublish:
 
         with (
             patch(
-                "modulo.api.routes.contributions.publish_contribution",
+                "farna.api.routes.contributions.publish_contribution",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish")
 
@@ -340,11 +340,11 @@ class TestPublish:
     def test_publish_contribution_404(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.publish_contribution",
+                "farna.api.routes.contributions.publish_contribution",
                 new_callable=AsyncMock,
                 side_effect=ContributionNotFoundError("not found"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{uuid.uuid4()}/publish")
 
@@ -353,11 +353,11 @@ class TestPublish:
     def test_publish_contribution_409(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.publish_contribution",
+                "farna.api.routes.contributions.publish_contribution",
                 new_callable=AsyncMock,
                 side_effect=ContributionInvalidTransitionError("not in review_queue"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/publish")
 
@@ -375,11 +375,11 @@ class TestListContributions:
 
         with (
             patch(
-                "modulo.api.routes.contributions.list_contributions",
+                "farna.api.routes.contributions.list_contributions",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get("/api/v1/library/contribute")
 
@@ -397,11 +397,11 @@ class TestListContributions:
 
         with (
             patch(
-                "modulo.api.routes.contributions.list_contributions",
+                "farna.api.routes.contributions.list_contributions",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get("/api/v1/library/contribute?page=1&page_size=10")
 
@@ -420,11 +420,11 @@ class TestListContributions:
 
         with (
             patch(
-                "modulo.api.routes.contributions.list_contributions",
+                "farna.api.routes.contributions.list_contributions",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ) as mock_list,
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get("/api/v1/library/contribute?contribution_status=draft")
 
@@ -439,11 +439,11 @@ class TestSubmitVersion:
 
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_version",
+                "farna.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
@@ -466,11 +466,11 @@ class TestSubmitVersion:
 
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_version",
+                "farna.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_version,
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
@@ -488,11 +488,11 @@ class TestSubmitVersion:
     def test_submit_version_404(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_version",
+                "farna.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
                 side_effect=ContributionNotFoundError("not found"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/library/contribute/{uuid.uuid4()}/versions",
@@ -508,11 +508,11 @@ class TestSubmitVersion:
     def test_submit_version_409_for_draft_original(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_version",
+                "farna.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
                 side_effect=ContributionInvalidTransitionError("expected 'published', got 'draft'"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
@@ -530,11 +530,11 @@ class TestSubmitVersion:
 
         with (
             patch(
-                "modulo.api.routes.contributions.submit_contribution_version",
+                "farna.api.routes.contributions.submit_contribution_version",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_version,
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
@@ -564,11 +564,11 @@ class TestListVersions:
 
         with (
             patch(
-                "modulo.api.routes.contributions.list_contribution_versions",
+                "farna.api.routes.contributions.list_contribution_versions",
                 new_callable=AsyncMock,
                 return_value=versions,
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions")
 
@@ -582,11 +582,11 @@ class TestListVersions:
 
         with (
             patch(
-                "modulo.api.routes.contributions.list_contribution_versions",
+                "farna.api.routes.contributions.list_contribution_versions",
                 new_callable=AsyncMock,
                 return_value=[prim],
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions")
 
@@ -598,11 +598,11 @@ class TestListVersions:
     def test_list_versions_404(self, client: TestClient):
         with (
             patch(
-                "modulo.api.routes.contributions.list_contribution_versions",
+                "farna.api.routes.contributions.list_contribution_versions",
                 new_callable=AsyncMock,
                 side_effect=ContributionNotFoundError("not found"),
             ),
-            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get(f"/api/v1/library/contribute/{uuid.uuid4()}/versions")
 

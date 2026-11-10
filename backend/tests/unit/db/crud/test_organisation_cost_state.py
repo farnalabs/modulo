@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.organisation_cost_state import (
+from farna.db.crud.organisation_cost_state import (
     increment_org_cumulative_spend,
     upsert_org_cost_state,
 )

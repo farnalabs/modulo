@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from modulo.connectors._safe_page import safe_paging_total, safe_records
+from farna.connectors._safe_page import safe_paging_total, safe_records
 
 KEYS = ["value", "values"]
 

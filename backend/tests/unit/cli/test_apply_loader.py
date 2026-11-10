@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.cli.apply.loader import ApplyLoadError, load_apply_file, parse_apply_documents
+from farna.cli.apply.loader import ApplyLoadError, load_apply_file, parse_apply_documents
 
 SINGLE_DOC = """
 api_version: modulo.dev/v1

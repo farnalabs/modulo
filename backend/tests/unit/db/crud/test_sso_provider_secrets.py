@@ -9,14 +9,14 @@ from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from modulo.auth.secret_storage import DecryptionError, decode_stored_secret
-from modulo.db.crud.sso_provider import (
+from farna.auth.secret_storage import DecryptionError, decode_stored_secret
+from farna.db.crud.sso_provider import (
     _slugify_provider_id,
     _unique_provider_id,
     create_provider,
     update_provider,
 )
-from modulo.db.models.sso_provider import SsoProvider
+from farna.db.models.sso_provider import SsoProvider
 
 
 def test_slugify_symbol_only_or_empty_name_defaults_to_sso() -> None:
@@ -46,7 +46,7 @@ async def test_create_provider_encrypts_client_secret() -> None:
     result.scalar_one_or_none.return_value = None
     session.execute.return_value = result
 
-    with patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock):
+    with patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock):
         provider = await create_provider(
             session,
             provider_type="oidc",
@@ -73,8 +73,8 @@ async def test_update_provider_encrypts_client_secret() -> None:
     )
 
     with (
-        patch("modulo.db.crud.sso_provider.get_provider", new=AsyncMock(return_value=provider)),
-        patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
+        patch("farna.db.crud.sso_provider.get_provider", new=AsyncMock(return_value=provider)),
+        patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
         updated = await update_provider(
             session,
@@ -125,10 +125,10 @@ async def test_create_provider_uses_system_session_for_global_slug() -> None:
 
     with (
         patch(
-            "modulo.db.crud.sso_provider.get_settings",
+            "farna.db.crud.sso_provider.get_settings",
             return_value=SimpleNamespace(modulo_system_database_url="postgresql+asyncpg://system/test"),
         ),
-        patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
+        patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
         provider = await create_provider(
             app_session,
@@ -166,10 +166,10 @@ async def test_create_provider_global_dedupe_two_orgs_same_name() -> None:
 
     with (
         patch(
-            "modulo.db.crud.sso_provider.get_settings",
+            "farna.db.crud.sso_provider.get_settings",
             return_value=SimpleNamespace(modulo_system_database_url="postgresql+asyncpg://system/test"),
         ),
-        patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
+        patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
         provider_a = await create_provider(
             _app_session(),
@@ -212,7 +212,7 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
     eng: AsyncEngine = create_async_engine(
         "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
-    from modulo.db.models.sso_provider import SsoProvider
+    from farna.db.models.sso_provider import SsoProvider
 
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: SsoProvider.__table__.create(sync_conn, checkfirst=True))
@@ -241,10 +241,10 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
 
     with (
         patch(
-            "modulo.db.crud.sso_provider.get_settings",
+            "farna.db.crud.sso_provider.get_settings",
             return_value=SimpleNamespace(modulo_system_database_url="sqlite+aiosqlite:///system"),
         ),
-        patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
+        patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
         async with app_session.begin():
             provider = await create_provider(
@@ -281,10 +281,10 @@ async def test_create_provider_falls_back_to_app_session_scan() -> None:
 
     with (
         patch(
-            "modulo.db.crud.sso_provider.get_settings",
+            "farna.db.crud.sso_provider.get_settings",
             return_value=SimpleNamespace(modulo_system_database_url=""),
         ),
-        patch("modulo.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
+        patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
         provider = await create_provider(
             app_session,

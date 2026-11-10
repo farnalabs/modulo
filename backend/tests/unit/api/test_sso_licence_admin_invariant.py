@@ -26,23 +26,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     get_db_session,
     get_plan_context,
     require_feature_anonymous,
     resolve_anonymous_plan_context,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.core.license import (
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import FeatureFlagRegistry
+from farna.core.license import (
     LICENCE_GRACE_DAYS,
     clear_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -52,7 +52,7 @@ _TEST_KP = generate_keypair()
 
 def _licence(*, days_from_now: int) -> str:
     """A real signed Team key whose ``expires_at`` is ``days_from_now`` away."""
-    from modulo.core import license as license_mod
+    from farna.core import license as license_mod
 
     license_mod._configured_public_key_hex = _TEST_KP["public_key"]
     payload = {
@@ -104,7 +104,7 @@ def _make_mock_session() -> MagicMock:
 @pytest.fixture(autouse=True)
 def _restore_license_globals() -> Generator[None, None, None]:
     """Save AND restore the licence globals (no key leak into later tests)."""
-    from modulo.core import license as license_mod
+    from farna.core import license as license_mod
 
     saved_key = license_mod._configured_public_key_hex
     yield
@@ -150,7 +150,7 @@ def test_admin_can_reach_the_licence_endpoint_when_licence_is_lapsed(
     itself, an expired instance has no way to install a new key and every
     admin is locked out permanently.
     """
-    from modulo.core import license as license_mod
+    from farna.core import license as license_mod
 
     clear_license()
     org_key = _licence(days_from_now=days_from_now)
@@ -158,7 +158,7 @@ def test_admin_can_reach_the_licence_endpoint_when_licence_is_lapsed(
     org.id = _ORG_ID
     org.settings_json = {"license_key": org_key}
 
-    with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+    with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
         resp = admin_client.get("/api/v1/admin/license")
 
     assert resp.status_code == 200, resp.text

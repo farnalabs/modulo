@@ -4,13 +4,13 @@ prd: N/A
 adr:
   - ADR 002 (database-abstraction-strategy)
 code:
-  - backend/src/modulo/db/session.py
-  - backend/src/modulo/db/rls.py
-  - backend/src/modulo/db/repositories/base.py
-  - backend/src/modulo/db/repositories/generic.py
-  - backend/src/modulo/db/repositories/postgres.py
-  - backend/src/modulo/db/repositories/locks.py
-  - backend/src/modulo/db/migrations
+  - backend/src/farna/db/session.py
+  - backend/src/farna/db/rls.py
+  - backend/src/farna/db/repositories/base.py
+  - backend/src/farna/db/repositories/generic.py
+  - backend/src/farna/db/repositories/postgres.py
+  - backend/src/farna/db/repositories/locks.py
+  - backend/src/farna/db/migrations
 unit-tests:
   - backend/tests/unit/db/test_session.py
   - backend/tests/unit/db/test_repositories_base.py

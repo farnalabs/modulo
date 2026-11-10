@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.run_node_outputs import (
+from farna.db.crud.run_node_outputs import (
     read_run_blobs,
     replace_run_node_outputs,
     write_run_markers,

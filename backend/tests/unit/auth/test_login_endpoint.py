@@ -11,12 +11,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.routes.auth import REFRESH_COOKIE
-from modulo.api.routes.auth import router as auth_router
-from modulo.api.routes.health import router as health_router
-from modulo.auth.passwords import hash_password
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.routes.auth import REFRESH_COOKIE
+from farna.api.routes.auth import router as auth_router
+from farna.api.routes.health import router as health_router
+from farna.auth.passwords import hash_password
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -39,7 +39,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _override(admin_password: str = "testpass") -> Settings:
@@ -121,11 +121,11 @@ def test_login_success(client: TestClient) -> None:
     mock_membership.organisation_id = _ORG_ID
     mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -157,11 +157,11 @@ def test_login_response_flags_must_change_password(client: TestClient) -> None:
     mock_membership.organisation_id = _ORG_ID
     mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -174,8 +174,8 @@ def test_login_response_flags_must_change_password(client: TestClient) -> None:
 def test_login_wrong_password(client: TestClient) -> None:
     mock_user = _make_mock_user()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=False),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -187,9 +187,9 @@ def test_login_wrong_password(client: TestClient) -> None:
 def test_login_wrong_password_when_rate_limiter_unavailable(client: TestClient) -> None:
     mock_user = _make_mock_user()
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=None),
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=None),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=False),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -199,7 +199,7 @@ def test_login_wrong_password_when_rate_limiter_unavailable(client: TestClient) 
 
 
 def test_login_unknown_user(client: TestClient) -> None:
-    with patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)):
+    with patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)):
         resp = client.post(
             "/api/v1/auth/login",
             json={"email": "nobody@example.com", "password": "testpass"},
@@ -216,8 +216,8 @@ def test_login_rejects_service_principal(client: TestClient) -> None:
     mock_user = _make_mock_user()
     mock_user.kind = "service"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -236,11 +236,11 @@ def test_me_returns_username(client: TestClient) -> None:
     mock_membership.organisation_id = _ORG_ID
     mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         login_resp = client.post(
             "/api/v1/auth/login",
@@ -249,8 +249,8 @@ def test_me_returns_username(client: TestClient) -> None:
     token = login_resp.json()["access_token"]
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
@@ -267,8 +267,8 @@ def test_me_reports_must_change_password(client: TestClient) -> None:
     token = _login(client)
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
@@ -283,11 +283,11 @@ def _login(client: TestClient) -> str:
     mock_membership.organisation_id = _ORG_ID
     mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=_make_mock_user())),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=_make_mock_user())),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         login_resp = client.post(
             "/api/v1/auth/login",
@@ -302,7 +302,7 @@ def test_me_returns_404_for_a_service_principal(client: TestClient) -> None:
     token = _login(client)
     service_user = _make_mock_user()
     service_user.kind = "service"
-    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=service_user)):
+    with patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=service_user)):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Account not found"
@@ -320,11 +320,11 @@ def test_me_removed_member_returns_401(client: TestClient) -> None:
     mock_membership.organisation_id = _ORG_ID
     mock_membership.role = "admin"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         login_resp = client.post(
             "/api/v1/auth/login",
@@ -333,8 +333,8 @@ def test_me_removed_member_returns_401(client: TestClient) -> None:
     token = login_resp.json()["access_token"]
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
     ):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401

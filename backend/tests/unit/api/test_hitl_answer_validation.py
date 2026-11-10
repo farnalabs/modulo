@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.hitl_answer_validation import (
+from farna.api.hitl_answer_validation import (
     AnswerValidationError,
     validate_hitl_answer,
 )
@@ -32,7 +32,7 @@ async def _validate(
 ) -> dict[str, Any] | None:
     """Run ``validate_hitl_answer`` with ``resolve_hitl_review_config`` stubbed."""
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+        "farna.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
         return await validate_hitl_answer(
@@ -131,12 +131,12 @@ async def test_mcp_adapter_keeps_answer_with_error_key_as_answer():
     """Regression: an answer dict that itself carries an ``error`` key must not
     be mistaken for the MCP error sentinel — the old key-sniffing silently
     skipped ``mgr.approve``. The adapter returns ``(error, answer)``."""
-    from modulo.api.mcp_server import _validate_mcp_choice_answer
+    from farna.api.mcp_server import _validate_mcp_choice_answer
 
     answer = {"kind": "choice", "option_id": "yes", "error": "a legitimate answer field"}
     config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+        "farna.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
         error, validated = await _validate_mcp_choice_answer(AsyncMock(), _RUN_ID, _REVIEW_ID, _ORG_ID, answer)
@@ -145,11 +145,11 @@ async def test_mcp_adapter_keeps_answer_with_error_key_as_answer():
 
 
 async def test_mcp_adapter_returns_error_tuple_on_invalid_answer():
-    from modulo.api.mcp_server import _validate_mcp_choice_answer
+    from farna.api.mcp_server import _validate_mcp_choice_answer
 
     config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+        "farna.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
         error, validated = await _validate_mcp_choice_answer(
@@ -193,7 +193,7 @@ async def test_require_answer_passes_missing_on_no_contract_gate():
 
 class TestDispatchHitlApproveAnswer:
     async def test_approve_returns_answer_error_before_manager_call(self):
-        from modulo.api import mcp_server
+        from farna.api import mcp_server
 
         mgr = MagicMock()
         mgr.approve = AsyncMock()
@@ -214,7 +214,7 @@ class TestDispatchHitlApproveAnswer:
         mgr.approve.assert_not_awaited()
 
     async def test_approve_embeds_validated_answer_in_payload(self):
-        from modulo.api import mcp_server
+        from farna.api import mcp_server
 
         mgr = MagicMock()
         mgr.approve = AsyncMock()
@@ -237,7 +237,7 @@ class TestDispatchHitlApproveAnswer:
 
 class TestDispatchHitlDeliverManualAnswer:
     async def test_deliver_manual_returns_answer_error_before_manager_call(self):
-        from modulo.api import mcp_server
+        from farna.api import mcp_server
 
         mgr = MagicMock()
         mgr.deliver_manual = AsyncMock()
@@ -259,7 +259,7 @@ class TestDispatchHitlDeliverManualAnswer:
         mgr.deliver_manual.assert_not_awaited()
 
     async def test_deliver_manual_embeds_validated_answer_in_payload(self):
-        from modulo.api import mcp_server
+        from farna.api import mcp_server
 
         mgr = MagicMock()
         mgr.deliver_manual = AsyncMock()

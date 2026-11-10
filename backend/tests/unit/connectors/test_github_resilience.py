@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.github import GitHubConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.github import GitHubConnector
 
 TOKEN = "ghp_test_token"
 
@@ -195,7 +195,7 @@ async def test_query_429_uses_rate_limit_reset(connector, monkeypatch):
     # connector's own processing time would otherwise push
     # reset_epoch - time.time() <= 0 and fall back to backoff).
     fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.github.time.time", lambda: fake_now)
+    monkeypatch.setattr("farna.connectors.github.time.time", lambda: fake_now)
     reset_epoch = fake_now + 5.0  # 5s reset window, comfortably in the future
     route = respx.get("https://api.github.com/user/repos")
     route.mock(
@@ -276,7 +276,7 @@ def test_parse_rate_limit_reset_missing_or_invalid():
     """X-RateLimit-Reset parsing handles absent/invalid values."""
     import time
 
-    from modulo.connectors.github import _parse_rate_limit_reset
+    from farna.connectors.github import _parse_rate_limit_reset
 
     assert _parse_rate_limit_reset(httpx.Response(200)) is None
     assert _parse_rate_limit_reset(httpx.Response(200, headers={"X-RateLimit-Reset": "not-a-number"})) is None
@@ -297,15 +297,15 @@ async def test_query_429_reset_uses_tight_jitter_not_full(connector, monkeypatch
     Tight jitter keeps the wait close to the reset so the window is honoured.
     """
     fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.github.time.time", lambda: fake_now)
+    monkeypatch.setattr("farna.connectors.github.time.time", lambda: fake_now)
     reset_epoch = fake_now + 10.0
     sleeps: list[float] = []
 
     async def fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("farna.connectors.github.random.uniform", lambda lo, hi: lo)
     route = respx.get("https://api.github.com/user/repos")
     route.mock(
         side_effect=[
@@ -328,8 +328,8 @@ async def test_query_429_retry_after_uses_tight_jitter_not_full(connector, monke
     async def fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("farna.connectors.github.random.uniform", lambda lo, hi: lo)
     route = respx.get("https://api.github.com/user/repos")
     route.mock(
         side_effect=[
@@ -351,8 +351,8 @@ async def test_query_503_backoff_still_uses_full_jitter(connector, monkeypatch):
     async def fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("farna.connectors.github.random.uniform", lambda lo, hi: lo)
     route = respx.get("https://api.github.com/user/repos")
     route.mock(
         side_effect=[

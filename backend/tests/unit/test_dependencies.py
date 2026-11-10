@@ -17,8 +17,8 @@ class TestGetOrCreateEngine:
     """
 
     def setup_method(self):
-        import modulo.api.dependencies as deps
-        import modulo.db.session as session_mod
+        import farna.api.dependencies as deps
+        import farna.db.session as session_mod
 
         deps._engine = None
         session_mod._shared_engine = None
@@ -34,15 +34,15 @@ class TestGetOrCreateEngine:
         never-awaited coroutine, which surfaces as a
         ``PytestUnraisableExceptionWarning`` failure on an unrelated test.
         """
-        import modulo.api.dependencies as deps
-        import modulo.db.session as session_mod
+        import farna.api.dependencies as deps
+        import farna.db.session as session_mod
 
         deps._engine = None
         session_mod._shared_engine = None
 
     def test_engine_with_postgres_pool_config(self):
         """Postgres backends get pool_pre_ping, pool_size, max_overflow, pool_recycle, pool_timeout."""
-        from modulo.api.dependencies import get_or_create_engine
+        from farna.api.dependencies import get_or_create_engine
 
         settings = MagicMock()
         settings.modulo_db = "postgres"
@@ -52,8 +52,8 @@ class TestGetOrCreateEngine:
         settings.db_pool_recycle_seconds = 1500
 
         with (
-            patch("modulo.db.session.get_settings", return_value=settings),
-            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.get_settings", return_value=settings),
+            patch("farna.db.session.create_async_engine") as mock_create,
         ):
             get_or_create_engine(settings)
             mock_create.assert_called_once()
@@ -68,15 +68,15 @@ class TestGetOrCreateEngine:
 
     def test_engine_with_sqlite_skips_pool_config(self):
         """SQLite backends skip pool settings (not supported by pysqlite)."""
-        from modulo.api.dependencies import get_or_create_engine
+        from farna.api.dependencies import get_or_create_engine
 
         settings = MagicMock()
         settings.modulo_db = "sqlite"
         settings.database_url = "sqlite+aiosqlite:///./test.db"
 
         with (
-            patch("modulo.db.session.get_settings", return_value=settings),
-            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.get_settings", return_value=settings),
+            patch("farna.db.session.create_async_engine") as mock_create,
         ):
             get_or_create_engine(settings)
             kw = mock_create.call_args[1]
@@ -88,15 +88,15 @@ class TestGetOrCreateEngine:
 
     def test_engine_connect_args_includes_timeout_for_all_backends(self):
         """All backends get connect_args with timeout=10."""
-        from modulo.api.dependencies import get_or_create_engine
+        from farna.api.dependencies import get_or_create_engine
 
         settings = MagicMock()
         settings.modulo_db = "sqlite"
         settings.database_url = "sqlite+aiosqlite:///./test.db"
 
         with (
-            patch("modulo.db.session.get_settings", return_value=settings),
-            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.get_settings", return_value=settings),
+            patch("farna.db.session.create_async_engine") as mock_create,
         ):
             get_or_create_engine(settings)
             kw = mock_create.call_args[1]
@@ -104,8 +104,8 @@ class TestGetOrCreateEngine:
 
     def test_engine_is_singleton(self):
         """get_or_create_engine returns the same engine on second call."""
-        import modulo.api.dependencies as deps
-        from modulo.api.dependencies import get_or_create_engine
+        import farna.api.dependencies as deps
+        from farna.api.dependencies import get_or_create_engine
 
         deps._engine = None
 
@@ -114,8 +114,8 @@ class TestGetOrCreateEngine:
         settings.database_url = "postgresql+asyncpg://u:p@localhost/db"
 
         with (
-            patch("modulo.db.session.get_settings", return_value=settings),
-            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.get_settings", return_value=settings),
+            patch("farna.db.session.create_async_engine") as mock_create,
         ):
             engine1 = get_or_create_engine(settings)
             engine2 = get_or_create_engine(settings)
@@ -129,7 +129,7 @@ class TestGetDbSession:
     @pytest.mark.asyncio
     async def test_yields_session_on_success(self):
         """Happy path: session is yielded and usable."""
-        from modulo.api.dependencies import get_db_session
+        from farna.api.dependencies import get_db_session
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -150,7 +150,7 @@ class TestGetDbSession:
         """ProgrammingError raised during session use is converted to HTTPException 501."""
         from fastapi import HTTPException
 
-        from modulo.api.dependencies import get_db_session
+        from farna.api.dependencies import get_db_session
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -170,7 +170,7 @@ class TestGetDbSession:
     @pytest.mark.asyncio
     async def test_non_programming_error_propagates(self):
         """Non-ProgrammingError exceptions propagate through unchanged."""
-        from modulo.api.dependencies import get_db_session
+        from farna.api.dependencies import get_db_session
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -236,7 +236,7 @@ class TestPgConnectionString:
         ],
     )
     def test_pg_connection_string(self, input_url: str, expected: str) -> None:
-        from modulo.api.dependencies import pg_connection_string
+        from farna.api.dependencies import pg_connection_string
 
         result = pg_connection_string(input_url)
         assert result == expected
@@ -258,7 +258,7 @@ class TestPgConnectionString:
         """Regression (FAR-1426): URLs without an explicit sslmode must not
         be silently downgraded to plaintext — forcing sslmode=disable broke
         real checkpointer connections on TLS-required deployments."""
-        from modulo.api.dependencies import pg_connection_string
+        from farna.api.dependencies import pg_connection_string
 
         result = pg_connection_string(input_url)
         assert "sslmode=disable" not in result

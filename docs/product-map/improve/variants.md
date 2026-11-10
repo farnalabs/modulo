@@ -3,7 +3,7 @@ id: feat-variants
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/variants.py
+  - backend/src/farna/api/routes/variants.py
 unit-tests: []
 bdd:
   - backend/tests/bdd/features/variants/variant_groups.feature

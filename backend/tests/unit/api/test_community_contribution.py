@@ -9,15 +9,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.library_service import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -127,7 +127,7 @@ class TestCommunityContribute:
         prim = _make_primitive(contribution_status="draft")
 
         with (
-            patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim),
         ):
             resp = client.post(
                 self.CONTRIBUTE_PATH,
@@ -175,7 +175,7 @@ class TestCommunityContribute:
     def test_contribute_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.library.contribute_primitive",
+                "farna.api.routes.library.contribute_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("mock", {}, ""),
             ),
@@ -198,7 +198,7 @@ class TestCommunityContribute:
 
         with (
             patch(
-                "modulo.api.routes.library.contribute_primitive",
+                "farna.api.routes.library.contribute_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_fn,
@@ -239,7 +239,7 @@ class TestListCommunityContributions:
 
         with (
             patch(
-                "modulo.api.routes.library.list_org_contributions",
+                "farna.api.routes.library.list_org_contributions",
                 new_callable=AsyncMock,
                 return_value=mock_result,
             ),
@@ -263,8 +263,8 @@ class TestListCommunityContributions:
         mock_result.page_size = 20
 
         with (
-            patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
-            patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch("farna.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
+            patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
         ):
             resp = client.get(self.LIST_PATH)
 
@@ -281,8 +281,8 @@ class TestListCommunityContributions:
         mock_result.page_size = 20
 
         with (
-            patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
-            patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+            patch("farna.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
+            patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
         ):
             resp = client.get(self.LIST_PATH)
 
@@ -300,7 +300,7 @@ class TestListCommunityContributions:
 
         with (
             patch(
-                "modulo.api.routes.library.list_org_contributions",
+                "farna.api.routes.library.list_org_contributions",
                 new_callable=AsyncMock,
                 return_value=mock_result,
             ) as mock_fn,
@@ -320,7 +320,7 @@ class TestListCommunityContributions:
 
         with (
             patch(
-                "modulo.api.routes.library.list_org_contributions",
+                "farna.api.routes.library.list_org_contributions",
                 new_callable=AsyncMock,
                 return_value=mock_result,
             ),
@@ -340,7 +340,7 @@ class TestListCommunityContributions:
 
         with (
             patch(
-                "modulo.api.routes.library.list_org_contributions",
+                "farna.api.routes.library.list_org_contributions",
                 new_callable=AsyncMock,
                 return_value=mock_result,
             ) as mock_fn,
@@ -355,7 +355,7 @@ class TestListCommunityContributions:
     def test_list_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.library.list_org_contributions",
+                "farna.api.routes.library.list_org_contributions",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("mock", {}, ""),
             ),
@@ -380,7 +380,7 @@ class TestAdminPublishContribution:
         published = _make_primitive(pid=prim_id, contribution_status="published", visibility="community")
 
         with (
-            patch("modulo.api.routes.library.publish_contribution", new_callable=AsyncMock, return_value=published),
+            patch("farna.api.routes.library.publish_contribution", new_callable=AsyncMock, return_value=published),
         ):
             resp = client.post(self._publish_path(prim_id))
 
@@ -393,7 +393,7 @@ class TestAdminPublishContribution:
 
         with (
             patch(
-                "modulo.api.routes.library.publish_contribution",
+                "farna.api.routes.library.publish_contribution",
                 new_callable=AsyncMock,
                 side_effect=ContributionNotFoundError(f"Contribution {prim_id} not found"),
             ),
@@ -408,7 +408,7 @@ class TestAdminPublishContribution:
 
         with (
             patch(
-                "modulo.api.routes.library.publish_contribution",
+                "farna.api.routes.library.publish_contribution",
                 new_callable=AsyncMock,
                 side_effect=ContributionInvalidTransitionError(
                     f"Cannot publish contribution {prim_id}: expected status 'draft' or 'review_queue', got 'published'"
@@ -425,7 +425,7 @@ class TestAdminPublishContribution:
 
         with (
             patch(
-                "modulo.api.routes.library.publish_contribution",
+                "farna.api.routes.library.publish_contribution",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("mock", {}, ""),
             ),

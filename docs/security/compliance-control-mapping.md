@@ -31,14 +31,14 @@ What they do **not** do:
 The mapping content ships in the product as versioned YAML:
 
 ```
-backend/src/modulo/compliance/mappings/
+backend/src/farna/compliance/mappings/
   pack.yaml          pack version, publication date, framework index
   soc2.yaml          SOC 2 Trust Services Criteria
   iso-42001.yaml     ISO/IEC 42001
   eu-ai-act.yaml     EU AI Act
 ```
 
-The loader (`backend/src/modulo/compliance/pack.py`) validates the pack at
+The loader (`backend/src/farna/compliance/pack.py`) validates the pack at
 load time and refuses an invalid or dishonest one:
 
 - every row names a known artifact type, coverage attribution and provenance

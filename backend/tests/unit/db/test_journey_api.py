@@ -26,12 +26,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes.lifecycle_maps import router as lifecycle_maps_router
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
-from modulo.core.lifecycle_map.journeys import (
+from farna.api.dependencies import get_db_session
+from farna.api.routes.lifecycle_maps import router as lifecycle_maps_router
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
+from farna.core.lifecycle_map.journeys import (
     _is_unattributed,
     _journey_runs_postgres_query,
     decode_cursor,
@@ -41,15 +41,15 @@ from modulo.core.lifecycle_map.journeys import (
     list_journey_runs,
     list_map_journeys,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.journey import Journey
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
-from modulo.db.models.team_membership import TeamMembership
-from modulo.settings import get_settings
+from farna.db.models.base import Base
+from farna.db.models.journey import Journey
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.run import Run
+from farna.db.models.team_membership import TeamMembership
+from farna.settings import get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -161,7 +161,7 @@ async def _seed_journey(
     stage_id: str | None = None,
     canonical_work_item_id: uuid.UUID | None = None,
 ) -> Journey:
-    from modulo.db.lifecycle_refs import canonical_work_item_id as _canonical
+    from farna.db.lifecycle_refs import canonical_work_item_id as _canonical
 
     journey = Journey(
         organisation_id=org_id,
@@ -559,7 +559,7 @@ class TestJourneyRunHistory:
         await _seed_org(session)
         await _seed_map(session)
         await _seed_stage(session)
-        from modulo.db.lifecycle_refs import canonical_work_item_id as _canonical
+        from farna.db.lifecycle_refs import canonical_work_item_id as _canonical
 
         journey = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=_MAP)
         anchor = _canonical(_ORG, "linear", "FAR-1")
@@ -954,7 +954,7 @@ class TestRoutes:
 
         app.dependency_overrides[get_db_session] = override_session
         with (
-            patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=None)),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
@@ -972,10 +972,10 @@ class TestRoutes:
         list_mock = AsyncMock(return_value=([], None))
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock(visibility="team", owner_team_id=_TEAM_A)),
             ),
-            patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=list_mock),
+            patch("farna.api.routes.lifecycle_maps.list_map_journeys", new=list_mock),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
@@ -994,10 +994,10 @@ class TestRoutes:
         list_mock = AsyncMock(return_value=([], None))
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock(visibility="org")),
             ),
-            patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=list_mock),
+            patch("farna.api.routes.lifecycle_maps.list_map_journeys", new=list_mock),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
@@ -1015,11 +1015,11 @@ class TestRoutes:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                "farna.api.routes.lifecycle_maps.list_map_journeys",
                 new=AsyncMock(side_effect=SQLAlchemyError("boom")),
             ),
             TestClient(app) as c,
@@ -1039,11 +1039,11 @@ class TestRoutes:
         journey = _make_journey_mock()
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                "farna.api.routes.lifecycle_maps.list_map_journeys",
                 new=AsyncMock(return_value=([(journey, False)], "cursor-x")),
             ),
             TestClient(app) as c,
@@ -1082,11 +1082,11 @@ class TestRoutes:
         )
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                "farna.api.routes.lifecycle_maps.list_map_journeys",
                 new=AsyncMock(return_value=([(journey, False)], None)),
             ),
             TestClient(app) as c,
@@ -1109,11 +1109,11 @@ class TestRoutes:
         journey = _make_journey_mock(map_id=None, stage_id=None, run_count=0)
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                "farna.api.routes.lifecycle_maps.list_map_journeys",
                 new=AsyncMock(return_value=([(journey, True)], None)),
             ),
             TestClient(app) as c,
@@ -1134,10 +1134,10 @@ class TestRoutes:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=None)),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys/github_issue/simple-ref")
@@ -1164,11 +1164,11 @@ class TestRoutes:
         run.execution_origin = None
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
-            patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
+            patch("farna.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
+            patch("farna.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys/github_issue/simple-ref")
@@ -1209,11 +1209,11 @@ class TestRoutes:
         run.execution_origin = "dispatched"
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
-            patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
+            patch("farna.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
+            patch("farna.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys/github_issue/simple-ref")
@@ -1234,14 +1234,14 @@ class TestRoutes:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.get_map_journey",
+                "farna.api.routes.lifecycle_maps.get_map_journey",
                 new=AsyncMock(return_value=(_make_journey_mock(), False)),
             ),
-            patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[])),
+            patch("farna.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[])),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys/github_issue/simple-ref")
@@ -1259,7 +1259,7 @@ class TestRoutes:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(side_effect=SQLAlchemyError("boom")),
             ),
             TestClient(app) as c,
@@ -1413,7 +1413,7 @@ def _make_self_report_app(*, org_role: str = "runner") -> FastAPI:
 
 class TestSelfReportRoute:
     def test_self_report_requires_authentication(self, mock_session: AsyncMock) -> None:
-        from modulo.auth.dependencies import InvalidToken
+        from farna.auth.dependencies import InvalidToken
 
         app = FastAPI()
         app.include_router(lifecycle_maps_router)
@@ -1460,7 +1460,7 @@ class TestSelfReportRoute:
 
         app.dependency_overrides[get_db_session] = override_session
         with (
-            patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=None)),
             TestClient(app) as c,
         ):
             resp = c.post(
@@ -1480,11 +1480,11 @@ class TestSelfReportRoute:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
             patch(
-                "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+                "farna.api.routes.lifecycle_maps.confirm_reported_refs",
                 new=AsyncMock(
                     return_value=(
                         [{"kind": "github_issue", "ref": "a/b#5", "source": "agent"}],
@@ -1492,7 +1492,7 @@ class TestSelfReportRoute:
                     )
                 ),
             ),
-            patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=AsyncMock(return_value=1)),
+            patch("farna.api.routes.lifecycle_maps.advance_journeys", new=AsyncMock(return_value=1)),
             TestClient(app) as c,
         ):
             resp = c.post(
@@ -1520,7 +1520,7 @@ class TestSelfReportRoute:
         app.dependency_overrides[get_db_session] = override_session
         with (
             patch(
-                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                "farna.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(side_effect=SQLAlchemyError("boom")),
             ),
             TestClient(app) as c,
@@ -1582,8 +1582,8 @@ async def _seed_org_and_map(engine: AsyncEngine, *, map_id: uuid.UUID = _MAP) ->
 
 
 async def _seed_org_map_and_journey(engine: AsyncEngine, *, kind: str, ref: str) -> None:
-    from modulo.db.lifecycle_refs import canonical_work_item_id as _canonical
-    from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
+    from farna.db.lifecycle_refs import canonical_work_item_id as _canonical
+    from farna.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
 
     k = canonicalise_kind(kind)
     r = canonicalise_ref(k, ref)

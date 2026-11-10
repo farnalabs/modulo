@@ -29,18 +29,18 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from tests.unit.api.mock_session import configure_mock_session
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes.pipelines import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.api.routes.pipelines import (
     GraphValidationIssue,
     PipelineGraphNode,
     _graph_response,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.settings import Settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -461,10 +461,10 @@ class TestGetGraphEndpointNever422:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -485,10 +485,10 @@ class TestGetGraphEndpointNever422:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         # MUST be 200, not 422
@@ -513,10 +513,10 @@ class TestGetGraphEndpointNever422:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -542,13 +542,13 @@ class TestGetGraphEndpointNever422:
 
         with (
             patch(
-                "modulo.api.routes.pipelines.get_pipeline_graph",
+                "farna.api.routes.pipelines.get_pipeline_graph",
                 new_callable=AsyncMock,
                 return_value=(nodes, edges),
             ),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -565,10 +565,10 @@ class TestGetGraphEndpointNever422:
         pipeline = _make_mock_pipeline([node])
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=([node], [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=([node], [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -633,10 +633,10 @@ class TestDataLossRegression:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -693,10 +693,10 @@ class TestSecretNonLeak:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, [])),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200
@@ -850,12 +850,10 @@ class TestNonDictEdgeEntry:
         pipeline = _make_mock_pipeline(nodes)
 
         with (
-            patch(
-                "modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, edges)
-            ),
-            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=(nodes, edges)),
+            patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
         assert resp.status_code == 200

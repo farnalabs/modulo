@@ -28,11 +28,11 @@ def _restore_app_dependency_overrides() -> Generator[None, None, None]:
     is declared before the other autouse fixtures so its teardown runs last,
     after the test-specific fixture finalizers have finished.
     """
-    app_module = sys.modules.get("modulo.api.main")
+    app_module = sys.modules.get("farna.api.main")
     app = getattr(app_module, "app", None)
     baseline = dict(app.dependency_overrides) if app is not None else {}
     yield
-    app_module = sys.modules.get("modulo.api.main")
+    app_module = sys.modules.get("farna.api.main")
     app = getattr(app_module, "app", None)
     if app is not None:
         app.dependency_overrides.clear()
@@ -108,7 +108,7 @@ def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.M
     """
     if not _verify_identity_patch_needed(request):
         return
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr("farna.auth.dependencies._verify_identity", AsyncMock(return_value=None))
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +206,7 @@ def _provisioned_system_engine(request: pytest.FixtureRequest, monkeypatch: pyte
     """
     if not _verify_identity_patch_needed(request):
         return
-    from modulo.api import dependencies as _deps
+    from farna.api import dependencies as _deps
 
     monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
@@ -215,32 +215,32 @@ def _provisioned_system_engine(request: pytest.FixtureRequest, monkeypatch: pyte
 #: (``modulo.api.main.app``). Loading it costs ~10 s of CPU-bound route and
 #: pydantic-model construction (measured 2026-10-11, FAR-1678), so the unit
 #: suite must only load it when a test can actually reach the app.
-_APP_MODULE = "modulo.api.main"
+_APP_MODULE = "farna.api.main"
 
 #: The module holding ``_verify_identity`` (and FastAPI's auth dependencies).
 #: Importing it costs ~5 s (measured 2026-10-13), so the autouse
 #: ``_patch_verify_identity`` / ``_provisioned_system_engine`` fixtures gate
 #: on it instead of paying it for every unit test.
-_AUTH_DEPS_MODULE = "modulo.auth.dependencies"
+_AUTH_DEPS_MODULE = "farna.auth.dependencies"
 
 #: ``sys.modules`` markers meaning "this session has already loaded the
 #: auth/app stack". ``modulo.api.dependencies`` is included because it
 #: executes ``modulo.auth.dependencies`` at module level, so its presence
 #: means the expensive import is paid regardless — patching then costs only
 #: the (cheap) setattr.
-_AUTH_STACK_MARKERS: tuple[str, ...] = (_AUTH_DEPS_MODULE, "modulo.api.dependencies")
+_AUTH_STACK_MARKERS: tuple[str, ...] = (_AUTH_DEPS_MODULE, "farna.api.dependencies")
 
 #: Source tokens whose appearance in a test module marks it as able to reach
-#: the auth/app stack INSIDE its body (a lazy ``from modulo.api... import`` /
-#: ``from modulo.auth... import`` is a string in its source). ``modulo.api``
+#: the auth/app stack INSIDE its body (a lazy ``from farna.api... import`` /
+#: ``from farna.auth... import`` is a string in its source). ``modulo.api``
 #: is deliberately one hop wide: any ``modulo.api.*`` import transitively
 #: executes ``modulo.auth.dependencies``, so catching only ``_AUTH_DEPS_MODULE``
-#: would miss e.g. an in-body ``from modulo.api.main import app``. A false
+#: would miss e.g. an in-body ``from farna.api.main import app``. A false
 #: positive (token in a comment/docstring) costs only the already-cached
 #: import — a performance no-op for a module that names the stack, never a
 #: behaviour change. A false negative would leave a test hitting the REAL
 #: ``_verify_identity`` (a live DB query -> 401), so the set errs wide.
-_AUTH_STACK_MENTION_TOKENS: tuple[str, ...] = ("modulo.api", "modulo.auth")
+_AUTH_STACK_MENTION_TOKENS: tuple[str, ...] = ("farna.api", "farna.auth")
 
 #: Per-file cache for the lazy source scan below: (file path, token) ->
 #: does the file contain the token? Filled on demand so the per-test gate
@@ -251,7 +251,7 @@ _MENTION_CACHE: dict[tuple[str, str], bool] = {}
 def _test_module_mentions(node: object, token: str) -> bool:
     """True when *node*'s test module's source contains *token*.
 
-    A module-level ``from modulo.api.main import app`` (or any other token
+    A module-level ``from farna.api.main import app`` (or any other token
     import) is already visible in ``sys.modules`` at fixture-setup time
     (pytest imports test modules during collection), so the caller's
     ``sys.modules`` probe covers it. A handful of modules instead import the
@@ -297,12 +297,12 @@ def _test_module_mentions(node: object, token: str) -> bool:
 #: reach the dispatch. ``executor`` and ``graph_cache`` import ``node_runner``
 #: at module level, so ANY ``modulo.core.pipeline_engine`` load — package
 #: ``__init__`` included — puts this marker in ``sys.modules``.
-_E2B_BRIDGE_MARKER = "modulo.core.pipeline_engine.node_runner"
+_E2B_BRIDGE_MARKER = "farna.core.pipeline_engine.node_runner"
 
 #: Source tokens whose appearance in a test module marks it as able to reach
 #: the dispatch INSIDE its body: an in-body ``from
 #: modulo.core.pipeline_engine... import`` / ``from ...node_runner import`` /
-#: a ``monkeypatch.setattr("modulo.core.pipeline_engine.node_runner....")``
+#: a ``monkeypatch.setattr("farna.core.pipeline_engine.node_runner....")``
 #: string target is literally in the module's source, and the fixture decides
 #: BEFORE the body runs — so ``sys.modules`` alone would miss it. A comment
 #: mention costs only the already-cached import (a performance no-op, never a
@@ -334,7 +334,7 @@ def _e2b_bridge_needed(request: pytest.FixtureRequest) -> bool:
 
     1. ``sys.modules`` already holds ``modulo.core.pipeline_engine.node_runner``
        — a module-level import in the test module, a conftest, or the app
-       (``import modulo.api.main`` loads the executor chain), all resolved
+       (``import farna.api.main`` loads the executor chain), all resolved
        during collection BEFORE fixture setup; the import is already paid, so
        installing costs only the (cheap) seam patching; or
     2. the test module's source mentions ``pipeline_engine`` or ``node_runner``
@@ -410,16 +410,16 @@ def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
 #: at call time): ``mcp_server`` defines the ``mcp_audited`` tools,
 #: ``mcp_audit`` defines the decorator, ``main`` is the app.
 _AUDIT_SURFACE_MARKERS: tuple[str, ...] = (
-    "modulo.core.audit_coverage",
-    "modulo.api.main",
-    "modulo.api.mcp_server",
-    "modulo.api.mcp_audit",
+    "farna.core.audit_coverage",
+    "farna.api.main",
+    "farna.api.mcp_server",
+    "farna.api.mcp_audit",
 )
 
 #: Source tokens whose appearance in a test module marks it as able to reach
-#: the audited surface INSIDE its body (a lazy ``from modulo.api... import`` /
-#: ``from modulo.core.audit_coverage import ...`` / an
-#: ``importlib.import_module("modulo.api...")`` literal — all are strings in
+#: the audited surface INSIDE its body (a lazy ``from farna.api... import`` /
+#: ``from farna.core.audit_coverage import ...`` / an
+#: ``importlib.import_module("farna.api...")`` literal — all are strings in
 #: its source). ``modulo.api`` is deliberately one hop wide: any
 #: ``modulo.api.*`` module either is an audited surface or transitively loads
 #: one. A false positive (token in a comment/docstring) costs only the
@@ -428,7 +428,7 @@ _AUDIT_SURFACE_MARKERS: tuple[str, ...] = (
 #: fail-open audited route dials the real engine, writes a real audit row on
 #: a live Postgres, and logs-and-continues), so the set errs wide and the
 #: corpus pin lives in ``tests/architecture/test_unit_audit_double_gate.py``.
-_AUDIT_SURFACE_MENTION_TOKENS: tuple[str, ...] = ("modulo.api", "modulo.core.audit_coverage")
+_AUDIT_SURFACE_MENTION_TOKENS: tuple[str, ...] = ("farna.api", "farna.core.audit_coverage")
 
 
 def _audit_session_double_needed(request: pytest.FixtureRequest) -> bool:
@@ -516,14 +516,14 @@ def _far681_any_credential_default(request: pytest.FixtureRequest) -> None:
     from fastapi import Depends
     from fastapi.security import HTTPAuthorizationCredentials
 
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
+    from farna.api.main import app
+    from farna.auth.dependencies import (
         _bearer_optional,
         get_current_tenant_user_or_api_key,
         get_current_user,
     )
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings, get_settings
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings, get_settings
 
     async def _default_any_credential(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),

@@ -248,8 +248,8 @@ saqRunner:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Command derived from docker-compose.yml: python -m saq modulo.core.saq_worker.runs_settings
-  command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
+  # Command derived from docker-compose.yml: python -m saq farna.core.saq_worker.runs_settings
+  command: ["python", "-m", "saq", "farna.core.saq_worker.runs_settings"]
 
   resources:
     requests:
@@ -281,8 +281,8 @@ saqSystem:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Command derived from docker-compose.yml: python -m modulo.core.saq_worker
-  command: ["python", "-m", "modulo.core.saq_worker"]
+  # Command derived from docker-compose.yml: python -m farna.core.saq_worker
+  command: ["python", "-m", "farna.core.saq_worker"]
 
   service:
     type: ClusterIP

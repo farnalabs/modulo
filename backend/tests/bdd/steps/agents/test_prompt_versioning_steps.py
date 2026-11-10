@@ -103,8 +103,8 @@ def _update_prompt(client, request, ctx, prompt: str) -> None:
         ctx["agent_id"] = agent.id
     updated = _update_agent_prompt(agent, prompt_val)
     with (
-        patch("modulo.api.routes.agents.update_agent", return_value=updated),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.update_agent", return_value=updated),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/agents/{ctx['agent_id']}", json={"prompt_template": prompt_val})
     request.node._resp = resp
@@ -130,8 +130,8 @@ def _trigger_new_run(ctx) -> None:
 def _get_prompt_versions(client, request, ctx) -> None:
     agent = ctx.get("agent")
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/agents/{ctx['agent_id']}/prompts")
     request.node._resp = resp

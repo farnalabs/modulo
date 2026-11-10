@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-import modulo.db.bootstrap as bootstrap_module
-from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
+import farna.db.bootstrap as bootstrap_module
+from farna.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
 from tests.unit._source_scan import iter_source_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -281,11 +281,11 @@ def test_promoted_main_fails_closed_on_downgrading_sslmode(
 
 _IMPORT_LIGHT_SCRIPT = (
     "import sys\n"
-    "import modulo.db.bootstrap\n"
-    "import modulo.db.url_utils\n"
-    "import modulo.db.health_checks\n"
-    "banned = [m for m in sys.modules if m.startswith(('sqlalchemy', 'modulo.api', 'modulo.db.models', "
-    "'modulo.core', 'modulo.auth'))]\n"
+    "import farna.db.bootstrap\n"
+    "import farna.db.url_utils\n"
+    "import farna.db.health_checks\n"
+    "banned = [m for m in sys.modules if m.startswith(('sqlalchemy', 'farna.api', 'farna.db.models', "
+    "'farna.core', 'farna.auth'))]\n"
     "assert not banned, f'promotion modules must stay dependency-light: {banned}'\n"
     "print('OK')\n"
 )

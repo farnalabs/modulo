@@ -11,11 +11,11 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -43,7 +43,7 @@ def _stub_get_agent() -> Generator[None, None, None]:
     ``get_agent`` before the write CRUD, but the apply tests only mock
     ``add_prompt_version``. Supply a same-org agent so the ownership check passes
     for the legitimate (same-org) principal these tests use."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_make_agent()):
         yield
 
 
@@ -170,15 +170,15 @@ class TestOptimizePrompt:
         }
 
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
             patch(
-                "modulo.api.routes.agents.get_eval_results_with_defs",
+                "farna.api.routes.agents.get_eval_results_with_defs",
                 return_value=(eval_results, eval_defs),
             ),
-            patch("modulo.api.routes.agents.set_rls_org"),
-            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
-            patch("modulo.core.model_backend_hub._build_backend", return_value=mock_backend),
-            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+            patch("farna.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("farna.core.model_backend_hub._build_backend", return_value=mock_backend),
+            patch("farna.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
         ):
             mock_sb = AsyncMock()
             mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
@@ -213,16 +213,16 @@ class TestOptimizePrompt:
         ]
 
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
             patch(
-                "modulo.api.routes.agents.get_eval_results_with_defs",
+                "farna.api.routes.agents.get_eval_results_with_defs",
                 return_value=(eval_results, {}),
             ),
-            patch("modulo.api.routes.agents.set_rls_org"),
-            patch("modulo.api.routes.agents.set_rls_user_context"),
-            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
-            patch("modulo.core.model_backend_hub._build_backend"),
-            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+            patch("farna.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.set_rls_user_context"),
+            patch("farna.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("farna.core.model_backend_hub._build_backend"),
+            patch("farna.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
         ):
             mock_sb = AsyncMock()
             mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
@@ -235,8 +235,8 @@ class TestOptimizePrompt:
 
     def test_optimize_returns_404_when_agent_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 _OPTIMIZE_URL,
@@ -248,9 +248,9 @@ class TestOptimizePrompt:
         agent = _make_agent()
         agent.prompt_version_history = [{"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}]
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.get_eval_results_with_defs", return_value=([], {})),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_eval_results_with_defs", return_value=([], {})),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 _OPTIMIZE_URL,
@@ -266,12 +266,12 @@ class TestOptimizePrompt:
         mock_optimizer.optimize = AsyncMock(return_value=MagicMock())
 
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.get_eval_results_with_defs"),
-            patch("modulo.api.routes.agents.set_rls_org"),
-            patch("modulo.api.routes.agents.create_secrets_backend"),
-            patch("modulo.core.model_backend_hub._build_backend"),
-            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_eval_results_with_defs"),
+            patch("farna.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.create_secrets_backend"),
+            patch("farna.core.model_backend_hub._build_backend"),
+            patch("farna.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
         ):
             resp = client.post(
                 f"/api/v1/agents/{_AGENT_ID}/prompts/v99/optimize",
@@ -324,15 +324,15 @@ class TestOptimizePrompt:
         }
 
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
             patch(
-                "modulo.api.routes.agents.get_eval_results_with_defs",
+                "farna.api.routes.agents.get_eval_results_with_defs",
                 return_value=(eval_results, eval_defs),
             ),
-            patch("modulo.api.routes.agents.set_rls_org"),
-            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
-            patch("modulo.core.model_backend_hub._build_backend", return_value=mock_backend),
-            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+            patch("farna.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("farna.core.model_backend_hub._build_backend", return_value=mock_backend),
+            patch("farna.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
         ):
             mock_sb = AsyncMock()
             mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
@@ -389,15 +389,15 @@ class TestOptimizePrompt:
         }
 
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
             patch(
-                "modulo.api.routes.agents.get_eval_results_with_defs",
+                "farna.api.routes.agents.get_eval_results_with_defs",
                 return_value=(eval_results, eval_defs),
             ),
-            patch("modulo.api.routes.agents.set_rls_org"),
-            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
-            patch("modulo.core.model_backend_hub._build_backend", return_value=mock_backend),
-            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+            patch("farna.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("farna.core.model_backend_hub._build_backend", return_value=mock_backend),
+            patch("farna.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
         ):
             mock_sb = AsyncMock()
             mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
@@ -428,8 +428,8 @@ class TestApplyOptimizedPrompt:
         agent.prompt_template = "Improved prompt"
 
         with (
-            patch("modulo.api.routes.agents.add_prompt_version", return_value=agent),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.add_prompt_version", return_value=agent),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 _APPLY_URL,
@@ -445,8 +445,8 @@ class TestApplyOptimizedPrompt:
 
     def test_apply_returns_404_when_agent_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.add_prompt_version", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.add_prompt_version", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 _APPLY_URL,

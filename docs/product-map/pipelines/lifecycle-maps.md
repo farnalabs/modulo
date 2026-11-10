@@ -3,9 +3,9 @@ id: feat-lifecycle-maps
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/lifecycle_maps.py
-  - backend/src/modulo/api/dependencies.py
-  - backend/src/modulo/core/lifecycle_map
+  - backend/src/farna/api/routes/lifecycle_maps.py
+  - backend/src/farna/api/dependencies.py
+  - backend/src/farna/core/lifecycle_map
   - frontend/src/stores/lifecycleMaps.ts
   - frontend/src/views/lifecycle-map/LifecycleMapView.vue
 unit-tests:
@@ -51,14 +51,14 @@ through, with edges representing transitions between stages.
       The API router itself is guarded by `require_in_dev_operator(...,
       require_dev_mode=True)`, so an operator with developer mode OFF is
       refused 403 before the handler and the service layer never runs
-      (`backend/src/modulo/api/routes/lifecycle_maps.py`,
-      `backend/src/modulo/api/dependencies.py`,
+      (`backend/src/farna/api/routes/lifecycle_maps.py`,
+      `backend/src/farna/api/dependencies.py`,
       `tests/unit/api/test_lifecycle_maps_routes.py::test_operator_is_denied_when_developer_mode_is_off`,
       `tests/unit/api/test_global_search.py`,
       `tests/unit/api/test_library_routes.py`)
 - [x] Lifecycle map CRUD: create, list, get, update, soft-delete, restore with
       name deduplication and org-scoped RLS
-      (`backend/src/modulo/api/routes/lifecycle_maps.py`,
+      (`backend/src/farna/api/routes/lifecycle_maps.py`,
       `backend/tests/bdd/features/lifecycle_maps/crud.feature`)
 - [x] Version management: content save bumps version, metadata-only updates do
       not; sequential saves produce unique increasing versions; FOR UPDATE row

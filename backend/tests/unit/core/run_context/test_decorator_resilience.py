@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.decorator import (
+from farna.core.pipeline_engine.decorator import (
     RunCancelledError,
     cancellable_node,
     set_cancellation_check,
@@ -123,7 +123,7 @@ class TestReservedKeyProtection:
     async def test_context_setter_cannot_overwrite_the_earned_pin(self) -> None:
         """FAR-1175 S1 — a context-setter's write of the pinned earned level is
         stripped, while its legitimate ``autonomy_recommendation`` survives."""
-        from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
+        from farna.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
 
         @cancellable_node(role="context_setter")
         async def setter(state: dict[str, Any]) -> dict[str, Any]:
@@ -166,7 +166,7 @@ class TestReservedKeyProtection:
         assert "cancelled" in records[0].reserved_keys
 
     async def test_non_setter_reserved_keys_still_raises_violation(self) -> None:
-        from modulo.core.pipeline_engine import ContextSetterViolationError
+        from farna.core.pipeline_engine import ContextSetterViolationError
 
         @cancellable_node(role="agent")
         async def bad_node(state: dict[str, Any]) -> dict[str, Any]:

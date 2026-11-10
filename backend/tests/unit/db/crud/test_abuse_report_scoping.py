@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.rating import review_abuse_report
-from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
+from farna.db.crud.rating import review_abuse_report
+from farna.db.models.primitive_abuse_report import PrimitiveAbuseReport
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")

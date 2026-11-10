@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.guardrails.conformance import ConformanceRecheckResult
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.guardrails.conformance import ConformanceRecheckResult
 
 _ORG_ID = uuid.uuid4()
 _PIPE_ID = uuid.uuid4()
@@ -78,7 +78,7 @@ def _set_ctx(
 
 
 def _patch_check_node_start(monkeypatch: pytest.MonkeyPatch, result: ConformanceRecheckResult | None) -> AsyncMock:
-    import modulo.core.guardrails.conformance as conf
+    import farna.core.guardrails.conformance as conf
 
     mock = AsyncMock()
     if result is not None:
@@ -174,7 +174,7 @@ async def test_gate_resume_rejected_fails_closed(monkeypatch: pytest.MonkeyPatch
     """Rejecting THIS node's conformance block FAILS CLOSED: the node must not
     execute with the capability the guardrail protected, so the run is denied
     (``GuardrailBlockedError`` -> terminal ``eval_failed``), never resumed."""
-    import modulo.core.guardrails as gr
+    import farna.core.guardrails as gr
 
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(monkeypatch, None)
@@ -669,8 +669,8 @@ async def test_gate_absent_node_def_forwards_none(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core import audit_logger
-    from modulo.db import rls
+    from farna.core import audit_logger
+    from farna.db import rls
 
     append_mock = AsyncMock()
     monkeypatch.setattr(audit_logger, "append_audit_event", append_mock)
@@ -707,7 +707,7 @@ async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.Monk
 
 
 async def test_append_conformance_audit_never_raises(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core import audit_logger
+    from farna.core import audit_logger
 
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("audit db down")

@@ -50,7 +50,7 @@ def _scalars_result(rows: list[Any]) -> MagicMock:
 
 async def test_pre_guardrail_load_includes_deleted_at_filter():
     """_load_guardrail_definitions must add deleted_at IS NULL to the WHERE."""
-    from modulo.core.trigger_engine.pre_guardrail import _load_guardrail_definitions
+    from farna.core.trigger_engine.pre_guardrail import _load_guardrail_definitions
 
     pipeline_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -71,7 +71,7 @@ async def test_pre_guardrail_load_includes_deleted_at_filter():
 
 async def test_load_node_guardrails_includes_deleted_at_filter():
     """load_node_guardrails must add deleted_at IS NULL to the WHERE."""
-    from modulo.core.guardrails.conformance import load_node_guardrails
+    from farna.core.guardrails.conformance import load_node_guardrails
 
     pipeline_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -87,7 +87,7 @@ async def test_load_node_guardrails_includes_deleted_at_filter():
 
 async def test_load_node_guardrails_without_node_id_scopes_org_level():
     """Without a node_id the loader filters to org-level rows (node_id IS NULL)."""
-    from modulo.core.guardrails.conformance import load_node_guardrails
+    from farna.core.guardrails.conformance import load_node_guardrails
 
     pipeline_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -110,7 +110,7 @@ async def test_load_node_guardrails_without_node_id_scopes_org_level():
 
 async def test_load_claimed_guardrails_includes_deleted_at_filter():
     """load_claimed_guardrails must add deleted_at IS NULL to the WHERE."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     pipeline_id = uuid.uuid4()
     org_id = uuid.uuid4()

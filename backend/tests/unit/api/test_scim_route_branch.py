@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes import scim as scim_routes
-from modulo.api.routes.scim import (
+from farna.api.routes import scim as scim_routes
+from farna.api.routes.scim import (
     _get_base_url,
     _group_to_scim,
     _scim_error,
@@ -234,7 +234,7 @@ def test_require_human_scim_user_rejects_service_account() -> None:
     account = MagicMock()
     account.id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.scim.is_service_account", return_value=True),
+        patch("farna.api.routes.scim.is_service_account", return_value=True),
         pytest.raises(HTTPException) as exc_info,
     ):
         scim_routes._require_human_scim_user(account, account.id)
@@ -244,7 +244,7 @@ def test_require_human_scim_user_rejects_service_account() -> None:
 def test_require_human_scim_user_accepts_human_account() -> None:
     account = MagicMock()
     account.id = uuid.uuid4()
-    with patch("modulo.api.routes.scim.is_service_account", return_value=False):
+    with patch("farna.api.routes.scim.is_service_account", return_value=False):
         assert scim_routes._require_human_scim_user(account, account.id) is account
 
 
@@ -309,7 +309,7 @@ def test_group_member_remove_helpers_cover_paths() -> None:
     session = AsyncMock()
     group = MagicMock(id=uuid.uuid4())
     member_id = uuid.uuid4()
-    with patch("modulo.api.routes.scim.scim_remove_group_member", new_callable=AsyncMock) as remove:
+    with patch("farna.api.routes.scim.scim_remove_group_member", new_callable=AsyncMock) as remove:
         asyncio.run(scim_routes._remove_member_by_path(session, group, f'members[value eq "{member_id}"]'))
         asyncio.run(scim_routes._remove_member_by_path(session, group, 'members[value eq "bad"]'))
         asyncio.run(scim_routes._remove_member_by_path(session, group, "other"))
@@ -322,7 +322,7 @@ def test_group_member_remove_helpers_cover_paths() -> None:
 def test_apply_remove_group_op_covers_empty_and_value() -> None:
     session = AsyncMock()
     group = MagicMock(id=uuid.uuid4())
-    with patch("modulo.api.routes.scim._remove_members_from_value", new_callable=AsyncMock) as remove:
+    with patch("farna.api.routes.scim._remove_members_from_value", new_callable=AsyncMock) as remove:
         asyncio.run(scim_routes._apply_remove_group_op(session, group, MagicMock(path=None, value=None)))
         asyncio.run(scim_routes._apply_remove_group_op(session, group, MagicMock(path=None, value={"value": "x"})))
     remove.assert_awaited_once()

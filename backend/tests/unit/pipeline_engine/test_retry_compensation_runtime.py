@@ -30,8 +30,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError, SandboxNodeFailedError
-from modulo.core.pipeline_engine.runtime_retry import (
+from farna.core.pipeline_engine.node_runner import ConnectorNodeFailedError, SandboxNodeFailedError
+from farna.core.pipeline_engine.runtime_retry import (
     CompensationFailedError,
     failure_event,
     make_retrying_node_fn,
@@ -777,7 +777,7 @@ async def test_compile_path_wires_retry_wrapper_without_breaking_normal_exec() -
     identical to before — the wrapper is transparent on success. The node here
     carries a ``retry`` config so we know the wrapper was actually installed.
     """
-    from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
+    from farna.core.pipeline_engine.graph_cache import build_graph_from_json
 
     graph = {
         "nodes": [

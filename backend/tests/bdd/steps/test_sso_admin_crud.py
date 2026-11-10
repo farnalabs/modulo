@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.bdd.conftest import harden_session_double
 
 
@@ -38,8 +38,8 @@ def _stub_audit_session() -> Generator[None, None, None]:
     """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
     fresh ``audit_session`` (a real engine — these steps run without a database),
     so stub that seam; the dependency itself still runs."""
-    from modulo.api.main import app
-    from modulo.core.audit_coverage import audit_session
+    from farna.api.main import app
+    from farna.core.audit_coverage import audit_session
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
@@ -159,7 +159,7 @@ def _dispatch(request: Any, method: str, url: str, *, json: dict[str, Any] | Non
 
 
 def _rls_patch() -> Any:
-    return patch("modulo.api.routes.admin_sso.set_rls_org", new=AsyncMock())
+    return patch("farna.api.routes.admin_sso.set_rls_org", new=AsyncMock())
 
 
 def _body(request: Any) -> dict[str, Any]:
@@ -281,7 +281,7 @@ def _when_list_providers(request: Any) -> None:
     providers = list(ctx.get("providers", {}).values())
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=providers)),
+        patch("farna.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=providers)),
     ]
     _dispatch(request, "GET", "/api/v1/admin/sso/providers")
 
@@ -302,11 +302,11 @@ def _when_create_oidc(request: Any, name: str, discovery_url: str) -> None:
     if not ctx.get("unrestricted"):
         payload["allowed_domains"] = ["example.com"]
     ctx["submitted_secret"] = payload["client_secret"]
-    patches = [_rls_patch(), patch("modulo.api.routes.admin_sso.create_provider", new=ctx["create_provider"])]
+    patches = [_rls_patch(), patch("farna.api.routes.admin_sso.create_provider", new=ctx["create_provider"])]
     if "flag_off" in ctx:
         patches.append(
             patch(
-                "modulo.api.routes.admin_sso.resolve_sso_unrestricted_provisioning",
+                "farna.api.routes.admin_sso.resolve_sso_unrestricted_provisioning",
                 new=AsyncMock(return_value=not ctx["flag_off"]),
             )
         )
@@ -329,7 +329,7 @@ def _when_create_saml(request: Any, name: str, metadata_url: str) -> None:
         payload["allowed_domains"] = ["example.com"]
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.create_provider", new=ctx["create_provider"]),
+        patch("farna.api.routes.admin_sso.create_provider", new=ctx["create_provider"]),
     ]
     _dispatch(request, "POST", "/api/v1/admin/sso/providers", json=payload)
 
@@ -359,7 +359,7 @@ def _when_rename_provider(request: Any, provider_id: str, new_name: str) -> None
         )
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=returned)),
+        patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=returned)),
     ]
     _dispatch(request, "PUT", f"/api/v1/admin/sso/providers/{_provider_uuid(provider_id)}", json={"name": new_name})
 
@@ -376,7 +376,7 @@ def _when_toggle_provider(request: Any, provider_id: str) -> None:
     ctx["standard_patches"] = [
         _rls_patch(),
         patch(
-            "modulo.api.routes.admin_sso.toggle_provider",
+            "farna.api.routes.admin_sso.toggle_provider",
             new=AsyncMock(
                 return_value=_make_provider(
                     id=_provider_uuid(provider_id),
@@ -396,7 +396,7 @@ def _when_delete_provider(request: Any, provider_id: str) -> None:
     deleted = provider_id in ctx.get("providers", {})
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=deleted)),
+        patch("farna.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=deleted)),
     ]
     _dispatch(request, "DELETE", f"/api/v1/admin/sso/providers/{_provider_uuid(provider_id)}")
 
@@ -407,15 +407,15 @@ def _when_test_connection(request: Any, provider_id: str) -> None:
     provider = ctx["providers"][provider_id]
     patches = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=provider)),
+        patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=provider)),
     ]
     if provider.provider_type == "oidc":
         discovery = ctx.get("discovery", _OIDC_DISCOVERY)
         patches.extend(
             [
-                patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
+                patch("farna.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
                 patch(
-                    "modulo.api.routes.admin_sso.pinned_async_client",
+                    "farna.api.routes.admin_sso.pinned_async_client",
                     new=AsyncMock(return_value=_make_pinned_discovery(discovery)),
                 ),
             ]
@@ -445,7 +445,7 @@ def _when_set_group_mappings(request: Any, provider_id: str) -> None:
     ctx["mappings"] = mappings
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=provider)),
+        patch("farna.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=provider)),
     ]
     _dispatch(
         request,
@@ -466,7 +466,7 @@ def _when_get_group_mappings(request: Any, provider_id: str) -> None:
     )
     ctx["standard_patches"] = [
         _rls_patch(),
-        patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=provider)),
+        patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=provider)),
     ]
     _dispatch(request, "GET", f"/api/v1/admin/sso/providers/{_provider_uuid(provider_id)}/group-mappings")
 

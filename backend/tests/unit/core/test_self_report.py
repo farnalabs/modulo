@@ -21,11 +21,11 @@ from typing import Any
 
 import pytest
 
-from modulo.core.lifecycle_map.self_report import (
+from farna.core.lifecycle_map.self_report import (
     parse_self_report_refs,
     validate_and_normalise_reported_refs,
 )
-from modulo.settings import get_settings, work_item_refs_cap
+from farna.settings import get_settings, work_item_refs_cap
 
 _ENTRY: dict[str, Any] = {"kind": "github_pr", "ref": "#123"}
 

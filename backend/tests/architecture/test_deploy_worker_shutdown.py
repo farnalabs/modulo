@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.saq_worker import _CANCELLATION_HARD_DEADLINE_S, _SHUTDOWN_GRACE_PERIOD_S
+from farna.core.saq_worker import _CANCELLATION_HARD_DEADLINE_S, _SHUTDOWN_GRACE_PERIOD_S
 
 PRODUCT = Path(__file__).resolve().parent.parent.parent.parent
 ENTRYPOINT = PRODUCT / "deploy" / "fly" / "entrypoint.sh"
@@ -253,7 +253,7 @@ exit 0
         """True once every TERM-ignoring stub has installed its trap."""
         if not self.ignore_term:
             return True
-        return all((self.run_dir / f"{name}.ready").exists() for name in ("saq", "modulo.core.saq_worker"))
+        return all((self.run_dir / f"{name}.ready").exists() for name in ("saq", "farna.core.saq_worker"))
 
     def _workers_registered(self) -> bool:
         for path in (self.run_pid_file, self.system_pid_file):

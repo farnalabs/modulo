@@ -32,8 +32,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.connectors.base import (
+import farna.core.pipeline_engine.node_runner as nr
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -43,13 +43,13 @@ from modulo.connectors.base import (
     node_fires_dispatch_job,
     node_routes_binding_to_connector,
 )
-from modulo.core.node_output_split import DISPATCH_PROVENANCE_FIELDS, split_node_output
-from modulo.core.pipeline_engine.decorator import set_connector_hub
-from modulo.core.pipeline_engine.executor import _graph_is_idempotent, _retry_policy_applies
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
-from modulo.core.pipeline_engine.node_runner import make_connector_fn
-from modulo.core.pipeline_engine.runtime_retry import make_retrying_node_fn
-from modulo.db.crud.run import graph_contains_dispatch
+from farna.core.node_output_split import DISPATCH_PROVENANCE_FIELDS, split_node_output
+from farna.core.pipeline_engine.decorator import set_connector_hub
+from farna.core.pipeline_engine.executor import _graph_is_idempotent, _retry_policy_applies
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
+from farna.core.pipeline_engine.node_runner import make_connector_fn
+from farna.core.pipeline_engine.runtime_retry import make_retrying_node_fn
+from farna.db.crud.run import graph_contains_dispatch
 
 _CI_TYPE = "github_actions_ci"
 
@@ -130,7 +130,7 @@ def test_run_level_retry_gate_is_closed_by_the_binding_alone():
 
 
 def _retry_after_budget() -> int:
-    from modulo.core.pipeline_engine.executor import _retry_after_policy
+    from farna.core.pipeline_engine.executor import _retry_after_policy
 
     policy = {"max_retries": 3}
     budget = _retry_after_policy(policy, "failed", "DispatchWaitTimeoutError", "wait window expired")
@@ -357,7 +357,7 @@ def _engine_route(node: dict[str, Any]) -> str:
     Every factory it can select is patched with a recorder, so the routing is
     OBSERVED (which branch ran) rather than inferred from the source.
     """
-    import modulo.core.pipeline_engine.graph_cache as gc
+    import farna.core.pipeline_engine.graph_cache as gc
 
     picked: list[str] = []
 

@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
-from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_anonymous_plan_context, get_plan_context
+from farna.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 from tests.bdd.conftest import harden_session_double
 
 # FAR-1733: the env-SAML licence gates verify the key (signature + expiry)
@@ -63,8 +63,8 @@ def _stub_audit_session() -> Generator[None, None, None]:
     """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
     fresh ``audit_session`` (a real engine — these steps run without a database),
     so stub that seam; the dependency itself still runs."""
-    from modulo.api.main import app
-    from modulo.core.audit_coverage import audit_session
+    from farna.api.main import app
+    from farna.core.audit_coverage import audit_session
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
@@ -190,7 +190,7 @@ def _make_id_token(email: str, name: str, groups: list[str] | None = None, sub: 
 
 
 def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
-    from modulo.auth.sso import sign_state
+    from farna.auth.sso import sign_state
 
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
@@ -202,8 +202,8 @@ def _browser_bound_state(provider_id: str, secret_key: str = _VALID_32) -> tuple
     the returned ``state`` plus the per-request nonce and PKCE verifier. These
     direct-callback steps install it explicitly, as a real login redirect would.
     """
-    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
-    from modulo.auth.sso import sign_state
+    from farna.api.routes.sso import _OIDC_FLOW_COOKIE
+    from farna.auth.sso import sign_state
 
     raw_state = uuid.uuid4().hex
     state = sign_state(f"{provider_id}:{raw_state}", secret_key)
@@ -212,7 +212,7 @@ def _browser_bound_state(provider_id: str, secret_key: str = _VALID_32) -> tuple
 
 
 def _setup_plan(license_key: str = _VALID_LICENSE_KEY) -> None:
-    from modulo.api.main import app as _app
+    from farna.api.main import app as _app
 
     if not license_key:
         _plan = CommunityTier()
@@ -232,7 +232,7 @@ def _setup_plan(license_key: str = _VALID_LICENSE_KEY) -> None:
 
 
 def _setup_oidc_client(license_key: str = _VALID_LICENSE_KEY) -> None:
-    from modulo.api.main import app as _app
+    from farna.api.main import app as _app
 
     _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key)
     _setup_plan(license_key)
@@ -240,7 +240,7 @@ def _setup_oidc_client(license_key: str = _VALID_LICENSE_KEY) -> None:
 
 
 def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY) -> None:
-    from modulo.api.main import app as _app
+    from farna.api.main import app as _app
 
     _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key)
     _setup_plan(license_key)
@@ -339,7 +339,7 @@ def set_group_mappings(provider_id: str, request: Any, ctx: dict[str, Any], clie
     mock_provider = MagicMock()
     mock_provider.group_mappings = mappings
 
-    with patch("modulo.api.routes.admin_sso.set_group_mappings", new_callable=AsyncMock) as mock_set:
+    with patch("farna.api.routes.admin_sso.set_group_mappings", new_callable=AsyncMock) as mock_set:
         mock_set.return_value = mock_provider
         resp = client.put(
             f"/api/v1/admin/sso/providers/{pid}/group-mappings",
@@ -361,7 +361,7 @@ def get_group_mappings(provider_id: str, request: Any, ctx: dict[str, Any], clie
     mock_provider = MagicMock()
     mock_provider.group_mappings = stored
 
-    with patch("modulo.api.routes.admin_sso.get_provider", new_callable=AsyncMock) as mock_get:
+    with patch("farna.api.routes.admin_sso.get_provider", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = mock_provider
         resp = client.get(f"/api/v1/admin/sso/providers/{pid}/group-mappings")
         _store_response(request, ctx, resp)
@@ -384,13 +384,13 @@ def oidc_callback_with_groups(groups: str, request: Any, ctx: dict[str, Any], cl
     id_token = _make_id_token(email, name, groups=group_list)
 
     with (
-        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
-        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-        patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("farna.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+        patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("farna.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_disc.return_value = {
             "token_endpoint": "https://oauth2.googleapis.com/token",
@@ -449,12 +449,12 @@ def saml_acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client:
     encoded = _make_saml_response(email, name, groups=group_list)
 
     with (
-        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
-        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-        patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        patch("farna.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("farna.auth.sso.ModuloSamlAuth") as mock_handler,
+        patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("farna.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         mock_handler.return_value.process_response.return_value = {

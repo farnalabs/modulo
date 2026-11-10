@@ -14,17 +14,17 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.routes.evidence import (
+from farna.api.routes.evidence import (
     _count_risk_assessment_by_action,
     _count_risk_assessment_rows,
     _load_risk_assessment_rows,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.evidence import Evidence
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from farna.db.models.account import Account
+from farna.db.models.evidence import Evidence
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 

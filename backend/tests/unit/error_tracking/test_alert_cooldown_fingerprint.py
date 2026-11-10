@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
-from modulo.core.error_tracking.alerting import AlertEngine, _CooldownKey
+from farna.core.error_tracking.alerting import AlertEngine, _CooldownKey
 from tests.unit.error_tracking._factories import GROUP_ID as _GROUP_ID
 from tests.unit.error_tracking._factories import ORG_ID as _ORG_ID
 from tests.unit.error_tracking._factories import make_rule as _make_rule
@@ -59,7 +59,7 @@ class TestCrossRunCooldown:
         assert len(alerts) == 1
 
     async def test_suppression_fires_metric(self) -> None:
-        from modulo.core.error_tracking import alerting as alerting_mod
+        from farna.core.error_tracking import alerting as alerting_mod
 
         rule = _make_rule()
         engine = AlertEngine(redis_client=None)
@@ -71,7 +71,7 @@ class TestCrossRunCooldown:
             suppressed.assert_called_once_with(str(rule.id))
 
     async def test_no_suppression_metric_on_first_fire(self) -> None:
-        from modulo.core.error_tracking import alerting as alerting_mod
+        from farna.core.error_tracking import alerting as alerting_mod
 
         rule = _make_rule()
         engine = AlertEngine(redis_client=None)
@@ -101,7 +101,7 @@ class TestPerRunEnumeration:
         assert len(b1) == 1
 
     async def test_per_run_suppression_fires_metric(self) -> None:
-        from modulo.core.error_tracking import alerting as alerting_mod
+        from farna.core.error_tracking import alerting as alerting_mod
 
         rule = _make_rule(cooldown_seconds=0)
         engine = AlertEngine(redis_client=None)

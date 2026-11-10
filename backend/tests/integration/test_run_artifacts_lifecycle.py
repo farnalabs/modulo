@@ -15,8 +15,8 @@ import uuid
 
 import pytest
 
-from modulo.core.artifacts.store import LocalArtifactStore, _encode_segment
-from modulo.core.artifacts.writer import ArtifactWriter
+from farna.core.artifacts.store import LocalArtifactStore, _encode_segment
+from farna.core.artifacts.writer import ArtifactWriter
 
 pytestmark = pytest.mark.integration
 

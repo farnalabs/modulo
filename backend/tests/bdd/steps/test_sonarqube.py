@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/sonarqube.feature")
@@ -25,7 +25,7 @@ def _build_connector(unhealthy: bool = False) -> AsyncMock:
 
     ``query``/``write``/``health_check`` are async and raise ValueError for
     unsupported resources or missing required filters, matching
-    ``SonarQubeConnector`` in ``src/modulo/connectors/sonarqube/``.
+    ``SonarQubeConnector`` in ``src/farna/connectors/sonarqube/``.
     """
     mock = AsyncMock()
     mock.connector_type = "sonarqube"

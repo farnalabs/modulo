@@ -25,13 +25,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -155,7 +155,7 @@ def _assert_masked_composite_body(body: dict[str, Any]) -> None:
 
 def test_response_validator_masks_composite_nodes() -> None:
     """Any LibraryPrimitiveResponse serialisation of a composite masks node creds."""
-    from modulo.api.routes.library import LibraryPrimitiveResponse
+    from farna.api.routes.library import LibraryPrimitiveResponse
 
     prim = _make_composite_primitive()
     resp = LibraryPrimitiveResponse.model_validate(prim)
@@ -169,7 +169,7 @@ def test_response_validator_masks_composite_nodes() -> None:
 
 def test_response_validator_never_mutates_the_source_orm_row() -> None:
     """The masker builds new dicts — the stored sentinel-free row stays raw."""
-    from modulo.api.routes.library import LibraryPrimitiveResponse
+    from farna.api.routes.library import LibraryPrimitiveResponse
 
     prim = _make_composite_primitive()
     LibraryPrimitiveResponse.model_validate(prim)
@@ -179,7 +179,7 @@ def test_response_validator_never_mutates_the_source_orm_row() -> None:
 
 def test_response_validator_leaves_non_composite_content_byte_identical() -> None:
     """Non-composite primitives pass through untouched — no accidental masking."""
-    from modulo.api.routes.library import LibraryPrimitiveResponse
+    from farna.api.routes.library import LibraryPrimitiveResponse
 
     p = MagicMock()
     p.id = uuid.uuid4()
@@ -227,7 +227,7 @@ def test_response_validator_leaves_non_composite_content_byte_identical() -> Non
 
 def test_response_validator_masks_only_the_nodes_key() -> None:
     """Masking touches ONLY content_json['nodes'] — sibling keys are preserved."""
-    from modulo.api.routes.library import LibraryPrimitiveResponse
+    from farna.api.routes.library import LibraryPrimitiveResponse
 
     prim = _make_composite_primitive()
     prim.content_json = {
@@ -252,7 +252,7 @@ def test_read_surface_list_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     page = PageResult(items=[prim], total=1, page=1, page_size=20)
     with patch(
-        "modulo.api.routes.library.list_primitives",
+        "farna.api.routes.library.list_primitives",
         new_callable=AsyncMock,
         return_value=page,
     ):
@@ -266,12 +266,12 @@ def test_read_surface_get_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     with (
         patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{prim.id}")
 
@@ -283,17 +283,17 @@ def test_read_surface_create_response_masks_composite(client: TestClient) -> Non
     prim = _make_composite_primitive()
     with (
         patch(
-            "modulo.api.routes.library.get_primitive_by_slug",
+            "farna.api.routes.library.get_primitive_by_slug",
             new_callable=AsyncMock,
             return_value=None,
         ),
         patch(
-            "modulo.api.routes.library.create_library_primitive",
+            "farna.api.routes.library.create_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries",
@@ -313,17 +313,17 @@ def test_read_surface_patch_response_masks_composite(client: TestClient) -> None
     prim = _make_composite_primitive()
     with (
         patch(
-            "modulo.api.routes.library.get_library_primitive",
+            "farna.api.routes.library.get_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
         patch(
-            "modulo.api.routes.library.update_library_primitive",
+            "farna.api.routes.library.update_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(
             f"/api/v1/libraries/{prim.id}",
@@ -337,9 +337,9 @@ def test_read_surface_patch_response_masks_composite(client: TestClient) -> None
 def test_read_surface_delete_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.api.routes.library.soft_delete_library_primitive",
+            "farna.api.routes.library.soft_delete_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
@@ -353,9 +353,9 @@ def test_read_surface_delete_response_masks_composite(client: TestClient) -> Non
 def test_read_surface_restore_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.library.restore_library_primitive",
+            "farna.api.routes.library.restore_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ),
@@ -370,14 +370,14 @@ def test_read_surface_adapt_response_masks_composite(client: TestClient) -> None
     prim = _make_composite_primitive()
     with (
         patch(
-            "modulo.api.routes.library.copy_to_adapt",
+            "farna.api.routes.library.copy_to_adapt",
             new_callable=AsyncMock,
             return_value=prim,
         ),
-        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/adapt", json={})
 
@@ -388,7 +388,7 @@ def test_read_surface_adapt_response_masks_composite(client: TestClient) -> None
 def test_read_surface_community_contribute_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     with patch(
-        "modulo.api.routes.library.contribute_primitive",
+        "farna.api.routes.library.contribute_primitive",
         new_callable=AsyncMock,
         return_value=prim,
     ):
@@ -411,7 +411,7 @@ def test_read_surface_community_contributions_list_masks_composite(client: TestC
     prim = _make_composite_primitive()
     page = PageResult(items=[prim], total=1, page=1, page_size=20)
     with patch(
-        "modulo.api.routes.library.list_org_contributions",
+        "farna.api.routes.library.list_org_contributions",
         new_callable=AsyncMock,
         return_value=page,
     ):
@@ -432,7 +432,7 @@ def test_read_surface_admin_publish_response_masks_composite(client: TestClient)
     )
     app.dependency_overrides[get_current_user] = lambda: admin_principal
     with patch(
-        "modulo.api.routes.library.publish_contribution",
+        "farna.api.routes.library.publish_contribution",
         new_callable=AsyncMock,
         return_value=prim,
     ):
@@ -452,17 +452,17 @@ def test_read_surface_community_install_response_masks_composite(client: TestCli
     entry = {"id": str(entry_id), "type": "composite"}
     with (
         patch(
-            "modulo.api.routes.community_library.get_community_entry",
+            "farna.api.routes.community_library.get_community_entry",
             new_callable=AsyncMock,
             return_value=entry,
         ),
         patch(
-            "modulo.api.routes.community_library.install_community_entry",
+            "farna.api.routes.community_library.install_community_entry",
             new_callable=AsyncMock,
             return_value=prim,
         ),
-        patch("modulo.api.routes.community_library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.community_library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.community_library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.community_library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/libraries/community/{entry_id}/install",
@@ -479,12 +479,12 @@ def test_read_surface_contributions_list_masks_composite(client: TestClient) -> 
     page = PageResult(items=[prim], total=1, page=1, page_size=20)
     with (
         patch(
-            "modulo.api.routes.contributions.list_contributions",
+            "farna.api.routes.contributions.list_contributions",
             new_callable=AsyncMock,
             return_value=page,
         ),
-        patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.contributions.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/library/contribute")
 
@@ -505,16 +505,16 @@ def test_write_create_composite_rejects_fresh_mask_sentinel(client: TestClient) 
     }
     with (
         patch(
-            "modulo.api.routes.library.get_primitive_by_slug",
+            "farna.api.routes.library.get_primitive_by_slug",
             new_callable=AsyncMock,
             return_value=None,
         ),
         patch(
-            "modulo.api.routes.library.create_library_primitive",
+            "farna.api.routes.library.create_library_primitive",
             new_callable=AsyncMock,
         ) as create_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries",
@@ -538,17 +538,17 @@ def test_write_create_composite_stores_declared_values_as_is(client: TestClient)
     prim = _make_composite_primitive()
     with (
         patch(
-            "modulo.api.routes.library.get_primitive_by_slug",
+            "farna.api.routes.library.get_primitive_by_slug",
             new_callable=AsyncMock,
             return_value=None,
         ),
         patch(
-            "modulo.api.routes.library.create_library_primitive",
+            "farna.api.routes.library.create_library_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ) as create_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries",
@@ -575,17 +575,17 @@ def test_write_patch_composite_resolves_mask_echo_against_stored(client: TestCli
     echo_node["env_vars"] = {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK, "APP_URL": "https://example.com"}
     with (
         patch(
-            "modulo.api.routes.library.get_library_primitive",
+            "farna.api.routes.library.get_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ),
         patch(
-            "modulo.api.routes.library.update_library_primitive",
+            "farna.api.routes.library.update_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ) as update_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(
             f"/api/v1/libraries/{stored.id}",
@@ -608,16 +608,16 @@ def test_write_patch_composite_rejects_fresh_mask_sentinel(client: TestClient) -
     fresh_sentinel_node = {"id": "n2", "env_vars": {"NEW_TOKEN": SENSITIVE_VALUE_MASK}}
     with (
         patch(
-            "modulo.api.routes.library.get_library_primitive",
+            "farna.api.routes.library.get_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ),
         patch(
-            "modulo.api.routes.library.update_library_primitive",
+            "farna.api.routes.library.update_library_primitive",
             new_callable=AsyncMock,
         ) as update_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(
             f"/api/v1/libraries/{stored.id}",
@@ -636,17 +636,17 @@ def test_write_patch_composite_echoless_deletion_stays_removed(client: TestClien
     emptied_node["env_vars"] = {"APP_URL": "https://example.com"}
     with (
         patch(
-            "modulo.api.routes.library.get_library_primitive",
+            "farna.api.routes.library.get_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ),
         patch(
-            "modulo.api.routes.library.update_library_primitive",
+            "farna.api.routes.library.update_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ) as update_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(
             f"/api/v1/libraries/{stored.id}",
@@ -663,11 +663,11 @@ def test_write_community_contribute_composite_rejects_fresh_mask_sentinel(client
     sentinel_node = {"id": "n1", "env_vars": {"LIB_TOKEN": SENSITIVE_VALUE_MASK}}
     with (
         patch(
-            "modulo.api.routes.library.contribute_primitive",
+            "farna.api.routes.library.contribute_primitive",
             new_callable=AsyncMock,
         ) as contribute_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/community/contribute",
@@ -700,12 +700,12 @@ def test_masked_library_read_to_patch_round_trip_preserves_stored_secret(client:
 
     with (
         patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         read_resp = client.get(f"/api/v1/libraries/{stored.id}")
 
@@ -718,17 +718,17 @@ def test_masked_library_read_to_patch_round_trip_preserves_stored_secret(client:
     # Write that content_json VERBATIM through the real PATCH surface.
     with (
         patch(
-            "modulo.api.routes.library.get_library_primitive",
+            "farna.api.routes.library.get_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ),
         patch(
-            "modulo.api.routes.library.update_library_primitive",
+            "farna.api.routes.library.update_library_primitive",
             new_callable=AsyncMock,
             return_value=stored,
         ) as update_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         write_resp = client.patch(
             f"/api/v1/libraries/{stored.id}",
@@ -757,7 +757,7 @@ def test_response_validator_passes_non_list_nodes_shape_through() -> None:
     composite routes apply before this control existed; structural rejection
     remains the boundary validators' job (_assert_composite_content_json).
     """
-    from modulo.api.routes.library import LibraryPrimitiveResponse
+    from farna.api.routes.library import LibraryPrimitiveResponse
 
     prim = _make_composite_primitive()
     prim.content_json = {"nodes": "not-a-list", "edges": []}
@@ -768,7 +768,7 @@ def test_response_validator_passes_non_list_nodes_shape_through() -> None:
 
 
 async def test_mcp_library_detail_resource_masks_composite_content() -> None:
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     ms._ctx_org_id.set(_ORG_ID)
     mock_session: Any = AsyncMock()
@@ -781,7 +781,7 @@ async def test_mcp_library_detail_resource_masks_composite_content() -> None:
             patch.object(ms, "_session", return_value=session_cm),
             # mcp_server imports get_primitive_by_slug into its OWN namespace.
             patch(
-                "modulo.api.mcp_server.get_primitive_by_slug",
+                "farna.api.mcp_server.get_primitive_by_slug",
                 new_callable=AsyncMock,
                 return_value=_make_composite_primitive(),
             ) as get_by_slug_mock,
@@ -806,7 +806,7 @@ async def test_mcp_library_detail_resource_passes_non_list_nodes_through() -> No
     The MCP mask site only rewrites a list-shaped ``nodes`` key; any other
     shape passes straight through (the serializer must not crash on it).
     """
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     ms._ctx_org_id.set(_ORG_ID)
     mock_session: Any = AsyncMock()
@@ -820,7 +820,7 @@ async def test_mcp_library_detail_resource_passes_non_list_nodes_through() -> No
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=session_cm),
             patch(
-                "modulo.api.mcp_server.get_primitive_by_slug",
+                "farna.api.mcp_server.get_primitive_by_slug",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -839,7 +839,7 @@ async def test_mcp_library_detail_resource_passes_non_dict_composite_content_thr
     The MCP mask site only rewrites a dict-shaped ``content_json``; any other
     shape passes straight through (the serializer must not crash on it).
     """
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     ms._ctx_org_id.set(_ORG_ID)
     mock_session: Any = AsyncMock()
@@ -853,7 +853,7 @@ async def test_mcp_library_detail_resource_passes_non_dict_composite_content_thr
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=session_cm),
             patch(
-                "modulo.api.mcp_server.get_primitive_by_slug",
+                "farna.api.mcp_server.get_primitive_by_slug",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -867,7 +867,7 @@ async def test_mcp_library_detail_resource_passes_non_dict_composite_content_thr
 
 async def test_mcp_library_detail_resource_leaves_non_composite_content_raw() -> None:
     """A non-composite primitive resource keeps its content byte-identical."""
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     ms._ctx_org_id.set(_ORG_ID)
     mock_session: Any = AsyncMock()
@@ -881,7 +881,7 @@ async def test_mcp_library_detail_resource_leaves_non_composite_content_raw() ->
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=session_cm),
             patch(
-                "modulo.api.mcp_server.get_primitive_by_slug",
+                "farna.api.mcp_server.get_primitive_by_slug",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),

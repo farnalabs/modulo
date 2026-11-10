@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
 from sqlalchemy.sql.operators import eq
 
-from modulo.core.graph_validator import ValidationResult
+from farna.core.graph_validator import ValidationResult
 
 UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"

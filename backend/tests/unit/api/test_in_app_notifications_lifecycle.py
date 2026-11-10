@@ -53,15 +53,15 @@ from httpx import Response
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
-from modulo.db.models.org_membership import OrgMembership
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.notification import Dismissal, Notification, NotificationPreference
+from farna.db.models.org_membership import OrgMembership
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 #: Admin — performs the dismissals.
@@ -228,8 +228,8 @@ def _notification_client(
 
     try:
         with (
-            patch("modulo.api.routes.in_app_notifications.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.in_app_notifications.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.in_app_notifications.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.in_app_notifications.set_rls_user_context", new=AsyncMock()),
         ):
             yield TestClient(app), actor
     finally:

@@ -12,8 +12,8 @@ import uuid
 
 import pytest
 
-from modulo.api import mcp_server
-from modulo.api.mcp_server import (
+from farna.api import mcp_server
+from farna.api.mcp_server import (
     McpAuthContextError,
     _ctx_auth_token,
     _ctx_auth_type,
@@ -23,7 +23,7 @@ from modulo.api.mcp_server import (
     _ctx_user_id_val,
     validate_current_auth,
 )
-from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from farna.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 
 
 class TestFailClosedResolution:

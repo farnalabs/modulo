@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.eval.finding_resolver import (
+from farna.core.eval.finding_resolver import (
     FindingResolutionError,
     apply_mute_policy,
     compute_acceptance_rate,
@@ -220,7 +220,7 @@ class TestEvaluateMutePolicy:
         # Mock compute_acceptance_rate to return 3 outcomes
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
+        with patch("farna.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
             mock_compute.return_value = (0.3, 3)  # 30% acceptance, 3 outcomes
 
             result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
@@ -243,7 +243,7 @@ class TestEvaluateMutePolicy:
 
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
+        with patch("farna.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
             mock_compute.return_value = (0.3, 10)  # 30% acceptance, 10 outcomes
 
             result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
@@ -267,7 +267,7 @@ class TestEvaluateMutePolicy:
 
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
+        with patch("farna.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
             mock_compute.return_value = (0.7, 10)  # 70% acceptance, 10 outcomes
 
             result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
@@ -295,7 +295,7 @@ class TestApplyMutePolicy:
 
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy:
+        with patch("farna.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy:
             mock_eval_policy.return_value = {
                 "should_mute": True,
                 "acceptance_rate": 0.3,
@@ -328,8 +328,8 @@ class TestApplyMutePolicy:
         mock_session.execute.return_value = mock_result
 
         with (
-            patch("modulo.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy,
-            patch("modulo.core.eval.mute_policy.record_mute_audit_event") as mock_audit,
+            patch("farna.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy,
+            patch("farna.core.eval.mute_policy.record_mute_audit_event") as mock_audit,
         ):
             mock_eval_policy.return_value = {
                 "should_mute": True,
@@ -383,7 +383,7 @@ class TestApplyMutePolicy:
 
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy:
+        with patch("farna.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy:
             mock_eval_policy.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.8,
@@ -414,7 +414,7 @@ class TestUnmuteDefinition:
 
         from unittest.mock import patch
 
-        with patch("modulo.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
+        with patch("farna.core.eval.finding_resolver.compute_acceptance_rate") as mock_compute:
             mock_compute.return_value = (0.5, 10)
 
             result = await unmute_definition(mock_session, "eval-123", "org-123")

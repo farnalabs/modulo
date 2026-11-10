@@ -1,0 +1,89 @@
+"""Schema Registry — LLM-based schema inference, generation, validation,
+migration between schema versions, and profile-based rendering/translation.
+"""
+
+from farna.core.schema_registry.contract import (
+    SCHEMA_CONTRACT_VERSION,
+    SCHEMA_DIR_ENV_VAR,
+    ContractWriteResult,
+    cleanup_schema_contract,
+    read_schema_contract_version,
+    write_schema_contract,
+)
+from farna.core.schema_registry.generation import (
+    SchemaGenerationError,
+    SchemaGenerationService,
+)
+from farna.core.schema_registry.inference import (
+    SchemaInferenceError,
+    SchemaInferenceService,
+    flag_rare_fields,
+)
+from farna.core.schema_registry.migration import (
+    FieldChange,
+    MigrationPlan,
+    MigrationRegistry,
+    MissingMigrationError,
+    SchemaMigration,
+    add_field,
+    apply_migration,
+    convert_field,
+    create_migration,
+    remove_field,
+    rename_field,
+    set_default,
+    transform_field,
+)
+from farna.core.schema_registry.rendering import (
+    SCHEMA_PROFILE_VALUES,
+    RenderResult,
+    RenderWarning,
+    SchemaProfile,
+    preview_strip_warnings,
+    render_for_profile,
+)
+from farna.core.schema_registry.validation import (
+    SchemaValidationError,
+    SchemaValidationResult,
+    validate_array_schema,
+    validate_union_and_array,
+    validate_union_schema,
+)
+
+__all__ = [
+    "SCHEMA_CONTRACT_VERSION",
+    "SCHEMA_DIR_ENV_VAR",
+    "SCHEMA_PROFILE_VALUES",
+    "ContractWriteResult",
+    "FieldChange",
+    "MigrationPlan",
+    "MigrationRegistry",
+    "MissingMigrationError",
+    "RenderResult",
+    "RenderWarning",
+    "SchemaGenerationError",
+    "SchemaGenerationService",
+    "SchemaInferenceError",
+    "SchemaInferenceService",
+    "SchemaMigration",
+    "SchemaProfile",
+    "SchemaValidationError",
+    "SchemaValidationResult",
+    "add_field",
+    "apply_migration",
+    "cleanup_schema_contract",
+    "convert_field",
+    "create_migration",
+    "flag_rare_fields",
+    "preview_strip_warnings",
+    "read_schema_contract_version",
+    "remove_field",
+    "rename_field",
+    "render_for_profile",
+    "set_default",
+    "transform_field",
+    "validate_array_schema",
+    "validate_union_and_array",
+    "validate_union_schema",
+    "write_schema_contract",
+]

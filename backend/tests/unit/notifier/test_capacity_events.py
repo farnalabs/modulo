@@ -15,9 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.admin_notifications import AVAILABLE_EVENTS
-from modulo.core import notifier as notifier_module
-from modulo.core.notifier.event_mapper import (
+from farna.api.routes.admin_notifications import AVAILABLE_EVENTS
+from farna.core import notifier as notifier_module
+from farna.core.notifier.event_mapper import (
     _ACTION_URL_TEMPLATES,
     _BODY_TEMPLATES,
     _EVENT_CONFIG,
@@ -25,7 +25,7 @@ from modulo.core.notifier.event_mapper import (
     NotificationEventMapper,
     notification_categories,
 )
-from modulo.db.models.notification import Notification
+from farna.db.models.notification import Notification
 
 _CAPACITY_EVENTS = (
     "queue_pressure_notice",
@@ -179,7 +179,7 @@ async def test_mapper_creates_notification_without_unknown_placeholder(event: st
     mapper = NotificationEventMapper()
     session = AsyncMock()
     with patch(
-        "modulo.core.notifier.event_mapper.create_notification",
+        "farna.core.notifier.event_mapper.create_notification",
         new_callable=AsyncMock,
         return_value=MagicMock(spec=Notification),
     ) as mock_create:

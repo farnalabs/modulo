@@ -25,7 +25,7 @@ from pathlib import Path
 from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parents[2]
-_SOURCE = _BACKEND / "src" / "modulo"
+_SOURCE = _BACKEND / "src" / "farna"
 _TYPED_JUDGE_DIR = _SOURCE / "core" / "eval_engine" / "typed_judge"
 _JUDGE_MODULES = (
     _SOURCE / "core" / "pipeline_engine" / "llm_judge.py",

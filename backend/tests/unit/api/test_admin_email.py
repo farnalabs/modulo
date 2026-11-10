@@ -8,12 +8,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
 
-import modulo.api.routes.admin_email as admin_email_mod
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+import farna.api.routes.admin_email as admin_email_mod
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 ORG_ID = uuid4()
@@ -162,8 +162,8 @@ def _reset_test_send_limiter():
 
 class TestGetEmailSettings:
     async def test_get_settings_success(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -193,8 +193,8 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_empty(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original = admin_email.get_organisation
@@ -211,8 +211,8 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_includes_stored_timeout(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -230,8 +230,8 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_non_numeric_timeout_falls_back_to_default(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -249,7 +249,7 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_not_found(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -266,8 +266,8 @@ class TestGetEmailSettings:
 
 class TestPutEmailSettings:
     async def test_put_settings_success(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original_get = admin_email.get_organisation
@@ -309,8 +309,8 @@ class TestPutEmailSettings:
     async def test_put_settings_lock_timeout_returns_409(self, client_admin, mock_session):
         """FAR-1832 QA F10: 55P03 from the bounded settings-patch lock is a 409,
         not the generic 503 the write arm's ``except SQLAlchemyError`` answers."""
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         with (
@@ -341,8 +341,8 @@ class TestPutEmailSettings:
         Without ``set_rls_org`` the patch helper's tenant guard would run
         against an unbound session — inert on this path-parameter route.
         """
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         bind = AsyncMock()
@@ -367,7 +367,7 @@ class TestPutEmailSettings:
             assert call.args[1] == ORG_ID
 
     async def test_put_settings_not_found(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -400,8 +400,8 @@ class TestPutEmailSettings:
         assert resp.status_code == 403
 
     async def test_put_settings_timeout_persisted(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original_get = admin_email.get_organisation
@@ -430,7 +430,7 @@ class TestPutEmailSettings:
             admin_email.update_org_settings_patch = original_patch
 
     async def test_put_settings_timeout_too_low_422(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -451,7 +451,7 @@ class TestPutEmailSettings:
             admin_email.get_organisation = original
 
     async def test_put_settings_timeout_too_high_422(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -472,7 +472,7 @@ class TestPutEmailSettings:
             admin_email.get_organisation = original
 
     async def test_put_settings_password_too_long_422(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -494,8 +494,8 @@ class TestPutEmailSettings:
 
 class TestTestEmail:
     async def test_email_test_no_config(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         original = admin_email.get_organisation
@@ -510,7 +510,7 @@ class TestTestEmail:
             admin_email.get_organisation = original
 
     async def test_email_test_not_found(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
+        from farna.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -531,8 +531,8 @@ class TestTestEmail:
         assert resp.status_code == 403
 
     async def test_email_test_success(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -556,8 +556,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_passes_configured_timeout(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -582,9 +582,9 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_smtp_failure_returns_descriptive_message(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.core.email_service import EmailSendingError
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.core.email_service import EmailSendingError
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -608,8 +608,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_unexpected_exception_does_not_leak_internals(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -637,8 +637,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_invalid_recipient_422(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -663,8 +663,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_requires_email_shape(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -689,8 +689,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_rate_limited_429_with_retry_after(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -717,8 +717,8 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_rate_limit_is_per_org(self, client_admin, mock_session):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID,
@@ -786,8 +786,8 @@ class TestOrgAdminAllowed:
     """
 
     async def test_get_email_settings_allowed(self, client_non_sys_admin, monkeypatch):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
@@ -797,8 +797,8 @@ class TestOrgAdminAllowed:
         assert resp.status_code == 200
 
     async def test_put_email_settings_allowed(self, client_non_sys_admin, monkeypatch):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
         monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
@@ -816,8 +816,8 @@ class TestOrgAdminAllowed:
         assert resp.status_code == 200
 
     async def test_test_email_allowed(self, client_non_sys_admin, monkeypatch):
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}

@@ -28,9 +28,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.schema import Schema, SchemaVersion
-from modulo.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
+from farna.db.models.base import Base
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
 
 
 def _needed_tables() -> list:

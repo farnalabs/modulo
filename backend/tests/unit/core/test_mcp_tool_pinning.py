@@ -24,23 +24,23 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.mcp.tool_pinning import (
+from farna.core.mcp.tool_pinning import (
     ToolPinningError,
     apply_tool_observation,
     compute_tools_hash,
     decide_observation,
 )
-from modulo.db.models import Base
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.mcp_server import (
+from farna.db.models import Base
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.mcp_server import (
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_APPROVED_STALE,
     APPROVAL_STATUS_BLOCKED,
     APPROVAL_STATUS_UNAPPROVED,
     McpServer,
 )
-from modulo.db.models.notification import Notification
-from modulo.db.models.organisation import Organisation
+from farna.db.models.notification import Notification
+from farna.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -292,7 +292,7 @@ async def test_drift_audit_failure_is_swallowed(session: AsyncSession) -> None:
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
 
     with patch(
-        "modulo.core.mcp.tool_pinning.append_audit_event",
+        "farna.core.mcp.tool_pinning.append_audit_event",
         AsyncMock(side_effect=SQLAlchemyError("audit down")),
     ):
         result = await apply_tool_observation(
@@ -311,7 +311,7 @@ async def test_drift_notification_failure_is_swallowed(session: AsyncSession) ->
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
 
     with patch(
-        "modulo.core.mcp.tool_pinning.create_notification",
+        "farna.core.mcp.tool_pinning.create_notification",
         AsyncMock(side_effect=SQLAlchemyError("notify down")),
     ):
         result = await apply_tool_observation(

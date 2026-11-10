@@ -8,7 +8,7 @@ scoping so an exhausted (org, actor) bucket never blocks a distinct actor.
 
 import asyncio
 
-from modulo.core.rate_limiter import TokenBucketRegistry
+from farna.core.rate_limiter import TokenBucketRegistry
 
 
 def test_guardrail_override_rate_limit_is_org_actor_scoped() -> None:

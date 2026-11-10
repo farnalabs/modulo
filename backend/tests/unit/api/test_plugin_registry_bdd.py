@@ -23,12 +23,12 @@ os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.plugin_registry import PluginHealth
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.plugin_registry import PluginHealth
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ def _make_mock_registry(plugins: list[dict[str, Any]]) -> MagicMock:
             return healths
         if pid in manifests:
             return {pid: healths[pid]}
-        from modulo.core.plugin_registry import PluginHealth
+        from farna.core.plugin_registry import PluginHealth
 
         return {pid: PluginHealth(ok=False, detail="Unknown plugin")}
 
@@ -181,7 +181,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_lists_two_plugins(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -191,7 +191,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_each_plugin_has_required_fields(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -203,7 +203,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_empty_when_no_plugins(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -215,7 +215,7 @@ class TestGetPluginDetail:
 
     def test_returns_plugin_detail(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack")
 
         assert resp.status_code == 200
@@ -229,7 +229,7 @@ class TestGetPluginDetail:
     @pytest.mark.parametrize("plugin_id", ["modulo-connector-slack", "modulo-backend-github"])
     def test_returns_full_manifest(self, client: TestClient, plugin_id: str) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get(f"/api/v1/plugins/{plugin_id}")
 
         assert resp.status_code == 200
@@ -237,7 +237,7 @@ class TestGetPluginDetail:
 
     def test_unknown_plugin_returns_404(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin")
 
         assert resp.status_code == 404
@@ -245,7 +245,7 @@ class TestGetPluginDetail:
     def test_registry_failure_returns_500(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
         mock_registry.get_plugin.side_effect = RuntimeError("registry exploded")
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack")
 
         assert resp.status_code == 500
@@ -257,7 +257,7 @@ class TestPluginHealthCheck:
 
     def test_returns_health_for_known_plugin(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -268,7 +268,7 @@ class TestPluginHealthCheck:
 
     def test_health_ok_true_for_loaded_plugin(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -276,7 +276,7 @@ class TestPluginHealthCheck:
 
     def test_health_has_detail_string(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -288,14 +288,14 @@ class TestPluginNotFound:
 
     def test_unknown_plugin_returns_404(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin/health")
 
         assert resp.status_code == 404
 
     def test_detail_contains_plugin_not_found(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin/health")
 
         assert resp.status_code == 404
@@ -304,7 +304,7 @@ class TestPluginNotFound:
 
     def test_empty_registry_returns_404_for_any(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/any-plugin/health")
 
         assert resp.status_code == 404
@@ -314,7 +314,7 @@ class TestPluginDiscoveryOnStartup:
     """Mirrors: Plugin discovery on startup (entry point scanning)."""
 
     def test_scans_connector_and_model_entry_points(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
@@ -330,15 +330,15 @@ class TestPluginDiscoveryOnStartup:
         mock_ep.dist = mock_dist
         mock_ep.load.return_value = lambda cfg, creds: None
 
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
-            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "farna.connectors" else []
             discovered = registry.discover_plugins()
 
         assert len(discovered) == 1
         assert discovered[0].PLUGIN_ID == "modulo-connector-slack"
 
     def test_discovered_plugins_available_via_list(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
@@ -354,8 +354,8 @@ class TestPluginDiscoveryOnStartup:
         mock_ep.dist = mock_dist
         mock_ep.load.return_value = lambda api_key, model_id, **kw: None
 
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
-            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.model_backends" else []
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "farna.model_backends" else []
             registry.discover_plugins()
 
         plugins = registry.list_plugins()
@@ -363,11 +363,11 @@ class TestPluginDiscoveryOnStartup:
         assert plugins["modulo-backend-github"].version == "0.5.0"
 
     def test_no_plugins_when_no_entry_points(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_eps.side_effect = lambda group=None: []
             discovered = registry.discover_plugins()
 
@@ -379,7 +379,7 @@ class TestPluginManifestValidation:
     """Mirrors: Plugin manifest validation (handling broken entry points)."""
 
     def test_entry_point_without_dist_is_marked_unhealthy(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
@@ -387,8 +387,8 @@ class TestPluginManifestValidation:
         mock_ep.name = "slack"
         mock_ep.dist = None  # No distribution metadata
 
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
-            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "farna.connectors" else []
             discovered = registry.discover_plugins()
 
         assert discovered == []
@@ -399,7 +399,7 @@ class TestPluginManifestValidation:
         assert "metadata" in health["slack"].detail
 
     def test_entry_point_load_failure_marks_unhealthy(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
@@ -415,8 +415,8 @@ class TestPluginManifestValidation:
         mock_ep.dist = mock_dist
         mock_ep.load.side_effect = ImportError("Missing dependency: slack-sdk")
 
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
-            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "farna.connectors" else []
             discovered = registry.discover_plugins()
 
         assert discovered == []
@@ -426,7 +426,7 @@ class TestPluginManifestValidation:
         assert "Failed to load" in health["modulo-connector-slack"].detail
 
     def test_healthy_plugin_after_valid_discovery(self) -> None:
-        from modulo.core.plugin_registry import PluginRegistry
+        from farna.core.plugin_registry import PluginRegistry
 
         registry = PluginRegistry()
 
@@ -443,10 +443,10 @@ class TestPluginManifestValidation:
         mock_ep.load.return_value = lambda cfg, creds: None
 
         with (
-            patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps,
-            patch("modulo.core.plugin_registry.importlib.metadata.metadata") as mock_metadata,
+            patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps,
+            patch("farna.core.plugin_registry.importlib.metadata.metadata") as mock_metadata,
         ):
-            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "farna.connectors" else []
             mock_metadata.return_value = {"Name": "Slack Connector"}
             registry.discover_plugins()
 
@@ -487,7 +487,7 @@ class TestPluginErrorPaths:
     def test_list_registry_failure_returns_500(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
         mock_registry.health_check.side_effect = RuntimeError("registry exploded")
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 500
@@ -496,7 +496,7 @@ class TestPluginErrorPaths:
     def test_health_registry_failure_returns_500(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
         mock_registry.get_plugin.side_effect = RuntimeError("registry exploded")
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 500
@@ -508,7 +508,7 @@ class TestPluginCapabilitiesAdvertised:
 
     def test_connector_plugin_has_connector_type_capability(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -519,7 +519,7 @@ class TestPluginCapabilitiesAdvertised:
 
     def test_model_backend_plugin_has_model_backend_capability(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_GITHUB])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -530,7 +530,7 @@ class TestPluginCapabilitiesAdvertised:
 
     def test_multiple_plugins_show_their_respective_capabilities(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+        with patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200

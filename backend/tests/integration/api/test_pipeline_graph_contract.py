@@ -29,9 +29,9 @@ from tests.helpers.pipeline_graph import (
     _build_graph_payload,
 )
 
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 pytestmark = pytest.mark.integration
 
@@ -71,7 +71,7 @@ async def seeded_env(
             ),
             {"id": str(_ORG_ID), "name": f"Roundtrip {str(_ORG_ID)[:8]}", "slug": f"rt-{str(_ORG_ID)[:8]}"},
         )
-        from modulo.auth.passwords import hash_password
+        from farna.auth.passwords import hash_password
 
         password = "roundtrip-password-1"
         await conn.execute(

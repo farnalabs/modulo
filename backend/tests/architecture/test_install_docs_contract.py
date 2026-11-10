@@ -74,7 +74,7 @@ def test_documented_first_run_command_exists() -> None:
     """The docs name a command that must actually exist on the ``modulo`` CLI."""
     from click.testing import CliRunner
 
-    from modulo.cli.users import users
+    from farna.cli.users import users
 
     assert "add" in users.commands
     result = CliRunner().invoke(users, ["add", "--help"])

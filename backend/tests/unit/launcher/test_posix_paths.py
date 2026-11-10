@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher import supervisor as supervisor_module
-from modulo.launcher import upgrade as upgrade_module
+from farna.launcher import supervisor as supervisor_module
+from farna.launcher import upgrade as upgrade_module
 
 # ---------------------------------------------------------------------------
 # Module-level skip: the ENTIRE file needs Linux /proc + POSIX semantics.
@@ -318,7 +318,7 @@ class TestSignalGroup:
         the non-leader branch would call os.kill(os.getpid(), SIGTERM) and kill
         the worker.
         """
-        from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+        from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
         killpg_calls: list[tuple[int, int]] = []
 

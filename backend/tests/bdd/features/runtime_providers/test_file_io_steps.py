@@ -20,8 +20,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo, WorkspaceSpec
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo, WorkspaceSpec
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 scenarios("file_io.feature")
 

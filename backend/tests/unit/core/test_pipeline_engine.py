@@ -11,17 +11,17 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
-from modulo.core.pipeline_engine.executor import _map_lg_event, _seed_state
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.core.pipeline_engine.event_broker import RunEventBroker
+from farna.core.pipeline_engine.executor import _map_lg_event, _seed_state
+from farna.core.pipeline_engine.node_runner import (
     OutputSchemaValidationError,
     _validate_against_schema,
     make_node_fn,
 )
-from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
-from modulo.model_backends.stub.backend import StubModelBackend
+from farna.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from farna.model_backends.stub.backend import StubModelBackend
 
 
 class TestMapLgEvent:
@@ -162,7 +162,7 @@ class TestRunawayGuard:
             def now(_tz=None):
                 return fake_time
 
-        monkeypatch.setattr("modulo.core.pipeline_engine.runaway_protection.datetime", _FakeDatetime)
+        monkeypatch.setattr("farna.core.pipeline_engine.runaway_protection.datetime", _FakeDatetime)
         guard = RunawayGuard(max_duration_seconds=10)
         fake_time = datetime(2025, 1, 1, 0, 1, 0, tzinfo=UTC)
         with pytest.raises(RunawayRunError) as excinfo:
@@ -221,7 +221,7 @@ class TestRunEventBrokerReplay:
     def test_replay_requested_seq_older_than_buffer_returns_empty(self) -> None:
         from collections import deque
 
-        from modulo.core.pipeline_engine.event_broker import RunEvent
+        from farna.core.pipeline_engine.event_broker import RunEvent
 
         broker = RunEventBroker(run_id=uuid.uuid4())
         # Simulate a ring buffer where seq 1..4 were evicted and the oldest
@@ -252,7 +252,7 @@ class TestOutputSchemaValidation:
             _validate_against_schema({}, {"required": ["x"]})
 
     def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
-        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+        from farna.core.pipeline_engine.error_codes import map_legacy_code
 
         assert map_legacy_code("schema_validation_failure") == "contract.schema"
 
@@ -498,7 +498,7 @@ class TestNodeEnforcementPersistence:
         *,
         persist_side_effect: Exception | None = None,
     ) -> tuple[dict[str, Any], AsyncMock]:
-        import modulo.core.pipeline_engine.node_runner as nr
+        import farna.core.pipeline_engine.node_runner as nr
 
         node_id = str(uuid.uuid4())
         backend_id = uuid.uuid4()
@@ -527,7 +527,7 @@ class TestNodeEnforcementPersistence:
         monkeypatch.setattr(nr, "set_rls_org", AsyncMock())
         persist = AsyncMock(side_effect=persist_side_effect)
         monkeypatch.setattr(
-            "modulo.db.crud.run_node_outputs.persist_schema_enforcement_record",
+            "farna.db.crud.run_node_outputs.persist_schema_enforcement_record",
             persist,
         )
 

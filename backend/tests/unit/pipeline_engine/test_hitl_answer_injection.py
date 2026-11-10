@@ -8,11 +8,11 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_engine import node_runner
-from modulo.core.pipeline_engine.hitl_context import (
+from farna.core.pipeline_engine import node_runner
+from farna.core.pipeline_engine.hitl_context import (
     build_hitl_review_context,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     HITL_REVIEW_ANSWER_STATE_KEY_PREFIX,
     _inject_answer_state,
 )
@@ -99,7 +99,7 @@ async def _build(graph_json: dict[str, Any]) -> dict[str, Any] | None:
     session = _make_session(graph_json)
     snapshot_id = uuid.uuid4()
     with patch(
-        "modulo.core.pipeline_engine.hitl_context.get_run",
+        "farna.core.pipeline_engine.hitl_context.get_run",
         new_callable=AsyncMock,
         return_value=_run_mock(snapshot_id),
     ):

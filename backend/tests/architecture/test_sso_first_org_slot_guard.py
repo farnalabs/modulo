@@ -1,6 +1,6 @@
 """Architecture test: the SSO first-org slot may be claimed in one sanctioned place.
 
-FAR-1098. ``_set_default_rls_org`` (``backend/src/modulo/auth/sso.py``)
+FAR-1098. ``_set_default_rls_org`` (``backend/src/farna/auth/sso.py``)
 resolves the app-fallback RLS org as the GLOBAL first row of ``organisations``
 (``created_at ASC LIMIT 1``). Every integration test module shares ONE
 Postgres, so that first row is a global resource: a module that backdates an

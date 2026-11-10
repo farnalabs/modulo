@@ -15,26 +15,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _collect_node_emission_sources,
     _confirm_reported_refs,
     _merge_effective_refs,
     _resolve_effective_refs,
     _stamp_node_sources,
 )
-from modulo.core.lifecycle_map.self_report import validate_and_normalise_reported_refs
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.lifecycle_map.self_report import validate_and_normalise_reported_refs
+from farna.core.pipeline_engine.node_runner import (
     _node_declares_work_item_refs,
     _node_input_work_item_refs,
 )
-from modulo.core.trigger_engine import (
+from farna.core.trigger_engine import (
     TriggerEngine,
     _RateLimitState,
     _WebhookDelivery,
 )
-from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY, validate_ref_entry
-from modulo.db.models.trigger import Trigger
-from modulo.settings import get_settings, work_item_refs_cap
+from farna.db.lifecycle_refs import WORK_ITEM_REFS_KEY, validate_ref_entry
+from farna.db.models.trigger import Trigger
+from farna.settings import get_settings, work_item_refs_cap
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -66,7 +66,7 @@ def _ref(kind: str, ref: str, source: str) -> dict[str, object]:
     return {"kind": kind, "ref": ref, "source": source}
 
 
-_CAP = "modulo.core.cost_controller.finalize.work_item_refs_cap"
+_CAP = "farna.core.cost_controller.finalize.work_item_refs_cap"
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ class TestMergeEffectiveRefs:
         with (
             patch(_CAP, lambda: 1),
             patch(
-                "modulo.core.cost_controller.finalize.notify_refs_event",
+                "farna.core.cost_controller.finalize.notify_refs_event",
                 side_effect=lambda name, *a, **kw: events.append((name, kw.get("ref"))),
             ),
         ):
@@ -165,7 +165,7 @@ class TestNodeEmissionSources:
         confirmed = [_ref("jira", "X-9", "agent")]
         with (
             patch(
-                "modulo.core.cost_controller.finalize._confirm_reported_refs",
+                "farna.core.cost_controller.finalize._confirm_reported_refs",
                 new=AsyncMock(return_value=confirmed),
             ),
             patch(_CAP, lambda: 100),
@@ -188,7 +188,7 @@ class TestNodeEmissionSources:
         run.work_item_refs = []
         merged = {"node-a": {"output": {"work_item_refs": [_ref("jira", "X-9", "agent")]}}}
         with patch(
-            "modulo.core.cost_controller.finalize._confirm_reported_refs",
+            "farna.core.cost_controller.finalize._confirm_reported_refs",
             new=AsyncMock(return_value=[]),
         ):
             import asyncio
@@ -240,7 +240,7 @@ class TestConfirmReportedRefs:
         confirmed = [_ref("jira", "X-9", "agent")]
         with (
             patch(
-                "modulo.core.cost_controller.finalize._confirm_reported_refs",
+                "farna.core.cost_controller.finalize._confirm_reported_refs",
                 new=AsyncMock(return_value=confirmed),
             ),
             patch(_CAP, lambda: 100),
@@ -282,7 +282,7 @@ class TestNodeInputInjection:
                 ]
             }
         }
-        with patch("modulo.core.pipeline_engine.node_runner.work_item_refs_cap", lambda: 1):
+        with patch("farna.core.pipeline_engine.node_runner.work_item_refs_cap", lambda: 1):
             refs = _node_input_work_item_refs("node-1", run_context)
         assert len(refs) == 1
         assert refs[0]["source"] == "caller"
@@ -307,7 +307,7 @@ class TestNodeInputInjection:
 class TestWorkItemRefsCapSetting:
     @pytest.fixture(autouse=True)
     def clear_cap_cache(self) -> None:
-        from modulo.settings import get_settings
+        from farna.settings import get_settings
 
         work_item_refs_cap.cache_clear()
         get_settings.cache_clear()
@@ -357,7 +357,7 @@ def _delivery() -> _WebhookDelivery:
 
 class TestWebhookRequiredRefs422:
     async def test_work_item_refs_required_maps_to_http_422(self) -> None:
-        from modulo.db.crud.run import WorkItemRefsRequiredError
+        from farna.db.crud.run import WorkItemRefsRequiredError
 
         engine = TriggerEngine()
         delivery = _delivery()
@@ -366,11 +366,11 @@ class TestWebhookRequiredRefs422:
 
         with (
             patch(
-                "modulo.core.trigger_engine.create_run",
+                "farna.core.trigger_engine.create_run",
                 new=AsyncMock(side_effect=WorkItemRefsRequiredError("work_item_refs required")),
             ),
             patch(
-                "modulo.core.trigger_engine.evaluate_backpressure",
+                "farna.core.trigger_engine.evaluate_backpressure",
                 new=AsyncMock(return_value=(False, None)),
             ),
             pytest.raises(HTTPException) as exc_info,
@@ -388,7 +388,7 @@ class TestWebhookRequiredRefs422:
         # webhook receive + replay routes can catch this specific refusal and
         # re-record the ``required_refs_missing`` event post-unwind — while every
         # other caller's ``except HTTPException`` passthrough is unchanged.
-        from modulo.core.trigger_engine import WorkItemRefsRequiredHTTPError
+        from farna.core.trigger_engine import WorkItemRefsRequiredHTTPError
 
         assert isinstance(exc_info.value, WorkItemRefsRequiredHTTPError)
         detail = exc_info.value.detail

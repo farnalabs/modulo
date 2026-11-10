@@ -12,8 +12,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.guardrails import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.guardrails import (
     DEFAULT_GUARDRAIL_TIMEOUT_SECONDS,
     DEFAULT_MAX_GUARDRAILS_PER_NODE,
     GuardrailConfigError,

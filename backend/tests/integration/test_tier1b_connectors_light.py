@@ -31,13 +31,13 @@ from typing import Any
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
-from modulo.connectors.gitea import GiteaConnector
-from modulo.connectors.grafana import GrafanaConnector
-from modulo.connectors.jenkins import JenkinsConnector
-from modulo.connectors.n8n import N8NConnector
-from modulo.connectors.sonarqube import SonarQubeConnector
-from modulo.connectors.teamcity import TeamCityConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
+from farna.connectors.gitea import GiteaConnector
+from farna.connectors.grafana import GrafanaConnector
+from farna.connectors.jenkins import JenkinsConnector
+from farna.connectors.n8n import N8NConnector
+from farna.connectors.sonarqube import SonarQubeConnector
+from farna.connectors.teamcity import TeamCityConnector
 
 # ── codeclimate (official CLI container; connector target is SaaS-only) ─────
 from tests.helpers.testcontainers_harness import (
@@ -734,7 +734,7 @@ def test_codeclimate_connector_has_no_self_hostable_target(
     # deselects: if the connector ever gains a base_url/_API_BASE override
     # path, this condition flips and the connector-level roundtrip must be
     # written for real instead of skipping.
-    from modulo.connectors import codeclimate as cc_mod
+    from farna.connectors import codeclimate as cc_mod
 
     pinned_base = getattr(cc_mod, "_API_BASE", "")
     if pinned_base:

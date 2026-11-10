@@ -39,10 +39,10 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.mcp_server import _mcp_run_item, _run_status_base
-from modulo.api.routes.dashboard import _load_recent_runs
-from modulo.api.routes.viewmodel import RunSummary
-from modulo.db.models.run import Run
+from farna.api.mcp_server import _mcp_run_item, _run_status_base
+from farna.api.routes.dashboard import _load_recent_runs
+from farna.api.routes.viewmodel import RunSummary
+from farna.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)

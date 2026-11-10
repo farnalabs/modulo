@@ -14,8 +14,8 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.models import Base
-from modulo.db.models.eval_result import EvalResult
+from farna.db.models import Base
+from farna.db.models.eval_result import EvalResult
 
 
 @pytest.fixture

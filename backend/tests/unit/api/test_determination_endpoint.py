@@ -15,16 +15,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.connectors.base import ConnectorType
-from modulo.core.connector_hub import ConnectorDecryptError
-from modulo.determination.draft import DraftNode, PipelineDraft
-from modulo.determination.inference import Finding
-from modulo.determination.scanner import ScanSample
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.connectors.base import ConnectorType
+from farna.core.connector_hub import ConnectorDecryptError
+from farna.determination.draft import DraftNode, PipelineDraft
+from farna.determination.inference import Finding
+from farna.determination.scanner import ScanSample
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -173,12 +173,12 @@ class TestRunDetermination:
         finding = _overview_finding()
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
-            patch("modulo.api.routes.determination.infer", return_value=[finding]),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
+            patch("farna.api.routes.determination.infer", return_value=[finding]),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -210,12 +210,12 @@ class TestRunDetermination:
             return MagicMock()
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend", fake_create_backend),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
-            patch("modulo.api.routes.determination.infer", return_value=[finding]),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend", fake_create_backend),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
+            patch("farna.api.routes.determination.infer", return_value=[finding]),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -224,13 +224,13 @@ class TestRunDetermination:
 
     def test_no_connectors_returns_empty_results(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[]),
             patch(
-                "modulo.api.routes.determination.infer",
+                "farna.api.routes.determination.infer",
                 return_value=[
                     Finding(
                         category="overview",
@@ -259,11 +259,11 @@ class TestRunDetermination:
     def test_programming_error_returns_501(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.determination.list_connector_instances",
+                "farna.api.routes.determination.list_connector_instances",
                 side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
             ),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -272,11 +272,11 @@ class TestRunDetermination:
     def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.determination.list_connector_instances",
+                "farna.api.routes.determination.list_connector_instances",
                 side_effect=SQLAlchemyError("connection lost"),
             ),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -289,10 +289,10 @@ class TestRunDetermination:
         hub.initialise.side_effect = ConnectorDecryptError(ci.id)
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", hub_cls),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", hub_cls),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -302,12 +302,12 @@ class TestRunDetermination:
         ci = _mock_connector_instance("github")
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[_github_sample()]),
-            patch("modulo.api.routes.determination.infer", side_effect=RuntimeError("boom")),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[_github_sample()]),
+            patch("farna.api.routes.determination.infer", side_effect=RuntimeError("boom")),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -323,13 +323,13 @@ class TestCreateDeterminationDraft:
         draft = _draft()
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
-            patch("modulo.api.routes.determination.infer", return_value=[finding]),
-            patch("modulo.api.routes.determination.generate_draft", return_value=draft),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[sample]),
+            patch("farna.api.routes.determination.infer", return_value=[finding]),
+            patch("farna.api.routes.determination.generate_draft", return_value=draft),
         ):
             resp = client.post("/api/v1/determination/draft")
 
@@ -356,11 +356,11 @@ class TestCreateDeterminationDraft:
     def test_programming_error_returns_501(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.determination.list_connector_instances",
+                "farna.api.routes.determination.list_connector_instances",
                 side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
             ),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
         ):
             resp = client.post("/api/v1/determination/draft")
 
@@ -369,11 +369,11 @@ class TestCreateDeterminationDraft:
     def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.determination.list_connector_instances",
+                "farna.api.routes.determination.list_connector_instances",
                 side_effect=SQLAlchemyError("connection lost"),
             ),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
         ):
             resp = client.post("/api/v1/determination/draft")
 
@@ -386,10 +386,10 @@ class TestCreateDeterminationDraft:
         hub.initialise.side_effect = ConnectorDecryptError(ci.id)
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", hub_cls),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", hub_cls),
         ):
             resp = client.post("/api/v1/determination/draft")
 
@@ -399,13 +399,13 @@ class TestCreateDeterminationDraft:
         ci = _mock_connector_instance("github")
 
         with (
-            patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
-            patch("modulo.api.routes.determination.set_rls_org"),
-            patch("modulo.api.routes.determination.create_secrets_backend"),
-            patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-            patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[_github_sample()]),
-            patch("modulo.api.routes.determination.infer", return_value=[_overview_finding()]),
-            patch("modulo.api.routes.determination.generate_draft", side_effect=RuntimeError("boom")),
+            patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page([ci])),
+            patch("farna.api.routes.determination.set_rls_org"),
+            patch("farna.api.routes.determination.create_secrets_backend"),
+            patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+            patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=[_github_sample()]),
+            patch("farna.api.routes.determination.infer", return_value=[_overview_finding()]),
+            patch("farna.api.routes.determination.generate_draft", side_effect=RuntimeError("boom")),
         ):
             resp = client.post("/api/v1/determination/draft")
 

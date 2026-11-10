@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy import Index, text
 
-from modulo.db.models.policy_gate_decision import PolicyGateDecision
+from farna.db.models.policy_gate_decision import PolicyGateDecision
 
 _PERMANENT = "uq_policy_gate_decisions_eval_result_id"
 _TEMPORARY = "ix_tmp_policy_gate_decisions_run_gate_result"

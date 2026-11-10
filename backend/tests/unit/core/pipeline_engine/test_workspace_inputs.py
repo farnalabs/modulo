@@ -19,7 +19,7 @@ from typing import ClassVar
 
 import pytest
 
-from modulo.core.pipeline_engine.workspace_inputs import (
+from farna.core.pipeline_engine.workspace_inputs import (
     RefResolutionError,
     build_input_clone_script,
     parse_ls_remote,

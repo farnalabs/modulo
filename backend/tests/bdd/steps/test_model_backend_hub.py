@@ -13,12 +13,12 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.model_backend_hub import (
+from farna.core.model_backend_hub import (
     BackendNotFoundError,
     BackendUnavailableError,
     ModelBackendHub,
 )
-from modulo.model_backends.stub.backend import StubModelBackend
+from farna.model_backends.stub.backend import StubModelBackend
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/model_backends/hub.feature")

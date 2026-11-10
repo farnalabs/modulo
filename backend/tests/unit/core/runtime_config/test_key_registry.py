@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.runtime_config.store import (
+from farna.core.runtime_config.store import (
     _KEY_CONFIG,
     BOOT_ONLY_REASONS,
     HOT_RELOADABLE_KEYS,

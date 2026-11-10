@@ -60,8 +60,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api.routes.hitl import ApproveRequest, _validate_choice_answer, approve_review
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.routes.hitl import ApproveRequest, _validate_choice_answer, approve_review
+from farna.auth.jwt import TenantPrincipal
 
 pytestmark = [
     pytest.mark.integration,
@@ -312,7 +312,7 @@ async def test_approve_runs_validation_inside_the_transaction(
     executor = MagicMock()
     executor.resume = AsyncMock()
 
-    with patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor):
+    with patch("farna.api.routes.hitl._build_resume_executor", return_value=executor):
         async with factory() as session:
             result = await approve_review(
                 gate.run_id,

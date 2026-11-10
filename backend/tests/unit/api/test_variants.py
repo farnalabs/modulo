@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.routes.variants import (
+from farna.api.routes.variants import (
     CreateVariantGroupRequest,
     VariantDef,
     _variant_to_response,
@@ -79,11 +79,11 @@ class TestCreateGroup:
 
         with (
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
             ) as mock_create,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -128,7 +128,7 @@ class TestGetGroup:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_group = MagicMock()
@@ -155,7 +155,7 @@ class TestGetGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -175,20 +175,20 @@ class TestRunVariant:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.check_pipeline_run_quota",
+                "farna.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
             ) as mock_quota,
             patch(
-                "modulo.api.routes.variants.run_variant_weighted",
+                "farna.api.routes.variants.run_variant_weighted",
                 new_callable=AsyncMock,
             ) as mock_run,
         ):
@@ -215,16 +215,16 @@ class TestRunVariant:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.check_pipeline_run_quota",
+                "farna.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
             ) as mock_quota,
         ):
@@ -246,21 +246,21 @@ class TestRunVariant:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.check_pipeline_run_quota",
+                "farna.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_weighted",
+                "farna.api.routes.variants.run_variant_weighted",
                 new_callable=AsyncMock,
             ) as mock_run,
         ):
@@ -288,16 +288,16 @@ class TestRunVariant:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_weighted",
+                "farna.api.routes.variants.run_variant_weighted",
                 new_callable=AsyncMock,
             ) as mock_run,
         ):
@@ -332,20 +332,20 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.run_variant_batch",
+                "farna.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
             ) as mock_run,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -382,16 +382,16 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_batch",
+                "farna.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -410,7 +410,7 @@ class TestRunVariantBatch:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -427,7 +427,7 @@ class TestRunVariantBatch:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_group = MagicMock()
@@ -446,7 +446,7 @@ class TestRunVariantBatch:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -458,7 +458,7 @@ class TestRunVariantBatch:
         """FAR-1528: a batch is all-or-nothing through the create_run choke
         point — an archived/soft-deleted pipeline refuses the whole batch with
         409 Conflict (state in the detail), not a generic 500."""
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         principal = make_mock_principal()
         mock_session = make_session_mock()
@@ -466,7 +466,7 @@ class TestRunVariantBatch:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived"),
         ):
@@ -482,7 +482,7 @@ class TestRunVariantBatch:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -500,20 +500,20 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_batch",
+                "farna.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
             ) as mock_run,
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -545,11 +545,11 @@ class TestCoverageGaps:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.get_coverage_gaps",
+                "farna.api.routes.variants.get_coverage_gaps",
                 new_callable=AsyncMock,
             ) as mock_gaps,
         ):
@@ -571,11 +571,11 @@ class TestPromptDiffs:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.get_prompt_diffs",
+                "farna.api.routes.variants.get_prompt_diffs",
                 new_callable=AsyncMock,
             ) as mock_diffs,
         ):
@@ -598,7 +598,7 @@ class TestDeleteGroup:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -610,7 +610,7 @@ class TestDeleteGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             return_value=False,
         ):
@@ -628,11 +628,11 @@ class TestUpdateGroup:
 
         with (
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
             ) as mock_update,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -672,12 +672,12 @@ class TestUpdateGroup:
 
         with (
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -704,7 +704,7 @@ class TestListGroups:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.list_variant_groups",
+            "farna.api.routes.variants.list_variant_groups",
             new_callable=AsyncMock,
         ) as mock_list:
             mock_group = MagicMock()
@@ -744,7 +744,7 @@ class TestRunVariantGroupNotFound:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -764,7 +764,7 @@ class TestRunVariantEmptyVariants:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_group = MagicMock()
@@ -785,7 +785,7 @@ class TestCoverageGapsGroupNotFound:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -803,7 +803,7 @@ class TestPromptDiffsGroupNotFound:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -821,12 +821,12 @@ class TestCreateGroupProgrammingError:
 
         with (
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -853,7 +853,7 @@ class TestGetGroupProgrammingError:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -870,12 +870,12 @@ class TestCreateGroupSQLAlchemyError:
 
         with (
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -903,12 +903,12 @@ class TestCreateGroupIntegrityError:
 
         with (
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -938,7 +938,7 @@ class TestRunVariantSQLAlchemyError:
         body.input_payload = {}
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -953,7 +953,7 @@ class TestRunVariantPipelineNotRunnable:
         """FAR-1528: variant runs go through the create_run choke point - an
         archived/soft-deleted pipeline is refused with 409 (state in the
         detail), not a generic 500."""
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         principal = make_mock_principal()
         mock_session = make_session_mock()
@@ -964,19 +964,19 @@ class TestRunVariantPipelineNotRunnable:
         group.variants = [{"id": "v1", "snapshot_id": str(uuid.uuid4()), "run_context_overrides": {}}]
 
         with (
-            patch("modulo.api.routes.variants.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variants.get_variant_group", new_callable=AsyncMock, return_value=group),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.check_pipeline_run_quota",
+                "farna.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_weighted",
+                "farna.api.routes.variants.run_variant_weighted",
                 new_callable=AsyncMock,
                 side_effect=PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived"),
             ),
@@ -996,7 +996,7 @@ class TestCoverageGapsSQLAlchemyError:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1013,7 +1013,7 @@ class TestPromptDiffsSQLAlchemyError:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1030,7 +1030,7 @@ class TestDeleteGroupSQLAlchemyError:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1087,12 +1087,12 @@ class TestCreateGroupException:
 
         with (
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
                 side_effect=ValueError("unexpected"),
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1119,7 +1119,7 @@ class TestGetGroupException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=KeyError("missing_key"),
         ):
@@ -1135,7 +1135,7 @@ class TestListGroupsException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.list_variant_groups",
+            "farna.api.routes.variants.list_variant_groups",
             new_callable=AsyncMock,
             side_effect=TypeError("bad type"),
         ):
@@ -1158,12 +1158,12 @@ class TestUpdateGroupException:
 
         with (
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
                 side_effect=ValueError("unexpected"),
             ),
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1190,7 +1190,7 @@ class TestDeleteGroupException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -1206,7 +1206,7 @@ class TestRunVariantException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -1225,7 +1225,7 @@ class TestCoverageGapsException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -1241,7 +1241,7 @@ class TestPromptDiffsException:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -1283,17 +1283,17 @@ class TestBatchCompare:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_batch_compare",
+                "farna.api.routes.variants.get_batch_compare",
                 new_callable=AsyncMock,
                 return_value=entries,
             ) as mock_cmp,
             patch(
-                "modulo.api.routes.variants.get_run",
+                "farna.api.routes.variants.get_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1311,7 +1311,7 @@ class TestBatchCompare:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_batch_compare",
+            "farna.api.routes.variants.get_batch_compare",
             new_callable=AsyncMock,
             return_value=[],
         ):
@@ -1339,17 +1339,17 @@ class TestBatchCompare:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_batch_compare",
+                "farna.api.routes.variants.get_batch_compare",
                 new_callable=AsyncMock,
                 return_value=entries,
             ),
             patch(
-                "modulo.api.routes.variants.get_run",
+                "farna.api.routes.variants.get_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1393,17 +1393,17 @@ class TestBatchCompare:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_batch_compare",
+                "farna.api.routes.variants.get_batch_compare",
                 new_callable=AsyncMock,
                 return_value=entries,
             ),
             patch(
-                "modulo.api.routes.variants.get_run",
+                "farna.api.routes.variants.get_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1425,7 +1425,7 @@ class TestBatchCompare:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.get_batch_compare",
+            "farna.api.routes.variants.get_batch_compare",
             new_callable=AsyncMock,
             return_value=[],
         ):
@@ -1453,17 +1453,17 @@ class TestBatchCompare:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_batch_compare",
+                "farna.api.routes.variants.get_batch_compare",
                 new_callable=AsyncMock,
                 return_value=entries,
             ),
             patch(
-                "modulo.api.routes.variants.get_run",
+                "farna.api.routes.variants.get_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1487,17 +1487,17 @@ class TestBatchCompare:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_batch_compare",
+                "farna.api.routes.variants.get_batch_compare",
                 new_callable=AsyncMock,
                 return_value=entries,
             ),
             patch(
-                "modulo.api.routes.variants.get_run",
+                "farna.api.routes.variants.get_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1530,7 +1530,7 @@ class TestRestoreGroup:
         mock_group.updated_at = datetime.now(UTC)
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             return_value=mock_group,
         ):
@@ -1542,7 +1542,7 @@ class TestRestoreGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1555,7 +1555,7 @@ class TestRestoreGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1568,7 +1568,7 @@ class TestRestoreGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1581,7 +1581,7 @@ class TestRestoreGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1594,7 +1594,7 @@ class TestRestoreGroup:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variants.restore_variant_group",
+            "farna.api.routes.variants.restore_variant_group",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -1605,7 +1605,7 @@ class TestRestoreGroup:
 
 class TestMintVariantIds:
     def test_mints_id_when_none(self) -> None:
-        from modulo.api.routes.variants import _mint_variant_ids
+        from farna.api.routes.variants import _mint_variant_ids
 
         variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": None}]
         result = _mint_variant_ids(variants)
@@ -1613,7 +1613,7 @@ class TestMintVariantIds:
         assert len(result[0]["id"]) == 36  # UUID string
 
     def test_preserves_existing_id(self) -> None:
-        from modulo.api.routes.variants import _mint_variant_ids
+        from farna.api.routes.variants import _mint_variant_ids
 
         vid = "my-variant-id"
         variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": vid}]
@@ -1621,7 +1621,7 @@ class TestMintVariantIds:
         assert result[0]["id"] == vid
 
     def test_does_not_mutate_input(self) -> None:
-        from modulo.api.routes.variants import _mint_variant_ids
+        from farna.api.routes.variants import _mint_variant_ids
 
         variants = [{"name": "a", "snapshot_id": str(uuid.uuid4()), "id": None}]
         _mint_variant_ids(variants)
@@ -1630,33 +1630,33 @@ class TestMintVariantIds:
 
 class TestCollectSnapshotIds:
     def test_collects_uuid_from_dicts(self) -> None:
-        from modulo.api.routes.variants import _collect_snapshot_ids
+        from farna.api.routes.variants import _collect_snapshot_ids
 
         sid = uuid.uuid4()
         result = _collect_snapshot_ids([{"snapshot_id": sid}])
         assert result == [sid]
 
     def test_converts_string_to_uuid(self) -> None:
-        from modulo.api.routes.variants import _collect_snapshot_ids
+        from farna.api.routes.variants import _collect_snapshot_ids
 
         sid = uuid.uuid4()
         result = _collect_snapshot_ids([{"snapshot_id": str(sid)}])
         assert result == [sid]
 
     def test_skips_non_dict_variants(self) -> None:
-        from modulo.api.routes.variants import _collect_snapshot_ids
+        from farna.api.routes.variants import _collect_snapshot_ids
 
         result = _collect_snapshot_ids(["not-a-dict", 42])
         assert result == []
 
     def test_skips_missing_snapshot_id(self) -> None:
-        from modulo.api.routes.variants import _collect_snapshot_ids
+        from farna.api.routes.variants import _collect_snapshot_ids
 
         result = _collect_snapshot_ids([{"name": "a"}])
         assert result == []
 
     def test_skips_none_snapshot_id(self) -> None:
-        from modulo.api.routes.variants import _collect_snapshot_ids
+        from farna.api.routes.variants import _collect_snapshot_ids
 
         result = _collect_snapshot_ids([{"snapshot_id": None}])
         assert result == []
@@ -1668,7 +1668,7 @@ class TestListGroupsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.list_variant_groups",
+            "farna.api.routes.variants.list_variant_groups",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1680,7 +1680,7 @@ class TestListGroupsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.list_variant_groups",
+            "farna.api.routes.variants.list_variant_groups",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1692,7 +1692,7 @@ class TestListGroupsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.list_variant_groups",
+            "farna.api.routes.variants.list_variant_groups",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1707,7 +1707,7 @@ class TestGetGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1719,7 +1719,7 @@ class TestGetGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1731,7 +1731,7 @@ class TestGetGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1755,9 +1755,9 @@ class TestUpdateGroupDBErrors:
         body.model_dump.return_value = {}
         body.pipeline_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
@@ -1779,9 +1779,9 @@ class TestUpdateGroupDBErrors:
         body.model_dump.return_value = {}
         body.pipeline_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
@@ -1803,9 +1803,9 @@ class TestUpdateGroupDBErrors:
         body.model_dump.return_value = {}
         body.pipeline_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.variants.validate_batch_ownership", new_callable=AsyncMock, return_value=True),
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
@@ -1821,7 +1821,7 @@ class TestDeleteGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1833,7 +1833,7 @@ class TestDeleteGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1845,7 +1845,7 @@ class TestDeleteGroupDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.soft_delete_variant_group",
+            "farna.api.routes.variants.soft_delete_variant_group",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -1862,7 +1862,7 @@ class TestRunVariantDBErrors:
         body = MagicMock()
         body.input_payload = {}
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1876,7 +1876,7 @@ class TestRunVariantDBErrors:
         body = MagicMock()
         body.input_payload = {}
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1893,7 +1893,7 @@ class TestRunBatchDBErrors:
         body = MagicMock()
         body.input_payload = {}
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1907,7 +1907,7 @@ class TestRunBatchDBErrors:
         body = MagicMock()
         body.input_payload = {}
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1922,7 +1922,7 @@ class TestCoverageGapsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1934,7 +1934,7 @@ class TestCoverageGapsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1949,7 +1949,7 @@ class TestPromptDiffsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1961,7 +1961,7 @@ class TestPromptDiffsDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants.get_variant_group",
+            "farna.api.routes.variants.get_variant_group",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -1976,7 +1976,7 @@ class TestBatchCompareDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants._load_batch_compare_tx",
+            "farna.api.routes.variants._load_batch_compare_tx",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -1988,7 +1988,7 @@ class TestBatchCompareDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants._load_batch_compare_tx",
+            "farna.api.routes.variants._load_batch_compare_tx",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -2000,7 +2000,7 @@ class TestBatchCompareDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants._load_batch_compare_tx",
+            "farna.api.routes.variants._load_batch_compare_tx",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -2012,7 +2012,7 @@ class TestBatchCompareDBErrors:
         principal = make_mock_principal()
         mock_session = make_session_mock()
         with patch(
-            "modulo.api.routes.variants._load_batch_compare_tx",
+            "farna.api.routes.variants._load_batch_compare_tx",
             new_callable=AsyncMock,
             side_effect=RuntimeError("unexpected"),
         ):
@@ -2032,16 +2032,16 @@ class TestRunVariantBatchOwnership:
 
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_batch",
+                "farna.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
             ) as mock_run,
         ):
@@ -2068,21 +2068,21 @@ class TestRunVariantBatchEvalCoverage:
         batch_id = uuid.uuid4()
         with (
             patch(
-                "modulo.api.routes.variants.get_variant_group",
+                "farna.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.variants.has_pipeline_default_evals",
+                "farna.api.routes.variants.has_pipeline_default_evals",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.api.routes.variants.run_variant_batch",
+                "farna.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
             ) as mock_run,
         ):
@@ -2198,12 +2198,12 @@ class TestGroupOwnershipRejection:
 
         with (
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.api.routes.variants.create_variant_group",
+                "farna.api.routes.variants.create_variant_group",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -2218,12 +2218,12 @@ class TestGroupOwnershipRejection:
 
         with (
             patch(
-                "modulo.api.routes.variants.validate_batch_ownership",
+                "farna.api.routes.variants.validate_batch_ownership",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.api.routes.variants.update_variant_group",
+                "farna.api.routes.variants.update_variant_group",
                 new_callable=AsyncMock,
             ) as mock_update,
         ):

@@ -12,12 +12,12 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.pipelines import PipelineResponse
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.pipelines import PipelineResponse
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -140,10 +140,10 @@ FAKE_PIPELINE_ID = uuid.uuid4()
 def test_clone_pipeline_not_found_returns_404_with_detail(client: TestClient) -> None:
     """Non-existent source pipeline should return 404 with a descriptive detail."""
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.check_pipeline_name_available"),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.check_pipeline_name_available"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{FAKE_PIPELINE_ID}/clone", json={})
 
@@ -164,14 +164,14 @@ def test_clone_pipeline_duplicate_name_returns_422(client: TestClient) -> None:
     source = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=False,
         ),
-        patch("modulo.api.routes.pipelines.clone_pipeline"),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.clone_pipeline"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/clone",
@@ -190,14 +190,14 @@ def test_clone_pipeline_default_name_taken_returns_422(client: TestClient) -> No
     source.name = "My Pipeline"
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=False,
         ),
-        patch("modulo.api.routes.pipelines.clone_pipeline"),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.clone_pipeline"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -233,17 +233,17 @@ def test_clone_pipeline_internal_error_returns_500(client: TestClient) -> None:
     source = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=True,
         ),
         patch(
-            "modulo.api.routes.pipelines.clone_pipeline",
+            "farna.api.routes.pipelines.clone_pipeline",
             side_effect=RuntimeError("DB connection lost"),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -263,17 +263,17 @@ def test_clone_pipeline_disappears_returns_404(client: TestClient) -> None:
     source = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=True,
         ),
         patch(
-            "modulo.api.routes.pipelines.clone_pipeline",
+            "farna.api.routes.pipelines.clone_pipeline",
             return_value=None,
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -308,13 +308,13 @@ def _clone_response() -> PipelineResponse:
 def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[Response]:
     source = _make_pipeline()
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
-        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
-        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=outcomes),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event"),
-        patch("modulo.api.routes.pipelines._pipeline_response", side_effect=lambda _p: _clone_response()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("farna.api.routes.pipelines.clone_pipeline", side_effect=outcomes),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event"),
+        patch("farna.api.routes.pipelines._pipeline_response", side_effect=lambda _p: _clone_response()),
     ):
         return [client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"}) for _ in outcomes]
 
@@ -343,11 +343,11 @@ def test_clone_pipeline_name_race_409_detail_names_conflict(client: TestClient) 
     violation = IntegrityError("INSERT INTO pipelines", {}, Exception("uq_pipelines_org_name"))
     source = _make_pipeline()
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
-        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
-        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=violation),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("farna.api.routes.pipelines.clone_pipeline", side_effect=violation),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"})
 
@@ -370,11 +370,11 @@ def test_clone_pipeline_unrelated_integrity_error_is_not_reported_as_name_confli
     )
     source = _make_pipeline()
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
-        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
-        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=violation),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("farna.api.routes.pipelines.clone_pipeline", side_effect=violation),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"})
 

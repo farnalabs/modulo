@@ -22,9 +22,9 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api import mcp_server as ms
-from modulo.db.models.trigger import Trigger
-from modulo.db.rls import set_rls_org
+from farna.api import mcp_server as ms
+from farna.db.models.trigger import Trigger
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

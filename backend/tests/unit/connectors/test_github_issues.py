@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.github import GitHubConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.github import GitHubConnector
 
 TOKEN = "ghp_test_token"
 

@@ -13,13 +13,13 @@ from decimal import Decimal, DecimalException
 
 import pytest
 
-from modulo.core import agent_event_evidence
-from modulo.core.agent_event_evidence import (
+from farna.core import agent_event_evidence
+from farna.core.agent_event_evidence import (
     _add_step_cost,
     heartbeat_liveness_seconds,
     parse_step_finish_evidence,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     RECOVERED_TOKEN_USAGE_ATTR,
     SandboxNodeFailedError,
     _attach_recovered_token_usage,

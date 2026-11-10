@@ -17,10 +17,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.agent import create_agent
-from modulo.db.crud.environment_profile import create_environment_profile
-from modulo.db.crud.library_primitive import create_library_primitive
-from modulo.db.crud.model_backend import create_model_backend
+from farna.db.crud.agent import create_agent
+from farna.db.crud.environment_profile import create_environment_profile
+from farna.db.crud.library_primitive import create_library_primitive
+from farna.db.crud.model_backend import create_model_backend
 
 
 def _library_primitive_kwargs(**overrides: Any) -> dict[str, Any]:
@@ -57,7 +57,7 @@ class TestLibraryPrimitiveRequiredOptions:
         only ``auto_update``/``tier`` fall back to their documented defaults."""
         session = AsyncMock(spec=AsyncSession)
         kwargs = _library_primitive_kwargs(visibility="team", auto_update=False, tier="community")
-        with patch("modulo.db.crud.library_primitive.LibraryPrimitive") as model:
+        with patch("farna.db.crud.library_primitive.LibraryPrimitive") as model:
             await create_library_primitive(session, **kwargs)
 
         row_kwargs = model.call_args.kwargs
@@ -69,7 +69,7 @@ class TestLibraryPrimitiveRequiredOptions:
 
     async def test_defaults_apply_when_optional_options_are_omitted(self) -> None:
         session = AsyncMock(spec=AsyncSession)
-        with patch("modulo.db.crud.library_primitive.LibraryPrimitive") as model:
+        with patch("farna.db.crud.library_primitive.LibraryPrimitive") as model:
             await create_library_primitive(session, **_library_primitive_kwargs())
 
         row_kwargs = model.call_args.kwargs
@@ -115,7 +115,7 @@ class TestModelBackendOptionGroup:
     async def test_known_options_reach_the_row(self) -> None:
         """The no-unknown-options path persists the row with its defaults."""
         session = AsyncMock(spec=AsyncSession)
-        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+        with patch("farna.db.crud.model_backend.ModelBackend") as model:
             await create_model_backend(session, **_model_backend_kwargs())
 
         row_kwargs = model.call_args.kwargs
@@ -129,7 +129,7 @@ class TestModelBackendOptionGroup:
     async def test_explicit_status_reaches_the_row(self) -> None:
         """FAR-2280: an explicit status (e.g. pending_setup) rides through."""
         session = AsyncMock(spec=AsyncSession)
-        with patch("modulo.db.crud.model_backend.ModelBackend") as model:
+        with patch("farna.db.crud.model_backend.ModelBackend") as model:
             await create_model_backend(session, **_model_backend_kwargs(status="pending_setup"))
 
         assert model.call_args.kwargs["status"] == "pending_setup"

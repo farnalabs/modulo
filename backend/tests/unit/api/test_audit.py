@@ -10,11 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -141,7 +141,7 @@ class TestListAuditEvents:
         events = [_make_event() for _ in range(3)]
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 return_value={
                     "items": [
                         {
@@ -163,7 +163,7 @@ class TestListAuditEvents:
                     "limit": 50,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -174,8 +174,8 @@ class TestListAuditEvents:
 
     def test_list_with_cursor_pagination(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = {
                 "items": [],
@@ -192,8 +192,8 @@ class TestListAuditEvents:
 
     def test_list_with_event_type_filter(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = {
                 "items": [],
@@ -209,8 +209,8 @@ class TestListAuditEvents:
 
     def test_list_with_user_id_filter(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = {
                 "items": [],
@@ -226,8 +226,8 @@ class TestListAuditEvents:
 
     def test_list_with_entity_type_filter(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = {
                 "items": [],
@@ -243,8 +243,8 @@ class TestListAuditEvents:
 
     def test_list_with_date_range(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = {
                 "items": [],
@@ -271,7 +271,7 @@ class TestBatchDetail:
         event_id = str(uuid.uuid4())
         with (
             patch(
-                "modulo.api.routes.audit.get_audit_events_batch",
+                "farna.api.routes.audit.get_audit_events_batch",
                 return_value=[
                     {
                         "id": event_id,
@@ -286,7 +286,7 @@ class TestBatchDetail:
                     }
                 ],
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.post(self.URL, json={"event_ids": [event_id]})
         assert resp.status_code == 200
@@ -297,8 +297,8 @@ class TestBatchDetail:
 
     def test_batch_detail_empty_ids(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[]),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.get_audit_events_batch", return_value=[]),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.post(self.URL, json={"event_ids": []})
         assert resp.status_code == 200
@@ -314,16 +314,16 @@ class TestExportChain:
 
     def test_export_programming_error_returns_501(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.export_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.export_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 501
 
     def test_export_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.export_chain", side_effect=SQLAlchemyError("connection failed")),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.export_chain", side_effect=SQLAlchemyError("connection failed")),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 503
@@ -335,7 +335,7 @@ class TestExportChain:
     def test_export_returns_paginated_events(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={
                     "items": [{"id": str(uuid.uuid4()), "event_type": "pipeline.run"}],
                     "total": 1,
@@ -343,7 +343,7 @@ class TestExportChain:
                     "page_size": 100,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -355,8 +355,8 @@ class TestExportChain:
 
     def test_export_with_filters(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.export_chain") as mock_export,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.export_chain") as mock_export,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_export.return_value = {
                 "items": [],
@@ -378,7 +378,7 @@ class TestExportChain:
     def test_export_page_beyond_data(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={
                     "items": [],
                     "total": 0,
@@ -386,7 +386,7 @@ class TestExportChain:
                     "page_size": 100,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{self.URL}?page=999")
         assert resp.status_code == 200
@@ -410,8 +410,8 @@ class TestScanChain:
         e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
         e2 = {"id": str(uuid.uuid4()), "event_type": "user.login"}
         with (
-            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1, e2)),
-            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+            patch("farna.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1, e2)),
+            patch("farna.api.routes.audit._audit_session_factory", return_value=object()),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -432,8 +432,8 @@ class TestScanChain:
         """
         e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
         with (
-            patch("modulo.api.routes.audit.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
+            patch("farna.api.routes.audit.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -442,8 +442,8 @@ class TestScanChain:
     def test_scan_csv_is_an_attachment(self, client: TestClient) -> None:
         e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
         with (
-            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
-            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+            patch("farna.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
+            patch("farna.api.routes.audit._audit_session_factory", return_value=object()),
         ):
             resp = client.get(f"{self.URL}?format=csv")
         assert resp.status_code == 200
@@ -454,8 +454,8 @@ class TestScanChain:
 
     def test_scan_empty_stream_is_an_empty_body(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream()),
-            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+            patch("farna.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream()),
+            patch("farna.api.routes.audit._audit_session_factory", return_value=object()),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -478,8 +478,8 @@ class TestScanChain:
                 yield item
 
         with (
-            patch("modulo.api.routes.audit.stream_export_chain", side_effect=_fake),
-            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+            patch("farna.api.routes.audit.stream_export_chain", side_effect=_fake),
+            patch("farna.api.routes.audit._audit_session_factory", return_value=object()),
         ):
             resp = client.get(
                 f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31"
@@ -505,16 +505,16 @@ class TestVerifyChain:
 
     def test_verify_programming_error_returns_501(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.verify_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.verify_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 501
 
     def test_verify_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.verify_chain", side_effect=SQLAlchemyError("connection failed")),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.verify_chain", side_effect=SQLAlchemyError("connection failed")),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 503
@@ -526,7 +526,7 @@ class TestVerifyChain:
     def test_verify_returns_valid(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.verify_chain",
+                "farna.api.routes.audit.verify_chain",
                 return_value={
                     "valid": True,
                     "total_events": 5,
@@ -537,7 +537,7 @@ class TestVerifyChain:
                     "chain_head_match": True,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -548,7 +548,7 @@ class TestVerifyChain:
     def test_verify_surfaces_chain_break_detail(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.verify_chain",
+                "farna.api.routes.audit.verify_chain",
                 return_value={
                     "valid": False,
                     "total_events": 2,
@@ -562,7 +562,7 @@ class TestVerifyChain:
                     ),
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -578,7 +578,7 @@ class TestVerifyChain:
     def test_verify_event_count_field(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.verify_chain",
+                "farna.api.routes.audit.verify_chain",
                 return_value={
                     "valid": True,
                     "total_events": 3,
@@ -589,7 +589,7 @@ class TestVerifyChain:
                     "chain_head_match": True,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200

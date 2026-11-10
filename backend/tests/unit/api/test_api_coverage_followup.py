@@ -11,18 +11,18 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import dashboard as dashboard_route
-from modulo.api.routes import onboarding as onboarding_route
-from modulo.api.routes import scim as scim_route
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.auth.scim_auth import get_scim_plan_context, get_scim_principal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
-from modulo.db.models.onboarding_progress import OnboardingProgress
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import dashboard as dashboard_route
+from farna.api.routes import onboarding as onboarding_route
+from farna.api.routes import scim as scim_route
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.scim_auth import get_scim_plan_context, get_scim_principal
+from farna.core.audit_coverage import audit_session
+from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry
+from farna.db.models.onboarding_progress import OnboardingProgress
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -215,9 +215,9 @@ class TestScimCoverage:
 
 class TestMeCoverage:
     def test_service_account_hidden(self) -> None:
-        from modulo.api.routes.me import _require_human_account
+        from farna.api.routes.me import _require_human_account
 
-        with patch("modulo.api.routes.me.is_service_account", return_value=True), pytest.raises(HTTPException) as info:
+        with patch("farna.api.routes.me.is_service_account", return_value=True), pytest.raises(HTTPException) as info:
             _require_human_account(MagicMock())
         assert info.value.status_code == 404
 
@@ -230,7 +230,7 @@ class TestMeCoverage:
 
     def test_locale_only_settings(self, route_client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.me.update_account_preferences",
+            "farna.api.routes.me.update_account_preferences",
             new_callable=AsyncMock,
             return_value={"locale": "en-GB"},
         ) as update:

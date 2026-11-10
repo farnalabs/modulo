@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
 from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
@@ -91,10 +91,10 @@ def _patch_create_env(role: str | None = "admin"):
     Yields the mocked ``_session`` so tests can configure the DB session.
     """
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.api.mcp_server.validate_current_auth", return_value=True))
-        mock_session = stack.enter_context(patch("modulo.api.mcp_server._session"))
+        stack.enter_context(patch("farna.api.mcp_server.validate_current_auth", return_value=True))
+        mock_session = stack.enter_context(patch("farna.api.mcp_server._session"))
         stack.enter_context(
-            patch("modulo.api.mcp_server.resolve_role_from_membership", new=AsyncMock(return_value=role))
+            patch("farna.api.mcp_server.resolve_role_from_membership", new=AsyncMock(return_value=role))
         )
         yield mock_session
 
@@ -102,39 +102,39 @@ def _patch_create_env(role: str | None = "admin"):
 class TestCreateApiKey(AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         result = await create_api_key(name="CI")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import create_api_key
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.api.mcp_server import create_api_key
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_api_key(name="CI")
         assert result["error"] == "insufficient_scope"
 
     async def test_invalid_role_rejected(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await create_api_key(name="CI", role="admin")
         assert result["error"] == "validation_failed"
         assert result["field"] == "role"
@@ -146,7 +146,7 @@ class TestCreateApiKey(AuthContext):
         admin stays prohibited there; the shared predicate itself permits it
         for a user-scoped key, which only the REST surface can mint.
         """
-        from modulo.api.mcp_server import _validate_api_key_role_and_name
+        from farna.api.mcp_server import _validate_api_key_role_and_name
 
         assert _validate_api_key_role_and_name("CI", "admin", "user") is None
         org_error = _validate_api_key_role_and_name("CI", "admin", "org")
@@ -154,31 +154,31 @@ class TestCreateApiKey(AuthContext):
         assert org_error["field"] == "role"
 
     async def test_blank_name_rejected(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await create_api_key(name="   ")
         assert result["error"] == "validation_failed"
         assert result["field"] == "name"
 
     async def test_past_expires_at_rejected(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await create_api_key(name="CI", expires_at="2020-01-01T00:00:00Z")
         assert result["error"] == "validation_failed"
         assert result["field"] == "expires_at"
 
     async def test_invalid_expires_at_format_rejected(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await create_api_key(name="CI", expires_at="not-a-date")
         assert result["error"] == "validation_failed"
         assert result["field"] == "expires_at"
 
     async def test_runner_cannot_mint_operator(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, create_api_key
+        from farna.api.mcp_server import _ctx_role, create_api_key
 
         _ctx_role.set("runner")
         with _patch_create_env(role="runner") as mock_session:
@@ -188,7 +188,7 @@ class TestCreateApiKey(AuthContext):
         assert "live role" in result["detail"]
 
     async def test_runner_can_mint_runner(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, create_api_key
+        from farna.api.mcp_server import _ctx_role, create_api_key
 
         _ctx_role.set("runner")
         with _patch_create_env(role="runner") as mock_session:
@@ -198,7 +198,7 @@ class TestCreateApiKey(AuthContext):
         assert result["role"] == "runner"
 
     async def test_removed_membership_denied(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with _patch_create_env(role=None) as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
@@ -207,28 +207,28 @@ class TestCreateApiKey(AuthContext):
         assert "membership" in result["detail"]
 
     async def test_break_glass_account_cannot_mint(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key(), is_break_glass=True))
             with (
-                patch("modulo.db.crud.break_glass_deny.is_break_glass_live", return_value=True),
-                patch("modulo.db.crud.break_glass_deny.is_break_glass_denied", return_value=False),
+                patch("farna.db.crud.break_glass_deny.is_break_glass_live", return_value=True),
+                patch("farna.db.crud.break_glass_deny.is_break_glass_denied", return_value=False),
             ):
                 result = await create_api_key(name="CI")
         assert result["error"] == "insufficient_scope"
         assert "Break-glass" in result["detail"]
 
     async def test_team_key_requires_admin(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, create_api_key
+        from farna.api.mcp_server import _ctx_role, create_api_key
 
         _ctx_role.set("operator")
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
             with (
-                patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+                patch("farna.api.mcp_server.get_settings", return_value=MagicMock()),
                 patch(
-                    "modulo.api.mcp_server.resolve_plan_context",
+                    "farna.api.mcp_server.resolve_plan_context",
                     new=AsyncMock(return_value=_Features(enabled=True)),
                 ),
             ):
@@ -237,14 +237,14 @@ class TestCreateApiKey(AuthContext):
         assert "admin" in result["detail"]
 
     async def test_team_key_requires_feature(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
             with (
-                patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+                patch("farna.api.mcp_server.get_settings", return_value=MagicMock()),
                 patch(
-                    "modulo.api.mcp_server.resolve_plan_context",
+                    "farna.api.mcp_server.resolve_plan_context",
                     new=AsyncMock(return_value=_Features(enabled=False)),
                 ),
             ):
@@ -253,14 +253,14 @@ class TestCreateApiKey(AuthContext):
         assert "upgraded plan" in result["detail"]
 
     async def test_admin_can_create_team_key(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
             with (
-                patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+                patch("farna.api.mcp_server.get_settings", return_value=MagicMock()),
                 patch(
-                    "modulo.api.mcp_server.resolve_plan_context",
+                    "farna.api.mcp_server.resolve_plan_context",
                     new=AsyncMock(return_value=_Features(enabled=True)),
                 ),
             ):
@@ -268,12 +268,12 @@ class TestCreateApiKey(AuthContext):
         assert result["team_id"] == str(_TEAM_ID)
 
     async def test_expires_at_parsed_and_passed_to_crud(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
-            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud) as _mock_crud:
+            with patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud) as _mock_crud:
                 result = await create_api_key(name="CI", expires_at="2030-06-01T00:00:00")
         assert "key_value" in result
         assert _mock_crud.await_args.kwargs["expires_at"] == datetime(2030, 6, 1, tzinfo=UTC)
@@ -283,13 +283,13 @@ class TestCreateApiKey(AuthContext):
     async def test_service_ttl_ceiling_maps_to_422(self) -> None:
         """FAR-1478: a >365d service-owned key is a client error (422), never a
         silent clamp — the MCP surface mirrors the REST mint shape."""
-        from modulo.api.mcp_server import create_api_key
-        from modulo.auth.api_key import ApiKeyTtlError
+        from farna.api.mcp_server import create_api_key
+        from farna.auth.api_key import ApiKeyTtlError
 
         mock_crud = AsyncMock(side_effect=ApiKeyTtlError("Keys owned by a service account expire within 365 days"))
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
-            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            with patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
                 result = await create_api_key(name="CI", expires_at="2030-06-01T00:00:00")
         assert result["error"] == "validation_error", result
         assert result["status"] == 422, result
@@ -307,12 +307,12 @@ class _Features:
 class TestCreateApiKeySuccess(AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
 
     async def test_create_returns_full_key_once(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         key = _make_key()
         with _patch_create_env() as mock_session:
@@ -334,7 +334,7 @@ class TestCreateApiKeyGrants(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
 
@@ -342,9 +342,9 @@ class TestCreateApiKeyGrants(AuthContext):
     def _env(self, *, flag: bool = True, role: str | None = "admin"):
         with (
             _patch_create_env(role=role) as mock_session,
-            patch("modulo.api.mcp_server.api_key_grants_enabled", new=AsyncMock(return_value=flag)),
+            patch("farna.api.mcp_server.api_key_grants_enabled", new=AsyncMock(return_value=flag)),
             patch(
-                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                "farna.api.routes.api_keys.resolve_role_from_membership",
                 new=AsyncMock(return_value=role),
             ),
         ):
@@ -352,28 +352,28 @@ class TestCreateApiKeyGrants(AuthContext):
             yield
 
     async def test_grants_passed_to_crud_and_echoed(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
-        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+        with self._env(), patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
             result = await create_api_key(name="CI", grants=["run.list", "run.cancel"])
         assert mock_crud.await_args.kwargs["grants"] == ["run.list", "run.cancel"]
         assert result["grants"] == ["run.cancel", "run.list"]
 
     async def test_omitted_grants_stay_null(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
-        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+        with self._env(), patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
             result = await create_api_key(name="CI")
         assert mock_crud.await_args.kwargs["grants"] is None
         assert result["grants"] is None
 
     async def test_empty_grants_is_explicit_deny_all(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
-        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+        with self._env(), patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
             result = await create_api_key(name="CI", grants=[])
         sent = mock_crud.await_args.kwargs["grants"]
         assert sent is not None
@@ -382,7 +382,7 @@ class TestCreateApiKeyGrants(AuthContext):
         assert not result["grants"]
 
     async def test_flag_off_rejected_422(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with self._env(flag=False):
             result = await create_api_key(name="CI", grants=["run.list"])
@@ -393,13 +393,13 @@ class TestCreateApiKeyGrants(AuthContext):
         """FAR-1477: a transient grants-flag read failure fails closed as a
         retryable 503, matching the REST mint path — never misreported as the
         permanent-looking 422 "not enabled"."""
-        from modulo.api.mcp_server import create_api_key
-        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+        from farna.api.mcp_server import create_api_key
+        from farna.auth.api_key import ApiKeyGrantsUnavailableError
 
         with (
             _patch_create_env(role="admin") as mock_session,
             patch(
-                "modulo.api.mcp_server.api_key_grants_enabled",
+                "farna.api.mcp_server.api_key_grants_enabled",
                 new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
             ),
         ):
@@ -409,7 +409,7 @@ class TestCreateApiKeyGrants(AuthContext):
         assert result["status"] == 503
 
     async def test_unknown_grant_rejected_422(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with self._env():
             result = await create_api_key(name="CI", grants=["no.such.permission"])
@@ -417,7 +417,7 @@ class TestCreateApiKeyGrants(AuthContext):
         assert result["status"] == 422
 
     async def test_non_delegable_grant_denied(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         with self._env():
             result = await create_api_key(name="CI", grants=["api_key.create"])
@@ -425,7 +425,7 @@ class TestCreateApiKeyGrants(AuthContext):
         assert "cannot be delegated" in result["detail"]
 
     async def test_grant_above_caller_capability_denied(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, create_api_key
+        from farna.api.mcp_server import _ctx_role, create_api_key
 
         _ctx_role.set("runner")
         with self._env(role="runner"):
@@ -437,24 +437,24 @@ class TestCreateApiKeyGrants(AuthContext):
 class TestListApiKeys(AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        from modulo.api.mcp_server import list_api_keys
+        from farna.api.mcp_server import list_api_keys
 
         result = await list_api_keys()
         assert result["error"] == "auth_expired"
 
     async def test_runner_cannot_receive_account_pii(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, list_api_keys
+        from farna.api.mcp_server import _ctx_role, list_api_keys
 
         _ctx_role.set("runner")
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
             result = await list_api_keys()
@@ -464,13 +464,13 @@ class TestListApiKeys(AuthContext):
 
     async def test_runner_with_tool_scope_still_cannot_list_org_keys(self) -> None:
         """The operator floor is enforced after the tool-scope check."""
-        from modulo.api.mcp_server import _ctx_role, list_api_keys
+        from farna.api.mcp_server import _ctx_role, list_api_keys
 
         _ctx_role.set("runner")
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server.check_tool_scope"),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server.check_tool_scope"),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
             result = await list_api_keys()
@@ -479,12 +479,12 @@ class TestListApiKeys(AuthContext):
         assert result["detail"] == "Only admin or operator users can list API keys"
 
     async def test_operator_list_returns_account_metadata_without_secrets(self) -> None:
-        from modulo.api.mcp_server import list_api_keys
+        from farna.api.mcp_server import list_api_keys
 
         key = _make_key()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([key]))
             result = await list_api_keys()
@@ -498,11 +498,11 @@ class TestListApiKeys(AuthContext):
         assert "hashed_secret" not in entry
 
     async def test_runner_is_denied_and_operator_is_allowed(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, list_api_keys
+        from farna.api.mcp_server import _ctx_role, list_api_keys
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
             _ctx_role.set("runner")
@@ -514,11 +514,11 @@ class TestListApiKeys(AuthContext):
         assert allowed["total"] == 1
 
     async def test_list_never_returns_full_key_values(self) -> None:
-        from modulo.api.mcp_server import list_api_keys
+        from farna.api.mcp_server import list_api_keys
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
             result = await list_api_keys()
@@ -533,13 +533,13 @@ class TestListApiKeys(AuthContext):
         assert entry["created_at"] == _NOW.isoformat()
 
     async def test_list_scoped_to_caller_org(self) -> None:
-        from modulo.api.mcp_server import list_api_keys
+        from farna.api.mcp_server import list_api_keys
 
         mock_list = AsyncMock(return_value=[{"id": str(_KEY_ID), "name": "CI"}])
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.auth_list_api_keys", new=mock_list) as _mock_list,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.auth_list_api_keys", new=mock_list) as _mock_list,
         ):
             mock_session.return_value = make_session_context(make_session_scope())
             result = await list_api_keys()
@@ -549,54 +549,54 @@ class TestListApiKeys(AuthContext):
 
 
 class TestRevokeApiKey(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         result = await revoke_api_key(str(_KEY_ID))
         assert result["error"] == "auth_expired"
 
     async def test_revoke_invalid_id(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await revoke_api_key("not-a-uuid")
         assert result["error"] == "invalid_id"
         assert result["field"] == "key_id"
 
     async def test_revoke_success(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))
         assert result == {"id": str(_KEY_ID), "revoked": True}
 
     async def test_revoke_not_found(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(None))
             result = await revoke_api_key(str(_KEY_ID))
         assert result["error"] == "not_found"
 
     async def test_revoke_scoped_to_caller_org(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         # FAR-620: the revoke CRUD returns the revoked ROW (the audit stamps
         # read its scope + prefix); a bool truthy works too but the row is the
         # contract.
         mock_revoke = AsyncMock(return_value=_make_key())
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke) as _mock_revoke,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.auth_revoke_api_key", new=mock_revoke) as _mock_revoke,
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))
@@ -605,15 +605,15 @@ class TestRevokeApiKey(AuthContext):
         assert _mock_revoke.await_args.args[2] == ORG_ID
 
     async def test_break_glass_account_cannot_revoke(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         session = _make_revoke_session(_make_key())
         session.get = AsyncMock(return_value=_make_account(is_break_glass=True))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.break_glass_deny.is_break_glass_live", return_value=True),
-            patch("modulo.db.crud.break_glass_deny.is_break_glass_denied", return_value=False),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.break_glass_deny.is_break_glass_live", return_value=True),
+            patch("farna.db.crud.break_glass_deny.is_break_glass_denied", return_value=False),
         ):
             mock_session.return_value = make_session_context(session)
             result = await revoke_api_key(str(_KEY_ID))
@@ -626,12 +626,12 @@ class TestRoundTrip(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
 
     async def test_round_trip_create_list_revoke(self) -> None:
-        from modulo.api.mcp_server import create_api_key, list_api_keys, revoke_api_key
+        from farna.api.mcp_server import create_api_key, list_api_keys, revoke_api_key
 
         key = _make_key(name="Roundtrip", role="runner")
         with _patch_create_env() as mock_session:
@@ -642,8 +642,8 @@ class TestRoundTrip(AuthContext):
         key_id = created["id"]
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_list_session([key]))
             listed = await list_api_keys()
@@ -654,8 +654,8 @@ class TestRoundTrip(AuthContext):
         assert entry["role"] == "runner"
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(key))
             revoked = await revoke_api_key(key_id)
@@ -677,40 +677,40 @@ class TestApiKeySessionContract(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
 
     async def test_create_api_key_session_contract_error_is_internal(self) -> None:
-        from modulo.api.mcp_server import create_api_key
+        from farna.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
-            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            with patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
                 result = await create_api_key(name="CI")
         assert result["error"] == "session_contract_error", result
         assert result["detail"] == MSG_SESSION_CONTRACT, result
 
     async def test_create_api_key_transient_stays_database_unavailable(self) -> None:
-        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, create_api_key
+        from farna.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, create_api_key
 
         mock_crud = AsyncMock(side_effect=SQLAlchemyError("down"))
         with _patch_create_env() as mock_session:
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
-            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            with patch("farna.api.mcp_server.auth_create_api_key", new=mock_crud):
                 result = await create_api_key(name="CI")
         assert result["error"] == "database_unavailable", result
         assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
 
     async def test_revoke_api_key_session_contract_error_is_internal(self) -> None:
-        from modulo.api.mcp_server import revoke_api_key
+        from farna.api.mcp_server import revoke_api_key
 
         mock_revoke = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))
@@ -718,13 +718,13 @@ class TestApiKeySessionContract(AuthContext):
         assert result["detail"] == MSG_SESSION_CONTRACT, result
 
     async def test_revoke_api_key_transient_stays_database_unavailable(self) -> None:
-        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, revoke_api_key
+        from farna.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, revoke_api_key
 
         mock_revoke = AsyncMock(side_effect=SQLAlchemyError("down"))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))

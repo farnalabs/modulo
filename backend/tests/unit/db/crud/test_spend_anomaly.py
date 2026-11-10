@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies, record_or_get_anomaly
-from modulo.db.models.base import Base
-from modulo.db.models.spend_anomaly import SpendAnomaly
+from farna.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies, record_or_get_anomaly
+from farna.db.models.base import Base
+from farna.db.models.spend_anomaly import SpendAnomaly
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")
@@ -233,7 +233,7 @@ class TestDismissAnomaly:
         session = AsyncMock()
         session.execute.return_value = result
 
-        from modulo.db.crud import spend_anomaly as crud
+        from farna.db.crud import spend_anomaly as crud
 
         dismissed = await crud.dismiss_anomaly(
             session,

@@ -21,19 +21,19 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from modulo.core.cost_controller.breakdown.aggregate import (
+from farna.core.cost_controller.breakdown.aggregate import (
     _dominant_rejection_reason,
     _missing_self_report_reason,
     build_cost_breakdown,
 )
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     RunCostTelemetry,
     build_telemetry,
     compute_run_warnings,
     compute_run_warnings_count,
 )
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _enrich_union,
     _rejected_zero_nodes,
     _rejection_reasons,

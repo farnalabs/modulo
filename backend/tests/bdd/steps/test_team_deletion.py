@@ -67,8 +67,8 @@ def delete_team_endpoint(team_identifier: str, request, ctx, client=None) -> Non
     )
 
     with (
-        patch("modulo.api.routes.teams.set_rls_org"),
-        patch("modulo.api.routes.teams.set_rls_user_context"),
+        patch("farna.api.routes.teams.set_rls_org"),
+        patch("farna.api.routes.teams.set_rls_user_context"),
     ):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
 
@@ -96,8 +96,8 @@ def deleted_team_not_retrievable(team_name: str, request, ctx, client=None) -> N
     _configure_delete_session(mock_session, table_counts={}, team_row=None)
 
     with (
-        patch("modulo.api.routes.teams.set_rls_org"),
-        patch("modulo.api.routes.teams.set_rls_user_context"),
+        patch("farna.api.routes.teams.set_rls_org"),
+        patch("farna.api.routes.teams.set_rls_user_context"),
     ):
         resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
     _store_response(request, ctx, resp)

@@ -23,8 +23,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.api.routes.viewmodel import _resolve_tier
-from modulo.core.license import (
+from farna.api.routes.viewmodel import _resolve_tier
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     LICENCE_GRACE_DAYS,
     LicenseData,
@@ -32,8 +32,8 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 

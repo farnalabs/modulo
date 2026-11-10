@@ -60,7 +60,7 @@ PREV_REV = "0297_autonomy_gating_s1"
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 

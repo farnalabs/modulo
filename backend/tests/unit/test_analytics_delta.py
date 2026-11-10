@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.core.analytics import compute_delta
+from farna.core.analytics import compute_delta
 
 
 @pytest.mark.parametrize(

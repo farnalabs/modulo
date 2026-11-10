@@ -38,8 +38,8 @@ import pytest
 from aiohttp import WSMsgType
 from kubernetes_asyncio.client.exceptions import ApiException
 
-import modulo.core.runtime_provider.k8s as k8s_mod
-from modulo.core.runtime_provider import (
+import farna.core.runtime_provider.k8s as k8s_mod
+from farna.core.runtime_provider import (
     BackendUnreachableError,
     ExecResult,
     IsolationPolicy,
@@ -52,10 +52,10 @@ from modulo.core.runtime_provider import (
     WorkspaceSpec,
     build_hub,
 )
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
-from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
+from farna.core.runtime_provider.local import LocalRuntimeProvider
+from farna.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 
 _EXIT_SUCCESS = '{"metadata":{},"status":"Success"}'
 
@@ -259,7 +259,7 @@ class TestRegistration:
         real_import = cast(Any, __import__)
 
         def _fake_import(name: str, *args: object, **kwargs: object) -> object:
-            if name == "modulo.core.runtime_provider.k8s":
+            if name == "farna.core.runtime_provider.k8s":
                 raise ImportError("kubernetes-asyncio not installed")
             return real_import(name, *args, **kwargs)
 
@@ -277,7 +277,7 @@ class TestRegistration:
 
     def test_env_var_mapping_names_remediation(self) -> None:
         """env_var_for_provider_type('kubernetes') returns the registration var."""
-        from modulo.core.runtime_provider import env_var_for_provider_type
+        from farna.core.runtime_provider import env_var_for_provider_type
 
         assert env_var_for_provider_type("kubernetes") == "MODULO_KUBERNETES_ENABLED"
         assert env_var_for_provider_type("KUBERNETES") == "MODULO_KUBERNETES_ENABLED"
@@ -1152,7 +1152,7 @@ class TestClientConfiguration:
 # Migration 0282 structural parity (mirrors the 0178 migration test)
 # ---------------------------------------------------------------------------
 
-_VERSIONS = Path(__file__).resolve().parents[4] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[4] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0282_env_profiles_kubernetes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -1747,7 +1747,7 @@ class TestIsolationArms:
 
         monkeypatch.setattr(provider, "exec_command", _fake_exec)
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.sandbox_policy.install_gh_pr_guard_via_exec",
+            "farna.core.pipeline_engine.sandbox_policy.install_gh_pr_guard_via_exec",
             AsyncMock(return_value=SimpleNamespace(status="installed", detail="guard note")),
         )
 

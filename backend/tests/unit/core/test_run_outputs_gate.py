@@ -41,20 +41,20 @@ from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _read_connector_idempotency_gate_state,
     _read_run_raw_output_markers_for_gate,
     _write_raw_output_marker,
 )
-from modulo.db.crud.run_node_outputs import DualWriteError, read_run_markers_fenced
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run_node_outputs import DualWriteError, read_run_markers_fenced
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.db.rls import set_rls_org
 from tests.unit._source_scan import iter_source_text
 
-_SRC = Path(__file__).resolve().parent.parent.parent.parent / "src" / "modulo"
+_SRC = Path(__file__).resolve().parent.parent.parent.parent / "src" / "farna"
 
 _ORG = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
@@ -165,7 +165,7 @@ class TestMarkerSavepointWrite:
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
 
-        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
+        caplog.set_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner")
         await _write_raw_output_marker(
             sqlite_sessionmaker,
             org_uuid=None,
@@ -197,8 +197,8 @@ class TestMarkerSavepointLegacyLostClassification:
             err.orig = type("_FakePG", (Exception,), {"sqlstate": "40P01"})("deadlock detected")
             raise err
 
-        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
-        with patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write):
+        caplog.set_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner")
+        with patch("farna.db.crud.run_node_outputs.write_run_markers", _failing_write):
             await _write_raw_output_marker(
                 sqlite_sessionmaker,
                 org_uuid=_ORG,
@@ -228,8 +228,8 @@ class TestMarkerSavepointLegacyLostClassification:
             err.orig = type("_FakePG", (Exception,), {"sqlstate": "42501"})("permission denied")
             raise err
 
-        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
-        with patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write):
+        caplog.set_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner")
+        with patch("farna.db.crud.run_node_outputs.write_run_markers", _failing_write):
             await _write_raw_output_marker(
                 sqlite_sessionmaker,
                 org_uuid=_ORG,
@@ -240,7 +240,7 @@ class TestMarkerSavepointLegacyLostClassification:
             )
         assert any("raw_output_marker_persist_uncommitted" in r.message for r in caplog.records)
         # ...and no marker row survived the failed savepoint.
-        from modulo.db.crud.run_node_outputs import read_run_blobs
+        from farna.db.crud.run_node_outputs import read_run_blobs
 
         async with sqlite_sessionmaker() as check, check.begin():
             stored = await read_run_blobs(check, run_id=run_id)
@@ -296,9 +296,9 @@ class TestGateReadUsesFencedReader:
 
         session = _CountingSession()
         with (
-            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+            patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+            patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("farna.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
                 lambda: session,
@@ -326,9 +326,9 @@ class TestGateReadUsesFencedReader:
 
         session = _CountingSession()
         with (
-            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+            patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+            patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("farna.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
                 lambda: session,
@@ -352,9 +352,9 @@ class TestGateReadUsesFencedReader:
 
         session = _CountingSession(rows=[("run-row-id", "key-1")])
         with (
-            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+            patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+            patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("farna.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers, persisted_key = await _read_connector_idempotency_gate_state(
                 lambda: session,
@@ -395,7 +395,7 @@ class TestFenceStatusVisibilityDuringCancel:
         # B2b: the markers land on the run_node_outputs store (the runs
         # columns are gone) through the repo writer - the fenced reader
         # reassembles exactly what the database stores.
-        from modulo.db.crud.run_node_outputs import write_run_markers
+        from farna.db.crud.run_node_outputs import write_run_markers
 
         async with maker() as session, session.begin():
             await set_rls_org(session, _ORG)
@@ -573,7 +573,7 @@ class TestGuardContract:
         )
 
     def test_update_run_status_docstring_documents_raises_and_guard(self) -> None:
-        from modulo.db.crud.run import update_run_status
+        from farna.db.crud.run import update_run_status
 
         doc = inspect.getdoc(update_run_status)
         assert doc is not None
@@ -581,7 +581,7 @@ class TestGuardContract:
         assert "guard_dual_write" in doc, "the guard obligation must be documented at the chokepoint"
 
     def test_dual_write_helper_docstring_documents_the_contract(self) -> None:
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud.run import write_run_outputs_from_run
 
         doc = inspect.getdoc(write_run_outputs_from_run)
         assert doc is not None
@@ -606,7 +606,7 @@ class TestRecoveryClaimTokenFence:
         """qa M18: the recovery dual-write failure path passes
         ``run.claim_token`` — without it the separate-session terminalize
         could mark a SUCCESSOR's re-claim."""
-        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+        from farna.core.pipeline_engine.recovery import _apply_recovery_markers
 
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
@@ -622,7 +622,7 @@ class TestRecoveryClaimTokenFence:
                 origin=kwargs["origin"],
             )
 
-        with patch("modulo.db.crud.run.write_run_outputs_from_run", _failing_dual_write):
+        with patch("farna.db.crud.run.write_run_outputs_from_run", _failing_dual_write):
             async with sqlite_sessionmaker() as session, session.begin():
                 loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
                 with pytest.raises(DualWriteError) as caught:
@@ -636,8 +636,8 @@ class TestRecoveryClaimTokenFence:
     async def test_orchestration_uses_the_claim_token_for_terminalize(self) -> None:
         """End-to-end through the orchestrator: the DualWriteError's claim
         token reaches ``_mark_run_failed`` (the successor-reclaim fence)."""
-        from modulo.core.error_tracking import saq_hooks
-        from modulo.core.run_outputs_dualwrite import orchestrate_dual_write_failure
+        from farna.core.error_tracking import saq_hooks
+        from farna.core.run_outputs_dualwrite import orchestrate_dual_write_failure
 
         exc = DualWriteError(
             "injected",
@@ -649,7 +649,7 @@ class TestRecoveryClaimTokenFence:
         )
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1) as mark,
-            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
+            patch("farna.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
         ):
             await orchestrate_dual_write_failure(exc)
         assert mark.await_args.kwargs["claim_token"] == "tok-owner"
@@ -665,7 +665,7 @@ class TestRecoveryInheritedSentinelKeys:
     async def test_inherited_kwargs_carry_the_pre_mutation_dicts(
         self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
     ) -> None:
-        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+        from farna.core.pipeline_engine.recovery import _apply_recovery_markers
 
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
@@ -674,7 +674,7 @@ class TestRecoveryInheritedSentinelKeys:
         async def _capturing_dual_write(session: Any, **kwargs: Any) -> None:
             captured.update(kwargs)
 
-        with patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_dual_write):
+        with patch("farna.db.crud.run.write_run_outputs_from_run", _capturing_dual_write):
             async with sqlite_sessionmaker() as session, session.begin():
                 loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
                 await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
@@ -697,7 +697,7 @@ class TestRecoveryInheritedSentinelKeys:
         FILTERED from the REPLACE upserts (its row survives the blanking;
         there is no legacy column any more) and counted, instead of raising
         :class:`OutputsSentinelViolation` and wedging the recovery."""
-        from modulo.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY, NodeOutputWrite, upsert_rows
+        from farna.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY, NodeOutputWrite, upsert_rows
 
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
@@ -721,7 +721,7 @@ class TestRecoveryInheritedSentinelKeys:
             await set_rls_org(session, _ORG)
             # MUST NOT raise OutputsSentinelViolation - the M19 wedge this
             # fix removes from the recovery path.
-            from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+            from farna.core.pipeline_engine.recovery import _apply_recovery_markers
 
             await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
         async with sqlite_sessionmaker() as check, check.begin():

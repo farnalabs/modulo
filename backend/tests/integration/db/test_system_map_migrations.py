@@ -34,7 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.db.models.system_map import (
+from farna.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
     SystemMapLoopAdmissionAttempt,
@@ -94,7 +94,7 @@ def _alembic_config(db_url: str) -> Config:
     """House conftest pattern: backend-absolute ini + script_location."""
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 

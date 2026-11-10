@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from modulo.cli.apply.models import ModelBackendEntity, SchemaEntity
-from modulo.cli.apply.plan import build_plan, canonical_hash, plan_entity
+from farna.cli.apply.models import ModelBackendEntity, SchemaEntity
+from farna.cli.apply.plan import build_plan, canonical_hash, plan_entity
 
 SCHEMA_ENTITY = SchemaEntity.model_validate({"name": "alpha", "description": "Old description"})
 
@@ -123,7 +123,7 @@ class TestPlanDecisionTable:
         """A declaration with more than 4dp quantizes to the column's Numeric
         (12, 4) scale, so the stored 4dp value compares equal instead of
         drifting as a permanent 'updated'."""
-        from modulo.cli.apply.models import TriggerEntity
+        from farna.cli.apply.models import TriggerEntity
 
         entity = TriggerEntity.model_validate(
             {"pipeline": "p", "name": "hook", "trigger_type": "ongoing", "daily_spend_limit": 10.55555}
@@ -144,7 +144,7 @@ class TestPlanDecisionTable:
     def test_trigger_secret_shaped_entries_excluded_both_sides(self) -> None:
         """hmac_secret (server Fernet-encrypted + read-masked) is excluded: the
         real desired value never drifts against the read mask."""
-        from modulo.cli.apply.models import TriggerEntity
+        from farna.cli.apply.models import TriggerEntity
 
         entity = TriggerEntity.model_validate(
             {
@@ -175,7 +175,7 @@ class TestPlanDecisionTable:
     def test_trigger_foreign_config_keys_do_not_drift(self) -> None:
         """Stored config keys undeclared by the config are NOT compared (apply
         merges declared keys and never deletes foreign ones)."""
-        from modulo.cli.apply.models import TriggerEntity
+        from farna.cli.apply.models import TriggerEntity
 
         entity = TriggerEntity.model_validate(
             {"pipeline": "report", "name": "hook", "trigger_type": "webhook", "config_json": {"note": "kept"}}

@@ -14,7 +14,7 @@ import pytest
 from click.testing import CliRunner
 from psycopg.types.json import Jsonb
 
-from modulo.cli.backup import (
+from farna.cli.backup import (
     _db_has_modulo_tables,
     _export_checkpoint_blobs_sync,
     _export_checkpoint_writes_sync,
@@ -57,7 +57,7 @@ class TestResolveUrl:
         url = "sqlite:///local.db"
         assert _resolve_url(url) == url
 
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup.get_settings")
     def test_none_fallback(self, mock_settings: MagicMock) -> None:
         mock_settings.return_value.database_url = "postgresql+asyncpg://fallback/db"
         result = _resolve_url(None)
@@ -96,7 +96,7 @@ class TestDbHasModuloTables:
         # Cannot verify the target ⇒ conservative True (require --replace-cluster).
         assert _db_has_modulo_tables("postgresql://localhost/db") is True
 
-    @patch("modulo.cli.backup.psycopg", None)
+    @patch("farna.cli.backup.psycopg", None)
     def test_treats_missing_driver_as_populated(self) -> None:
         assert _db_has_modulo_tables("postgresql://localhost/db") is True
 
@@ -239,7 +239,7 @@ class TestWriteJson:
 
 class TestRunPgDump:
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_success(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
@@ -261,7 +261,7 @@ class TestRunPgDump:
         assert mock_run.call_args[1]["timeout"] == 300
 
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_failure_raises_runtime_error(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
@@ -274,7 +274,7 @@ class TestRunPgDump:
             _run_pg_dump("postgresql://user:pass@localhost/db", output)
 
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_custom_timeout(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
@@ -292,7 +292,7 @@ class TestRunPgDump:
 
 class TestRunPsql:
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_success(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "psql"
         mock_process = MagicMock()
@@ -313,7 +313,7 @@ class TestRunPsql:
         assert mock_run.call_args[1]["timeout"] == 600
 
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_failure_raises_runtime_error(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "psql"
         mock_process = MagicMock()
@@ -328,7 +328,7 @@ class TestRunPsql:
             _run_psql("postgresql://user:pass@localhost/db", input_path)
 
     @patch.object(shutil, "which")
-    @patch("modulo.cli.backup.subprocess.run")
+    @patch("farna.cli.backup.subprocess.run")
     def test_custom_timeout(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
         mock_which.return_value = "psql"
         mock_process = MagicMock()
@@ -969,7 +969,7 @@ class TestRestoreCheckpointWritesSync:
 
 
 class TestReEncryptCredentialsSync:
-    @patch("modulo.cli.backup.Fernet")
+    @patch("farna.cli.backup.Fernet")
     @patch("psycopg.connect")
     def test_re_encrypts_rows(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
@@ -1004,7 +1004,7 @@ class TestReEncryptCredentialsSync:
         assert "UPDATE connector_instances" in update_call[0]
         assert update_call[1][0] == b"new_ciphertext"
 
-    @patch("modulo.cli.backup.Fernet")
+    @patch("farna.cli.backup.Fernet")
     @patch("psycopg.connect")
     def test_skips_rows_with_empty_ciphertext(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
@@ -1029,7 +1029,7 @@ class TestReEncryptCredentialsSync:
         assert mock_old.decrypt.call_count == 1
         assert mock_new.encrypt.call_count == 1
 
-    @patch("modulo.cli.backup.Fernet")
+    @patch("farna.cli.backup.Fernet")
     @patch("psycopg.connect")
     def test_processes_multiple_tables(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
@@ -1058,7 +1058,7 @@ class TestReEncryptCredentialsSync:
         assert mock_cur.execute.call_count == 2  # 2 UPDATEs (one per table)
         mock_conn.commit.assert_called_once()
 
-    @patch("modulo.cli.backup.Fernet")
+    @patch("farna.cli.backup.Fernet")
     @patch("psycopg.connect")
     def test_handles_empty_creds_dict(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
@@ -1080,15 +1080,15 @@ class TestReEncryptCredentialsSync:
 
 
 class TestBackupCli:
-    @patch("modulo.cli.backup._print_size")
-    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._export_checkpoints_sync")
-    @patch("modulo.cli.backup._export_credentials_references_sync")
-    @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_pg_dump")
-    @patch("modulo.cli.backup._get_schema_versions")
-    @patch("modulo.cli.backup._get_db_version")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._print_size")
+    @patch("farna.cli.backup._export_checkpoint_writes_sync")
+    @patch("farna.cli.backup._export_checkpoints_sync")
+    @patch("farna.cli.backup._export_credentials_references_sync")
+    @patch("farna.cli.backup._export_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_pg_dump")
+    @patch("farna.cli.backup._get_schema_versions")
+    @patch("farna.cli.backup._get_db_version")
+    @patch("farna.cli.backup.get_settings")
     def test_backup_success(
         self,
         mock_settings: MagicMock,
@@ -1132,15 +1132,15 @@ class TestBackupCli:
         mock_export_cw.assert_called_once()
         mock_print_size.assert_called_once()
 
-    @patch("modulo.cli.backup._print_size")
-    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._export_checkpoints_sync")
-    @patch("modulo.cli.backup._export_credentials_references_sync")
-    @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_pg_dump")
-    @patch("modulo.cli.backup._get_schema_versions")
-    @patch("modulo.cli.backup._get_db_version")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._print_size")
+    @patch("farna.cli.backup._export_checkpoint_writes_sync")
+    @patch("farna.cli.backup._export_checkpoints_sync")
+    @patch("farna.cli.backup._export_credentials_references_sync")
+    @patch("farna.cli.backup._export_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_pg_dump")
+    @patch("farna.cli.backup._get_schema_versions")
+    @patch("farna.cli.backup._get_db_version")
+    @patch("farna.cli.backup.get_settings")
     def test_backup_writes_manifest(
         self,
         mock_settings: MagicMock,
@@ -1185,7 +1185,7 @@ class TestBackupCli:
         assert "file_checksums" in manifest
         assert manifest["file_checksums"]["database.sql"] is not None
 
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup.get_settings")
     def test_backup_failure_raises_click_exception(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.database_url = "postgresql://localhost/db"
@@ -1197,15 +1197,15 @@ class TestBackupCli:
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
 
-    @patch("modulo.cli.backup._print_size")
-    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._export_checkpoints_sync")
-    @patch("modulo.cli.backup._export_credentials_references_sync")
-    @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_pg_dump")
-    @patch("modulo.cli.backup._get_schema_versions")
-    @patch("modulo.cli.backup._get_db_version")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._print_size")
+    @patch("farna.cli.backup._export_checkpoint_writes_sync")
+    @patch("farna.cli.backup._export_checkpoints_sync")
+    @patch("farna.cli.backup._export_credentials_references_sync")
+    @patch("farna.cli.backup._export_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_pg_dump")
+    @patch("farna.cli.backup._get_schema_versions")
+    @patch("farna.cli.backup._get_db_version")
+    @patch("farna.cli.backup.get_settings")
     def test_backup_writes_blobs_and_creds_json(
         self,
         mock_settings: MagicMock,
@@ -1270,15 +1270,15 @@ class TestBackupCli:
         loaded_creds = json.loads(creds_path.read_text(encoding="utf-8"))
         assert len(loaded_creds["connector_instances"]) == 1
 
-    @patch("modulo.cli.backup._print_size")
-    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._export_checkpoints_sync")
-    @patch("modulo.cli.backup._export_credentials_references_sync")
-    @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_pg_dump")
-    @patch("modulo.cli.backup._get_schema_versions")
-    @patch("modulo.cli.backup._get_db_version")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._print_size")
+    @patch("farna.cli.backup._export_checkpoint_writes_sync")
+    @patch("farna.cli.backup._export_checkpoints_sync")
+    @patch("farna.cli.backup._export_credentials_references_sync")
+    @patch("farna.cli.backup._export_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_pg_dump")
+    @patch("farna.cli.backup._get_schema_versions")
+    @patch("farna.cli.backup._get_db_version")
+    @patch("farna.cli.backup.get_settings")
     def test_backup_with_explicit_db_url(
         self,
         mock_settings: MagicMock,
@@ -1337,15 +1337,15 @@ class TestRestoreCli:
         The posture step needs a live cluster; its failure/success semantics are
         covered in test_backup_restore_semantics.py.
         """
-        monkeypatch.setattr("modulo.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("farna.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_success(
         self,
         mock_settings: MagicMock,
@@ -1404,12 +1404,12 @@ class TestRestoreCli:
         assert result.exit_code != 0
         assert "backup-info.json not found" in result.output
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_skips_database_sql_when_missing(
         self,
         mock_settings: MagicMock,
@@ -1442,13 +1442,13 @@ class TestRestoreCli:
         assert "No database.sql found" in result.output
         mock_psql.assert_not_called()
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_requires_previous_fernet_key_when_key_changed(
         self,
         mock_settings: MagicMock,
@@ -1487,13 +1487,13 @@ class TestRestoreCli:
         assert result.exit_code != 0
         assert "--previous-fernet-key" in result.output
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_with_re_encryption(
         self,
         mock_settings: MagicMock,
@@ -1550,13 +1550,13 @@ class TestRestoreCli:
         assert args[2] == old_fernet_key  # previous ferret key
         assert args[3] == new_fernet_key  # current ferret key
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_skips_re_encryption_when_key_unchanged(
         self,
         mock_settings: MagicMock,
@@ -1595,13 +1595,13 @@ class TestRestoreCli:
         assert "FERNET_KEY unchanged" in result.output
         mock_re_encrypt.assert_not_called()
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_confirmation_prompt(
         self,
         mock_settings: MagicMock,
@@ -1639,7 +1639,7 @@ class TestRestoreCli:
         assert "OVERWRITE" in result.output
         assert "Restore complete" in result.output
 
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_failure(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -1651,13 +1651,13 @@ class TestRestoreCli:
 
         assert result.exit_code != 0
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_skips_re_encryption_when_creds_json_missing(
         self,
         mock_settings: MagicMock,
@@ -1730,15 +1730,15 @@ class TestRestoreIntegrity:
     @pytest.fixture(autouse=True)
     def _stub_posture_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """These tests cover archive integrity, not the role-posture re-run."""
-        monkeypatch.setattr("modulo.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("farna.cli.backup._ensure_restore_posture", lambda *_args, **_kwargs: None)
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_with_checksum_verification(
         self,
         mock_settings: MagicMock,
@@ -1783,7 +1783,7 @@ class TestRestoreIntegrity:
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert "All file checksums verified" in result.output
 
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_fails_on_checksum_mismatch(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         # The app role URL is resolved from configuration BEFORE the archive
@@ -1817,7 +1817,7 @@ class TestRestoreIntegrity:
         assert result.exit_code != 0
         assert "Checksum mismatch" in result.output
 
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_fails_on_missing_manifest_file(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.database_url = _TEST_APP_DB_URL
@@ -1844,13 +1844,13 @@ class TestRestoreIntegrity:
         assert result.exit_code != 0
         assert "not found on disk" in result.output
 
-    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_skips_checksums_when_not_in_manifest(
         self,
         mock_settings: MagicMock,
@@ -1888,12 +1888,12 @@ class TestRestoreIntegrity:
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert "All file checksums verified" not in result.output
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_fails_on_corrupt_json(
         self,
         mock_settings: MagicMock,
@@ -1927,12 +1927,12 @@ class TestRestoreIntegrity:
         assert result.exit_code != 0
         assert "Corrupt JSON" in result.output
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_previews_steps_without_db_changes(
         self,
         mock_settings: MagicMock,
@@ -1981,12 +1981,12 @@ class TestRestoreIntegrity:
         mock_restore_cw.assert_not_called()
         mock_re_encrypt.assert_not_called()
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_skips_full_db_restore_when_no_sql(
         self,
         mock_settings: MagicMock,
@@ -2017,12 +2017,12 @@ class TestRestoreIntegrity:
         assert "No credentials_references.json found — WOULD skip credential restore" in result.output
         mock_psql.assert_not_called()
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_requires_previous_fernet_key_when_key_changed(
         self,
         mock_settings: MagicMock,
@@ -2057,12 +2057,12 @@ class TestRestoreIntegrity:
         assert "WOULD re-encrypt" not in result.output
         mock_re_encrypt.assert_not_called()
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_previews_re_encryption(
         self,
         mock_settings: MagicMock,
@@ -2106,12 +2106,12 @@ class TestRestoreIntegrity:
         assert "Dry run complete" in result.output
         mock_re_encrypt.assert_not_called()
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_still_fails_on_corrupt_json(
         self,
         mock_settings: MagicMock,
@@ -2141,12 +2141,12 @@ class TestRestoreIntegrity:
         assert "Corrupt JSON" in result.output
         mock_psql.assert_not_called()
 
-    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
-    @patch("modulo.cli.backup._restore_checkpoints_sync")
-    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
-    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
-    @patch("modulo.cli.backup._run_psql")
-    @patch("modulo.cli.backup.get_settings")
+    @patch("farna.cli.backup._restore_checkpoint_writes_sync")
+    @patch("farna.cli.backup._restore_checkpoints_sync")
+    @patch("farna.cli.backup._re_encrypt_credentials_sync")
+    @patch("farna.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("farna.cli.backup._run_psql")
+    @patch("farna.cli.backup.get_settings")
     def test_restore_dry_run_skips_confirmation_prompt(
         self,
         mock_settings: MagicMock,

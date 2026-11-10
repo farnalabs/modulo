@@ -31,10 +31,10 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
-from modulo.api.routes import analytics as route
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.analytics.builder import AnalyticsGroupBy, AnalyticsStatus
-from modulo.core.analytics.service import (
+from farna.api.routes import analytics as route
+from farna.auth.jwt import TenantPrincipal
+from farna.core.analytics.builder import AnalyticsGroupBy, AnalyticsStatus
+from farna.core.analytics.service import (
     EXPORT_COLUMN_NAMES,
     AnalyticsParams,
     AnalyticsRateLimitedError,

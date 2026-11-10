@@ -31,7 +31,7 @@ async def test_eval_definitions_count_where_clause_contains_deleted_at():
     definitions inflate the analytics count. FAR-1729: the query must also
     source the count from the live ``evals`` table.
     """
-    from modulo.core.product_analytics.metrics_dump import _count_entities
+    from farna.core.product_analytics.metrics_dump import _count_entities
 
     org_id = uuid.uuid4()
 

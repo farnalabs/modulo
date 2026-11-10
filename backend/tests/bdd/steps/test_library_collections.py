@@ -1,6 +1,6 @@
 """Step definitions for the library collection install/uninstall/grant lifecycle.
 
-The collection REST surface (``backend/src/modulo/api/routes/library.py``) is
+The collection REST surface (``backend/src/farna/api/routes/library.py``) is
 exercised end-to-end through the real routes with the library_service
 functions patched: installing a published collection (201 with an
 ``installed`` install record and a runnability verdict), the error mappings
@@ -28,19 +28,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.library_service.grant import (
+from farna.core.library_service.grant import (
     InstallNotFoundError as GrantInstallNotFoundError,
 )
-from modulo.core.library_service.grant import (
+from farna.core.library_service.grant import (
     NotCommunitySourcedError,
 )
-from modulo.core.library_service.install import (
+from farna.core.library_service.install import (
     CollectionInstallError,
     CollectionNotPublishedError,
     PinResolutionError,
 )
-from modulo.core.library_service.primitive_types import MAX_COLLECTION_PINS
-from modulo.core.library_service.uninstall import InstallNotFoundError as UninstallInstallNotFoundError
+from farna.core.library_service.primitive_types import MAX_COLLECTION_PINS
+from farna.core.library_service.uninstall import InstallNotFoundError as UninstallInstallNotFoundError
 from tests.bdd.conftest import ORG_ID, _active_client, _store_response
 
 scenarios("../features/library/library_collections.feature")
@@ -137,7 +137,7 @@ def _mk_collection_primitive(
 # Route-patch helpers
 # ===========================================================================
 
-_ROUTE = "modulo.api.routes.library"
+_ROUTE = "farna.api.routes.library"
 
 
 def _start_route_patches(

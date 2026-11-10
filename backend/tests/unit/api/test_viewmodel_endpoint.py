@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -191,14 +191,14 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -228,7 +228,7 @@ def test_me_includes_must_change_password(client: TestClient) -> None:
     for flag, expected in ((True, True), (False, False)):
         user = _make_user()
         user.must_change_password = flag
-        with patch("modulo.api.routes.viewmodel.get_account_by_id", new=AsyncMock(return_value=user)):
+        with patch("farna.api.routes.viewmodel.get_account_by_id", new=AsyncMock(return_value=user)):
             resp = client.get("/api/v1/me")
 
         assert resp.status_code == 200
@@ -265,16 +265,16 @@ def test_viewmodel_current_includes_pending_hitl(client: TestClient) -> None:
     execute_result.scalars.return_value = scalars_mock
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         patch(
-            "modulo.api.routes.viewmodel.AsyncSession.execute",
+            "farna.api.routes.viewmodel.AsyncSession.execute",
             new_callable=AsyncMock,
             return_value=execute_result,
         ),
@@ -323,14 +323,14 @@ def test_viewmodel_current_pending_hitl_query_filters_to_actionable_run_statuses
     try:
         client = TestClient(app)
         with (
-            patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-            patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+            patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+            patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
     finally:
@@ -356,14 +356,14 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -385,7 +385,7 @@ def test_viewmodel_current_feature_flags_full_set_with_org_overlay(client: TestC
     flags dropped entirely) and no org ``feature_overrides`` overlay — the two
     gaps that made this endpoint unusable as a plan bootstrap replacement.
     """
-    from modulo.core.feature_flags import FeatureFlag
+    from farna.core.feature_flags import FeatureFlag
 
     pipeline = _make_pipeline()
     run = _make_run()
@@ -402,14 +402,14 @@ def test_viewmodel_current_feature_flags_full_set_with_org_overlay(client: TestC
     )
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -432,14 +432,14 @@ def test_viewmodel_current_includes_org_info(client: TestClient) -> None:
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -462,14 +462,14 @@ def test_viewmodel_current_includes_team_memberships(client: TestClient) -> None
     membership = _make_membership(role="operator")
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[membership]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[membership]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -490,14 +490,14 @@ def test_viewmodel_current_includes_preferences(client: TestClient) -> None:
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -509,12 +509,12 @@ def test_viewmodel_current_includes_preferences(client: TestClient) -> None:
 
 def test_viewmodel_current_returns_503_on_sqlalchemy_error(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=Exception("connection failed")),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.list_pipelines", side_effect=Exception("connection failed")),
     ):
         resp = client.get("/api/v1/viewmodel/current")
     assert resp.status_code == 500
@@ -522,12 +522,12 @@ def test_viewmodel_current_returns_503_on_sqlalchemy_error(client: TestClient) -
 
 def test_viewmodel_current_returns_500_on_unexpected_error(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=TypeError("expected str, got None")),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.list_pipelines", side_effect=TypeError("expected str, got None")),
     ):
         resp = client.get("/api/v1/viewmodel/current")
     assert resp.status_code == 500
@@ -543,14 +543,14 @@ def test_viewmodel_current_includes_plan(client: TestClient) -> None:
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-        patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+        patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -595,11 +595,11 @@ def test_viewmodel_current_system_admin_without_org_returns_200(client: TestClie
     plan_ctx = _make_mock_plan_context()
 
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org"),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        patch("farna.api.routes.viewmodel.set_rls_org"),
+        patch("farna.api.routes.viewmodel.set_rls_user_context"),
+        patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
     ):
         resp = client.get("/api/v1/viewmodel/current")
 
@@ -640,14 +640,14 @@ def test_viewmodel_current_view_as_team_existing_team_returns_200() -> None:
     try:
         client = TestClient(app)
         with (
-            patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
-            patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+            patch("farna.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+            patch("farna.api.routes.viewmodel.list_runs", return_value=runs_page),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")
     finally:

@@ -31,14 +31,14 @@ from langgraph.errors import NodeCancelledError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import pipeline_execution as pe
-from modulo.core import worker_handoff as wh
-from modulo.core.pipeline_engine import PipelineExecutor
-from modulo.core.pipeline_engine import executor as ex
-from modulo.core.pipeline_engine import retry_policy as retry_policy_module
-from modulo.core.pipeline_engine import watchdog_retry as wr
-from modulo.db.crud import run_attempts as attempt_crud
-from modulo.db.models.run_attempt import (
+from farna.core import pipeline_execution as pe
+from farna.core import worker_handoff as wh
+from farna.core.pipeline_engine import PipelineExecutor
+from farna.core.pipeline_engine import executor as ex
+from farna.core.pipeline_engine import retry_policy as retry_policy_module
+from farna.core.pipeline_engine import watchdog_retry as wr
+from farna.db.crud import run_attempts as attempt_crud
+from farna.db.models.run_attempt import (
     ATTEMPT_TERMINAL_REASON_COMPLETED,
     ATTEMPT_TERMINAL_REASON_DEADLINE,
     ATTEMPT_TERMINAL_REASON_GUARD_CAP,
@@ -176,8 +176,8 @@ async def _admit(
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=active_runs)),
         patch.object(ex, "update_run_status", AsyncMock(return_value=None)),
         patch.object(executor, "_claim_run_and_audit", AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", bump),
-        patch("modulo.db.crud.run_attempts.start_attempt", start),
+        patch("farna.core.pipeline_execution.bump_execution_attempt_count", bump),
+        patch("farna.db.crud.run_attempts.start_attempt", start),
     ):
         result = await executor._claim_under_capacity(
             run_id=RUN,
@@ -346,7 +346,7 @@ async def test_attempt_close_failure_is_swallowed_and_logged(
 ) -> None:
     with (
         patch.object(attempt_crud, "close_attempt", AsyncMock(side_effect=RuntimeError("db down"))),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"),
+        caplog.at_level("WARNING", logger="farna.core.pipeline_execution"),
     ):
         result = await pe.record_attempt_close(sqlite_maker, RUN, ORG, terminal_reason="reset")
 
@@ -405,7 +405,7 @@ def _transient_executor(*, reset_rowcount: int | None) -> PipelineExecutor:
 
 
 async def _decide_transient(executor: PipelineExecutor) -> dict[str, Any]:
-    with patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_run_retries=5)):
+    with patch("farna.settings.get_settings", return_value=SimpleNamespace(saq_run_retries=5)):
         return await executor._decide_transient_failure(
             exc=NodeCancelledError("transient sandbox failure"),
             run_id=RUN,
@@ -452,7 +452,7 @@ async def test_a_retry_policy_redispatch_closes_the_attempt_as_a_reset() -> None
     executor._record_attempt_reset = AsyncMock()
     with (
         patch.object(retry_policy_module, "record_retry_redispatch", MagicMock()),
-        patch("modulo.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
+        patch("farna.settings.get_settings", return_value=SimpleNamespace(saq_retry_delay=0)),
         patch("asyncio.sleep", AsyncMock()),
         pytest.raises(ex.RunRetryPolicyError),
     ):
@@ -492,7 +492,7 @@ async def test_a_watchdog_redispatch_closes_the_attempt_as_a_reset() -> None:
         patch.object(wr, "_resolve_schedule_state", MagicMock(return_value=("absent", 0.0))),
         patch.object(wr, "_record_retry_redispatch", MagicMock()),
         patch.object(wr.asyncio, "sleep", AsyncMock()),
-        patch("modulo.core.pipeline_execution.record_attempt_close", closer),
+        patch("farna.core.pipeline_execution.record_attempt_close", closer),
     ):
         result = await wr.watchdog_retry_after_policy(
             aeng=MagicMock(),
@@ -513,7 +513,7 @@ async def test_a_watchdog_redispatch_closes_the_attempt_as_a_reset() -> None:
 async def test_a_handed_back_worker_loss_closes_the_attempt() -> None:
     entry = wh.InFlightRun(run_id=RUN, org_id=ORG, claim_token="tok")
     closer = AsyncMock(return_value=0)
-    with patch("modulo.core.pipeline_execution.record_attempt_close", closer):
+    with patch("farna.core.pipeline_execution.record_attempt_close", closer):
         await wh._close_handed_back_attempts(MagicMock(), [entry])
 
     closer.assert_awaited_once()
@@ -535,7 +535,7 @@ async def test_the_wrapper_closes_the_attempt_for_a_terminal_outcome(
     status: str, error_code: str | None, expected_reason: str
 ) -> None:
     closer = AsyncMock(return_value=0)
-    with patch("modulo.core.pipeline_execution.record_attempt_close", closer):
+    with patch("farna.core.pipeline_execution.record_attempt_close", closer):
         await pe._record_executor_outcome_attempt(MagicMock(), RUN, ORG, status=status, error_code=error_code)
 
     closer.assert_awaited_once()
@@ -546,7 +546,7 @@ async def test_the_wrapper_closes_the_attempt_for_a_terminal_outcome(
 async def test_the_wrapper_does_not_close_an_awaiting_human_attempt() -> None:
     """A resume continues the same attempt — closing here would end it early."""
     closer = AsyncMock()
-    with patch("modulo.core.pipeline_execution.record_attempt_close", closer):
+    with patch("farna.core.pipeline_execution.record_attempt_close", closer):
         await pe._record_executor_outcome_attempt(MagicMock(), RUN, ORG, status="awaiting_human", error_code=None)
 
     closer.assert_not_awaited()
@@ -604,7 +604,7 @@ async def test_fail_run_terminal_closes_the_attempt_with_the_mapped_reason() -> 
         patch.object(pe, "_advance_journeys_from_stored_refs", AsyncMock()),
         patch.object(pe, "_record_fact_for_terminal_failed_run", AsyncMock()),
         patch.object(pe, "_bound_hot_runs_row_lock", AsyncMock()),
-        patch("modulo.core.pipeline_execution.record_attempt_close", closer),
+        patch("farna.core.pipeline_execution.record_attempt_close", closer),
     ):
         ok = await pe.fail_run_terminal(
             _fake_engine(landed=True),
@@ -629,7 +629,7 @@ async def test_a_fenced_out_terminal_write_closes_nothing() -> None:
         patch.object(pe, "_advance_journeys_from_stored_refs", AsyncMock()),
         patch.object(pe, "_record_fact_for_terminal_failed_run", AsyncMock()),
         patch.object(pe, "_bound_hot_runs_row_lock", AsyncMock()),
-        patch("modulo.core.pipeline_execution.record_attempt_close", closer),
+        patch("farna.core.pipeline_execution.record_attempt_close", closer),
     ):
         ok = await pe.fail_run_terminal(
             _fake_engine(landed=False),
@@ -648,7 +648,7 @@ async def test_mark_complete_closes_the_attempt_as_completed() -> None:
     with (
         patch.object(pe, "_advance_journeys_from_stored_refs", AsyncMock()),
         patch.object(pe, "_bound_hot_runs_row_lock", AsyncMock()),
-        patch("modulo.core.pipeline_execution.record_attempt_close", closer),
+        patch("farna.core.pipeline_execution.record_attempt_close", closer),
     ):
         await pe.mark_complete(_fake_engine(landed=True), str(RUN), str(ORG))
 
@@ -707,7 +707,7 @@ async def _handback_once(*, reset_landed: bool) -> tuple[MagicMock, dict[str, in
 
     with (
         patch.object(wh, "_load_handback_row", _load),
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", AsyncMock()),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", AsyncMock()),
         patch.object(wh, "_close_handed_back_attempts", closer),
     ):
         result = await wh.handback_inflight_runs(_handback_engine(reset_landed=reset_landed), registry=reg)

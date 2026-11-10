@@ -19,9 +19,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.connector_hub.health_sweep as health_sweep
-from modulo.core.connector_hub.health_sweep import run_connector_health_checks
-from modulo.db.models.connector_instance import ConnectorInstance
+import farna.core.connector_hub.health_sweep as health_sweep
+from farna.core.connector_hub.health_sweep import run_connector_health_checks
+from farna.db.models.connector_instance import ConnectorInstance
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -67,7 +67,7 @@ def _instance(**overrides: Any) -> ConnectorInstance:
 async def sweep(tmp_path):
     engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'sweep.db'}", echo=False)
 
-    from modulo.db.models.base import Base
+    from farna.db.models.base import Base
 
     # Only the table under test — creating ALL Base tables on SQLite pulls in
     # Postgres-only column types across the model graph.
@@ -253,11 +253,11 @@ async def test_sweep_binds_org_context_for_real_secrets_backend(tmp_path) -> Non
     """
     from cryptography.fernet import Fernet
 
-    from modulo.db.models.secret import Secret
+    from farna.db.models.secret import Secret
 
     engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'real_secrets.db'}", echo=False)
 
-    from modulo.db.models.base import Base
+    from farna.db.models.base import Base
 
     tables = [ConnectorInstance.__table__, Secret.__table__]
     async with engine.begin() as conn:
@@ -378,7 +378,7 @@ async def test_sweep_escalated_failure_redacts_with_bound_redactor(sweep, tmp_pa
     run, seeder, rows = sweep
     monkeypatch.setattr(health_sweep, "create_secrets_backend", _planted_backend_factory)
 
-    from modulo.connectors.filesystem import FilesystemConnector
+    from farna.connectors.filesystem import FilesystemConnector
 
     async def _boom(self) -> Any:
         raise RuntimeError(f"upstream echoed {_ESCALATED_TOKEN}")
@@ -402,8 +402,8 @@ async def test_sweep_escalated_failure_fails_closed_without_redactor(sweep, tmp_
     (fail-closed): the exception TYPE survives, its message does not."""
     run, seeder, rows = sweep
 
-    from modulo.connectors.filesystem import FilesystemConnector
-    from modulo.core.connector_hub import ConnectorHub
+    from farna.connectors.filesystem import FilesystemConnector
+    from farna.core.connector_hub import ConnectorHub
 
     async def _boom(self) -> Any:
         raise RuntimeError(f"upstream echoed {_ESCALATED_TOKEN}")
@@ -429,9 +429,9 @@ async def test_sweep_unhealthy_result_fails_closed_without_redactor(sweep, tmp_p
     boundary never echoes the connector's own detail unredacted (FAR-1651Fix3)."""
     run, seeder, rows = sweep
 
-    from modulo.connectors.base import HealthResult
-    from modulo.connectors.filesystem import FilesystemConnector
-    from modulo.core.connector_hub import ConnectorHub
+    from farna.connectors.base import HealthResult
+    from farna.connectors.filesystem import FilesystemConnector
+    from farna.core.connector_hub import ConnectorHub
 
     async def _unhealthy(self) -> Any:
         return HealthResult(ok=False, detail=f"upstream echoed {_ESCALATED_TOKEN}")
@@ -454,7 +454,7 @@ async def test_sweep_re_raises_cancelled_error_from_health_check(sweep, tmp_path
     """A CancelledError escaping health_check keeps run-loop semantics — re-raised."""
     run, seeder, _rows = sweep
 
-    from modulo.connectors.filesystem import FilesystemConnector
+    from farna.connectors.filesystem import FilesystemConnector
 
     async def _cancel(self) -> Any:
         raise asyncio.CancelledError

@@ -42,10 +42,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.jwt import create_access_token
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.jwt import create_access_token
+from farna.settings import Settings, get_settings
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -214,7 +214,7 @@ async def runs_route_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenera
     # direct call would read the lru_cached real settings and keep the 5 s
     # default. Patch the ``row_lock`` module's binding so the raised budget
     # actually applies to the allocation lock.
-    with patch("modulo.db.crud.row_lock.get_settings", return_value=settings):
+    with patch("farna.db.crud.row_lock.get_settings", return_value=settings):
         async with AsyncClient(transport=transport, base_url="http://test", timeout=120.0) as client:
             yield client
 
@@ -230,7 +230,7 @@ def _stub_run_dispatch() -> Generator[None, None, None]:
     already created and the route returns 202 regardless, so the dispatch side
     effect is irrelevant to these assertions.
     """
-    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock):
         yield
 
 

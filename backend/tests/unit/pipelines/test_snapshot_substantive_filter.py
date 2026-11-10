@@ -27,13 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
 
-import modulo.db.models  # noqa: F401  (registers every table on Base.metadata)
-from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+import farna.db.models  # noqa: F401  (registers every table on Base.metadata)
+from farna.db.crud.pipeline_snapshot_versioning import list_snapshots
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 #: The exclusion the frontend sends (lib/pipelineVersion NON_VERSION_CREATED_KINDS).
 _EXCLUDE_RUN = ["run"]

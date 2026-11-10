@@ -109,9 +109,9 @@ on:
     # kind cluster) from chart-only changes (`chart`, lints without a cluster)
     # - see `Detect changed paths` below.
     paths:
-      - "backend/src/modulo/core/runtime_provider/**"
-      - "backend/src/modulo/core/bundled_runner/**"
-      - "backend/src/modulo/core/pipeline_engine/**"
+      - "backend/src/farna/core/runtime_provider/**"
+      - "backend/src/farna/core/bundled_runner/**"
+      - "backend/src/farna/core/pipeline_engine/**"
       - "backend/tests/conformance/**"
       - "backend/pyproject.toml"
       - "backend/uv.lock"
@@ -204,7 +204,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BEFORE: ${{ github.event.before }}
         run: |
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/ backend/tests/conformance/ backend/pyproject.toml backend/uv.lock .github/workflows/k8s-conformance.yml"
+          PATHS="backend/src/farna/core/runtime_provider/ backend/src/farna/core/bundled_runner/ backend/src/farna/core/pipeline_engine/ backend/tests/conformance/ backend/pyproject.toml backend/uv.lock .github/workflows/k8s-conformance.yml"
           CHART_PATHS="deploy/helm/"
           if [ "$EVENT_NAME" = "pull_request" ]; then
             # PRs check out the merge commit: HEAD^ is the base side.

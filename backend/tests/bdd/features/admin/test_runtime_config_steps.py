@@ -17,8 +17,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.runtime_config.store import get_runtime_config_store
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.runtime_config.store import get_runtime_config_store
 
 scenarios("runtime-config.feature")
 
@@ -39,9 +39,9 @@ def _build_app(request: Any) -> FastAPI:
     wires up. This mirrors the shared BDD ``client`` fixture, which stubs both
     resolvers.
     """
-    from modulo.api.dependencies import get_plan_context
-    from modulo.api.routes.admin_runtime_config import router as runtime_config_router
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from farna.api.dependencies import get_plan_context
+    from farna.api.routes.admin_runtime_config import router as runtime_config_router
+    from farna.auth.dependencies import get_current_tenant_user, get_current_user
 
     class _AllFeatures:
         def feature_enabled(self, name: str) -> bool:

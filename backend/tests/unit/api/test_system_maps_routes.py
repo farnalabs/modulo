@@ -15,9 +15,9 @@ from fastapi import Depends, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.main import app
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.repositories.system_map import SystemMapRepository
+from farna.api.main import app
+from farna.auth.jwt import TenantPrincipal
+from farna.db.repositories.system_map import SystemMapRepository
 
 # ─── Test constants ───
 
@@ -303,9 +303,9 @@ def _install_overrides(
     internal_access: bool = True,
 ) -> None:
     """Install FastAPI dependency overrides for testing."""
-    from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings
-    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
-    from modulo.settings import Settings
+    from farna.api.dependencies import get_current_tenant_user, get_db_session, get_settings
+    from farna.auth.dependencies import get_current_tenant_user_or_api_key
+    from farna.settings import Settings
 
     principal = TenantPrincipal(
         username="test",
@@ -358,11 +358,11 @@ def _install_overrides(
     app.dependency_overrides[get_current_tenant_user] = lambda: principal
     app.dependency_overrides[get_db_session] = _get_session
     app.dependency_overrides[get_settings] = lambda: settings
-    from modulo.api.routes.system_maps import get_repo
+    from farna.api.routes.system_maps import get_repo
 
     app.dependency_overrides[get_repo] = lambda: harness.repository
     # Override the internal system maps access gate
-    from modulo.api.routes.system_maps import (
+    from farna.api.routes.system_maps import (
         _require_internal_system_maps_access,
         _system_maps_internal_access,
     )
@@ -375,7 +375,7 @@ def _install_overrides(
 
     app.dependency_overrides[_require_internal_system_maps_access] = _mock_require_internal_system_maps_access
     app.dependency_overrides[_system_maps_internal_access] = lambda: internal_access
-    from modulo.api.routes.system_maps import _require_system_maps_feature, _require_system_maps_read_feature
+    from farna.api.routes.system_maps import _require_system_maps_feature, _require_system_maps_read_feature
 
     async def _mock_system_maps_feature() -> None:
         return None
@@ -408,9 +408,9 @@ def client() -> tuple[TestClient, _Harness]:
 
 def test_ordinary_caller_denied_403() -> None:
     """Ordinary caller (viewer role) is denied 403 by the internal gate."""
-    from modulo.api.dependencies import _require_internal_system_maps_access
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings
+    from farna.api.dependencies import _require_internal_system_maps_access
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings
 
     settings = Settings(
         modulo_dev_mode=True,
@@ -440,9 +440,9 @@ def test_ordinary_caller_denied_403() -> None:
 
 def test_internal_caller_without_grant_denied_403() -> None:
     """Grant-bearing operator keys without the dedicated grant are denied 403."""
-    from modulo.api.dependencies import _require_internal_system_maps_access
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings
+    from farna.api.dependencies import _require_internal_system_maps_access
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings
 
     settings = Settings(
         modulo_dev_mode=True,
@@ -473,9 +473,9 @@ def test_internal_caller_without_grant_denied_403() -> None:
 
 def test_internal_caller_with_grant_can_access() -> None:
     """Internal caller (operator) with system_maps_access grant can access."""
-    from modulo.api.dependencies import _require_internal_system_maps_access
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings
+    from farna.api.dependencies import _require_internal_system_maps_access
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings
 
     settings = Settings(
         modulo_dev_mode=True,
@@ -504,9 +504,9 @@ def test_internal_caller_with_grant_can_access() -> None:
 
 def test_internal_jwt_without_grants_can_access() -> None:
     """Legacy JWT callers retain role-based System Maps access."""
-    from modulo.api.dependencies import _require_internal_system_maps_access
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings
+    from farna.api.dependencies import _require_internal_system_maps_access
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings
 
     settings = Settings(
         modulo_dev_mode=True,
@@ -533,9 +533,9 @@ def test_internal_jwt_without_grants_can_access() -> None:
 
 def test_dev_mode_required() -> None:
     """Dev mode is required - without it, even operator gets 403."""
-    from modulo.api.dependencies import _require_internal_system_maps_access
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings
+    from farna.api.dependencies import _require_internal_system_maps_access
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings
 
     settings = Settings(
         modulo_dev_mode=False,  # Dev mode OFF
@@ -649,7 +649,7 @@ def test_create_system_map_runs_owner_team_validation(
     validate_owner_team = AsyncMock(
         side_effect=HTTPException(status_code=404, detail="Team not found in this organisation")
     )
-    monkeypatch.setattr("modulo.api.routes.system_maps.validate_owner_team_for_create", validate_owner_team)
+    monkeypatch.setattr("farna.api.routes.system_maps.validate_owner_team_for_create", validate_owner_team)
     harness.stub("create_map", AsyncMock(return_value=_map_row()))
 
     response = http.post(_BASE, json={"name": "Map", "owner_team_id": str(_TEAM_ID)})
@@ -810,7 +810,7 @@ def test_get_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
 
 def test_system_map_graph_serializes_deleted_by_from_real_orm_objects(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
-    from modulo.db.models.system_map import (
+    from farna.db.models.system_map import (
         SystemMapLoopConfig,
         SystemMapNode,
         SystemMapRelationship,
@@ -1901,7 +1901,7 @@ def test_integrity_error_maps_to_409(
 
 
 def test_system_map_create_schema_validates_node_types() -> None:
-    from modulo.api.schemas.system_maps import VALID_NODE_TYPES, SystemMapNodeCreate
+    from farna.api.schemas.system_maps import VALID_NODE_TYPES, SystemMapNodeCreate
 
     for node_type in VALID_NODE_TYPES:
         node = SystemMapNodeCreate(
@@ -1915,7 +1915,7 @@ def test_system_map_create_schema_validates_node_types() -> None:
 def test_system_map_create_schema_rejects_invalid_node_type() -> None:
     from pydantic import ValidationError
 
-    from modulo.api.schemas.system_maps import SystemMapNodeCreate
+    from farna.api.schemas.system_maps import SystemMapNodeCreate
 
     with pytest.raises(ValidationError):
         SystemMapNodeCreate(
@@ -1928,7 +1928,7 @@ def test_system_map_create_schema_rejects_invalid_node_type() -> None:
 def test_system_map_schemas_reject_vocabulary_substrings() -> None:
     from pydantic import ValidationError
 
-    from modulo.api.schemas.system_maps import (
+    from farna.api.schemas.system_maps import (
         AttributionBindingCreate,
         SystemMapNodeCreate,
         SystemMapRelationshipCreate,
@@ -1957,7 +1957,7 @@ def test_system_map_schemas_reject_vocabulary_substrings() -> None:
 
 
 def test_system_map_revision_create_schema_validates_loop_config() -> None:
-    from modulo.api.schemas.system_maps import SystemMapLoopConfigCreate, SystemMapNodeCreate, SystemMapRevisionCreate
+    from farna.api.schemas.system_maps import SystemMapLoopConfigCreate, SystemMapNodeCreate, SystemMapRevisionCreate
 
     rev = SystemMapRevisionCreate(
         nodes=[SystemMapNodeCreate(node_key="loop-1", node_type="improvement_loop", display_name="Loop 1")],
@@ -1978,7 +1978,7 @@ def test_system_map_revision_create_schema_validates_loop_config() -> None:
 
 
 def test_system_map_overview_response_includes_bottlenecks() -> None:
-    from modulo.api.schemas.system_maps import (
+    from farna.api.schemas.system_maps import (
         SystemMapOverviewBottleneck,
         SystemMapOverviewLoopConfig,
         SystemMapOverviewNodeHealth,
@@ -2032,7 +2032,7 @@ def test_system_map_overview_response_includes_bottlenecks() -> None:
 
 def _install_session(*, scalar_one: object = 1, one_or_none: object = None) -> MagicMock:
     """Override the request session with a scripted execute() result."""
-    from modulo.api.dependencies import get_db_session
+    from farna.api.dependencies import get_db_session
 
     session = MagicMock()
     cm = MagicMock()
@@ -2062,7 +2062,7 @@ def _install_session(*, scalar_one: object = 1, one_or_none: object = None) -> M
 async def test_get_repo_builds_repository_with_shared_session_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modulo.api.routes import system_maps as routes
+    from farna.api.routes import system_maps as routes
 
     session = MagicMock()
     ctx = MagicMock()
@@ -2081,7 +2081,7 @@ async def test_get_repo_builds_repository_with_shared_session_factory(
 
 
 async def test_get_repo_dependency_delegates_to_helper(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.api.routes import system_maps as routes
+    from farna.api.routes import system_maps as routes
 
     sentinel = MagicMock()
     monkeypatch.setattr(routes, "_get_repo", AsyncMock(return_value=sentinel))
@@ -2090,7 +2090,7 @@ async def test_get_repo_dependency_delegates_to_helper(monkeypatch: pytest.Monke
 
 
 async def test_record_audit_swallows_write_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.api.routes import system_maps as routes
+    from farna.api.routes import system_maps as routes
 
     session = MagicMock()
     nested = MagicMock()
@@ -2166,7 +2166,7 @@ async def _assert_http_exception_reraised(endpoint, **kwargs: object) -> None:
 
 
 async def test_list_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import list_system_maps_endpoint
+    from farna.api.routes.system_maps import list_system_maps_endpoint
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.list_maps_by_org = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -2184,7 +2184,7 @@ async def test_list_endpoint_reraises_http_exception() -> None:
 
 
 async def test_get_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import get_system_map_endpoint
+    from farna.api.routes.system_maps import get_system_map_endpoint
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -2198,8 +2198,8 @@ async def test_get_endpoint_reraises_http_exception() -> None:
 
 
 async def test_update_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import update_system_map_endpoint
-    from modulo.api.schemas.system_maps import SystemMapUpdate
+    from farna.api.routes.system_maps import update_system_map_endpoint
+    from farna.api.schemas.system_maps import SystemMapUpdate
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -2214,7 +2214,7 @@ async def test_update_endpoint_reraises_http_exception() -> None:
 
 
 async def test_delete_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import delete_system_map_endpoint
+    from farna.api.routes.system_maps import delete_system_map_endpoint
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.soft_delete_map = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -2228,7 +2228,7 @@ async def test_delete_endpoint_reraises_http_exception() -> None:
 
 
 async def test_list_bindings_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import list_attribution_bindings_endpoint
+    from farna.api.routes.system_maps import list_attribution_bindings_endpoint
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -2242,7 +2242,7 @@ async def test_list_bindings_endpoint_reraises_http_exception() -> None:
 
 
 async def test_delete_binding_endpoint_reraises_http_exception() -> None:
-    from modulo.api.routes.system_maps import delete_attribution_binding_endpoint
+    from farna.api.routes.system_maps import delete_attribution_binding_endpoint
 
     repository = MagicMock(spec=SystemMapRepository)
     repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
@@ -3058,7 +3058,7 @@ def test_delete_binding_missing_map_returns_404(client: tuple[TestClient, _Harne
 def test_system_map_revision_schema_rejects_duplicate_and_dangling_entries() -> None:
     from pydantic import ValidationError
 
-    from modulo.api.schemas.system_maps import (
+    from farna.api.schemas.system_maps import (
         SystemMapLoopConfigCreate,
         SystemMapNodeCreate,
         SystemMapRelationshipCreate,
@@ -3170,9 +3170,9 @@ def _install_viewer_overrides(
     contract is enforced. These overrides leave resolution intact so the real
     ``system_maps.read`` / ``system_maps_access`` gates run.
     """
-    from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_plan_context, get_settings
-    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
-    from modulo.settings import Settings
+    from farna.api.dependencies import get_current_tenant_user, get_db_session, get_plan_context, get_settings
+    from farna.auth.dependencies import get_current_tenant_user_or_api_key
+    from farna.settings import Settings
 
     principal = TenantPrincipal(
         username=f"{org_role}@example.com",
@@ -3211,8 +3211,8 @@ def _install_viewer_overrides(
     app.dependency_overrides[get_plan_context] = lambda: _ReadPlan(read_enabled=read_enabled)
     app.dependency_overrides[get_current_tenant_user] = lambda: principal
     app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
-    from modulo.api.dependencies import _system_maps_internal_access
-    from modulo.api.routes.system_maps import get_repo
+    from farna.api.dependencies import _system_maps_internal_access
+    from farna.api.routes.system_maps import get_repo
 
     app.dependency_overrides[get_repo] = lambda: harness.repository
     # The viewer surface must never take the internal (draft-aware) branch.
@@ -3335,7 +3335,7 @@ def test_viewer_reads_are_tenant_scoped(viewer_client: tuple[TestClient, _Harnes
 
 def test_demo_viewer_can_read_a_published_map() -> None:
     """The read-only demo principal (viewer) reaches the published read path."""
-    from modulo.core.demo import DEMO_ORG_ROLE
+    from farna.core.demo import DEMO_ORG_ROLE
 
     harness = _Harness()
     harness.stub("list_maps_by_org", AsyncMock(return_value=[_map_row(name="Demo Delivery System")]))
@@ -3353,7 +3353,7 @@ def test_demo_viewer_can_read_a_published_map() -> None:
 
 def test_demo_viewer_still_cannot_mutate() -> None:
     """The demo viewer never gains write authority through the read entitlement."""
-    from modulo.core.demo import DEMO_ORG_ROLE
+    from farna.core.demo import DEMO_ORG_ROLE
 
     harness = _Harness()
     _install_viewer_overrides(harness, org_role=DEMO_ORG_ROLE)

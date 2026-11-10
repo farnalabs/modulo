@@ -30,12 +30,12 @@ from sqlalchemy import exc as sa_exc
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.api_keys import _enforce_user_key_quota
-from modulo.auth.api_key import create_api_key
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.crud.account import set_hitl_email_preference
-from modulo.db.models.api_key import OrgApiKey
-from modulo.db.rls import set_rls_org
+from farna.api.routes.api_keys import _enforce_user_key_quota
+from farna.auth.api_key import create_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.db.crud.account import set_hitl_email_preference
+from farna.db.models.api_key import OrgApiKey
+from farna.db.rls import set_rls_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -157,7 +157,7 @@ async def test_user_key_preference_write_isolates_accounts(
     b_block = {"dashboard_level": "error", "hitl_email": {"default": True, "pipeline_overrides": {}}}
     async with maker() as session, session.begin():
         await set_rls_org(session, org_id)
-        from modulo.db.crud.account import update_account_preferences
+        from farna.db.crud.account import update_account_preferences
 
         await update_account_preferences(session, account_b, b_block)
     before_b = await _read_preferences_text(db_engine, account_b)

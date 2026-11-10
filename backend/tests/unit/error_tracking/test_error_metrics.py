@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from opentelemetry.trace import StatusCode
 
-import modulo.core.error_tracking.metrics as metrics_mod
+import farna.core.error_tracking.metrics as metrics_mod
 
 pytestmark = pytest.mark.usefixtures("reset_metric_handles")
 
@@ -283,9 +283,9 @@ class TestSampleErrorGroupMetrics:
 
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from modulo.db.models.base import Base
-        from modulo.db.models.error_event import ErrorEvent
-        from modulo.db.models.error_group import ErrorGroup
+        from farna.db.models.base import Base
+        from farna.db.models.error_event import ErrorEvent
+        from farna.db.models.error_group import ErrorGroup
 
         engine = create_async_engine("sqlite+aiosqlite://", echo=False)
         try:
@@ -578,8 +578,8 @@ class TestSampleRunRuntimeMetrics:
 
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from modulo.db.models.base import Base
-        from modulo.db.models.run import Run
+        from farna.db.models.base import Base
+        from farna.db.models.run import Run
 
         engine = create_async_engine("sqlite+aiosqlite://", echo=False)
         try:

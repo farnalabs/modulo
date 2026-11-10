@@ -18,10 +18,10 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from modulo.cli.apply import register_apply, render_table
-from modulo.cli.apply.drift import _managed_current_view, build_drift_detail, has_drift
-from modulo.cli.apply.executor import ApplyExecutor
-from modulo.cli.apply.loader import parse_apply_documents
+from farna.cli.apply import register_apply, render_table
+from farna.cli.apply.drift import _managed_current_view, build_drift_detail, has_drift
+from farna.cli.apply.executor import ApplyExecutor
+from farna.cli.apply.loader import parse_apply_documents
 from tests.unit.cli.test_apply_executor import (
     _STABLE_CURRENT,
     CONFIG_TEXT,

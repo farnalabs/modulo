@@ -57,7 +57,7 @@ from pathlib import Path
 
 import pydantic.root_model  # noqa: F401
 
-import modulo.core.ssrf as _ssrf
+import farna.core.ssrf as _ssrf
 
 #: The warning class the audited suites must treat as a HARD ERROR. Kept as the
 #: pytest ``-W`` spelling so every CI command that runs a gated suite can carry
@@ -144,7 +144,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
 
 #: The module whose ``_verify_identity`` the FAR-1631 leak guard protects.
-_AUTH_DEPS_MODULE = "modulo.auth.dependencies"
+_AUTH_DEPS_MODULE = "farna.auth.dependencies"
 
 #: Snapshot of the real ``_verify_identity`` — the function object the auth
 #: module body bound when it executed. Captured LAZILY (never at conftest
@@ -312,7 +312,7 @@ def _assert_real_verify_identity() -> None:
     current = module._verify_identity
     if current is not captured:
         raise AssertionError(
-            "modulo.auth.dependencies._verify_identity was replaced and not "
+            "farna.auth.dependencies._verify_identity was replaced and not "
             "restored before test setup: a fixture leaked a patch (teardown "
             "restored a stale value). Expected the real function "
             f"{captured!r} but found {current!r}. Fix the leaking "

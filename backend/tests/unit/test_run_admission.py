@@ -31,8 +31,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.run_admission as ra
-from modulo.core.run_admission import (
+import farna.core.run_admission as ra
+from farna.core.run_admission import (
     CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS,
     SlotReconciliationError,
     coalesce_enabled,
@@ -42,26 +42,26 @@ from modulo.core.run_admission import (
     reconcile_pipeline_slots,
     trigger_slot_count_predicate,
 )
-from modulo.core.trigger_engine import (
+from farna.core.trigger_engine import (
     CiFailureCoalescedError,
     PipelineBackpressureError,
     TriggerEngine,
 )
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     CI_FAILURE_COALESCE_KEY_FIELD,
     create_run,
     read_ci_failure_coalesce_key,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.variant_group import VariantGroup
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.variant_group import VariantGroup
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
@@ -193,7 +193,7 @@ class TestReconcilePipelineSlots:
         must canonicalize to its own ``harness.heartbeat_stale`` registry entry
         — never the ``harness.unknown`` fallback, and distinct from
         ``worker_lost``/``harness.dispatch_failed``."""
-        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+        from farna.core.pipeline_engine.error_codes import map_legacy_code
 
         assert map_legacy_code("heartbeat_stale") == "harness.heartbeat_stale"
         assert map_legacy_code("worker_lost") == "harness.dispatch_failed"
@@ -241,7 +241,7 @@ class TestReconcilePipelineSlots:
         engine = _SweepEngine(statements, [_released_row()])
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
         with patch(
-            "modulo.core.analytics.record_fact_for_terminal_failed_run",
+            "farna.core.analytics.record_fact_for_terminal_failed_run",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -393,7 +393,7 @@ class TestAdmissionAfterRelease:
     admits again."""
 
     async def test_capacity_gate_admits_once_leaked_slot_released(self) -> None:
-        from modulo.core import dispatch
+        from farna.core import dispatch
 
         run = SimpleNamespace(pipeline_id=PIPELINE_ID, status="pending")
         pipeline = SimpleNamespace(max_concurrent_runs=2)
@@ -410,8 +410,8 @@ class TestAdmissionAfterRelease:
         session.execute = AsyncMock(return_value=pipeline_result)
 
         with (
-            patch("modulo.db.crud.run.get_run", side_effect=_get_run),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
+            patch("farna.db.crud.run.get_run", side_effect=_get_run),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
         ):
             # Before release: 2 slots counted for a 2-slot pipeline — wedged.
             count.return_value = 2
@@ -748,7 +748,7 @@ class TestCiFailureInflightSuppression:
         unreadable.execute = AsyncMock(
             side_effect=OperationalError("SELECT runs", {}, Exception("database is locked")),
         )
-        with caplog.at_level(logging.WARNING, logger="modulo.core.run_admission"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.run_admission"):
             in_flight = await has_in_flight_ci_failure_run(
                 unreadable,
                 pipeline_id=PIPELINE_ID,
@@ -908,8 +908,8 @@ class TestCoalescePendingRun:
             work_item_refs=None,
         )
         session = self._session("postgresql", run=pending)
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -928,8 +928,8 @@ class TestCoalescePendingRun:
 
     async def test_no_pending_match_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         session = self._session("postgresql", run=None)
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -949,8 +949,8 @@ class TestCoalescePendingRun:
             created_at=datetime.now(UTC),
         )
         session = self._session("postgresql", run=None)
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -972,8 +972,8 @@ class TestCoalescePendingRun:
             work_item_refs=None,
         )
         session = self._session("postgresql", run=pending)
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from farna.db.crud.run import coalesce_pending_run
 
         await coalesce_pending_run(
             session,
@@ -994,8 +994,8 @@ class TestCoalescePendingRun:
             work_item_refs=None,
         )
         session = self._session("sqlite", candidates=[stale])
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -1023,8 +1023,8 @@ class TestCoalescePendingRun:
             created_at=datetime.now(UTC) - timedelta(minutes=5),
         )
         session = self._session("sqlite", candidates=[pending])
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -1054,8 +1054,8 @@ class TestCoalescePendingRun:
             work_item_refs=None,
         )
         session = self._session("postgresql", run=pending)
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from farna.db.crud.run import coalesce_pending_run
 
         await coalesce_pending_run(
             session,
@@ -1094,8 +1094,8 @@ class TestCoalescePendingRun:
             created_at=datetime.now(UTC) - timedelta(minutes=4),
         )
         session = self._session("sqlite", candidates=[claimed, started])
-        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
-        from modulo.db.crud.run import coalesce_pending_run
+        monkeypatch.setattr("farna.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
+        from farna.db.crud.run import coalesce_pending_run
 
         updated = await coalesce_pending_run(
             session,
@@ -1142,7 +1142,7 @@ class TestEvaluateBackpressure:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(2)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(7, datetime.now(UTC)),
         ):
@@ -1155,7 +1155,7 @@ class TestEvaluateBackpressure:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(5)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(3, datetime.now(UTC)),
         ):
@@ -1167,7 +1167,7 @@ class TestEvaluateBackpressure:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(1)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(6, datetime.now(UTC)),
         ):
@@ -1182,7 +1182,7 @@ class TestEvaluateBackpressure:
         old = datetime.now(UTC) - timedelta(hours=2)
         session = self._session_with_filtered_age(5, old)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(2, old),
         ):
@@ -1199,7 +1199,7 @@ class TestEvaluateBackpressure:
         old = datetime.now(UTC) - timedelta(hours=2)
         session = self._session_with_filtered_age(5, None)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(2, old),
         ):
@@ -1225,7 +1225,7 @@ class TestEvaluateBackpressure:
         filtered_oldest = datetime.now(UTC) - timedelta(hours=2)
         session = self._session_with_filtered_age(5, filtered_oldest)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(2, unfiltered_oldest),
         ):
@@ -1248,7 +1248,7 @@ class TestEvaluateBackpressure:
         recent_wedged = datetime.now(UTC) - timedelta(minutes=10)
         session = self._session_with_filtered_age(5, recent_wedged)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(2, aged_capacity),
         ):
@@ -1262,7 +1262,7 @@ class TestEvaluateBackpressure:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(5)  # depth_limit = max(3 * 5, 5) = 15
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(16, None),
         ):
@@ -1275,7 +1275,7 @@ class TestEvaluateBackpressure:
         monkeypatch.setattr(ra, "get_settings", lambda: MagicMock(trigger_backpressure_max_age_seconds=3600))
         session = self._session(5)
         with patch(
-            "modulo.db.crud.run.get_pipeline_queue_depth",
+            "farna.db.crud.run.get_pipeline_queue_depth",
             new_callable=AsyncMock,
             return_value=(0, None),
         ):
@@ -1463,7 +1463,7 @@ class TestCapacityDemotedAgeExclusion:
 
 
 def _delivery(cfg: dict[str, Any] | None) -> Any:
-    from modulo.core.trigger_engine import _WebhookDelivery
+    from farna.core.trigger_engine import _WebhookDelivery
 
     trigger = SimpleNamespace(
         id=TRIGGER_ID,
@@ -1498,12 +1498,12 @@ class TestWebhookSeamIntegration:
 
         with (
             patch(
-                "modulo.core.trigger_engine.coalesce_pending_run",
+                "farna.core.trigger_engine.coalesce_pending_run",
                 new_callable=AsyncMock,
                 return_value=coalesced_run,
             ) as coalesce,
             patch(
-                "modulo.core.trigger_engine.create_run",
+                "farna.core.trigger_engine.create_run",
                 new_callable=AsyncMock,
             ) as create_run_mock,
             patch.object(engine, "_log_event", new_callable=AsyncMock) as log_event,
@@ -1531,16 +1531,16 @@ class TestWebhookSeamIntegration:
 
         with (
             patch(
-                "modulo.core.trigger_engine.coalesce_pending_run",
+                "farna.core.trigger_engine.coalesce_pending_run",
                 new_callable=AsyncMock,
             ) as coalesce,
             patch(
-                "modulo.core.trigger_engine.create_run",
+                "farna.core.trigger_engine.create_run",
                 new_callable=AsyncMock,
                 return_value=fresh_run,
             ) as create_run_mock,
             patch(
-                "modulo.core.trigger_engine.evaluate_backpressure",
+                "farna.core.trigger_engine.evaluate_backpressure",
                 new_callable=AsyncMock,
                 return_value=(False, ""),
             ),
@@ -1565,17 +1565,17 @@ class TestWebhookSeamIntegration:
 
         with (
             patch(
-                "modulo.core.trigger_engine.coalesce_pending_run",
+                "farna.core.trigger_engine.coalesce_pending_run",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.trigger_engine.evaluate_backpressure",
+                "farna.core.trigger_engine.evaluate_backpressure",
                 new_callable=AsyncMock,
                 return_value=(True, "queue_depth=8 limit=6"),
             ),
             patch(
-                "modulo.core.trigger_engine.create_run",
+                "farna.core.trigger_engine.create_run",
                 new_callable=AsyncMock,
             ) as create_run_mock,
             patch.object(engine, "_log_event", new_callable=AsyncMock) as log_event,
@@ -1600,15 +1600,15 @@ class TestWebhookSeamIntegration:
 
         with (
             patch(
-                "modulo.core.trigger_engine.coalesce_pending_run",
+                "farna.core.trigger_engine.coalesce_pending_run",
                 new_callable=AsyncMock,
             ) as coalesce,
             patch(
-                "modulo.core.trigger_engine.evaluate_backpressure",
+                "farna.core.trigger_engine.evaluate_backpressure",
                 new_callable=AsyncMock,
             ) as backpressure,
             patch(
-                "modulo.core.trigger_engine.create_run",
+                "farna.core.trigger_engine.create_run",
                 new_callable=AsyncMock,
                 return_value=fresh_run,
             ),
@@ -1635,13 +1635,13 @@ class TestWebhookSeamIntegration:
 
 class TestBackpressureSkipHelper:
     async def test_skip_stamps_last_fired_and_logs_event(self) -> None:
-        from modulo.core.cron_helpers import _backpressure_skip
+        from farna.core.cron_helpers import _backpressure_skip
 
         session = MagicMock()
         session.execute = AsyncMock()
         trigger = SimpleNamespace(id=TRIGGER_ID)
 
-        with patch("modulo.core.cron_helpers._log_event", new_callable=AsyncMock) as log_event:
+        with patch("farna.core.cron_helpers._log_event", new_callable=AsyncMock) as log_event:
             result = await _backpressure_skip(session, trigger, ORG_ID, "queue_depth=8 limit=6")
 
         assert result["status"] == "skipped"
@@ -1658,7 +1658,7 @@ class TestBackpressureSkipHelper:
 
 class TestPipelineConfigGuard:
     async def test_create_pipeline_rejects_zero(self) -> None:
-        from modulo.db.crud.pipeline import create_pipeline
+        from farna.db.crud.pipeline import create_pipeline
 
         session = MagicMock()
         with pytest.raises(ValueError, match="must be >= 1"):
@@ -1671,7 +1671,7 @@ class TestPipelineConfigGuard:
             )
 
     async def test_create_pipeline_rejects_negative(self) -> None:
-        from modulo.db.crud.pipeline import create_pipeline
+        from farna.db.crud.pipeline import create_pipeline
 
         session = MagicMock()
         with pytest.raises(ValueError, match="must be >= 1"):
@@ -1684,7 +1684,7 @@ class TestPipelineConfigGuard:
             )
 
     async def test_update_pipeline_rejects_zero(self) -> None:
-        from modulo.db.crud.pipeline import update_pipeline
+        from farna.db.crud.pipeline import update_pipeline
 
         session = MagicMock()
         pipeline = SimpleNamespace(owner_team_id=None)
@@ -1696,7 +1696,7 @@ class TestPipelineConfigGuard:
             await update_pipeline(session, uuid.uuid4(), {"max_concurrent_runs": 0})
 
     async def test_update_pipeline_allows_absent_and_valid_values(self) -> None:
-        from modulo.db.crud.pipeline import update_pipeline
+        from farna.db.crud.pipeline import update_pipeline
 
         session = MagicMock()
         session.flush = AsyncMock()
@@ -1705,19 +1705,19 @@ class TestPipelineConfigGuard:
         result.scalar_one_or_none.return_value = pipeline
         session.execute = AsyncMock(return_value=result)
 
-        with patch("modulo.db.crud.pipeline.apply_updates") as apply_updates:
+        with patch("farna.db.crud.pipeline.apply_updates") as apply_updates:
             updated = await update_pipeline(session, uuid.uuid4(), {"name": "renamed"})
         assert updated is pipeline
         apply_updates.assert_called_once()
 
     def test_variant_group_request_rejects_zero(self) -> None:
-        from modulo.api.routes.variants import CreateVariantGroupRequest
+        from farna.api.routes.variants import CreateVariantGroupRequest
 
         with pytest.raises(ValidationError):
             CreateVariantGroupRequest(pipeline_id=PIPELINE_ID, name="g", max_concurrent_runs=0)
 
     def test_variant_group_request_accepts_one(self) -> None:
-        from modulo.api.routes.variants import CreateVariantGroupRequest
+        from farna.api.routes.variants import CreateVariantGroupRequest
 
         req = CreateVariantGroupRequest(pipeline_id=PIPELINE_ID, name="g", max_concurrent_runs=1)
         assert req.max_concurrent_runs == 1
@@ -1746,8 +1746,8 @@ class TestPipelineCapacityExcludesAwaitingHuman:
         """qa F14: the required ``scope`` kwarg is gone — the helper resolves
         only on ``include_pending`` (the pipeline scoping lives in
         ``_count_active_runs``), so plain two-argument callers work again."""
-        from modulo.db.crud.run import _active_run_statuses
-        from modulo.db.models.run import ACTIVE_RUN_STATUSES
+        from farna.db.crud.run import _active_run_statuses
+        from farna.db.models.run import ACTIVE_RUN_STATUSES
 
         assert _active_run_statuses(True) == set(ACTIVE_RUN_STATUSES)
         assert _active_run_statuses(False) == set(ACTIVE_RUN_STATUSES - {"pending"})
@@ -1755,7 +1755,7 @@ class TestPipelineCapacityExcludesAwaitingHuman:
         assert "awaiting_human" in _active_run_statuses(False)
 
     def test_pipeline_capacity_statuses_exclude_human_waiting(self) -> None:
-        from modulo.db.models.run import PIPELINE_CAPACITY_STATUSES
+        from farna.db.models.run import PIPELINE_CAPACITY_STATUSES
 
         assert "awaiting_human" not in PIPELINE_CAPACITY_STATUSES
         assert "hitl_parked" not in PIPELINE_CAPACITY_STATUSES
@@ -1763,7 +1763,7 @@ class TestPipelineCapacityExcludesAwaitingHuman:
         assert {"running", "claimed", "unknown"} == PIPELINE_CAPACITY_STATUSES
 
     async def test_pipeline_count_statement_excludes_human_waiting(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_pipeline
+        from farna.db.crud.run import count_active_runs_for_pipeline
 
         session = AsyncMock()
         result = MagicMock()
@@ -1775,7 +1775,7 @@ class TestPipelineCapacityExcludesAwaitingHuman:
         assert _status_values(stmt) == {"running", "claimed", "unknown"}
 
     async def test_org_count_statement_includes_human_waiting(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_org
+        from farna.db.crud.run import count_active_runs_for_org
 
         session = AsyncMock()
         result = MagicMock()
@@ -2251,7 +2251,7 @@ class TestSweepRowLockBoundFAR1592:
         """The bound's value knob — patched so no test ever builds a real
         ``Settings`` (and so the pin can assert an exact value)."""
         with patch(
-            "modulo.db.crud.row_lock.get_settings",
+            "farna.db.crud.row_lock.get_settings",
             return_value=MagicMock(mutation_row_lock_timeout_ms=4321),
         ):
             yield
@@ -2314,7 +2314,7 @@ class TestSweepRowLockBoundFAR1592:
         )
         monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings("slot_reconciliation"))
         with patch.object(ra, "_advance_released_run", new_callable=AsyncMock) as advance:
-            caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+            caplog.set_level(logging.WARNING, logger="farna.core.run_admission")
             result = await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
 
         # The sweep completed — no exception escaped and no failure was raised.
@@ -2347,7 +2347,7 @@ class TestSweepRowLockBoundFAR1592:
             write_errors={ORG_ID: _lock_timeout_error("UPDATE runs SET status = :parked_status ...")},
         )
         monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings("hitl_park"))
-        caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+        caplog.set_level(logging.WARNING, logger="farna.core.run_admission")
         result = await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
 
         # No exception escaped; only the committed org's parks are counted.
@@ -2383,7 +2383,7 @@ class TestSweepRowLockBoundFAR1592:
         )
         monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings(sweep_name))
         expected = SlotReconciliationError if sweep_name == "slot_reconciliation" else ra.HitlParkError
-        caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+        caplog.set_level(logging.WARNING, logger="farna.core.run_admission")
         with pytest.raises(expected) as excinfo:
             await _run_sweep(sweep_name, engine)
 

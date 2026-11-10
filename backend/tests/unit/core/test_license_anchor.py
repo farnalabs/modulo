@@ -24,9 +24,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.api import main as api_main
-from modulo.core import license as license_mod
-from modulo.core.license import (
+from farna.api import main as api_main
+from farna.core import license as license_mod
+from farna.core.license import (
     LICENCE_GRACE_DAYS,
     REASON_ANCHOR_MISMATCH,
     REASON_EXPIRED,
@@ -36,9 +36,9 @@ from modulo.core.license import (
     set_public_key,
     using_builtin_dev_anchor,
 )
-from modulo.core.license_bootstrap import configure_license_trust_anchor
-from modulo.core.license_signing import encode_license_key
-from modulo.core.registry.crypto import generate_keypair
+from farna.core.license_bootstrap import configure_license_trust_anchor
+from farna.core.license_signing import encode_license_key
+from farna.core.registry.crypto import generate_keypair
 
 
 def _payload(**overrides: Any) -> dict[str, Any]:

@@ -24,10 +24,10 @@ Sites (a), (b create/update), (e) must agree on the FULL universe. Sites (c),
 
 import re
 
-from modulo.core.composite_engine.composite_binding import EvalDefinitionConfig
-from modulo.core.eval_engine import EvalType
-from modulo.core.graph_validator import GraphValidator
-from modulo.db.models.eval import Eval as EvalModel
+from farna.core.composite_engine.composite_binding import EvalDefinitionConfig
+from farna.core.eval_engine import EvalType
+from farna.core.graph_validator import GraphValidator
+from farna.db.models.eval import Eval as EvalModel
 
 FULL_UNIVERSE = {"model_judge", "regex", "json_schema", "custom_function", "guardrail", "human_set"}
 COMPOSITE_ELIGIBLE = {"regex", "json_schema", "model_judge"}
@@ -38,7 +38,7 @@ def test_site_a_evaltype_full_universe():
 
 
 def test_site_b_evals_regexes_accept_guardrail():
-    from modulo.api.routes import evals
+    from farna.api.routes import evals
 
     create_pattern = evals.CreateEvalRequest.model_fields["eval_type"].metadata[0].pattern
     update_pattern = evals.UpdateEvalRequest.model_fields["eval_type"].metadata[0].pattern
@@ -55,7 +55,7 @@ def test_site_b_from_run_regex_excludes_guardrail():
     # guardrail deny-rule (regex pattern / json_schema) cannot be derived from a
     # sample. A stub config would be silently-inert (fail-open) for a
     # data-safety control, so the API edge rejects it outright.
-    from modulo.api.routes import evals
+    from farna.api.routes import evals
 
     from_run_pattern = evals.CreateEvalFromRunRequest.model_fields["eval_type"].metadata[0].pattern
     assert not re.match(f"^{from_run_pattern}$", "guardrail"), from_run_pattern
@@ -67,7 +67,7 @@ def test_site_b_from_run_regex_excludes_guardrail():
 def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
     # Behavioural check: the graph validator rejects a guardrail-typed eval in
     # composite output_validation (guardrail is NOT composite-eligible).
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core.graph_validator._types import ValidationResult
 
     result = ValidationResult()
     GraphValidator()._check_output_validation(
@@ -111,7 +111,7 @@ def test_site_e_orm_and_migration_check_include_guardrail():
 
     import pathlib
 
-    migration_dir = pathlib.Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+    migration_dir = pathlib.Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
     migration_file = migration_dir / "0110_schema_pipeline_runtime.py"
     assert migration_file.exists(), "migration 0110_schema_pipeline_runtime.py missing"
     content = migration_file.read_text(encoding="utf-8")

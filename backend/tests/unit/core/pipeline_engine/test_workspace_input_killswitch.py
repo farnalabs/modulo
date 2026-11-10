@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
-from modulo.core.pipeline_engine.workspace_input_orchestration import ResolvedInput
+from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+from farna.core.pipeline_engine.workspace_input_orchestration import ResolvedInput
 
 # ---------------------------------------------------------------------------
 # Killswitch tests
@@ -30,7 +30,7 @@ class TestWorkspaceInputsKillswitch:
 
     def test_default_settings_killswitch_is_off(self):
         """Settings.modulo_workspace_inputs_enabled defaults to False."""
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         s = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -41,7 +41,7 @@ class TestWorkspaceInputsKillswitch:
 
     def test_killswitch_can_be_enabled(self):
         """Settings.modulo_workspace_inputs_enabled can be set to True."""
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         s = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -53,7 +53,7 @@ class TestWorkspaceInputsKillswitch:
 
     def test_disabled_error_code_matches_registry(self):
         """The sandbox.workspace_inputs_disabled error code is in the registry."""
-        from modulo.core.pipeline_engine.error_codes import (
+        from farna.core.pipeline_engine.error_codes import (
             _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
             ERROR_CODE_REGISTRY,
         )
@@ -63,7 +63,7 @@ class TestWorkspaceInputsKillswitch:
 
     def test_provisioning_error_carries_disabled_code(self):
         """ProvisioningError constructed with the disabled code carries it correctly."""
-        from modulo.core.pipeline_engine.workspace_input_orchestration import (
+        from farna.core.pipeline_engine.workspace_input_orchestration import (
             ProvisioningError,
         )
 
@@ -78,7 +78,7 @@ class TestWorkspaceInputsKillswitch:
 
     def test_error_code_imported_in_node_runner(self):
         """_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED is importable in node_runner."""
-        from modulo.core.pipeline_engine import node_runner
+        from farna.core.pipeline_engine import node_runner
 
         assert hasattr(node_runner, "_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED")
 
@@ -93,7 +93,7 @@ class TestRunDetailWorkspaceInputsSurfacing:
 
     def test_run_response_has_workspace_inputs_field(self):
         """RunResponse model accepts workspace_inputs parameter."""
-        from modulo.api.routes.runs import RunResponse
+        from farna.api.routes.runs import RunResponse
 
         resp = RunResponse(
             run_id=uuid.uuid4(),
@@ -116,7 +116,7 @@ class TestRunDetailWorkspaceInputsSurfacing:
 
     def test_run_response_workspace_inputs_none_when_absent(self):
         """RunResponse defaults workspace_inputs to None."""
-        from modulo.api.routes.runs import RunResponse
+        from farna.api.routes.runs import RunResponse
 
         resp = RunResponse(
             run_id=uuid.uuid4(),
@@ -128,7 +128,7 @@ class TestRunDetailWorkspaceInputsSurfacing:
 
     def test_audit_record_has_no_secret_fields(self):
         """WorkspaceInputAuditRecord.to_audit_dict never contains credentials."""
-        from modulo.core.pipeline_engine.workspace_input_audit import (
+        from farna.core.pipeline_engine.workspace_input_audit import (
             WorkspaceInputAuditRecord,
         )
 
@@ -154,7 +154,7 @@ class TestRunDetailWorkspaceInputsSurfacing:
 
     def test_audit_record_strips_userinfo_from_url(self):
         """URL redaction strips user:pass@ from URLs."""
-        from modulo.core.pipeline_engine.workspace_input_audit import (
+        from farna.core.pipeline_engine.workspace_input_audit import (
             WorkspaceInputAuditRecord,
         )
 
@@ -180,7 +180,7 @@ class TestRunDetailWorkspaceInputsSurfacing:
         """_do_get_workspace_inputs helper exists and is async."""
         import inspect
 
-        from modulo.api.routes.runs import _do_get_workspace_inputs
+        from farna.api.routes.runs import _do_get_workspace_inputs
 
         assert inspect.iscoroutinefunction(_do_get_workspace_inputs)
 
@@ -195,7 +195,7 @@ class TestDailyFactsWorkspaceInputsCount:
 
     def test_model_has_workspace_inputs_count_column(self):
         """RunDailyFact model includes workspace_inputs_count column."""
-        from modulo.db.models.run_daily_facts import RunDailyFact
+        from farna.db.models.run_daily_facts import RunDailyFact
 
         col = RunDailyFact.__table__.c.workspace_inputs_count
         assert col is not None
@@ -205,7 +205,7 @@ class TestDailyFactsWorkspaceInputsCount:
         """_fact_workspace_inputs_count helper exists and is async."""
         import inspect
 
-        from modulo.core.analytics import _fact_workspace_inputs_count
+        from farna.core.analytics import _fact_workspace_inputs_count
 
         assert inspect.iscoroutinefunction(_fact_workspace_inputs_count)
 
@@ -213,7 +213,7 @@ class TestDailyFactsWorkspaceInputsCount:
         """_fact_workspace_inputs_count takes session and run parameters."""
         import inspect
 
-        from modulo.core.analytics import _fact_workspace_inputs_count
+        from farna.core.analytics import _fact_workspace_inputs_count
 
         sig = inspect.signature(_fact_workspace_inputs_count)
         params = list(sig.parameters.keys())
@@ -315,7 +315,7 @@ class TestWorkspaceInputsKillswitchDispatch:
         created — the node fails (never 'completed') with the dedicated
         workspace-inputs-disabled message, and AsyncSandbox.create is NEVER
         called."""
-        from modulo.settings import get_settings
+        from farna.settings import get_settings
 
         # Ensure a clean settings cache: another sandbox-agent test file may have
         # set MODULO_WORKSPACE_INPUTS_ENABLED=true and left a cached True in the
@@ -333,7 +333,7 @@ class TestWorkspaceInputsKillswitchDispatch:
 
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         ):
             result = await fn(_run_state())
 
@@ -346,7 +346,7 @@ class TestWorkspaceInputsKillswitchDispatch:
     async def test_enabled_passes_gate_and_resolves_inputs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MWI ON: the gate does not fire — host-side resolution runs and a sandbox
         is created (the dispatch proceeds past the killswitch)."""
-        from modulo.settings import get_settings
+        from farna.settings import get_settings
 
         monkeypatch.setattr(get_settings(), "modulo_workspace_inputs_enabled", True)
 
@@ -355,9 +355,9 @@ class TestWorkspaceInputsKillswitchDispatch:
 
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
                 new=AsyncMock(return_value=_resolved_inputs()),
             ) as resolve_mock,
         ):

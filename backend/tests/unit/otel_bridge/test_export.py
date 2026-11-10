@@ -13,7 +13,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from modulo.otel_bridge.export import _sanitise_url, setup_otel, shutdown_otel
+from farna.otel_bridge.export import _sanitise_url, setup_otel, shutdown_otel
 from tests.unit.otel_bridge.conftest import reset_global_provider, span_processors
 
 
@@ -94,7 +94,7 @@ def test_setup_otel_with_otlp_endpoint_registers_batch_processor_after_stdout(mo
     only the processor wiring is under test here.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://nonexistent.local:4318/v1/traces")
-    with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_exporter:
+    with patch("farna.otel_bridge.export.OTLPSpanExporter") as mock_exporter:
         setup_otel(service_name="with-otlp", telemetry_enabled=True)
     mock_exporter.assert_called_once()
     processors = span_processors(trace.get_tracer_provider())
@@ -106,7 +106,7 @@ def test_setup_otel_with_otlp_endpoint_registers_batch_processor_after_stdout(mo
 def test_setup_otel_otlp_constructor_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing OTLPSpanExporter constructor must not break setup_otel."""
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otlp.invalid:4318/v1/traces")
-    with patch("modulo.otel_bridge.export.OTLPSpanExporter", side_effect=RuntimeError("boom")):
+    with patch("farna.otel_bridge.export.OTLPSpanExporter", side_effect=RuntimeError("boom")):
         setup_otel(service_name="otlp-fails", telemetry_enabled=True)
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
@@ -140,7 +140,7 @@ def test_setup_otel_otlp_constructor_cancellation_propagates(monkeypatch: pytest
     """A cancelled OTLP exporter constructor must not be swallowed."""
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otlp.invalid:4318/v1/traces")
     with (
-        patch("modulo.otel_bridge.export.OTLPSpanExporter", side_effect=asyncio.CancelledError),
+        patch("farna.otel_bridge.export.OTLPSpanExporter", side_effect=asyncio.CancelledError),
         pytest.raises(asyncio.CancelledError),
     ):
         setup_otel(service_name="otlp-cancelled", telemetry_enabled=True)

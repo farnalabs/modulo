@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import modulo.cli.main as cli_main
-import modulo.settings as settings_module
-from modulo.settings import get_settings
+import farna.cli.main as cli_main
+import farna.settings as settings_module
+from farna.settings import get_settings
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 SECRET_KEY = "a" * 32
@@ -64,7 +64,7 @@ def test_unknown_first_token_falls_back_to_backup() -> None:
 
 
 def test_legacy_backup_group_still_works_standalone() -> None:
-    from modulo.cli.backup import cli as legacy_cli
+    from farna.cli.backup import cli as legacy_cli
 
     result = CliRunner().invoke(legacy_cli, ["backup", "--help"])
     assert result.exit_code == 0
@@ -115,10 +115,10 @@ def test_console_script_scrubs_before_any_project_import() -> None:
         [
             "import os, sys",
             "os.environ['PGHOST'] = 'foreign.example'",
-            "import modulo.cli.main",
+            "import farna.cli.main",
             "print(os.environ.get('PGHOST'),",
-            "      'modulo.cli.backup' in sys.modules,",
-            "      'modulo.launcher.env_safety' in sys.modules)",
+            "      'farna.cli.backup' in sys.modules,",
+            "      'farna.launcher.env_safety' in sys.modules)",
         ]
     )
     result = subprocess.run(  # noqa: S603 — test driver
@@ -233,7 +233,7 @@ def test_env_redacts_every_real_credential_carrier(monkeypatch: pytest.MonkeyPat
 
 def test_start_invokes_run_start_with_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[tuple[Path, bool, Path | None, bool]] = []
-    import modulo.launcher.entry as entry_module
+    import farna.launcher.entry as entry_module
 
     def fake_run_start(
         data_dir: Path | None,
@@ -253,7 +253,7 @@ def test_start_invokes_run_start_with_options(monkeypatch: pytest.MonkeyPatch, t
 
 def test_start_clear_degraded_flag_is_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[bool] = []
-    import modulo.launcher.entry as entry_module
+    import farna.launcher.entry as entry_module
 
     def fake_run_start(
         data_dir: Path | None,
@@ -272,7 +272,7 @@ def test_start_clear_degraded_flag_is_passed_through(monkeypatch: pytest.MonkeyP
 
 
 def test_start_failure_is_rendered_as_click_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.entry as entry_module
+    import farna.launcher.entry as entry_module
 
     def failing_run_start(
         data_dir: Path | None,
@@ -290,7 +290,7 @@ def test_start_failure_is_rendered_as_click_exception(monkeypatch: pytest.Monkey
 
 
 def test_start_keyboard_interrupt_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.entry as entry_module
+    import farna.launcher.entry as entry_module
 
     def interrupted_run_start(
         data_dir: Path | None,
@@ -307,7 +307,7 @@ def test_start_keyboard_interrupt_exits_zero(monkeypatch: pytest.MonkeyPatch, tm
 
 
 def test_stop_invokes_request_stop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     calls: list[Path] = []
 
@@ -322,7 +322,7 @@ def test_stop_invokes_request_stop(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 
 def test_stop_failure_is_rendered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     def failing_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
         raise RuntimeError("launcher did not stop")
@@ -334,7 +334,7 @@ def test_stop_failure_is_rendered(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 
 def test_status_json_renders_payload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     payload = {
         "data_dir": str(tmp_path),
@@ -351,7 +351,7 @@ def test_status_json_renders_payload(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 
 def test_status_table_renders_components(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     payload = {
         "data_dir": str(tmp_path),
@@ -377,8 +377,8 @@ def test_status_on_uninitialized_dir_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.cli.main as cli_main_module
-    import modulo.launcher.doctor as doctor_module
+    import farna.cli.main as cli_main_module
+    import farna.launcher.doctor as doctor_module
 
     calls: list[tuple[Path, bool]] = []
 
@@ -395,8 +395,8 @@ def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.Mo
 def test_doctor_command_render_runtime_error_as_click_exception(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import modulo.cli.main as cli_main_module
-    import modulo.launcher.doctor as doctor_module
+    import farna.cli.main as cli_main_module
+    import farna.launcher.doctor as doctor_module
 
     def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
         raise RuntimeError("data dir is not initialized")
@@ -419,7 +419,7 @@ def test_platform_guard_failure_degrades_status(tmp_path: Path) -> None:
 def test_logs_rotate_refuses_while_launcher_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`logs --rotate` must refuse when the launcher still holds the log open,
     not silently rotate into a live inode (FAR-676 review finding)."""
-    import modulo.launcher.supervisor as supervisor
+    import farna.launcher.supervisor as supervisor
 
     class _Holder:
         pid = 4242
@@ -433,7 +433,7 @@ def test_logs_rotate_refuses_while_launcher_running(monkeypatch: pytest.MonkeyPa
 
 def test_logs_rotate_proceeds_when_launcher_stopped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """With no live launcher the rotation guard is a no-op and rotation runs."""
-    import modulo.launcher.supervisor as supervisor
+    import farna.launcher.supervisor as supervisor
 
     monkeypatch.setattr(supervisor, "_read_lock_holder", lambda _p: None)
     monkeypatch.setattr(supervisor, "_pid_alive", lambda _pid: False)
@@ -448,7 +448,7 @@ def test_logs_rotate_child_component_is_not_rotated(monkeypatch: pytest.MonkeyPa
     log, even though it prints 'rotation applies to the app log only' (FAR-676
     review finding — the rotate call previously sat outside the app-only guard).
     """
-    import modulo.launcher.supervisor as supervisor
+    import farna.launcher.supervisor as supervisor
 
     rotated_calls: list[str] = []
     monkeypatch.setattr(supervisor, "rotate_log", lambda path: rotated_calls.append(str(path)) is None)
@@ -462,7 +462,7 @@ def test_logs_rotate_child_component_is_not_rotated(monkeypatch: pytest.MonkeyPa
 def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     captured: dict[str, object] = {}
 
@@ -480,7 +480,7 @@ def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
 
 
 def test_doctor_command_json_flag_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     captured: dict[str, object] = {}
 
@@ -517,7 +517,7 @@ def test_doctor_help_documents_exit_codes_and_flags() -> None:
 
 
 def test_doctor_fix_flag_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     captured: dict[str, object] = {}
 
@@ -536,7 +536,7 @@ def test_doctor_fix_flag_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_pat
 def test_doctor_report_writes_redacted_zip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import zipfile
 
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     pg_password = "real-looking-report-pg-secret"
     redis_password = "real-looking-report-redis-secret"
@@ -603,7 +603,7 @@ def test_env_redacted_by_default_still_redacts(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_status_json_carries_state_and_remediation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     payload = {
         "data_dir": str(tmp_path),
@@ -653,7 +653,7 @@ def test_logs_help_lists_components() -> None:
 
 
 def test_logs_rotate_when_stopped_rotates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     big = tmp_path / "launcher.log"
     big.write_text("x" * 2048, encoding="utf-8")
@@ -677,7 +677,7 @@ def test_service_group_help_lists_subcommands() -> None:
 
 
 def test_service_install_refusal_is_rendered_as_click_exception(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.service as service_module
+    import farna.launcher.service as service_module
 
     def refusing_install() -> object:
         raise service_module.ServiceError("systemd was not detected (no /run/systemd/system)")
@@ -689,7 +689,7 @@ def test_service_install_refusal_is_rendered_as_click_exception(monkeypatch: pyt
 
 
 def test_service_install_renders_result_and_warnings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.service as service_module
+    import farna.launcher.service as service_module
 
     def fake_install() -> service_module.ServiceInstallResult:
         return service_module.ServiceInstallResult(
@@ -709,7 +709,7 @@ def test_service_install_renders_result_and_warnings(monkeypatch: pytest.MonkeyP
 
 
 def test_service_status_renders_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.service as service_module
+    import farna.launcher.service as service_module
 
     payload = {
         "unit": "modulo.service",
@@ -728,7 +728,7 @@ def test_service_status_renders_state(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
 
 def test_clear_degraded_removes_the_persisted_record(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+    from farna.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()

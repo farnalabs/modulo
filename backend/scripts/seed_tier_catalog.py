@@ -19,8 +19,8 @@ import sys
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from modulo.core.seed_data.catalog import FLAGS, TIERS
-from modulo.settings import get_settings
+from farna.core.seed_data.catalog import FLAGS, TIERS
+from farna.settings import get_settings
 
 
 async def seed() -> None:

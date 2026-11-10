@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.mcp_server import create_trigger, list_triggers
+from farna.api.mcp_server import create_trigger, list_triggers
 from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -117,7 +117,7 @@ class _AuthContext:
     """Set/teardown the MCP ContextVars so tool handlers reach the DB layer."""
 
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -130,18 +130,18 @@ class _AuthContext:
         # tests/unit/mcp/test_team_scope_enforcement.py; these CRUD tests stub
         # it to "allowed" so they stay focused on the tool's field handling.
         self._team_gate_patch = patch(
-            "modulo.api.mcp_server._pipeline_team_gate",
+            "farna.api.mcp_server._pipeline_team_gate",
             new=AsyncMock(return_value=(None, None)),
         )
         self._team_gate_patch.start()
         # FAR-2227: the duplicate-name probe needs a real Result; the mocked
         # sessions here do not model it, so it is stubbed to "no clash". The
         # probe itself is covered by TestTriggerNameRequired and the REST tests.
-        self._unique_name_patch = patch("modulo.api.mcp_server._require_unique_trigger_name", new=AsyncMock())
+        self._unique_name_patch = patch("farna.api.mcp_server._require_unique_trigger_name", new=AsyncMock())
         self._unique_name_patch.start()
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         self._team_gate_patch.stop()
         self._unique_name_patch.stop()
@@ -160,34 +160,34 @@ class _AuthContext:
 class TestCreateTriggerErrors(_AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -202,8 +202,8 @@ class TestCreateTriggerErrors(_AuthContext):
         assert result["field"] == "pipeline_id"
         mock_sesh.add.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_validation_error_for_zero_max_concurrent(
         self,
         mock_session: AsyncMock,
@@ -218,8 +218,8 @@ class TestCreateTriggerErrors(_AuthContext):
         assert result["field"] == "max_concurrent_runs"
         mock_sesh.add.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_validation_error_for_negative_spend_limit(
         self,
         mock_session: AsyncMock,
@@ -234,8 +234,8 @@ class TestCreateTriggerErrors(_AuthContext):
         assert result["field"] == "daily_spend_limit"
         mock_sesh.add.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_cron_returns_invalid_cron(
         self,
         mock_session: AsyncMock,
@@ -244,7 +244,7 @@ class TestCreateTriggerErrors(_AuthContext):
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        with patch("modulo.api.mcp_server.validate_cron_expression", return_value="bad expression"):
+        with patch("farna.api.mcp_server.validate_cron_expression", return_value="bad expression"):
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
                 name="t",
@@ -265,12 +265,12 @@ class TestCreateTriggerErrors(_AuthContext):
 class TestCreateTriggerSuccess(_AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_creates_trigger_and_returns_shape(
         self,
         mock_session: AsyncMock,
@@ -293,8 +293,8 @@ class TestCreateTriggerSuccess(_AuthContext):
         mock_sesh.add.assert_called_once()
         mock_sesh.flush.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_creates_trigger_with_full_options(
         self,
         mock_session: AsyncMock,
@@ -320,8 +320,8 @@ class TestCreateTriggerSuccess(_AuthContext):
         assert result["daily_spend_limit"] == 12.5
         assert result["cron_expression"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_cron_expression_sets_next_fire_at(
         self,
         mock_session: AsyncMock,
@@ -332,8 +332,8 @@ class TestCreateTriggerSuccess(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
 
         with (
-            patch("modulo.api.mcp_server.validate_cron_expression", return_value=None) as mock_validate_cron,
-            patch("modulo.api.mcp_server.compute_next_fire", return_value=next_fire) as mock_compute,
+            patch("farna.api.mcp_server.validate_cron_expression", return_value=None) as mock_validate_cron,
+            patch("farna.api.mcp_server.compute_next_fire", return_value=next_fire) as mock_compute,
         ):
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
@@ -358,7 +358,7 @@ _TEAM_B = uuid.UUID("7f000000-0000-0000-0000-00000000000b")
 
 
 def _cross_team_mismatch(connector_id: uuid.UUID) -> Any:
-    from modulo.core.team_visibility import ConnectorTeamMismatch
+    from farna.core.team_visibility import ConnectorTeamMismatch
 
     return ConnectorTeamMismatch(
         connector_id=connector_id,
@@ -379,25 +379,25 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_cross_team_connector_is_refused(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+        from farna.core.team_visibility import CONNECTOR_TEAM_MISMATCH
 
         mock_sesh = _make_add_session()
         mock_session.return_value = _make_session_context(mock_sesh)
         connector_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.triggers.find_connector_team_mismatches",
+            "farna.api.routes.triggers.find_connector_team_mismatches",
             new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)]),
         ) as find_mismatches:
             result = await create_trigger(
@@ -413,8 +413,8 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
         mock_sesh.add.assert_not_called()
         mock_sesh.flush.assert_not_awaited()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_gate_judges_against_the_resolved_owner_team(
         self,
         mock_session: AsyncMock,
@@ -432,11 +432,11 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
 
         with (
             patch(
-                "modulo.api.mcp_server._pipeline_team_gate",
+                "farna.api.mcp_server._pipeline_team_gate",
                 new=AsyncMock(return_value=(_TEAM_A, None)),
             ),
             patch(
-                "modulo.api.routes.triggers.find_connector_team_mismatches",
+                "farna.api.routes.triggers.find_connector_team_mismatches",
                 new=AsyncMock(return_value=[]),
             ) as find_mismatches,
         ):
@@ -458,31 +458,31 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
 
 
 class TestListTriggersErrors(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_triggers()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await list_triggers()
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_migration_required_on_programming_error(
         self,
         mock_db_list: AsyncMock,
@@ -497,9 +497,9 @@ class TestListTriggersErrors(_AuthContext):
 
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_internal_error_on_generic_exception(
         self,
         mock_db_list: AsyncMock,
@@ -515,8 +515,8 @@ class TestListTriggersErrors(_AuthContext):
         assert result["error"] == "server_error"
         assert result["detail"] == "Failed to list triggers"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_malformed_pipeline_filter_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -541,9 +541,9 @@ class TestListTriggersErrors(_AuthContext):
 
 
 class TestListTriggersSuccess(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_returns_paginated_data(
         self,
         mock_db_list: AsyncMock,
@@ -589,9 +589,9 @@ class TestListTriggersSuccess(_AuthContext):
         assert result["data"][1]["created_at"] is None
         mock_db_list.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_filters_by_pipeline_id(
         self,
         mock_db_list: AsyncMock,
@@ -622,9 +622,9 @@ class TestListTriggersSuccess(_AuthContext):
             team_id=None,
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_limit_is_clamped_to_max_100(
         self,
         mock_db_list: AsyncMock,
@@ -647,9 +647,9 @@ class TestListTriggersSuccess(_AuthContext):
             team_id=None,
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_cursor_is_forwarded(
         self,
         mock_db_list: AsyncMock,
@@ -681,9 +681,9 @@ class TestListTriggersSuccess(_AuthContext):
 
 
 class TestListTriggersStreakStatus(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.trigger.list_triggers")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.trigger.list_triggers")
     async def test_list_triggers_includes_streak_status_per_item(
         self,
         mock_db_list: AsyncMock,
@@ -716,7 +716,7 @@ class TestListTriggersStreakStatus(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
 
         with patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             side_effect=[streak_deactivated, streak_base],
         ) as get_status:
@@ -743,7 +743,7 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
@@ -755,10 +755,10 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
     def _settings_patch(self):
         fake_settings = MagicMock()
         fake_settings.fernet_key = _VALID_FERNET_KEY
-        return patch("modulo.api.mcp_server.get_settings", return_value=fake_settings)
+        return patch("farna.api.mcp_server.get_settings", return_value=fake_settings)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_webhook_secrets_stored_as_fernet_tokens(
         self,
         mock_session: AsyncMock,
@@ -791,8 +791,8 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
         # not even surface in the response blob.
         assert "config_json" not in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_config_without_webhook_secrets_is_stored_unchanged(
         self,
         mock_session: AsyncMock,
@@ -821,12 +821,12 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
 class TestTriggerNameRequired(_AuthContext):
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("operator")
 
     @pytest.mark.parametrize("bad_name", ["", "   ", "n" * 256])
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_blank_or_overlong_name_is_a_validation_error(
         self, mock_validate_auth: AsyncMock, bad_name: str
     ) -> None:
@@ -835,8 +835,8 @@ class TestTriggerNameRequired(_AuthContext):
         assert result["error"] == "validation"
         assert result["field"] == "name"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_name_is_stripped_before_it_is_stored(
         self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
     ) -> None:
@@ -848,8 +848,8 @@ class TestTriggerNameRequired(_AuthContext):
         assert result["name"] == "nightly"
         assert mock_sesh.add.call_args.args[0].name == "nightly"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_duplicate_name_is_a_conflict_not_a_db_error(
         self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
     ) -> None:
@@ -859,7 +859,7 @@ class TestTriggerNameRequired(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
 
         with patch(
-            "modulo.api.mcp_server._require_unique_trigger_name",
+            "farna.api.mcp_server._require_unique_trigger_name",
             new=AsyncMock(side_effect=HTTPException(status_code=409, detail="duplicate trigger name 'nightly'")),
         ):
             result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="nightly")
@@ -868,9 +868,9 @@ class TestTriggerNameRequired(_AuthContext):
         assert result["field"] == "name"
         mock_sesh.add.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_blank_rename_is_a_validation_error(self, mock_validate_auth: AsyncMock) -> None:
-        from modulo.api.mcp_server import update_trigger
+        from farna.api.mcp_server import update_trigger
 
         result = await update_trigger(trigger_id=str(uuid.uuid4()), name="   ")
 

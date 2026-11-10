@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.pipelines import _assert_team_transition_allowed
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.routes.pipelines import _assert_team_transition_allowed
+from farna.auth.jwt import TenantPrincipal
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()
@@ -49,7 +49,7 @@ def _stub_membership(monkeypatch: pytest.MonkeyPatch, teams: set[uuid.UUID]) -> 
         return team_id in teams
 
     stub = AsyncMock(side_effect=_exists)
-    monkeypatch.setattr("modulo.api.routes.pipelines.team_membership_exists", stub)
+    monkeypatch.setattr("farna.api.routes.pipelines.team_membership_exists", stub)
     return stub
 
 

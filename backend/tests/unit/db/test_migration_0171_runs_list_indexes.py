@@ -24,7 +24,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0171_runs_list_performance_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -79,7 +79,7 @@ def test_downgrade_drops_the_list_count_index() -> None:
 
 
 def test_model_declares_the_list_count_index_only() -> None:
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     index_names = {idx.name for idx in Run.__table__.indexes}
     assert "ix_runs_org_created_pipeline" in index_names, (

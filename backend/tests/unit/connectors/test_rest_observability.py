@@ -32,9 +32,9 @@ import httpx
 import pytest
 from redis.exceptions import RedisError
 
-from modulo.connectors._rate_bucket import PerDestinationRateLimiter, RedisTokenBucket, SharedBudgetUnavailableError
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.rest import (
+from farna.connectors._rate_bucket import PerDestinationRateLimiter, RedisTokenBucket, SharedBudgetUnavailableError
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.rest import (
     RESTConnectError,
     RestConnector,
     RESTFanOutFailureError,
@@ -43,7 +43,7 @@ from modulo.connectors.rest import (
     rest_metrics,
     rest_rollback,
 )
-from modulo.connectors.rest.rest_rollback import RestRollbackSignal, evaluate_rest_rollback, is_unknown_like
+from farna.connectors.rest.rest_rollback import RestRollbackSignal, evaluate_rest_rollback, is_unknown_like
 
 
 @pytest.fixture(autouse=True)
@@ -705,7 +705,7 @@ async def test_redis_outage_fails_closed_when_configured(caplog: Any) -> None:
     guarantee. With a ``redis_client`` configured the limiter must refuse to
     charge rather than fail open.
     """
-    with caplog.at_level(logging.WARNING, logger="modulo.connectors._rate_bucket"):
+    with caplog.at_level(logging.WARNING, logger="farna.connectors._rate_bucket"):
         limiter = PerDestinationRateLimiter(rate=1.0, burst=2, redis_client=_BrokenRedis(), tenant_id="org-1")
 
         with pytest.raises(SharedBudgetUnavailableError):
@@ -722,7 +722,7 @@ async def test_saturation_signal_recorded_on_deny(caplog: Any) -> None:
     limiter = PerDestinationRateLimiter(rate=1.0, burst=1, redis_client=_FakeRedis(store), tenant_id="org-1")
 
     assert await limiter.consume("dest") is True
-    with caplog.at_level(logging.WARNING, logger="modulo.connectors._rate_bucket"):
+    with caplog.at_level(logging.WARNING, logger="farna.connectors._rate_bucket"):
         assert await limiter.consume("dest") is False
 
     assert limiter.saturation_count == 1
@@ -744,7 +744,7 @@ async def test_saturation_warning_throttled_on_deny_after_grant(caplog: Any) -> 
     limiter = PerDestinationRateLimiter(rate=0.0001, burst=1, redis_client=_FakeRedis(store), tenant_id="org-1")
 
     assert await limiter.consume("dest") is True  # grant — resets the transition state
-    with caplog.at_level(logging.WARNING, logger="modulo.connectors._rate_bucket"):
+    with caplog.at_level(logging.WARNING, logger="farna.connectors._rate_bucket"):
         assert await limiter.consume("dest") is False  # deny — transition, WARNING
         assert await limiter.consume("dest") is False  # deny — still saturated, no WARNING
 

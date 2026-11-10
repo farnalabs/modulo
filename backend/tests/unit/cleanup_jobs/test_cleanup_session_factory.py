@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import modulo.core.saq_worker as sw
+import farna.core.saq_worker as sw
 
 
 class TestCleanupSessionFactory:

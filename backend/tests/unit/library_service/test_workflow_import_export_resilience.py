@@ -8,7 +8,7 @@ import pytest
 from fastapi import status
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
+from farna.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
 
 
 class TestConfirmImportParameterFix:
@@ -16,7 +16,7 @@ class TestConfirmImportParameterFix:
 
     async def test_materialize_called_with_created_by(self):
         """confirm_import_endpoint should pass created_by=, not account_id=."""
-        from modulo.api.routes.library import confirm_import_endpoint
+        from farna.api.routes.library import confirm_import_endpoint
 
         mock_session = MagicMock()
         mock_session.begin = MagicMock()
@@ -50,9 +50,9 @@ class TestConfirmImportParameterFix:
         mock_body.connector_overrides = None
 
         with (
-            patch("modulo.api.routes.library.materialize_import", AsyncMock()) as mock_mi,
-            patch("modulo.api.routes.library.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.library.set_rls_user_context", AsyncMock()),
+            patch("farna.api.routes.library.materialize_import", AsyncMock()) as mock_mi,
+            patch("farna.api.routes.library.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.library.set_rls_user_context", AsyncMock()),
         ):
             mock_mi.return_value = {
                 "pipeline_id": str(uuid.uuid4()),
@@ -77,7 +77,7 @@ class TestAnalyseBundleSQLAlchemyError:
     """_analyse_bundle should return 503 on SQLAlchemyError."""
 
     async def test_sqlalchemy_error_returns_503(self):
-        from modulo.api.routes.library import _analyse_bundle
+        from farna.api.routes.library import _analyse_bundle
 
         mock_session = MagicMock()
         mock_session.begin = MagicMock()
@@ -107,7 +107,7 @@ class TestConfirmImportSQLAlchemyError:
     """confirm_import_endpoint should return 503 on SQLAlchemyError."""
 
     async def test_sqlalchemy_error_returns_503(self):
-        from modulo.api.routes.library import confirm_import_endpoint
+        from farna.api.routes.library import confirm_import_endpoint
 
         mock_session = MagicMock()
         mock_session.begin = MagicMock()
@@ -151,7 +151,7 @@ class TestExportPipelineSingleTransaction:
     """export_pipeline_endpoint should use a single session.begin()."""
 
     async def test_single_transaction(self):
-        from modulo.api.routes.library import export_pipeline_endpoint
+        from farna.api.routes.library import export_pipeline_endpoint
 
         pipeline_id = uuid.uuid4()
         mock_session = MagicMock()
@@ -171,10 +171,10 @@ class TestExportPipelineSingleTransaction:
         mock_principal.org_role = "admin"
 
         with (
-            patch("modulo.api.routes.library.get_pipeline", AsyncMock(return_value=mock_pipeline)),
-            patch("modulo.api.routes.library.export_pipeline_bundle", AsyncMock(return_value=b"zip-content")),
-            patch("modulo.api.routes.library.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.library.set_rls_user_context", AsyncMock()),
+            patch("farna.api.routes.library.get_pipeline", AsyncMock(return_value=mock_pipeline)),
+            patch("farna.api.routes.library.export_pipeline_bundle", AsyncMock(return_value=b"zip-content")),
+            patch("farna.api.routes.library.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.library.set_rls_user_context", AsyncMock()),
         ):
             response = await export_pipeline_endpoint(
                 pipeline_id=pipeline_id, session=mock_session, principal=mock_principal

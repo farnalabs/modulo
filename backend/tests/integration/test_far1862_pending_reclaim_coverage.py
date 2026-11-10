@@ -53,13 +53,13 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.cron_helpers import (
+from farna.core.cron_helpers import (
     _reconcile_capacity_marker_exclusion,
     _terminalize_stranded_pending_runs,
     reconciler_recovery_predicate,
 )
-from modulo.core.pipeline_execution import _sweep_org_stale_runs
-from modulo.db.models.run import Run
+from farna.core.pipeline_execution import _sweep_org_stale_runs
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 

@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core import cron_helpers as ch
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.core import cron_helpers as ch
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
 ORG = uuid.UUID("00000000-0000-0000-0000-000000000081")
 

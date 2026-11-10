@@ -23,10 +23,10 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.main import app
-from modulo.api.routes.evals import _assert_eval_definition_write_role
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+from farna.api.main import app
+from farna.api.routes.evals import _assert_eval_definition_write_role
+from farna.auth.jwt import TenantPrincipal
+from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 from tests.unit.api.route_introspection import (
     get_all_apiroutes,
     get_permission_tag,

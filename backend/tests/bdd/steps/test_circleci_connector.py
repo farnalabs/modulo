@@ -32,7 +32,7 @@ def ctx() -> dict:
 
 @given(parsers.parse('a CircleCI connector configured with project "{project}"'))
 def circleci_connector_project(ctx: dict, project: str) -> None:
-    from modulo.connectors.circleci import CircleCIConnector
+    from farna.connectors.circleci import CircleCIConnector
 
     ctx["connector"] = CircleCIConnector(token=TOKEN)
     ctx["project"] = project
@@ -41,7 +41,7 @@ def circleci_connector_project(ctx: dict, project: str) -> None:
 
 @given("a CircleCI connector configured with invalid credentials")
 def circleci_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.circleci import CircleCIConnector
+    from farna.connectors.circleci import CircleCIConnector
 
     ctx["connector"] = CircleCIConnector(token=TOKEN)
     ctx["valid"] = False
@@ -61,7 +61,7 @@ def circleci_health_check(ctx: dict) -> None:
 
 @when(parsers.parse('the connector triggers a pipeline on branch "{branch}"'))
 def circleci_trigger_run(ctx: dict, branch: str) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     body = {
         "id": "pipe-uuid-123",
@@ -90,7 +90,7 @@ def circleci_run_created(ctx: dict) -> None:
 
 @when(parsers.parse('the connector checks status of pipeline "{run_id}"'))
 def circleci_get_run_status(ctx: dict, run_id: str) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     body = {
         "id": run_id,
@@ -111,7 +111,7 @@ def circleci_get_run_status(ctx: dict, run_id: str) -> None:
 
 @then("the pipeline status is returned")
 def circleci_run_status(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     run = ctx["run"]
     assert run is not None, "No run status"
@@ -148,7 +148,7 @@ def circleci_list_runs(ctx: dict) -> None:
 
 @then("the result contains pipeline runs")
 def circleci_result_contains_runs(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     runs = ctx["runs"]
     assert runs is not None, "No listed runs"

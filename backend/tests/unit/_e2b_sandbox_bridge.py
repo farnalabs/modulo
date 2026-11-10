@@ -53,7 +53,7 @@ def current_bridge() -> MockSandboxBridge:
 
 
 if TYPE_CHECKING:
-    from modulo.core.runtime_provider import (
+    from farna.core.runtime_provider import (
         ExecProcess,
         IsolationPolicy,
         RuntimeProvider,
@@ -124,7 +124,7 @@ class MockSandboxBridge:
         """
         from e2b import AsyncSandbox
 
-        from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+        from farna.core.runtime_config.key_bridge import get_e2b_api_key
 
         self.spec = spec
         self.events.append("create")
@@ -150,7 +150,7 @@ class MockSandboxBridge:
         *,
         cmd_timeout: int | None = None,
     ) -> Any:
-        from modulo.core.runtime_provider import ExecResult
+        from farna.core.runtime_provider import ExecResult
 
         self.events.append("exec")
         sandbox = self._sbx()
@@ -194,7 +194,7 @@ class MockSandboxBridge:
         window lives in the dispatch's own watchdog, which kills via
         ``ExecProcess.kill`` -> ``handle.kill()``.
         """
-        from modulo.core.runtime_provider import ExecProcess, ExecStreamChunk
+        from farna.core.runtime_provider import ExecProcess, ExecStreamChunk
 
         self.events.append("stream")
         sandbox = self._sbx()
@@ -306,7 +306,7 @@ class MockSandboxBridge:
         return str(raw).encode("utf-8")
 
     async def get_info(self, provider_ref: str, path: str) -> Any:
-        from modulo.core.runtime_provider import WorkspaceFileInfo
+        from farna.core.runtime_provider import WorkspaceFileInfo
 
         self.events.append(f"get_info:{path}")
         info = await self._sbx().files.get_info(path)
@@ -337,7 +337,7 @@ class MockSandboxBridge:
 
     # -- isolation (T7) ------------------------------------------------------
     async def apply_isolation(self, provider_ref: str, spec: WorkspaceSpec, policy: IsolationPolicy) -> None:
-        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+        from farna.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
         self.events.append("isolation")
         await apply_sandbox_policy(
@@ -391,7 +391,7 @@ def install_bridge(monkeypatch: Any, bridge: RuntimeProvider | None = None) -> M
     """
     global _CURRENT
 
-    from modulo.core.pipeline_engine import node_runner as nr
+    from farna.core.pipeline_engine import node_runner as nr
 
     shared = bridge if bridge is not None else MockSandboxBridge()
     _CURRENT = shared

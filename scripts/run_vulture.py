@@ -54,7 +54,7 @@ Gate semantics (FAR-252):
   New dead code is a blocking finding.
 
 Additional scan targets may be passed as positional arguments. The unit tests
-stage a probe file OUTSIDE ``backend/src/modulo`` and hand it to the gate, so
+stage a probe file OUTSIDE ``backend/src/farna`` and hand it to the gate, so
 the gate's blocking behaviour can be exercised without writing into the
 measured coverage source tree (FAR-2334: coverage's un-executed-source scan
 walks ``[tool.coverage.run] source``, so a probe created there can be recorded
@@ -111,7 +111,7 @@ def _repo_root() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     root = _repo_root()
-    src = str(Path(root) / "backend" / "src" / "modulo")
+    src = str(Path(root) / "backend" / "src" / "farna")
     whitelist = str(Path(root) / ".vulture_whitelist.py")
     extra_targets = list(sys.argv[1:] if argv is None else argv)
     if not Path(src).is_dir() or not Path(whitelist).is_file():

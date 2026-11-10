@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session as SASession
 
-from modulo.core.pipeline_engine.classify import (
+from farna.core.pipeline_engine.classify import (
     DELIVERY_CONFIDENCE_AGENT_REPORTED,
     DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY,
     DELIVERY_CONFIDENCE_VALUES,
@@ -59,13 +59,13 @@ from modulo.core.pipeline_engine.classify import (
     persist_classification,
     reconcile_missing_classifications,
 )
-from modulo.core.pipeline_engine.error_codes import class_for
-from modulo.db.crud.run import update_run_status
-from modulo.db.models.base import Base
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import TERMINAL_STATUSES, Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.core.pipeline_engine.error_codes import class_for
+from farna.db.crud.run import update_run_status
+from farna.db.models.base import Base
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
 from tests.unit.api.mock_session import make_redis_client
 
@@ -204,7 +204,7 @@ class TestDecisionTable:
         TERMINAL_STATUSES must fail loudly in tests, never silently inherit
         complete semantics."""
         with patch(
-            "modulo.db.models.run.TERMINAL_STATUSES",
+            "farna.db.models.run.TERMINAL_STATUSES",
             frozenset({*TERMINAL_STATUSES, "expired"}),
         ):
             result = classify_run("expired", None)
@@ -488,7 +488,7 @@ class TestDeliveryProvenance:
         run_id = uuid.uuid4()
         async with session.begin():
             await _seed_run(session, run_id)
-            with patch("modulo.core.pipeline_engine.classify.classify_run", side_effect=RuntimeError("boom")):
+            with patch("farna.core.pipeline_engine.classify.classify_run", side_effect=RuntimeError("boom")):
                 await update_run_status(session, run_id, "complete")
         record = await _read_classification(engine, run_id)
         assert record is not None
@@ -521,8 +521,8 @@ class TestDeliveryProvenance:
         (anti-drift) with planted-violation proof". The test FAILS if either
         writer adds, drops, renames OR re-values a key.
         """
-        from modulo.core.pipeline_engine.classify import _unclassified_marker_dict
-        from modulo.db.crud.run import _write_unclassified_classification
+        from farna.core.pipeline_engine.classify import _unclassified_marker_dict
+        from farna.db.crud.run import _write_unclassified_classification
 
         run_id = uuid.uuid4()
         async with session.begin():
@@ -957,7 +957,7 @@ class TestReasons:
             seen.append(code or "")
             return real_class_for(code)
 
-        with patch("modulo.core.pipeline_engine.error_codes.class_for", side_effect=_capturing_class_for):
+        with patch("farna.core.pipeline_engine.error_codes.class_for", side_effect=_capturing_class_for):
             result = classify_run("failed", "RateLimitError")
         assert seen
         assert seen[-1] == "RateLimitError"
@@ -1067,7 +1067,7 @@ class TestCancelledHitlTimeoutReason:
         to the pre-FAR-1257 operator/HITL-cancel reason — never raise out of the
         pure classifier and never fabricate a timeout."""
         with patch(
-            "modulo.core.pipeline_engine.error_codes.map_legacy_code",
+            "farna.core.pipeline_engine.error_codes.map_legacy_code",
             side_effect=RuntimeError("registry broken"),
         ):
             result = classify_run("cancelled", "hitl.unknown_sibling")
@@ -1244,7 +1244,7 @@ class TestPrUrlEdgeCases:
     def test_class_for_failure_falls_back_to_no_delivery(self) -> None:
         """A class_for lookup failure yields no_delivery, not a crash."""
         with patch(
-            "modulo.core.pipeline_engine.error_codes.class_for",
+            "farna.core.pipeline_engine.error_codes.class_for",
             side_effect=RuntimeError("registry broken"),
         ):
             result = classify_run("failed", "agent.failed")
@@ -1264,7 +1264,7 @@ class TestPersistenceHook:
             # FAR-583 B1: the blobs write is the PRIMARY store write — bound
             # org required (fail-closed); production terminalization sessions
             # are org-bound and the SQLite-side binding mirrors that contract.
-            from modulo.db.rls import set_rls_org
+            from farna.db.rls import set_rls_org
 
             await set_rls_org(session, _ORG)
             updated = await update_run_status(
@@ -1297,8 +1297,8 @@ class TestPersistenceHook:
         engine: AsyncEngine,
         session: AsyncSession,
     ) -> None:
-        from modulo.db.crud.run import request_cancellation
-        from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, CANCELLED_BY_SYSTEM
+        from farna.db.crud.run import request_cancellation
+        from farna.db.models.run import CANCEL_REASON_USER_REQUESTED, CANCELLED_BY_SYSTEM
 
         run_id = uuid.uuid4()
         async with session.begin():
@@ -1353,7 +1353,7 @@ class TestPersistenceHook:
         the record carries the real value. This test reproduces that exact
         ordering against a real DB and asserts the final record is corrected —
         without the reclassify-after-write step the assertion fails."""
-        from modulo.core.pipeline_engine.executor import _apply_work_intact, _reclassify_after_work_intact
+        from farna.core.pipeline_engine.executor import _apply_work_intact, _reclassify_after_work_intact
 
         run_id = uuid.uuid4()
         # 1. Terminalize WITHOUT work_intact set — finalize_cost's inline
@@ -1391,7 +1391,7 @@ class TestCrossTenantIsolation:
         select is scoped to org A, so org B's run is invisible and no
         classification record can be written for it.
         """
-        from modulo.db.rls import _inject_tenant_filter
+        from farna.db.rls import _inject_tenant_filter
 
         org_a = uuid.UUID("00000000-0000-0000-0000-0000000000a9")
         run_id = uuid.uuid4()
@@ -1429,7 +1429,7 @@ class TestFailureAndIdempotency:
         run_id = uuid.uuid4()
         async with session.begin():
             await _seed_run(session, run_id)
-            with patch("modulo.core.pipeline_engine.classify.classify_run", side_effect=RuntimeError("boom")):
+            with patch("farna.core.pipeline_engine.classify.classify_run", side_effect=RuntimeError("boom")):
                 updated = await update_run_status(session, run_id, "complete")
         assert updated is not None
         assert updated.status == "complete"
@@ -1446,7 +1446,7 @@ class TestFailureAndIdempotency:
         async with session.begin():
             await _seed_run(session, run_id)
             with patch(
-                "modulo.core.pipeline_engine.classify.persist_classification",
+                "farna.core.pipeline_engine.classify.persist_classification",
                 side_effect=RuntimeError("boom"),
             ):
                 updated = await update_run_status(session, run_id, "complete")
@@ -1498,7 +1498,7 @@ class TestFailureAndIdempotency:
         async with session.begin():
             # FAR-583 B1: the re-terminalization carries blobs — bound org
             # required (see test_update_run_status_writes_classification_atomically).
-            from modulo.db.rls import set_rls_org
+            from farna.db.rls import set_rls_org
 
             await set_rls_org(session, _ORG)
             await update_run_status(
@@ -1521,7 +1521,7 @@ class TestFailureAndIdempotency:
         async with session.begin():
             run = await _seed_run(session, uuid.uuid4(), status="complete")
             with patch(
-                "modulo.core.pipeline_engine.classify.persist_classification",
+                "farna.core.pipeline_engine.classify.persist_classification",
                 new=AsyncMock(return_value=False),
             ):
                 ok = await classify_and_persist_run(session, run)
@@ -1541,7 +1541,7 @@ class TestFailureAndIdempotency:
         real_import = builtins.__import__
 
         def _failing_import(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "modulo.core.pipeline_engine.classify":
+            if name == "farna.core.pipeline_engine.classify":
                 raise ImportError("simulated classifier import failure")
             return real_import(name, *args, **kwargs)
 
@@ -1621,8 +1621,8 @@ class TestFailureAndIdempotency:
         async with session.begin():
             run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
             with (
-                caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.classify"),
-                patch("modulo.core.pipeline_engine.classify.asyncio.wait_for", side_effect=_stall),
+                caplog.at_level("WARNING", logger="farna.core.pipeline_engine.classify"),
+                patch("farna.core.pipeline_engine.classify.asyncio.wait_for", side_effect=_stall),
             ):
                 ok = await persist_classification(session, run, classify_run("complete", None))
 
@@ -1641,7 +1641,7 @@ class TestFailureAndIdempotency:
         async with session.begin():
             run = await _seed_run(session, run_id, status="complete")
             with patch(
-                "modulo.core.pipeline_engine.classify.persist_classification",
+                "farna.core.pipeline_engine.classify.persist_classification",
                 new=AsyncMock(return_value=False),
             ):
                 ok = await classify_and_persist_run(session, run)
@@ -1719,8 +1719,8 @@ class TestSweep:
 
         from sqlalchemy import event
 
-        from modulo.core import cron_helpers
-        from modulo.core.error_tracking import saq_hooks
+        from farna.core import cron_helpers
+        from farna.core.error_tracking import saq_hooks
 
         eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
 
@@ -1788,11 +1788,11 @@ class TestSweepBenignFactRestamp:
 
         from sqlalchemy import event
 
-        from modulo.core import cron_helpers
-        from modulo.core.analytics.builder import AnalyticsGroupBy, AnalyticsQuery, bucket_rows, build_facts_query
-        from modulo.core.error_tracking import saq_hooks
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-        from modulo.db.models.run_daily_facts import RunDailyFact
+        from farna.core import cron_helpers
+        from farna.core.analytics.builder import AnalyticsGroupBy, AnalyticsQuery, bucket_rows, build_facts_query
+        from farna.core.error_tracking import saq_hooks
+        from farna.db.models.pipeline_snapshot import PipelineSnapshot
+        from farna.db.models.run_daily_facts import RunDailyFact
 
         eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
 
@@ -1899,10 +1899,10 @@ class TestSweepBenignFactRestamp:
 
         from sqlalchemy import event
 
-        from modulo.core import cron_helpers
-        from modulo.core.error_tracking import saq_hooks
-        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-        from modulo.db.models.run_daily_facts import RunDailyFact
+        from farna.core import cron_helpers
+        from farna.core.error_tracking import saq_hooks
+        from farna.db.models.pipeline_snapshot import PipelineSnapshot
+        from farna.db.models.run_daily_facts import RunDailyFact
 
         eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
 
@@ -2087,8 +2087,8 @@ class TestPeriodicWiring:
     async def test_reconcile_sweep_wired_into_periodic_cron_path(self) -> None:
         """The cron_helpers entrypoint (invoked by dispatcher_reconcile every
         60s) actually calls the sweep — proven by patching the sweep."""
-        from modulo.core import cron_helpers
-        from modulo.core.pipeline_engine import classify as classify_module
+        from farna.core import cron_helpers
+        from farna.core.pipeline_engine import classify as classify_module
 
         with (
             patch.object(
@@ -2115,7 +2115,7 @@ class TestPeriodicWiring:
         the same way, then ``dispatcher_reconcile`` is awaited for real and the
         sweep call is asserted.
         """
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([_ORG]), _rows_result([])])
@@ -2144,7 +2144,7 @@ class TestPeriodicWiring:
                 return_value=False,
             ),
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
         ):
             summary = await ch.dispatcher_reconcile()
 
@@ -2158,7 +2158,7 @@ class TestPeriodicWiring:
     ) -> None:
         """End-to-end: the periodic entrypoint backfills an unclassified terminal
         run (raw-SQL-terminalizer shape) against a real DB."""
-        from modulo.core import cron_helpers
+        from farna.core import cron_helpers
 
         run_id = uuid.uuid4()
         maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
@@ -2392,7 +2392,7 @@ class TestBenignClassification:
         LITERAL (the db layer must not import the classifier on the CRUD hot
         path), so this test pins the two spellings together — the same
         convention the ``unclassified`` marker lockstep test uses."""
-        from modulo.db.crud.run import _RUN_CLASSIFICATION_BENIGN
+        from farna.db.crud.run import _RUN_CLASSIFICATION_BENIGN
 
         assert RunClassificationValue.benign.value == _RUN_CLASSIFICATION_BENIGN
         assert RunClassificationValue.benign.value == "benign"
@@ -2451,7 +2451,7 @@ class TestBenignConfigWiring:
         remain fail-closed as a business outcome while the PR evidence survives
         in the persisted record.
         """
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         run_id = uuid.uuid4()
         async with session.begin():
@@ -2550,7 +2550,7 @@ class TestBenignConfigWiring:
             run = await _seed_run(session, run_id, status="failed", error_code="agent.failed")
             run.error_detail = "Sandbox died"  # would match a WIDENED typo'd entry
             await session.flush()
-            with caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.classify"):
+            with caplog.at_level("WARNING", logger="farna.core.pipeline_engine.classify"):
                 assert await classify_and_persist_run(session, run) is True
         assert any("classification.benign_signatures_malformed" in m for m in caplog.messages)
         record = await _read_classification(engine, run_id)
@@ -2565,7 +2565,7 @@ class TestBenignConfigWiring:
     ) -> None:
         """The signature read is gated on a COUNTABLE failure status carrying an
         error code, so a ``complete`` terminalization pays no extra statement."""
-        from modulo.core.pipeline_engine.classify import _load_benign_signatures
+        from farna.core.pipeline_engine.classify import _load_benign_signatures
 
         run = SimpleNamespace(status="complete", error_code="agent.failed", pipeline_id=_PIPELINE, organisation_id=_ORG)
         assert not await _load_benign_signatures(session, run)

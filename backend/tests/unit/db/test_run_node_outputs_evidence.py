@@ -15,7 +15,7 @@ from __future__ import annotations
 from sqlalchemy import literal_column, select
 from sqlalchemy.dialects import postgresql
 
-from modulo.db.crud.run_node_outputs import observed_activity_expr
+from farna.db.crud.run_node_outputs import observed_activity_expr
 
 
 def _compiled() -> tuple[str, list[object]]:

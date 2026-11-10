@@ -16,15 +16,15 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.bitbucket import BitbucketConnector
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
-from modulo.connectors.dropbox_paper import DropboxPaperConnector
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.linear import LinearConnector
-from modulo.connectors.monday import MondayConnector
-from modulo.connectors.notion import NotionConnector
-from modulo.connectors.sharepoint import SharePointConnector
+from farna.connectors.bitbucket import BitbucketConnector
+from farna.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from farna.connectors.dropbox_paper import DropboxPaperConnector
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.linear import LinearConnector
+from farna.connectors.monday import MondayConnector
+from farna.connectors.notion import NotionConnector
+from farna.connectors.sharepoint import SharePointConnector
 
 _PLANTED = "far1651plantedcredentialvalue"
 

@@ -18,12 +18,12 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-import modulo.core.evidence_pack.build as evidence_build
-import modulo.core.evidence_pack.signing as evidence_signing
-from modulo.api.routes import audit as route
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.evidence_pack import EvidenceSigningError, verify_evidence_pack
-from modulo.registry.crypto import generate_keypair
+import farna.core.evidence_pack.build as evidence_build
+import farna.core.evidence_pack.signing as evidence_signing
+from farna.api.routes import audit as route
+from farna.auth.jwt import TenantPrincipal
+from farna.core.evidence_pack import EvidenceSigningError, verify_evidence_pack
+from farna.registry.crypto import generate_keypair
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000b2")

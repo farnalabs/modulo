@@ -19,7 +19,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0178_env_profiles_runner_docker"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -81,7 +81,7 @@ def test_downgrade_repoints_runner_docker_and_restores_guarded() -> None:
 
 
 def test_model_parity_widened_check_no_server_default() -> None:
-    from modulo.db.models.environment_profile import EnvironmentProfile
+    from farna.db.models.environment_profile import EnvironmentProfile
 
     constraint = next(
         c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type"

@@ -418,8 +418,8 @@ jobs:
         run: |
           bash ../scripts/uv_sync_with_retry.sh --frozen
           uv run --no-build --no-sync ruff check .
-          uv run --no-build --no-sync mypy src/modulo/
-          uv run --no-build --no-sync bandit -r src/modulo/ -ll
+          uv run --no-build --no-sync mypy src/farna/
+          uv run --no-build --no-sync bandit -r src/farna/ -ll
 
   backend-unit:
     name: "Pre-deploy: Backend unit tests"

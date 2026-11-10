@@ -8,17 +8,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, scenarios, then, when
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.draft import DraftNode, PipelineDraft
-from modulo.determination.inference import Finding
-from modulo.determination.models import (
+from farna.connectors.base import ConnectorType
+from farna.determination.draft import DraftNode, PipelineDraft
+from farna.determination.inference import Finding
+from farna.determination.models import (
     DeterminationAttempt,
     ProposalContract,
     ProposalFact,
     SourceInventoryItem,
     UnresolvedAssumption,
 )
-from modulo.determination.scanner import ScanSample
+from farna.determination.scanner import ScanSample
 
 scenarios("determination.feature")
 
@@ -269,15 +269,15 @@ def _request(request, method: str, path: str, json: dict[str, Any] | None = None
     findings = [_no_stages_finding()] if no_connectors else [_overview_finding()]
 
     with (
-        patch("modulo.api.routes.determination.list_connector_instances", return_value=_mock_page(page_items)),
-        patch("modulo.api.routes.determination.set_rls_org"),
-        patch("modulo.api.routes.determination.set_rls_user_context"),
-        patch("modulo.api.routes.determination.create_secrets_backend"),
-        patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
-        patch("modulo.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=samples),
-        patch("modulo.api.routes.determination.infer", return_value=findings),
-        patch("modulo.api.routes.determination.generate_draft", return_value=_draft()),
-        patch("modulo.api.routes.determination.append_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.determination.list_connector_instances", return_value=_mock_page(page_items)),
+        patch("farna.api.routes.determination.set_rls_org"),
+        patch("farna.api.routes.determination.set_rls_user_context"),
+        patch("farna.api.routes.determination.create_secrets_backend"),
+        patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
+        patch("farna.api.routes.determination.run_scan", new_callable=AsyncMock, return_value=samples),
+        patch("farna.api.routes.determination.infer", return_value=findings),
+        patch("farna.api.routes.determination.generate_draft", return_value=_draft()),
+        patch("farna.api.routes.determination.append_audit_event", new_callable=AsyncMock),
     ):
         return client.request(method, path, json=json)
 

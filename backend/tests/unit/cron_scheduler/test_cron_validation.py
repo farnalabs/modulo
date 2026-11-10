@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 
-from modulo.core.cron_helpers import compute_next_fire, compute_next_send, validate_cron_expression
+from farna.core.cron_helpers import compute_next_fire, compute_next_send, validate_cron_expression
 
 
 class TestValidateCronExpression:
@@ -103,8 +103,8 @@ class TestComputeNextFire:
             captured["base"] = base
             return FakeCron()
 
-        monkeypatch.setattr("modulo.core.cron_helpers.datetime", FrozenDateTime)
-        monkeypatch.setattr("modulo.core.cron_helpers.croniter", fake_croniter)
+        monkeypatch.setattr("farna.core.cron_helpers.datetime", FrozenDateTime)
+        monkeypatch.setattr("farna.core.cron_helpers.croniter", fake_croniter)
 
         assert compute_next_fire("* * * * *") == datetime.datetime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
         assert captured["base"] == now
@@ -216,8 +216,8 @@ class TestComputeNextSend:
             captured["base"] = base
             return FakeCron()
 
-        monkeypatch.setattr("modulo.core.cron_helpers.datetime", FrozenDateTime)
-        monkeypatch.setattr("modulo.core.cron_helpers.croniter", fake_croniter)
+        monkeypatch.setattr("farna.core.cron_helpers.datetime", FrozenDateTime)
+        monkeypatch.setattr("farna.core.cron_helpers.croniter", fake_croniter)
 
         assert compute_next_send("* * * * *") == datetime.datetime(2026, 1, 1, 12, 1, tzinfo=datetime.UTC)
         assert captured["base"] == now

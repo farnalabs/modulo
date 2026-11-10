@@ -14,12 +14,12 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.routes.pipelines import (
+from farna.api.routes.pipelines import (
     ConvertToAgentRequest,
     convert_node_to_agent_endpoint,
     revert_node_to_manual_endpoint,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.auth.jwt import AuthenticatedPrincipal
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -78,11 +78,11 @@ def _stub_reference_resolution_loaders() -> Generator[None, None, None]:
         return agents
 
     agents_patch = patch(
-        "modulo.api.routes.pipelines._load_agents_by_ids",
+        "farna.api.routes.pipelines._load_agents_by_ids",
         new=AsyncMock(side_effect=_fake_agents),
     )
     schemas_patch = patch(
-        "modulo.api.routes.pipelines._load_existing_schema_ids",
+        "farna.api.routes.pipelines._load_existing_schema_ids",
         new=AsyncMock(side_effect=lambda _s, _o, schema_ids: set(schema_ids)),
     )
     agents_patch.start()
@@ -289,7 +289,7 @@ class TestConvertToAgent:
         saved_nodes[0]["node_type"] = "agent"
         saved_nodes[0]["agent_id"] = str(AGENT_ID)
 
-        with patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])):
+        with patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])):
             resp = await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -474,7 +474,7 @@ class TestConvertToAgent:
 
         with (
             patch(
-                "modulo.api.routes.pipelines.replace_pipeline_graph",
+                "farna.api.routes.pipelines.replace_pipeline_graph",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
             pytest.raises(HTTPException) as excinfo,
@@ -527,8 +527,8 @@ class TestConvertToAgent:
         body = make_convert_body()
 
         with (
-            patch("modulo.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await convert_node_to_agent_endpoint(
@@ -563,8 +563,8 @@ class TestRevertToManual:
         saved_nodes[0]["label"] = "qa-review"
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])),
         ):
             resp = await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
@@ -633,7 +633,7 @@ class TestRevertToManual:
         principal = make_principal()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=None),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -657,7 +657,7 @@ class TestRevertToManual:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -681,7 +681,7 @@ class TestRevertToManual:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -705,7 +705,7 @@ class TestRevertToManual:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -725,9 +725,9 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines._save_graph", side_effect=IntegrityError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines._save_graph", side_effect=IntegrityError("stmt", "params", "orig")),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -747,9 +747,9 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines._save_graph", side_effect=ProgrammingError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines._save_graph", side_effect=ProgrammingError("stmt", "params", "orig")),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -769,9 +769,9 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines._save_graph", side_effect=SQLAlchemyError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines._save_graph", side_effect=SQLAlchemyError("stmt", "params", "orig")),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -791,9 +791,9 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines._save_graph", side_effect=ValueError("unexpected")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines._save_graph", side_effect=ValueError("unexpected")),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -816,7 +816,7 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
@@ -838,9 +838,9 @@ class TestRevertToManual:
         snapshot = make_snapshot()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-            patch("modulo.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("farna.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
+            patch("farna.api.routes.pipelines.append_audit_event", AsyncMock()),
             pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(

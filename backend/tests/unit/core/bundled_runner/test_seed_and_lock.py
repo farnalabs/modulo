@@ -11,13 +11,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.bundled_runner.profile import (
+from farna.core.bundled_runner.profile import (
     TEMPLATE_CONFIG_JSON,
     TEMPLATE_PROFILE_NAME,
     build_bundled_runner_profile_values,
 )
-from modulo.db.crud.environment_profile import validate_runner_docker_persistence
-from modulo.db.seed import seed_bundled_runner_profile
+from farna.db.crud.environment_profile import validate_runner_docker_persistence
+from farna.db.seed import seed_bundled_runner_profile
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()

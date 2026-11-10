@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.mcp_server import set_org_triggers_paused
+from farna.api.mcp_server import set_org_triggers_paused
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
@@ -24,7 +24,7 @@ def _make_org(*, paused: bool, paused_at) -> MagicMock:
 
 class TestSetOrgTriggersPausedScope:
     def test_scope_requires_admin(self) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+        from farna.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 
         assert check_tool_scope("admin", "set_org_triggers_paused") is None
         with pytest.raises(MCPAuthorizationError):
@@ -32,32 +32,32 @@ class TestSetOrgTriggersPausedScope:
 
 
 class TestSetOrgTriggersPausedErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await set_org_triggers_paused(paused=True)
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await set_org_triggers_paused(paused=True)
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_migration_required_on_programming_error(
         self,
         mock_get_org: AsyncMock,
@@ -74,9 +74,9 @@ class TestSetOrgTriggersPausedErrors(AuthContext):
 
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
     async def test_returns_not_found_when_org_missing(
         self,
         mock_check_scope: MagicMock,
@@ -84,17 +84,17 @@ class TestSetOrgTriggersPausedErrors(AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.db.crud.organisation.get_organisation", AsyncMock(return_value=None)):
+        with patch("farna.db.crud.organisation.get_organisation", AsyncMock(return_value=None)):
             result = await set_org_triggers_paused(paused=True)
         assert result["error"] == "not_found"
 
 
 class TestSetOrgTriggersPausedSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
-    @patch("modulo.core.audit_logger.append_audit_event")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
+    @patch("farna.core.audit_logger.append_audit_event")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_pause_true_toggles_org_and_appends_audit(
         self,
         mock_get_org: AsyncMock,
@@ -120,11 +120,11 @@ class TestSetOrgTriggersPausedSuccess(AuthContext):
         assert call_kwargs["payload_json"] == {"paused": True}
         mock_sesh.flush.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
-    @patch("modulo.core.audit_logger.append_audit_event")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
+    @patch("farna.core.audit_logger.append_audit_event")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_resume_false_clears_paused_at(
         self,
         mock_get_org: AsyncMock,
@@ -146,11 +146,11 @@ class TestSetOrgTriggersPausedSuccess(AuthContext):
         mock_append_audit.assert_awaited_once()
         assert mock_append_audit.await_args.kwargs["payload_json"] == {"paused": False}
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
-    @patch("modulo.core.audit_logger.append_audit_event")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
+    @patch("farna.core.audit_logger.append_audit_event")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_idempotent_same_state_returns_current_without_audit(
         self,
         mock_get_org: AsyncMock,
@@ -171,11 +171,11 @@ class TestSetOrgTriggersPausedSuccess(AuthContext):
         mock_append_audit.assert_not_awaited()
         mock_sesh.flush.assert_not_awaited()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
-    @patch("modulo.core.audit_logger.append_audit_event")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
+    @patch("farna.core.audit_logger.append_audit_event")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_audit_failure_is_fail_open_toggle_commits(
         self,
         mock_get_org: AsyncMock,

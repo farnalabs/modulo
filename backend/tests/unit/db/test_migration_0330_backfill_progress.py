@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0330_eval_verdict_contract")
+_MIGRATION = importlib.import_module("farna.db.migrations.versions.0330_eval_verdict_contract")
 _LOGGER_NAME = "alembic.runtime.migration"
 
 

@@ -26,12 +26,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -218,11 +218,11 @@ class TestDeterminationOuterHandlerOrdering:
                 pass
 
         with (
-            patch("modulo.api.routes.determination.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
-            patch("modulo.api.routes.determination.create_secrets_backend", MagicMock()),
-            patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
-            patch("modulo.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
+            patch("farna.api.routes.determination.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
+            patch("farna.api.routes.determination.create_secrets_backend", MagicMock()),
+            patch("farna.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
+            patch("farna.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -246,11 +246,11 @@ class TestDeterminationOuterHandlerOrdering:
                 pass
 
         with (
-            patch("modulo.api.routes.determination.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
-            patch("modulo.api.routes.determination.create_secrets_backend", MagicMock()),
-            patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
-            patch("modulo.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
+            patch("farna.api.routes.determination.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
+            patch("farna.api.routes.determination.create_secrets_backend", MagicMock()),
+            patch("farna.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
+            patch("farna.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
         ):
             resp = client.post("/api/v1/determination/draft", json={})
 
@@ -274,11 +274,11 @@ class TestDeterminationOuterHandlerOrdering:
                 pass
 
         with (
-            patch("modulo.api.routes.determination.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
-            patch("modulo.api.routes.determination.create_secrets_backend", MagicMock()),
-            patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
-            patch("modulo.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
+            patch("farna.api.routes.determination.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
+            patch("farna.api.routes.determination.create_secrets_backend", MagicMock()),
+            patch("farna.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
+            patch("farna.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
         ):
             resp = client.get("/api/v1/determination")
 
@@ -301,11 +301,11 @@ class TestDeterminationOuterHandlerOrdering:
                 pass
 
         with (
-            patch("modulo.api.routes.determination.set_rls_org", AsyncMock()),
-            patch("modulo.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
-            patch("modulo.api.routes.determination.create_secrets_backend", MagicMock()),
-            patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
-            patch("modulo.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
+            patch("farna.api.routes.determination.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.determination.list_connector_instances", AsyncMock(return_value=empty_page)),
+            patch("farna.api.routes.determination.create_secrets_backend", MagicMock()),
+            patch("farna.api.routes.determination.ConnectorHub", MagicMock(return_value=_MockHubCM())),
+            patch("farna.api.routes.determination.run_scan", AsyncMock(side_effect=exc)),
         ):
             resp = client.post("/api/v1/determination/draft", json={})
 

@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
+from farna.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
 
 pytestmark = pytest.mark.integration
 

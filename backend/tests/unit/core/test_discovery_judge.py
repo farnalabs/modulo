@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.discovery_judge import build_discovery_model_judge_callable
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
-from modulo.core.pipeline_engine import llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.discovery_judge import build_discovery_model_judge_callable
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from farna.core.pipeline_engine import llm_judge
 
 _BACKEND_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.api.models.error_forwarder_config import (
+from farna.api.models.error_forwarder_config import (
     ForwarderConfigResponse,
     ForwarderConfigUpdate,
     ForwarderListItem,
@@ -22,7 +22,7 @@ from modulo.api.models.error_forwarder_config import (
     ForwarderTestResult,
     _mask_sensitive,
 )
-from modulo.api.models.error_forwarder_config import TestConnectionRequest as ConnectionRequestModel
+from farna.api.models.error_forwarder_config import TestConnectionRequest as ConnectionRequestModel
 
 
 class TestMaskSensitive:

@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.docker import (
+from farna.core.runtime_provider import ExecResult, WorkspaceSpec
+from farna.core.runtime_provider.docker import (
     _DEFAULT_HARDENING_MEMORY_MB,
     _DEFAULT_WORKSPACE_NETWORK,
     DockerRuntimeProvider,
 )
-from modulo.util import WorkspaceNetworkValidationError
+from farna.util import WorkspaceNetworkValidationError
 
 
 class _FakeDockerError(Exception):
@@ -43,7 +43,7 @@ def fake_docker_error() -> Iterator[type[_FakeDockerError]]:
     repeating the same ``patch()`` wrapper ten times.
     """
     with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        "farna.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
         _FakeDockerError,
     ):
         yield _FakeDockerError
@@ -85,7 +85,7 @@ def mock_docker_client(mock_container: MagicMock) -> MagicMock:
 @pytest.fixture
 def provider(mock_docker_client: MagicMock) -> DockerRuntimeProvider:
     with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.Docker",
+        "farna.core.runtime_provider.docker.aiodocker.Docker",
         return_value=mock_docker_client,
     ):
         p = DockerRuntimeProvider(docker_host="unix:///var/run/docker.sock")
@@ -704,7 +704,7 @@ async def test_await_container_removed_returns_false_when_still_present(
 ) -> None:
     mock_docker_client.containers.get.return_value = mock_container
 
-    with patch("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0):
+    with patch("farna.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0):
         removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
 
     assert removed is False
@@ -723,7 +723,7 @@ async def test_destroy_workspace_warns_when_container_survives(
     delete_error.status = 409
     mock_container.delete.side_effect = delete_error
     mock_docker_client.containers.get.return_value = mock_container
-    monkeypatch.setattr("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0)
+    monkeypatch.setattr("farna.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0)
 
     await provider.destroy_workspace(ref)
 
@@ -774,7 +774,7 @@ async def test_get_workspace_status_docker_error_returns_terminated(
     mock_container.show.side_effect = _FakeDockerError("no such container")
 
     with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        "farna.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
         _FakeDockerError,
     ):
         status = await provider.get_workspace_status(ref)
@@ -830,7 +830,7 @@ async def test_close_destroys_all_workspaces(
 
 async def test_get_client_lazily_initializes_once(mock_docker_client: MagicMock) -> None:
     with patch(
-        "modulo.core.runtime_provider.docker.aiodocker.Docker",
+        "farna.core.runtime_provider.docker.aiodocker.Docker",
         return_value=mock_docker_client,
     ) as docker_cls:
         p = DockerRuntimeProvider(docker_host="unix:///var/run/docker.sock")

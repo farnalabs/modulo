@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import time
 
-from modulo.core.artifacts.store import LocalArtifactStore
-from modulo.core.artifacts.writer import _FLUSH_INTERVAL, ArtifactWriter
+from farna.core.artifacts.store import LocalArtifactStore
+from farna.core.artifacts.writer import _FLUSH_INTERVAL, ArtifactWriter
 
 
 def _make_store(tmp_path) -> LocalArtifactStore:
@@ -190,7 +190,7 @@ def test_redaction_overlap_strips_old_content(tmp_path):
 
 def test_redact_artifact_text_empty():
     """_redact_artifact_text returns empty string as-is."""
-    from modulo.core.artifacts.writer import _redact_artifact_text
+    from farna.core.artifacts.writer import _redact_artifact_text
 
     assert not _redact_artifact_text("")
 

@@ -32,7 +32,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run_node_outputs import (
+from farna.db.crud.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
     QUARANTINE_TABLE,
@@ -58,10 +58,10 @@ from modulo.db.crud.run_node_outputs import (
     upsert_rows,
     write_run_markers,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX, RunNodeOutput
-from modulo.db.rls import OutputsRlsMismatch, set_rls_org
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX, RunNodeOutput
+from farna.db.rls import OutputsRlsMismatch, set_rls_org
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
 
@@ -1178,7 +1178,7 @@ class TestCancelTriageMarkerAttribution:
     """
 
     async def test_cancelled_node_marker_is_rejected_by_the_progress_rule(self, session: AsyncSession) -> None:
-        from modulo.core.pipeline_engine.node_runner import _cancel_triage_attempt_key
+        from farna.core.pipeline_engine.node_runner import _cancel_triage_attempt_key
 
         run = await _seed_run(session)
         real_key = f"run:{run.id}:node:n1:3"
@@ -1253,7 +1253,7 @@ def test_assemble_skips_non_final_rows_with_absent_markers() -> None:
     """A non-final row whose marker side is NULL contributes no marker entry."""
     from types import SimpleNamespace
 
-    from modulo.db.crud.run_node_outputs import _assemble
+    from farna.db.crud.run_node_outputs import _assemble
 
     row = SimpleNamespace(
         attempt_key="attempt-1",

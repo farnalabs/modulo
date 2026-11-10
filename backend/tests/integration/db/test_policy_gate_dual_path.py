@@ -25,13 +25,13 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
     EvalEngine,
     EvalType,
 )
-from modulo.core.guardrails import (
+from farna.core.guardrails import (
     GuardrailBlockedError,
     evaluate_guardrails,
     run_guardrail_pass,

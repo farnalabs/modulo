@@ -25,13 +25,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.schema_registry import SchemaGenerationError
-from modulo.db.crud.schema import SchemaDeletionProtectedError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.schema_registry import SchemaGenerationError
+from farna.db.crud.schema import SchemaDeletionProtectedError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -46,7 +46,7 @@ _SQL = SQLAlchemyError("boom")
 _INTEGRITY = IntegrityError("s", {}, Exception())
 _RUNTIME = RuntimeError("kaboom")
 
-_PREFIX = "modulo.api.routes.schemas."
+_PREFIX = "farna.api.routes.schemas."
 
 
 def _make_settings() -> Settings:
@@ -474,7 +474,7 @@ def _mbs_ok() -> MagicMock:
 
 def test_sample_connector_records_init_failure_returns_502() -> None:
 
-    from modulo.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
+    from farna.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
 
     hub = MagicMock()
     hub.__aenter__ = AsyncMock(return_value=hub)
@@ -503,7 +503,7 @@ def test_sample_connector_records_init_failure_returns_502() -> None:
 
 def test_sample_connector_records_timeout_returns_504() -> None:
 
-    from modulo.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
+    from farna.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
 
     hub = MagicMock()
     hub.__aenter__ = AsyncMock(return_value=hub)
@@ -532,7 +532,7 @@ def test_sample_connector_records_timeout_returns_504() -> None:
 
 def test_sample_connector_records_sampling_failure_returns_502() -> None:
 
-    from modulo.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
+    from farna.api.routes.schemas import SchemaInferRequest, SchemaSampleQuery, _sample_connector_records
 
     hub = MagicMock()
     hub.__aenter__ = AsyncMock(return_value=hub)
@@ -562,7 +562,7 @@ def test_sample_connector_records_sampling_failure_returns_502() -> None:
 
 def test_resolve_model_backend_failure_branches() -> None:
 
-    from modulo.api.routes.schemas import _resolve_model_backend
+    from farna.api.routes.schemas import _resolve_model_backend
 
     async def _run(hub: MagicMock) -> None:
         session = _make_session()
@@ -615,7 +615,7 @@ def test_resolve_model_backend_failure_branches() -> None:
 
 def test_resolve_model_backend_happy_path_returns_backend() -> None:
 
-    from modulo.api.routes.schemas import _resolve_model_backend
+    from farna.api.routes.schemas import _resolve_model_backend
 
     backend = MagicMock()
     hub = MagicMock()
@@ -920,7 +920,7 @@ def test_validate_schema_valid_and_invalid(client: tuple[TestClient, AsyncMock])
 
 
 def test_step_json_path_and_location_helpers() -> None:
-    from modulo.api.routes.schemas import _find_json_location, _json_path_exists, _step_json_path
+    from farna.api.routes.schemas import _find_json_location, _json_path_exists, _step_json_path
 
     assert _step_json_path({"a": {"b": 1}}, "a") == {"b": 1}
     assert _step_json_path(["x"], "0") == "x"

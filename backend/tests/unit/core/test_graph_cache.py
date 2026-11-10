@@ -14,7 +14,7 @@ reject target.
 
 import pytest
 
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine.graph_cache import (
     _make_gate_kickback_router,
     _reject_unknown_graph_fields,
     build_graph_from_json,

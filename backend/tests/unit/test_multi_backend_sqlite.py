@@ -16,11 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
 
-import modulo.db.models  # noqa: F401
-from modulo.db.models import Account
-from modulo.db.models.base import Base
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
+import farna.db.models  # noqa: F401
+from farna.db.models import Account
+from farna.db.models.base import Base
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
 
 
 @pytest.fixture(scope="module")
@@ -136,8 +136,8 @@ class TestSqliteMultiBackend:
         SQLite has no ``DISTINCT ON`` — asserting newest-per-key wins."""
         from sqlalchemy import text
 
-        from modulo.core.eval_engine.evidence_layer import fetch
-        from modulo.db.models.evidence import Evidence
+        from farna.core.eval_engine.evidence_layer import fetch
+        from farna.db.models.evidence import Evidence
 
         org_id = uuid.uuid4()
         subject_id = "node_execution:run-1:node-1"

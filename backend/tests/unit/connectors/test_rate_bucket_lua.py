@@ -16,7 +16,7 @@ import importlib.util
 
 import pytest
 
-from modulo.connectors._rate_bucket import _CONSUME_LUA
+from farna.connectors._rate_bucket import _CONSUME_LUA
 
 
 def _lua51_available() -> bool:

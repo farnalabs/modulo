@@ -22,15 +22,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.auth.api_key import (
+from farna.auth.api_key import (
     KEY_SCOPES,
     ApiKeyScopeError,
     create_api_key,
     mint_run_api_key,
     validate_api_key,
 )
-from modulo.auth.permissions import _clamp_role
-from modulo.db.models.api_key import OrgApiKey
+from farna.auth.permissions import _clamp_role
+from farna.db.models.api_key import OrgApiKey
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -120,13 +120,13 @@ class TestMintRunApiKeyPinnedOrg:
         through the pure resolver — the pinned FAR-620 matrix cell."""
         import types
 
-        import modulo.core.mcp.scope_validator as sv
+        import farna.core.mcp.scope_validator as sv
 
         patched = {**sv._TOOL_SCOPE_REQUIREMENTS, "notification_self": "notification.self"}
         monkeypatch.setattr(sv, "_TOOL_SCOPE_REQUIREMENTS", patched)
         monkeypatch.setattr(sv, "TOOL_SCOPE_REQUIREMENTS", types.MappingProxyType(patched))
 
-        from modulo.core.mcp.scope_validator import resolve_tool_access
+        from farna.core.mcp.scope_validator import resolve_tool_access
 
         allowed, _ = resolve_tool_access(
             tool="notification_self",
@@ -142,7 +142,7 @@ class TestMintRunApiKeyPinnedOrg:
 
 class TestSerializeKeyScope:
     def test_serialize_key_round_trips_scope(self) -> None:
-        from modulo.auth.api_key import _serialize_key
+        from farna.auth.api_key import _serialize_key
 
         now = datetime.now(UTC)
         key = MagicMock()
@@ -161,7 +161,7 @@ class TestSerializeKeyScope:
         assert serialized["role"] == "operator"
 
     def test_serialize_key_defaults_org_for_test_doubles(self) -> None:
-        from modulo.auth.api_key import _serialize_key
+        from farna.auth.api_key import _serialize_key
 
         now = datetime.now(UTC)
         key = MagicMock()
@@ -184,7 +184,7 @@ class TestScopeImmutability:
         """The shared update helper takes no scope argument — the scope is
         stamped at mint and never changed (the REST surface rejects a scope
         payload with 422 before reaching here)."""
-        from modulo.auth.api_key import update_api_key
+        from farna.auth.api_key import update_api_key
 
         params = inspect.signature(update_api_key).parameters
         assert "scope" not in params, (
@@ -240,7 +240,7 @@ class TestScopeColumnModel:
     async def test_validate_api_key_does_not_filter_by_scope(self) -> None:
         """The lookup path is scope-agnostic — the flag gate (not the lookup)
         denies user keys, so stored rows stay enumerable for revocation."""
-        from modulo.auth.api_key import _hash_key
+        from farna.auth.api_key import _hash_key
 
         token = "mk_abcdefgh_secret"
         key = MagicMock()
@@ -290,7 +290,7 @@ class TestScopeAwareRoleCeiling:
     """
 
     def test_shared_predicate_allows_admin_only_for_user_scope(self) -> None:
-        from modulo.auth.api_key import api_key_role_violation
+        from farna.auth.api_key import api_key_role_violation
 
         assert api_key_role_violation("admin", "user") is None
         assert api_key_role_violation("operator", "user") is None
@@ -350,7 +350,7 @@ class TestScopeAwareRoleCeiling:
 
     @pytest.mark.asyncio
     async def test_update_org_key_to_admin_is_refused(self) -> None:
-        from modulo.auth.api_key import update_api_key
+        from farna.auth.api_key import update_api_key
 
         key = MagicMock()
         key.scope = "org"
@@ -369,7 +369,7 @@ class TestScopeAwareRoleCeiling:
 
     @pytest.mark.asyncio
     async def test_update_user_key_to_admin_is_allowed(self) -> None:
-        from modulo.auth.api_key import update_api_key
+        from farna.auth.api_key import update_api_key
 
         key = MagicMock()
         key.scope = "user"
@@ -389,7 +389,7 @@ class TestScopeAwareRoleCeiling:
     async def test_update_user_key_to_admin_with_team_is_refused(self) -> None:
         """Promoting a user key to admin while scoping it to a team is a 422-shaped
         refusal (``ApiKeyScopeError``), never an ``ApiKeyInvalidError`` 500."""
-        from modulo.auth.api_key import update_api_key
+        from farna.auth.api_key import update_api_key
 
         key = MagicMock()
         key.scope = "user"
@@ -411,7 +411,7 @@ class TestScopeAwareRoleCeiling:
     async def test_update_team_assignment_on_admin_user_key_is_refused(self) -> None:
         """Assigning a team to an existing admin-role user key is refused too —
         an unchanged role must not slip past the team rule."""
-        from modulo.auth.api_key import update_api_key
+        from farna.auth.api_key import update_api_key
 
         key = MagicMock()
         key.scope = "user"

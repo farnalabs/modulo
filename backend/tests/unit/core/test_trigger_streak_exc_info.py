@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import trigger_streak as ts
+from farna.core import trigger_streak as ts
 
 
 def _ch_mock(**raised: object) -> MagicMock:

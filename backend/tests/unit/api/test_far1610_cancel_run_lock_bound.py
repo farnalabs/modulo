@@ -17,7 +17,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 
-from modulo.api.routes.runs import _cancel_run, cancel_run
+from farna.api.routes.runs import _cancel_run, cancel_run
 
 
 def _lock_timeout_error(statement: str = "SELECT runs") -> OperationalError:
@@ -69,10 +69,10 @@ async def test_cancel_run_helper_bounds_before_request_cancellation() -> None:
         return run
 
     with (
-        patch("modulo.api.routes.runs.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.api.routes.runs.get_run", new=_get_run),
-        patch("modulo.api.routes.runs.request_cancellation", new=_request),
-        patch("modulo.core.cost_controller.finalize.finalize_cancelled_run", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.api.routes.runs.get_run", new=_get_run),
+        patch("farna.api.routes.runs.request_cancellation", new=_request),
+        patch("farna.core.cost_controller.finalize.finalize_cancelled_run", new=AsyncMock()),
     ):
         await _cancel_run(session, _principal(), uuid.uuid4())
 
@@ -86,9 +86,9 @@ async def test_cancel_run_route_maps_lock_timeout_to_409() -> None:
     principal = _principal()
 
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_rls_org", new=AsyncMock()),
         patch(
-            "modulo.api.routes.runs._cancel_run",
+            "farna.api.routes.runs._cancel_run",
             new=AsyncMock(side_effect=_lock_timeout_error()),
         ),
         pytest.raises(HTTPException) as excinfo,
@@ -105,9 +105,9 @@ async def test_cancel_run_route_non_lock_db_error_stays_503() -> None:
     principal = _principal()
 
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_rls_org", new=AsyncMock()),
         patch(
-            "modulo.api.routes.runs._cancel_run",
+            "farna.api.routes.runs._cancel_run",
             new=AsyncMock(side_effect=OperationalError("SELECT runs", {}, RuntimeError("db down"))),
         ),
         pytest.raises(HTTPException) as excinfo,

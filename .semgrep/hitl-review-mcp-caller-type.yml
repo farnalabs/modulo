@@ -19,4 +19,4 @@ rules:
     severity: ERROR
     paths:
       include:
-        - "**/backend/src/modulo/api/mcp_server.py"
+        - "**/backend/src/farna/api/mcp_server.py"

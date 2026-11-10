@@ -28,7 +28,7 @@ import pathlib
 
 import pytest
 
-from modulo.api.routes import admin, admin_run_retention, observability, product_analytics_identity
+from farna.api.routes import admin, admin_run_retention, observability, product_analytics_identity
 
 _VOCABULARY = frozenset(
     {

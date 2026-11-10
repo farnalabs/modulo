@@ -8,8 +8,8 @@ import uuid
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType, GuardrailMisroutedError
-from modulo.core.guardrails import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType, GuardrailMisroutedError
+from farna.core.guardrails import (
     REDACTION_MASK,
     FieldRedactionMode,
     FieldRedactionPolicy,
@@ -665,7 +665,7 @@ def test_evaluate_guardrails_policy_gate_skips_muted_and_records_active(monkeypa
         recorded.append(eval_def.name)
         violations.append((eval_def, result))
 
-    monkeypatch.setattr("modulo.core.guardrails._record_gated_violation", _fake_record)
+    monkeypatch.setattr("farna.core.guardrails._record_gated_violation", _fake_record)
 
     gate = SimpleNamespace(id=uuid.uuid4())
     active = _guardrail(name="gated-active")

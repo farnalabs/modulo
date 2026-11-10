@@ -23,14 +23,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.saq_worker as sw
-from modulo.core import license as license_mod
-from modulo.core.events import worker_subscription as ws
-from modulo.core.feature_flags import resolve_effective_license
-from modulo.core.license import using_builtin_dev_anchor
-from modulo.core.license_signing import encode_license_key
-from modulo.core.registry.crypto import generate_keypair
-from modulo.db import capacity as db_capacity
+import farna.core.saq_worker as sw
+from farna.core import license as license_mod
+from farna.core.events import worker_subscription as ws
+from farna.core.feature_flags import resolve_effective_license
+from farna.core.license import using_builtin_dev_anchor
+from farna.core.license_signing import encode_license_key
+from farna.core.registry.crypto import generate_keypair
+from farna.db import capacity as db_capacity
 
 
 def _settings(**overrides: object) -> MagicMock:
@@ -108,7 +108,7 @@ class TestSettingsWireStartupHook:
             patch.object(sw, "get_settings", return_value=_settings()),
             patch.object(sw, "_build_queue", return_value=MagicMock()),
             patch(
-                "modulo.core.events.redis_broker.RedisEventBroker",
+                "farna.core.events.redis_broker.RedisEventBroker",
                 side_effect=RuntimeError("redis unreachable"),
             ),
         ):
@@ -136,10 +136,10 @@ class TestStartupHookAppliesLicenseAnchor:
     @staticmethod
     async def _run_hook(settings: MagicMock) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock),
             patch.object(sw, "get_settings", return_value=settings),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription"),
         ):
             await sw._startup_event_bus_hook({})
 
@@ -203,10 +203,10 @@ class TestStartupHookAppliesLicenseAnchor:
 class TestStartupHook:
     async def test_invokes_register_configure_and_spawns_subscription(self) -> None:
         with (
-            patch("modulo.core.events.register_listeners") as reg,
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.register_listeners") as reg,
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
         ):
             await sw._startup_event_bus_hook({})
 
@@ -221,15 +221,15 @@ class TestStartupHook:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         with (
-            patch("modulo.core.events.register_listeners") as reg,
+            patch("farna.core.events.register_listeners") as reg,
             patch(
-                "modulo.core.events.configure_event_bus",
+                "farna.core.events.configure_event_bus",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("redis down"),
             ),
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
-            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
+            caplog.at_level("WARNING", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -242,14 +242,14 @@ class TestStartupHook:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
+            patch("farna.core.events.register_listeners"),
             patch(
-                "modulo.core.events.redis_broker.RedisEventBroker",
+                "farna.core.events.redis_broker.RedisEventBroker",
                 side_effect=RuntimeError("broker init boom"),
             ),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings()),
-            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+            caplog.at_level("WARNING", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -258,11 +258,11 @@ class TestStartupHook:
 
     async def test_register_listeners_failure_still_configures_bus(self) -> None:
         with (
-            patch("modulo.core.events.register_listeners", side_effect=RuntimeError("mapper boom")),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.register_listeners", side_effect=RuntimeError("mapper boom")),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
-            patch("modulo.core.saq_worker._log.exception"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
+            patch("farna.core.saq_worker._log.exception"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -274,10 +274,10 @@ class TestStartupHook:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings(redis_url="")),
-            caplog.at_level("INFO", logger="modulo.core.saq_worker"),
+            caplog.at_level("INFO", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})
 
@@ -289,14 +289,14 @@ class TestStartupHook:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock),
             patch.object(sw, "get_settings", return_value=_settings()),
             patch(
-                "modulo.core.events.worker_subscription.spawn_worker_event_subscription",
+                "farna.core.events.worker_subscription.spawn_worker_event_subscription",
                 side_effect=RuntimeError("cannot spawn"),
             ),
-            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+            caplog.at_level("WARNING", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -306,12 +306,12 @@ class TestStartupHook:
         """FAR-1771: the shared startup hook is the worker-side install
         point for stall attribution (both worker flavours flow through it)."""
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock),
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription"),
             patch(
-                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                "farna.core.health_alerts.install_event_loop_stall_attribution",
                 return_value=True,
             ) as install,
         ):
@@ -326,15 +326,15 @@ class TestStartupHook:
         """Attribution is observability, never a boot requirement: an
         install failure logs and the worker still wires its event pipeline."""
         with (
-            patch("modulo.core.events.register_listeners") as reg,
+            patch("farna.core.events.register_listeners") as reg,
             patch(
-                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                "farna.core.health_alerts.install_event_loop_stall_attribution",
                 side_effect=RuntimeError("sampler boom"),
             ),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
-            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription") as spawn,
+            caplog.at_level("WARNING", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -352,10 +352,10 @@ class TestStartupHook:
             # FAR-2093: the licence anchor is applied first and reads settings.
             patch.object(sw, "get_settings", return_value=_settings()),
             patch(
-                "modulo.core.health_alerts.install_event_loop_stall_attribution",
+                "farna.core.health_alerts.install_event_loop_stall_attribution",
                 side_effect=asyncio.CancelledError,
             ),
-            patch("modulo.core.events.register_listeners") as reg,
+            patch("farna.core.events.register_listeners") as reg,
             pytest.raises(asyncio.CancelledError),
         ):
             await sw._startup_event_bus_hook({})
@@ -376,14 +376,14 @@ class TestCapacityProbeInstall:
     async def test_startup_hook_installs_the_capacity_platform_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
         probe = object()
         factory = MagicMock(return_value=probe)
-        monkeypatch.setattr("modulo.core.capacity_providers.build_platform_capacity_probe", factory)
+        monkeypatch.setattr("farna.core.capacity_providers.build_platform_capacity_probe", factory)
         monkeypatch.setattr(db_capacity, "_platform_probe", None)
 
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock),
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription"),
         ):
             await sw._startup_event_bus_hook({})
 
@@ -396,14 +396,14 @@ class TestCapacityProbeInstall:
         # get the probe and its cron-created runs would silently skip the gate.
         probe = object()
         monkeypatch.setattr(
-            "modulo.core.capacity_providers.build_platform_capacity_probe",
+            "farna.core.capacity_providers.build_platform_capacity_probe",
             MagicMock(return_value=probe),
         )
         monkeypatch.setattr(db_capacity, "_platform_probe", None)
 
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings(redis_url="")),
         ):
             await sw._startup_event_bus_hook({})
@@ -415,17 +415,17 @@ class TestCapacityProbeInstall:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(
-            "modulo.core.capacity_providers.build_platform_capacity_probe",
+            "farna.core.capacity_providers.build_platform_capacity_probe",
             MagicMock(side_effect=RuntimeError("factory boom")),
         )
         monkeypatch.setattr(db_capacity, "_platform_probe", None)
 
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock) as cfg,
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
-            caplog.at_level("WARNING", logger="modulo.core.saq_worker"),
+            patch("farna.core.events.worker_subscription.spawn_worker_event_subscription"),
+            caplog.at_level("WARNING", logger="farna.core.saq_worker"),
         ):
             await sw._startup_event_bus_hook({})  # must not raise
 
@@ -466,7 +466,7 @@ class TestWorkerEventSubscription:
         broker.connect = AsyncMock()
         broker.subscribe_pattern = AsyncMock(side_effect=[RuntimeError("first attempt fails"), ok])
 
-        with caplog.at_level("INFO", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("INFO", logger="farna.core.events.worker_subscription"):
             task = asyncio.create_task(ws.run_worker_event_subscription(broker))
             try:
                 await asyncio.wait_for(ok.started.wait(), timeout=5)
@@ -565,7 +565,7 @@ class TestWorkerEventSubscriptionEdges:
         broker.connect = AsyncMock()
         broker.subscribe_pattern = AsyncMock(return_value=_ReturningPubSub())
 
-        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("WARNING", logger="farna.core.events.worker_subscription"):
             task = asyncio.create_task(ws.run_worker_event_subscription(broker))
             for _ in range(200):
                 if "worker_event_subscription.listen_ended" in caplog.text:
@@ -581,7 +581,7 @@ class TestWorkerEventSubscriptionEdges:
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        with caplog.at_level("DEBUG", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("DEBUG", logger="farna.core.events.worker_subscription"):
             await ws._close_pubsub(_UnsubRaisesPubSub(RuntimeError("boom")))
         assert "worker_event_subscription.unsubscribe_failed" in caplog.text
 
@@ -598,7 +598,7 @@ class TestWorkerEventSubscriptionEdges:
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        with caplog.at_level("DEBUG", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("DEBUG", logger="farna.core.events.worker_subscription"):
             await ws._close_pubsub(_NoAclosePubSub(RuntimeError("close boom")))
         assert "worker_event_subscription.close_failed" in caplog.text
 
@@ -612,7 +612,7 @@ class TestSpawnWorkerEventSubscription:
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("WARNING", logger="farna.core.events.worker_subscription"):
             assert ws.spawn_worker_event_subscription(MagicMock()) is None
         assert "worker_event_subscription.spawn_skipped_no_loop" in caplog.text
 
@@ -648,7 +648,7 @@ class TestSpawnWorkerEventSubscription:
             await task
         ws._held_tasks.add(task)
 
-        with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+        with caplog.at_level("WARNING", logger="farna.core.events.worker_subscription"):
             ws._on_task_done(task)
 
         assert task not in ws._held_tasks
@@ -660,16 +660,16 @@ class TestStartupHookCancellationPropagates:
         with (
             # FAR-2093: the licence anchor is applied first and reads settings.
             patch.object(sw, "get_settings", return_value=_settings()),
-            patch("modulo.core.events.register_listeners", side_effect=asyncio.CancelledError()),
+            patch("farna.core.events.register_listeners", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
             await sw._startup_event_bus_hook({})
 
     async def test_configure_event_bus_cancellation_propagates(self) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
+            patch("farna.core.events.register_listeners"),
             patch(
-                "modulo.core.events.configure_event_bus",
+                "farna.core.events.configure_event_bus",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),
@@ -680,11 +680,11 @@ class TestStartupHookCancellationPropagates:
 
     async def test_spawn_cancellation_propagates(self) -> None:
         with (
-            patch("modulo.core.events.register_listeners"),
-            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch("farna.core.events.register_listeners"),
+            patch("farna.core.events.configure_event_bus", new_callable=AsyncMock),
             patch.object(sw, "get_settings", return_value=_settings()),
             patch(
-                "modulo.core.events.worker_subscription.spawn_worker_event_subscription",
+                "farna.core.events.worker_subscription.spawn_worker_event_subscription",
                 side_effect=asyncio.CancelledError(),
             ),
             pytest.raises(asyncio.CancelledError),
@@ -700,7 +700,7 @@ async def test_on_task_done_successful_task_is_silent(caplog: pytest.LogCaptureF
     await task
     ws._held_tasks.add(task)
 
-    with caplog.at_level("WARNING", logger="modulo.core.events.worker_subscription"):
+    with caplog.at_level("WARNING", logger="farna.core.events.worker_subscription"):
         ws._on_task_done(task)
 
     assert task not in ws._held_tasks
@@ -781,7 +781,7 @@ class TestRunSystemWebStartupFailure:
         monkeypatch.setattr(sw, "reconcile_cron_registrations", AsyncMock())
         monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
         monkeypatch.setattr(
-            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            "farna.core.cost_controller.probe.set_duplicate_terminal_cooldown",
             AsyncMock(),
         )
         monkeypatch.setattr("aiohttp.web.run_app", cls._fake_run_app)
@@ -816,7 +816,7 @@ class TestRunSystemWebStartupFailure:
         )
 
         with (
-            caplog.at_level("ERROR", logger="modulo.core.saq_worker"),
+            caplog.at_level("ERROR", logger="farna.core.saq_worker"),
             pytest.raises(SystemExit) as excinfo,
         ):
             sw.run_system_web()
@@ -857,7 +857,7 @@ class TestRunSystemWebStartupFailure:
         """A cancellation while setting the cooldown propagates untouched."""
         monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
         monkeypatch.setattr(
-            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            "farna.core.cost_controller.probe.set_duplicate_terminal_cooldown",
             AsyncMock(side_effect=asyncio.CancelledError()),
         )
 
@@ -870,11 +870,11 @@ class TestRunSystemWebStartupFailure:
         """A Redis blip setting the cooldown must not crash the worker at boot."""
         monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
         monkeypatch.setattr(
-            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            "farna.core.cost_controller.probe.set_duplicate_terminal_cooldown",
             AsyncMock(side_effect=ConnectionError("redis gone")),
         )
 
-        with caplog.at_level("ERROR", logger="modulo.core.saq_worker"):
+        with caplog.at_level("ERROR", logger="farna.core.saq_worker"):
             await sw._set_duplicate_terminal_cooldown()
 
         assert "saq_worker.cooldown_set_failed" in caplog.text

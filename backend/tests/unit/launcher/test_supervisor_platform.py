@@ -34,8 +34,8 @@ from typing import Any
 
 import pytest
 
-import modulo.launcher.supervisor as supervisor_module
-from modulo.launcher.supervisor import (
+import farna.launcher.supervisor as supervisor_module
+from farna.launcher.supervisor import (
     SHIM_POLL_SECONDS,
     ChildSpec,
     Supervisor,
@@ -418,7 +418,7 @@ def test_linux_child_shim_argv_is_byte_identical_to_the_historical_shape() -> No
     assert argv == [
         sys.executable,
         "-m",
-        "modulo.launcher.supervisor",
+        "farna.launcher.supervisor",
         "child-shim",
         "--parent-pid",
         str(parent),
@@ -444,7 +444,7 @@ def test_child_shim_argv_wraps_when_darwin_identity_is_readable(monkeypatch: pyt
     assert argv == [
         sys.executable,
         "-m",
-        "modulo.launcher.supervisor",
+        "farna.launcher.supervisor",
         "child-shim",
         "--parent-pid",
         "4242",
@@ -465,7 +465,7 @@ def test_child_shim_argv_passes_through_when_darwin_identity_is_unreadable(
     stub = StubBackend(shim_starttime=None)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setitem(supervisor_module._PROCESS_BACKENDS, "darwin", stub)
-    with caplog.at_level(logging.WARNING, logger="modulo.launcher.supervisor"):
+    with caplog.at_level(logging.WARNING, logger="farna.launcher.supervisor"):
         argv = child_shim_argv(["redis-server"], parent_pid=4242)
     assert argv == ["redis-server"]
     assert "supervisor.shim_identity_unreadable" in caplog.text

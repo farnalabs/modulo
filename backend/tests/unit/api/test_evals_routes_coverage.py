@@ -21,14 +21,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.evals import MutePolicyConfigRequest, update_mute_policy
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.eval.finding_resolver import FindingResolutionError
-from modulo.db.models.trigger_event_finding import TriggerEventFinding
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.evals import MutePolicyConfigRequest, update_mute_policy
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.eval.finding_resolver import FindingResolutionError
+from farna.db.models.trigger_event_finding import TriggerEventFinding
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -214,8 +214,8 @@ def _patch_route_rls():
     side_effect result queues; unit tier stubs them at the route boundary.
     """
     with (
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
     ):
         yield
 
@@ -735,10 +735,10 @@ async def test_update_mute_policy_preserves_omitted_field() -> None:
     )
 
     with (
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
     ):
         response = await update_mute_policy(
             _EVAL_ID,
@@ -772,10 +772,10 @@ async def test_update_mute_policy_explicit_null_clears_field() -> None:
     )
 
     with (
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
     ):
         response = await update_mute_policy(
             _EVAL_ID,
@@ -818,12 +818,12 @@ def test_resolve_finding_endpoint_uses_wire_contract_and_mute_wiring(client: tup
     session.begin = MagicMock(return_value=_make_session().begin.return_value)
     with (
         patch(
-            "modulo.api.routes.evals.resolve_finding_core",
+            "farna.api.routes.evals.resolve_finding_core",
             new_callable=AsyncMock,
             return_value=finding,
         ) as resolve,
-        patch("modulo.api.routes.evals.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
+        patch("farna.api.routes.evals.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
     ):
         response = http.post(
             f"/api/v1/evals/findings/{finding.id}/resolve",
@@ -889,7 +889,7 @@ def test_get_trigger_event_finding_returns_wire_contract(client: tuple[TestClien
     finding = _trigger_event_finding_row()
     _queue_execute(session, [_result(scalar_one_or_none=None)])
     with patch(
-        "modulo.api.routes.evals.load_trigger_event_finding",
+        "farna.api.routes.evals.load_trigger_event_finding",
         new_callable=AsyncMock,
         return_value=finding,
     ):
@@ -905,7 +905,7 @@ def test_get_finding_missing_returns_404(client: tuple[TestClient, AsyncMock]) -
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=None)])
     with patch(
-        "modulo.api.routes.evals.load_trigger_event_finding",
+        "farna.api.routes.evals.load_trigger_event_finding",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -926,17 +926,17 @@ def test_resolve_trigger_event_finding_pending_clears_resolution_metadata(
     finding.resolved_by = _USER_ID
     with (
         patch(
-            "modulo.api.routes.evals.resolve_finding_core",
+            "farna.api.routes.evals.resolve_finding_core",
             new_callable=AsyncMock,
             side_effect=FindingResolutionError("Finding not found"),
         ),
         patch(
-            "modulo.api.routes.evals.load_trigger_event_finding",
+            "farna.api.routes.evals.load_trigger_event_finding",
             new_callable=AsyncMock,
             return_value=finding,
         ),
-        patch("modulo.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock),
     ):
         response = http.post(
             f"/api/v1/evals/findings/{finding.id}/resolve",
@@ -954,12 +954,12 @@ def test_resolve_missing_trigger_event_finding_returns_404(client: tuple[TestCli
     http, _session = client
     with (
         patch(
-            "modulo.api.routes.evals.resolve_finding_core",
+            "farna.api.routes.evals.resolve_finding_core",
             new_callable=AsyncMock,
             side_effect=FindingResolutionError("Finding not found"),
         ),
         patch(
-            "modulo.api.routes.evals.load_trigger_event_finding",
+            "farna.api.routes.evals.load_trigger_event_finding",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -1001,8 +1001,8 @@ def test_resolve_override_without_reason_returns_400_before_any_lookup(
     _queue_execute(session, queued)
 
     with (
-        patch("modulo.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock),
     ):
         response = http.post(
             f"/api/v1/evals/findings/{finding.id}/resolve",
@@ -1017,7 +1017,7 @@ def test_resolve_override_without_reason_returns_400_before_any_lookup(
 def test_resolve_finding_invalid_core_error_returns_400(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with patch(
-        "modulo.api.routes.evals.resolve_finding_core",
+        "farna.api.routes.evals.resolve_finding_core",
         new_callable=AsyncMock,
         side_effect=FindingResolutionError("invalid finding state"),
     ):
@@ -1035,17 +1035,17 @@ def test_resolve_trigger_event_finding_records_audit_fields(client: tuple[TestCl
     finding = _trigger_event_finding_row()
     with (
         patch(
-            "modulo.api.routes.evals.resolve_finding_core",
+            "farna.api.routes.evals.resolve_finding_core",
             new_callable=AsyncMock,
             side_effect=FindingResolutionError("Finding not found"),
         ),
         patch(
-            "modulo.api.routes.evals.load_trigger_event_finding",
+            "farna.api.routes.evals.load_trigger_event_finding",
             new_callable=AsyncMock,
             return_value=finding,
         ),
-        patch("modulo.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
+        patch("farna.api.routes.evals.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
     ):
         response = http.post(
             f"/api/v1/evals/findings/{finding.id}/resolve",
@@ -1108,7 +1108,7 @@ def test_get_mute_policy_endpoint_returns_evaluation_contract(client: tuple[Test
     eval_def = _configured_eval_row()
     session.get = AsyncMock(return_value=eval_def)
     with patch(
-        "modulo.core.eval.finding_resolver.evaluate_mute_policy",
+        "farna.core.eval.finding_resolver.evaluate_mute_policy",
         new_callable=AsyncMock,
         return_value={
             "should_mute": True,
@@ -1147,8 +1147,8 @@ def test_update_mute_policy_endpoint_round_trips_patch_and_audit_wiring(
     eval_def = _configured_eval_row(muted=True)
     session.get = AsyncMock(return_value=eval_def)
     with (
-        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
-        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
+        patch("farna.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
+        patch("farna.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
     ):
         response = http.patch(
             f"/api/v1/evals/{_EVAL_ID}/mute-policy",
@@ -1209,8 +1209,8 @@ def test_unmute_endpoint_returns_updated_state_and_audits(client: tuple[TestClie
     eval_def = _configured_eval_row(muted=True)
     session.get = AsyncMock(return_value=eval_def)
     with (
-        patch("modulo.core.eval.finding_resolver.unmute_definition", new_callable=AsyncMock) as unmute,
-        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
+        patch("farna.core.eval.finding_resolver.unmute_definition", new_callable=AsyncMock) as unmute,
+        patch("farna.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
     ):
         response = http.post(f"/api/v1/evals/{_EVAL_ID}/mute-policy/unmute")
 
@@ -1304,7 +1304,7 @@ def test_acceptance_rate_endpoint_returns_window_and_totals(client: tuple[TestCl
     session.get = AsyncMock(return_value=_configured_eval_row())
 
     with patch(
-        "modulo.core.eval.finding_resolver.compute_acceptance_rate",
+        "farna.core.eval.finding_resolver.compute_acceptance_rate",
         new_callable=AsyncMock,
         return_value=(0.75, 8),
     ) as compute:
@@ -1337,8 +1337,8 @@ def test_update_mute_policy_endpoint_updates_min_outcomes_only(client: tuple[Tes
     session.get = AsyncMock(return_value=eval_def)
 
     with (
-        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
-        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+        patch("farna.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("farna.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
     ):
         response = http.patch(f"/api/v1/evals/{_EVAL_ID}/mute-policy", json={"mute_min_outcomes": 25})
 
@@ -1364,7 +1364,7 @@ def test_resolve_finding_reraises_http_exception(client: tuple[TestClient, Async
 
     http, _session = client
     with patch(
-        "modulo.api.routes.evals._resolve_finding_record",
+        "farna.api.routes.evals._resolve_finding_record",
         new_callable=AsyncMock,
         side_effect=HTTPException(status_code=409, detail="finding state conflict"),
     ):
@@ -1381,7 +1381,7 @@ def test_resolve_finding_unexpected_error_returns_500(client: tuple[TestClient, 
     """An unexpected error maps to the route's generic 500, not a leaked detail."""
     http, _session = client
     with patch(
-        "modulo.api.routes.evals._resolve_finding_record",
+        "farna.api.routes.evals._resolve_finding_record",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):

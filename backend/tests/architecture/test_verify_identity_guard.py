@@ -43,7 +43,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import modulo.auth.dependencies as _auth_dependencies
+import farna.auth.dependencies as _auth_dependencies
 import tests.conftest as _root_conftest
 from tests.conftest import (
     _AUTH_DEPS_MODULE,
@@ -149,8 +149,8 @@ def test_snapshot_finder_ignores_unrelated_imports() -> None:
     """The meta-path finder must not claim (or wrap) any other module."""
     finder = _AuthDepsSnapshotFinder()
     assert finder.find_spec("os") is None
-    assert finder.find_spec("modulo") is None
-    assert finder.find_spec("modulo.auth") is None
+    assert finder.find_spec("farna") is None
+    assert finder.find_spec("farna.auth") is None
 
 
 def test_snapshot_finder_wraps_only_the_auth_module_loader() -> None:
@@ -161,7 +161,7 @@ def test_snapshot_finder_wraps_only_the_auth_module_loader() -> None:
     import system passes for a dotted name (a bare ``find_spec(name)`` only
     resolves top-level modules).
     """
-    import modulo.auth as _auth_pkg
+    import farna.auth as _auth_pkg
 
     finder = _AuthDepsSnapshotFinder()
     spec = finder.find_spec(_AUTH_DEPS_MODULE, _auth_pkg.__path__)

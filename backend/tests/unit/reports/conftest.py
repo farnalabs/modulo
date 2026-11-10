@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.reports import scheduler as sched_mod
+from farna.core.reports import scheduler as sched_mod
 
 
 @pytest.fixture(autouse=True)

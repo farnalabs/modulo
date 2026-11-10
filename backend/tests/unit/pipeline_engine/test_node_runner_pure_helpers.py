@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.pipelines import PipelineGraphNode
-from modulo.cli.apply.models import ApplyGraphNode
-from modulo.core.artifacts.store import LocalArtifactStore
-from modulo.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine.node_runner import (
+from farna.api.routes.pipelines import PipelineGraphNode
+from farna.cli.apply.models import ApplyGraphNode
+from farna.core.artifacts.store import LocalArtifactStore
+from farna.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine.node_runner import (
     _FULL_MODE_DEFAULT_MAX_BYTES,
     _MAX_ARTIFACT_LOG,
     _build_model_cost_fields,
@@ -42,10 +42,10 @@ from modulo.core.pipeline_engine.node_runner import (
     _run_identity_strs,
     _source_contains_delivery_sentinel,
 )
-from modulo.core.runtime_provider.log_tail import (
+from farna.core.runtime_provider.log_tail import (
     combine_log_entries as _combine_log_entries,
 )
-from modulo.core.runtime_provider.log_tail import (
+from farna.core.runtime_provider.log_tail import (
     log_entry_text as _log_entry_text,
 )
 
@@ -97,7 +97,7 @@ class TestClaimTokenAttemptSuffix:
     def test_dispatch_marker_json_embeds_attempt_key(self) -> None:
         # D8 (FAR-594): the marker vocabulary moved to
         # runner_capacity.build_dispatch_marker — provider is REQUIRED (FAR-995).
-        from modulo.core.runner_capacity import build_dispatch_marker
+        from farna.core.runner_capacity import build_dispatch_marker
 
         marker = build_dispatch_marker("run:1:node:a:2", "runner_docker")
         parsed = json.loads(marker)
@@ -116,15 +116,15 @@ class TestSelfReportedCost:
         class _Settings:
             effective_max_self_reported_usd = 123.5
 
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: _Settings())
         assert _effective_self_reported_cap() == 123.5
 
     def test_effective_cap_falls_back_to_constant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom() -> None:
             raise ImportError("no settings")
 
-        monkeypatch.setattr("modulo.settings.get_settings", _boom)
-        from modulo.core.cost_controller.breakdown.constants import MAX_SELF_REPORTED_USD
+        monkeypatch.setattr("farna.settings.get_settings", _boom)
+        from farna.core.cost_controller.breakdown.constants import MAX_SELF_REPORTED_USD
 
         assert _effective_self_reported_cap() == float(MAX_SELF_REPORTED_USD)
 
@@ -391,16 +391,16 @@ class TestAgentReportedTokenUsage:
 
 class TestComputeSandboxCost:
     def test_zero_cost_with_no_reports(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.13})())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.13})())
         assert _compute_sandbox_cost(0.0, {}) == 0.0
 
     def test_non_finite_total_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.13})())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.13})())
         assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": float("nan")}) == 0.0
         assert _compute_sandbox_cost(0.0, {"cost_estimate_usd": "not-a-number"}) == 0.0
 
     def test_combines_sandbox_and_agent_costs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.12})())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: type("S", (), {"e2b_sandbox_usd_per_hour": 0.12})())
         total = _compute_sandbox_cost(3600.0, {"cost_estimate_usd": 1.5})
         assert total == pytest.approx(0.12 + 1.5, abs=1e-6)
 
@@ -408,7 +408,7 @@ class TestComputeSandboxCost:
         def _boom() -> None:
             raise ImportError("no settings")
 
-        monkeypatch.setattr("modulo.settings.get_settings", _boom)
+        monkeypatch.setattr("farna.settings.get_settings", _boom)
         total = _compute_sandbox_cost(3600.0, {})
         assert total == pytest.approx(nr._E2B_SANDBOX_USD_PER_HOUR, abs=1e-6)
 
@@ -654,7 +654,7 @@ class TestReadOrgStdoutRetentionCeiling:
 
     async def test_reads_ceiling_from_system_config(self) -> None:
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value=5_000_000),
         ) as read:
             ceiling = await _read_org_stdout_retention_ceiling(_fake_session_factory)
@@ -666,7 +666,7 @@ class TestReadOrgStdoutRetentionCeiling:
 
     async def test_unset_key_returns_none(self) -> None:
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value=None),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
@@ -676,14 +676,14 @@ class TestReadOrgStdoutRetentionCeiling:
 
     async def test_malformed_value_coerces_to_none(self) -> None:
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value="lots"),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
 
     async def test_read_failure_is_fail_open(self) -> None:
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
@@ -693,19 +693,19 @@ class TestReadOrgStdoutRetentionCeiling:
         ``system_config`` reads; `float(MagicMock()) == 1.0`, so a non-scalar
         read MUST reject to None or it would clamp real nodes to 1 byte."""
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value=MagicMock()),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
 
     async def test_bool_and_float_values_reject(self) -> None:
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value=True),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
         with patch(
-            "modulo.core.cost_controller.system_config.read_system_config",
+            "farna.core.cost_controller.system_config.read_system_config",
             new=AsyncMock(return_value=5_500_000.5),
         ):
             assert await _read_org_stdout_retention_ceiling(_fake_session_factory) is None
@@ -973,7 +973,7 @@ class TestPersistFullStdoutArtifact:
         import hashlib
 
         store = LocalArtifactStore(tmp_path)
-        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        with patch("farna.core.artifacts.store.get_store", return_value=store):
             pointer = _persist_full_stdout_artifact(**self._kwargs())
         assert pointer is not None
         assert pointer["truncated"] is False
@@ -989,7 +989,7 @@ class TestPersistFullStdoutArtifact:
         """No attempt key means nothing to key the overflow artifact on — the
         function bails before touching the store (backwards-compatible no-op)."""
         store = MagicMock()
-        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        with patch("farna.core.artifacts.store.get_store", return_value=store):
             assert _persist_full_stdout_artifact(**self._kwargs(attempt_key=None)) is None
         store.append.assert_not_called()
 
@@ -998,7 +998,7 @@ class TestPersistFullStdoutArtifact:
         store round-trip (the store's append is itself a no-op on empty input,
         but the guard keeps the contract explicit and cheap)."""
         store = MagicMock()
-        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        with patch("farna.core.artifacts.store.get_store", return_value=store):
             assert _persist_full_stdout_artifact(**self._kwargs(redacted_stdout="")) is None
         store.append.assert_not_called()
 
@@ -1009,7 +1009,7 @@ class TestPersistFullStdoutArtifact:
         store = MagicMock()
         store.append.side_effect = boom
         with (
-            patch("modulo.core.artifacts.store.get_store", return_value=store),
+            patch("farna.core.artifacts.store.get_store", return_value=store),
             caplog.at_level("WARNING"),
         ):
             assert _persist_full_stdout_artifact(**self._kwargs()) is None
@@ -1022,7 +1022,7 @@ class TestPersistFullStdoutArtifact:
         store = MagicMock()
         store.append.return_value = None
         store.finalize.return_value = None
-        with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        with patch("farna.core.artifacts.store.get_store", return_value=store):
             assert _persist_full_stdout_artifact(**self._kwargs()) is None
 
     def test_cancelled_error_propagates(self) -> None:
@@ -1030,7 +1030,7 @@ class TestPersistFullStdoutArtifact:
         re-raise so the runtime can honour cancellation instead of swallowing it."""
         with (
             patch(
-                "modulo.core.artifacts.store.get_store",
+                "farna.core.artifacts.store.get_store",
                 side_effect=asyncio.CancelledError(),
             ),
             pytest.raises(asyncio.CancelledError),
@@ -1111,7 +1111,7 @@ def test_new_format_return_carries_artifacts_accumulator() -> None:
 def test_state_reducer_accumulates_new_format_artifacts() -> None:
     """A new-format return concatenated by the real reducer lands in
     ``state["artifacts"]`` (the channel every state reader resolves from)."""
-    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+    from farna.core.pipeline_engine.graph_cache import _pipeline_state_reducer
 
     returned = _new_format_sandbox_return(node_id="sandbox-1")
     state = _pipeline_state_reducer({"artifacts": []}, returned)
@@ -1123,7 +1123,7 @@ def test_state_reducer_accumulates_new_format_artifacts() -> None:
 def test_fold_ancestor_emission_refs_reads_new_format_sandbox_artifact() -> None:
     """REGRESSION (FAR-130): an ancestor sandbox node's emitted refs are folded
     from ``state["artifacts"]`` accumulated from the new-format return."""
-    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+    from farna.core.pipeline_engine.graph_cache import _pipeline_state_reducer
 
     returned = _new_format_sandbox_return(node_id="sandbox-1")
     # The emitting agent's self-reported refs live on the artifact's full inner
@@ -1140,7 +1140,7 @@ def test_resolve_gate_eval_target_resolves_new_format_sandbox_artifact() -> None
     """REGRESSION (FAR-130): a HITL gate after a sandbox node resolves the
     sandbox agent's CONTRACT output (``output.output_json``) from the
     new-format artifact instead of falling back to the whole state."""
-    from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer
+    from farna.core.pipeline_engine.graph_cache import _pipeline_state_reducer
 
     contract_output = {"pr_url": "https://github.com/farnalabs/modulo/pull/9", "summary": "done"}
     returned = _new_format_sandbox_return(node_id="sandbox-1", output_json=contract_output)

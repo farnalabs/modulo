@@ -6,7 +6,7 @@ opcode kind. They double as the regression guard for multi-line unchanged hunks,
 which previously repeated the first hunk line across the whole run.
 """
 
-from modulo.core.line_diff import iter_line_diffs
+from farna.core.line_diff import iter_line_diffs
 
 
 def materialize(a: str, b: str) -> list[tuple[str, str, int | None, int | None]]:

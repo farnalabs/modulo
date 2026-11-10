@@ -18,8 +18,8 @@ import redis.asyncio as aioredis
 from saq import CronJob
 from saq.queue.redis import RedisQueue
 
-import modulo.core.saq_worker as sw
-from modulo.core.saq_worker import reconcile_cron_registrations
+import farna.core.saq_worker as sw
+from farna.core.saq_worker import reconcile_cron_registrations
 
 pytestmark = pytest.mark.integration
 

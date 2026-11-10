@@ -352,7 +352,7 @@ class TestC15aPreVersionRawIntegration:
 class TestC16EvalSchemaContract:
     @pytest.mark.asyncio
     async def test_evals_columns_match_orm(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.models.eval import Eval
+        from farna.db.models.eval import Eval
 
         async with db_engine.connect() as connection:
             db_columns = await connection.run_sync(

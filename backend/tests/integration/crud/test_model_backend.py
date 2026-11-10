@@ -16,15 +16,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.auth.jwt import create_access_token
-from modulo.db.crud.model_backend import (
+from farna.auth.jwt import create_access_token
+from farna.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
     get_model_backend,
     list_model_backends,
     update_model_backend,
 )
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models.model_backend import ModelBackend
 
 pytestmark = pytest.mark.integration
 
@@ -169,7 +169,7 @@ async def tier_scoped_session(
         async with factory() as session:
             # Begin a transaction before set_rls_org (it guards on an active tx).
             await session.execute(text("SELECT 1"))
-            from modulo.db.rls import set_rls_org
+            from farna.db.rls import set_rls_org
 
             await set_rls_org(session, org_id)
             yield session, org_id
@@ -333,9 +333,9 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
 @pytest_asyncio.fixture
 async def model_backend_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     """HTTP client wired to the real (testcontainer) database via the app_engine role."""
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -542,7 +542,7 @@ async def test_delete_model_backend_fails_closed_when_audit_append_fails(
     headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
     with (
         patch(
-            "modulo.core.audit_coverage.append_audit_event",
+            "farna.core.audit_coverage.append_audit_event",
             new=AsyncMock(side_effect=SQLAlchemyError("audit store unavailable")),
         ),
         pytest.raises(SQLAlchemyError, match="audit store unavailable"),

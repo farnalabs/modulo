@@ -9,7 +9,7 @@ format.
 
 import uuid
 
-from modulo.core.audit_logger.labels import (
+from farna.core.audit_logger.labels import (
     SYSTEM_ACTOR,
     compose_run_started_summary,
     compose_trigger_actor,

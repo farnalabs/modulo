@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.monday import MondayConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.monday import MondayConnector
 
 API_KEY = "monday_api_key"
 _MONDAY_API = "https://api.monday.com/v2/"

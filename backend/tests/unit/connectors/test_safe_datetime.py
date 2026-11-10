@@ -13,7 +13,7 @@ consistent across every consumer (mirrors ``test_safe_cursor`` /
 
 import pytest
 
-from modulo.connectors._safe_datetime import safe_datetime
+from farna.connectors._safe_datetime import safe_datetime
 
 
 @pytest.mark.parametrize(

@@ -44,7 +44,7 @@ def _session_returning(rows: list[Any]) -> AsyncMock:
 
 
 def _validate(graph: dict[str, Any], session: AsyncMock) -> Any:
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     return asyncio.run(GraphValidator().validate_definition(graph, session))
 

@@ -1,0 +1,146 @@
+import uuid
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from farna.db.models.base import JSONB_COL, OrgScoped
+
+if TYPE_CHECKING:
+    from farna.db.models.environment_profile import EnvironmentProfile
+    from farna.db.models.organisation import Organisation
+    from farna.db.models.pipeline import Pipeline
+    from farna.db.models.snapshot_schema_pin import SnapshotSchemaPin
+
+
+class PipelineSnapshot(OrgScoped):
+    __tablename__ = "pipeline_snapshots"
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", "snapshot_version", name="uq_pipeline_snapshot_version"),
+        CheckConstraint("version_kind IN ('edit','run','draft')", name="ck_pipeline_snapshots_version_kind"),
+        CheckConstraint(
+            "created_kind IN ('initial','edit','rollback','run')",
+            name="ck_pipeline_snapshots_created_kind",
+        ),
+        CheckConstraint("channel IN ('none','stable','canary')", name="ck_pipeline_snapshots_channel"),
+        # FAR-1223: the autonomy ceiling frozen into the snapshot carries the
+        # SAME vocabulary the live column is guarded by (0256 added the column
+        # to both tables but only checked `pipelines`; 0259 closes the gap).
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_max_autonomy_level",
+        ),
+        # FAR-1223: the frozen default gets the SAME vocabulary the live
+        # `pipelines.default_autonomy_level` column is guarded by
+        # (ck_pipelines_autonomy_level, since 0003/0110). NULL passes BOTH
+        # forms: under Postgres three-valued logic a NULL operand makes the
+        # CHECK predicate NULL, which satisfies the constraint, so the live
+        # form's missing NULL arm changes nothing - the live column is
+        # nullable too (0110 DROP NOT NULLs it and PATCH
+        # {"default_autonomy_level": null} stores NULL despite its server
+        # default of manual_approval). This snapshot column is nullable by
+        # design (0110 dropped NOT NULL and no server default exists), so its
+        # NULL arm is stated explicitly and means "nothing was frozen".
+        CheckConstraint(
+            "default_autonomy_level IS NULL OR "
+            "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipeline_snapshots_default_autonomy_level",
+        ),
+        # FAR-1280: the snapshot pair gets the SAME ceiling >= default invariant
+        # 0264 added to `pipelines` - byte-identical predicate, only the table
+        # and constraint name differ (migration 0270). Both columns are nullable
+        # by design, so the `max IS NULL` arm is load-bearing (NULL ceiling =
+        # effective ceiling is the default), and a NULL default ranks as
+        # manual_approval under three-valued logic exactly as
+        # `validate_autonomy_ceiling` does - no explicit `default IS NULL` arm
+        # is needed.
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "(CASE default_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END) <= "
+            "(CASE max_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END)",
+            name="ck_pipeline_snapshots_max_autonomy_ge_default",
+        ),
+    )
+
+    pipeline_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("pipelines.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
+    environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("environment_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    graph_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
+    connector_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    schema_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    prompt_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    model_backend_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False)
+    composite_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=True, default=list)
+    parameter_bindings_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL, nullable=True)
+    # Guardrail snapshot pin (FAR-223 item 10): the guardrail set that was
+    # bound at snapshot creation, serialized by ``serialize_guardrail_pin``.
+    # Replays evaluate the PINNED set (the ORIGINAL conditions), not the live
+    # rows; a pinned guardrail whose live row is gone is skipped-with-audit +
+    # enforcement-gap alert. Mirrors the ``composite_bindings_json`` shape.
+    guardrail_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL, nullable=True, default=list)
+    # Run-start snapshot-integrity fingerprint (FAR-309 PR B): canonical SHA-256
+    # over the serialized ``guardrail_pins_json`` captured at snapshot creation.
+    # The replay seam re-computes the fingerprint of the LOADED pins and fails
+    # closed on a mismatch — a tampered/drifted pin set must never silently
+    # change which guardrails evaluate. Nullable: legacy snapshots predating
+    # the fingerprint are still trusted (verified only when present).
+    guardrail_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # FAR-967 chunk 10 (§3.3): policy-gate snapshot pin set and integrity
+    # fingerprint.  ``policy_gate_pins_json`` carries per-gate entries
+    # (policy_gate_id, eval_id, action, node_id, evaluation_mode — the last
+    # added by FAR-1749) captured at snapshot creation;
+    # ``policy_gate_pins_fingerprint`` is a canonical SHA-256 over the
+    # serialized pin set.  Both nullable for backward compatibility with
+    # legacy snapshots (§6.1 three-case table: no pins + no fingerprint →
+    # fall back to live gates).
+    policy_gate_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    policy_gate_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # FAR-402 P6: live-edit history + release channels. ``version_kind``
+    # discriminates a live-edit version ('edit') from a run-frozen snapshot
+    # ('run'); ``draft`` marks an in-progress editor auto-save; ``created_kind``
+    # is the finer provenance discriminator the GUI timeline uses
+    # ('initial' | 'edit' | 'rollback' | 'run'); ``channel`` tags the release
+    # channel the snapshot was created under ('none' | 'stable' | 'canary').
+    # Additive columns — legacy snapshots default to a run-kind, no-channel
+    # snapshot so existing consumers are unaffected.
+    version_kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="run", default="run")
+    created_kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="run", default="run")
+    draft: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    channel: Mapped[str] = mapped_column(String(10), nullable=False, server_default="none", default="none")
+    default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
+    # FAR-1163 S0: the autonomy ceiling frozen at snapshot time — runs read
+    # the SNAPSHOT, not the live row, so the ceiling must travel with it.
+    # NULL = effective ceiling is the snapshot's default_autonomy_level.
+    max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    # FAR-811: pipeline-level default for sandbox stdout retention, frozen at
+    # snapshot time. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}
+    # or None (no pipeline override).
+    stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    organisation: Mapped["Organisation"] = relationship()
+    pipeline: Mapped["Pipeline"] = relationship()
+    environment_profile: Mapped["EnvironmentProfile | None"] = relationship()
+    schema_pins: Mapped[list["SnapshotSchemaPin"]] = relationship(back_populates="snapshot")

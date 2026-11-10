@@ -3,7 +3,7 @@
 FAR-168's Deploy pre-deploy integration tests failed at collection with::
 
     ImportError: cannot import name 'fire_agent_signal' from partially
-    initialized module 'modulo.core.trigger_engine.agent_signal'
+    initialized module 'farna.core.trigger_engine.agent_signal'
 
 when ``tests/integration/bdd/test_agent_signal.py`` imported
 ``fire_agent_signal`` FIRST. agent_signal imported
@@ -22,8 +22,8 @@ never silently return.
 # agent_signal FIRST — the previously-failing order. The I001 suppression is
 # deliberate: the module pair is ordered this way to pin the import sequence,
 # not sorted alphabetically.
-from modulo.core.trigger_engine.agent_signal import fire_agent_signal  # noqa: I001
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.trigger_engine.agent_signal import fire_agent_signal  # noqa: I001
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 
 def test_agent_signal_importable_first() -> None:

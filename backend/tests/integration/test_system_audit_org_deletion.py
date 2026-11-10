@@ -95,7 +95,7 @@ async def _create_error_event(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid
 
 async def _durable_rows(db_engine: AsyncEngine, org_id: uuid.UUID | None = None) -> list[tuple[Any, ...]]:
     """Read durable rows through the ORM (driver-independent JSON decoding)."""
-    from modulo.db.models.system_audit_event import SystemAuditEvent
+    from farna.db.models.system_audit_event import SystemAuditEvent
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
@@ -131,9 +131,9 @@ class TestLifecycleRecordsSurviveHardDelete:
         durable copy) then confirm (durable copy written in-transaction BEFORE
         the org row is removed, then the hard delete).
         """
-        from modulo.core.audit_logger import append_audit_event
-        from modulo.core.system_audit_logger import append_system_audit_event
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.core.audit_logger import append_audit_event
+        from farna.core.system_audit_logger import append_system_audit_event
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "survive")
         user_id = await _create_user(db_engine, org_id, "survive")
@@ -214,9 +214,9 @@ class TestLifecycleRecordsSurviveHardDelete:
     async def test_normal_org_scoped_event_still_cascades(self, db_engine: AsyncEngine) -> None:
         """The CASCADE itself is unchanged: a normal org-scoped event dies,
         and the delete fabricates no durable rows of its own."""
-        from modulo.core.audit_logger import append_audit_event
-        from modulo.core.system_audit_logger import append_system_audit_event
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.core.audit_logger import append_audit_event
+        from farna.core.system_audit_logger import append_system_audit_event
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "cascade-only")
         user_id = await _create_user(db_engine, org_id, "cascade-only")
@@ -264,8 +264,8 @@ class TestLifecycleRecordsSurviveHardDelete:
     async def test_admin_delete_org_flow_survives(self, db_engine: AsyncEngine) -> None:
         """The system-admin path (``admin_orgs:admin_delete_org``) — durable
         write first, then the same ``delete_organisation`` hard delete."""
-        from modulo.core.system_audit_logger import append_system_audit_event
-        from modulo.db.crud.organisation import delete_organisation
+        from farna.core.system_audit_logger import append_system_audit_event
+        from farna.db.crud.organisation import delete_organisation
 
         org_id = await _create_org(db_engine, "admin-path")
         user_id = await _create_user(db_engine, org_id, "admin-path")
@@ -294,8 +294,8 @@ class TestLifecycleRecordsSurviveHardDelete:
     async def test_request_and_cancel_records_persist_while_org_lives(self, db_engine: AsyncEngine) -> None:
         """Request + cancel are lifecycle evidence too, recorded durably even
         though no delete happens (the pending deletion may be confirmed later)."""
-        from modulo.core.system_audit_logger import append_system_audit_event
-        from modulo.db.crud.org_deletion import cancel_org_deletion, request_org_deletion
+        from farna.core.system_audit_logger import append_system_audit_event
+        from farna.db.crud.org_deletion import cancel_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "cancel")
         user_id = await _create_user(db_engine, org_id, "cancel")
@@ -374,7 +374,7 @@ class TestDurableLedgerStructure:
     async def test_append_only_triggers_reject_update_and_delete(self, db_engine: AsyncEngine) -> None:
         """Evidence that can be edited is not evidence: the database refuses
         UPDATE and DELETE, while SELECT and INSERT keep working."""
-        from modulo.core.system_audit_logger import append_system_audit_event
+        from farna.core.system_audit_logger import append_system_audit_event
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
@@ -441,8 +441,8 @@ class TestDurableLedgerStructure:
         The failure is induced with an ``event_type`` longer than the
         ``varchar(100)`` column, a real driver error rather than a mock.
         """
-        from modulo.core.system_audit_logger import append_system_audit_event
-        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+        from farna.core.system_audit_logger import append_system_audit_event
+        from farna.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
 
         org_id = await _create_org(db_engine, "fail-closed")
         user_id = await _create_user(db_engine, org_id, "fail-closed")

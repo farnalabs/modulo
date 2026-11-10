@@ -16,16 +16,16 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.model_backends import ModelBackendCreate
-from modulo.cli.apply import executor as executor_module
-from modulo.cli.apply.executor import (
+from farna.api.routes.model_backends import ModelBackendCreate
+from farna.cli.apply import executor as executor_module
+from farna.cli.apply.executor import (
     PAGE_SIZE,
     ApplyExecutor,
     VaultListingError,
     resolve_secret_refs,
 )
-from modulo.cli.apply.loader import parse_apply_documents
-from modulo.cli.apply.models import ModelBackendEntity
+from farna.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.models import ModelBackendEntity
 
 _CREDENTIAL_REF_CONFIG = """
 api_version: modulo.dev/v1

@@ -13,17 +13,17 @@ from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import InvalidRequestError, OperationalError, PendingRollbackError, SQLAlchemyError
 
-from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.hitl_answer_validation import AnswerValidationError
-from modulo.api.main import app
-from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit, _run_hitl_manager
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
-from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
-from modulo.settings import Settings, get_settings
+from farna.api.constants import MSG_DB_ERROR_PLEASE_TRY
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.hitl_answer_validation import AnswerValidationError
+from farna.api.main import app
+from farna.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit, _run_hitl_manager
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
+from farna.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -83,7 +83,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 class TestClaimGateSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_claim_gate_returns_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -99,7 +99,7 @@ class TestClaimGateLockTimeout:
     409 naming the contention (mirroring ``runs.cancel_run``), never the generic
     retry-inviting 503; any other SQLAlchemyError still maps to 503."""
 
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=_lock_timeout_error()))
+    @patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=_lock_timeout_error()))
     def test_claim_gate_lock_timeout_returns_409(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -110,7 +110,7 @@ class TestClaimGateLockTimeout:
         assert "lock" in detail.lower(), detail
         assert "another change is in progress" in detail, detail
 
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_claim_gate_non_lock_sqlalchemy_error_still_503(self, client: TestClient) -> None:
         """Only 55P03 is attributable: a genuine transient error keeps its 503."""
         resp = client.post(
@@ -145,10 +145,10 @@ class TestClaimGateKeepsParkedRunParked:
         transition = AsyncMock(return_value=True)
         with (
             patch(
-                "modulo.api.routes.hitl.HITLManager",
+                "farna.api.routes.hitl.HITLManager",
                 return_value=MagicMock(claim=AsyncMock(return_value=self._claim_gate_response())),
             ),
-            patch("modulo.api.routes.hitl.transition_run", new=transition),
+            patch("farna.api.routes.hitl.transition_run", new=transition),
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -168,7 +168,7 @@ class TestClaimGateKeepsParkedRunParked:
 
 class TestClaimGateNotTeamMemberError:
     @patch(
-        "modulo.api.routes.hitl.HITLManager.claim",
+        "farna.api.routes.hitl.HITLManager.claim",
         new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
     )
     def test_claim_gate_returns_403_for_non_team_member(self, client: TestClient) -> None:
@@ -185,7 +185,7 @@ class TestClaimGateRunNotAwaitingError:
     gate claim."""
 
     @patch(
-        "modulo.api.routes.hitl.HITLManager.claim",
+        "farna.api.routes.hitl.HITLManager.claim",
         new=AsyncMock(side_effect=RunNotAwaitingError(_RUN_ID, "complete")),
     )
     def test_claim_gate_returns_409_when_run_not_awaiting(self, client: TestClient) -> None:
@@ -218,10 +218,10 @@ class TestClaimGateRunStatusFence:
         transition = AsyncMock(return_value=True)
         with (
             patch(
-                "modulo.api.routes.hitl.HITLManager",
+                "farna.api.routes.hitl.HITLManager",
                 return_value=MagicMock(claim=AsyncMock(return_value=self._claimed_gate())),
             ),
-            patch("modulo.api.routes.hitl.transition_run", new=transition),
+            patch("farna.api.routes.hitl.transition_run", new=transition),
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -239,10 +239,10 @@ class TestClaimGateRunStatusFence:
         transition = AsyncMock(return_value=False)
         with (
             patch(
-                "modulo.api.routes.hitl.HITLManager",
+                "farna.api.routes.hitl.HITLManager",
                 return_value=MagicMock(claim=AsyncMock(return_value=self._claimed_gate())),
             ),
-            patch("modulo.api.routes.hitl.transition_run", new=transition),
+            patch("farna.api.routes.hitl.transition_run", new=transition),
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -254,9 +254,9 @@ class TestClaimGateRunStatusFence:
 
 
 class TestApproveGateSQLAlchemyError:
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_returns_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
@@ -271,9 +271,9 @@ class TestApproveGateLockTimeout:
     by design on every decision route. It must surface as an attributable 409 -
     not the generic 503 - while a non-lock SQLAlchemyError keeps its 503."""
 
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=_lock_timeout_error()))
+    @patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=_lock_timeout_error()))
     def test_approve_gate_lock_timeout_returns_409(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
@@ -284,9 +284,9 @@ class TestApproveGateLockTimeout:
         assert "lock" in detail.lower(), detail
         assert "another change is in progress" in detail, detail
 
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_non_lock_sqlalchemy_error_still_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
@@ -305,19 +305,19 @@ class TestApproveGateAtSandboxCapacity:
     dispatcher to resume once a slot frees).
     """
 
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     def test_approve_gate_at_capacity_returns_queued_success(self, client: TestClient) -> None:
         """At org sandbox capacity the decision is recorded and the resume is
         queued — 200, never a 409."""
-        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+        from farna.core.pipeline_engine.executor import SandboxCapacityExceededError
 
         approve = AsyncMock()
         executor = MagicMock()
         executor.resume = AsyncMock(side_effect=SandboxCapacityExceededError(_ORG_ID))
         with (
-            patch("modulo.api.routes.hitl.HITLManager.approve", new=approve),
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+            patch("farna.api.routes.hitl.HITLManager.approve", new=approve),
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
@@ -339,7 +339,7 @@ class TestResumeSandboxCapacityExceeded:
 
     @staticmethod
     def _executor_raising() -> MagicMock:
-        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+        from farna.core.pipeline_engine.executor import SandboxCapacityExceededError
 
         executor = MagicMock()
         executor.resume = AsyncMock(
@@ -378,12 +378,12 @@ class TestResumeSandboxCapacityExceeded:
         executor = self._executor_raising()
         manager_call = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             # FAR-907: the modify-approve path now validates the answer contract,
             # which resolves the gate config through the shared validator module.
-            patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
-            patch(f"modulo.api.routes.hitl.HITLManager.{hitl_method}", new=manager_call),
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+            patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+            patch(f"farna.api.routes.hitl.HITLManager.{hitl_method}", new=manager_call),
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         ):
             resp = client.post(f"/api/v1/runs/{_RUN_ID}/{path}", json=payload)
 
@@ -428,10 +428,10 @@ class TestResumeDataGateStamp:
         executor = MagicMock()
         executor.resume = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
-            patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+            patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+            patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.hitl.HITLManager", return_value=manager),
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         ):
             resp = client.post(f"/api/v1/runs/{_RUN_ID}/{path}", json=payload)
 
@@ -445,13 +445,13 @@ class TestResumeDataGateStamp:
 
 
 class TestApproveWithModificationSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
-        "modulo.api.routes.hitl.HITLManager.approve_with_modification",
+        "farna.api.routes.hitl.HITLManager.approve_with_modification",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
     )
     def test_approve_with_modification_returns_503(self, client: TestClient) -> None:
-        with patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)):
+        with patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
                 json={"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "modified"},
@@ -460,7 +460,7 @@ class TestApproveWithModificationSQLAlchemyError:
 
 
 class TestRejectGateSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.HITLManager.reject", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.routes.hitl.HITLManager.reject", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_reject_gate_returns_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject",
@@ -470,9 +470,9 @@ class TestRejectGateSQLAlchemyError:
 
 
 class TestDeliverManualSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
-        "modulo.api.routes.hitl.HITLManager.deliver_manual",
+        "farna.api.routes.hitl.HITLManager.deliver_manual",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
     )
     def test_deliver_manual_returns_503(self, client: TestClient) -> None:
@@ -484,8 +484,8 @@ class TestDeliverManualSQLAlchemyError:
 
 
 class TestSubmitManualSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_submit_manual_returns_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/manual/gate-1/submit",
@@ -495,9 +495,9 @@ class TestSubmitManualSQLAlchemyError:
 
 
 class TestSubmitManualNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("farna.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
-        "modulo.api.routes.hitl.HITLManager.approve",
+        "farna.api.routes.hitl.HITLManager.approve",
         new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
     )
     def test_submit_manual_returns_403_for_non_team_member(self, client: TestClient) -> None:
@@ -509,7 +509,7 @@ class TestSubmitManualNotTeamMemberError:
 
 
 class TestListRunPendingGatesSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.get_run", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    @patch("farna.api.routes.hitl.get_run", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_list_run_pending_gates_returns_503(self, client: TestClient) -> None:
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
         assert resp.status_code == 503
@@ -517,7 +517,7 @@ class TestListRunPendingGatesSQLAlchemyError:
 
 class TestListOrgPendingGatesSQLAlchemyError:
     @patch(
-        "modulo.api.routes.hitl.HITLManager.list_pending",
+        "farna.api.routes.hitl.HITLManager.list_pending",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", "", "")),
     )
     def test_list_org_pending_gates_returns_503(self, client: TestClient) -> None:
@@ -527,7 +527,7 @@ class TestListOrgPendingGatesSQLAlchemyError:
 
 class TestReviewResponseLabel:
     def test_review_to_response_passes_label_through(self) -> None:
-        from modulo.api.routes.hitl import _review_to_response
+        from farna.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
@@ -545,7 +545,7 @@ class TestReviewResponseLabel:
         assert resp.label == "Deploy gate"
 
     def test_review_to_response_label_defaults_to_none(self) -> None:
-        from modulo.api.routes.hitl import _review_to_response
+        from farna.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
@@ -562,7 +562,7 @@ class TestReviewResponseLabel:
         assert resp.label is None
 
     def test_build_review_label_map_from_snapshot_edges(self) -> None:
-        from modulo.api.routes.hitl import _build_review_label_map
+        from farna.api.routes.hitl import _build_review_label_map
 
         graph = {
             "edges": [
@@ -628,7 +628,7 @@ class TestListRunPendingGatesLabelResolution:
 
         app.dependency_overrides[get_db_session] = override_session
         try:
-            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+            with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
                 resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
         finally:
             app.dependency_overrides.clear()
@@ -675,7 +675,7 @@ class TestListRunPendingGatesLabelResolution:
 
         app.dependency_overrides[get_db_session] = override_session
         try:
-            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+            with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
                 resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
         finally:
             app.dependency_overrides.clear()
@@ -710,7 +710,7 @@ class TestListRunPendingGatesLabelResolution:
 
         app.dependency_overrides[get_db_session] = override_session
         try:
-            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+            with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
                 resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
         finally:
             app.dependency_overrides.clear()
@@ -760,7 +760,7 @@ class TestListRunPendingGatesLabelResolution:
 
         app.dependency_overrides[get_db_session] = override_session
         try:
-            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+            with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
                 resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
         finally:
             app.dependency_overrides.clear()
@@ -884,7 +884,7 @@ class TestHumanOnlyRestEnforcement:
         failure-isolation path runs deterministically (the 403 outcome is
         never affected; that isolation is itself part of the contract)."""
         with patch(
-            "modulo.api.routes.hitl.get_or_create_engine",
+            "farna.api.routes.hitl.get_or_create_engine",
             side_effect=RuntimeError("no db in unit tests"),
         ):
             yield
@@ -909,8 +909,8 @@ class TestHumanOnlyRestEnforcement:
     def test_approve_human_only_api_key_returns_403(self, client: TestClient) -> None:
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
@@ -929,7 +929,7 @@ class TestHumanOnlyRestEnforcement:
         the gate config by topology and blocks the API-key principal."""
         live_edge = MagicMock()
         live_edge.hitl_review_config = {"human_only": True}
-        with patch("modulo.api.routes.hitl.HITLManager"):
+        with patch("farna.api.routes.hitl.HITLManager"):
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=live_edge)
             resp = client.post(
@@ -943,8 +943,8 @@ class TestHumanOnlyRestEnforcement:
     def test_approve_human_only_browser_jwt_passes_check(self, client: TestClient) -> None:
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False)
@@ -961,8 +961,8 @@ class TestHumanOnlyRestEnforcement:
         """No over-blocking: API-key principals may approve non-human_only gates."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
@@ -984,7 +984,7 @@ class TestHumanOnlyRestEnforcement:
         is an MCP credential under the default-OFF
         ``mcp_human_linked_hitl_authority`` flag.
         """
-        import modulo.api.routes.hitl as hitl_routes
+        import farna.api.routes.hitl as hitl_routes
 
         assert not hasattr(hitl_routes, "resolve_human_linkage")
         _override_principal(via_api_key=True)
@@ -1002,7 +1002,7 @@ class TestHumanOnlyRestEnforcement:
         its config is unresolvable — the policy cannot be verified, so the
         API-key principal is denied instead of silently allowed."""
         approve = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
@@ -1020,8 +1020,8 @@ class TestHumanOnlyRestEnforcement:
         check passes it through (the manager 404s it later as before)."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
@@ -1039,8 +1039,8 @@ class TestHumanOnlyRestEnforcement:
         enforcement surface, and the claim table is not even consulted."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False)
@@ -1055,7 +1055,7 @@ class TestHumanOnlyRestEnforcement:
 
     def test_approve_with_modification_human_only_api_key_returns_403(self, client: TestClient) -> None:
         modify = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.approve_with_modification = modify
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1070,7 +1070,7 @@ class TestHumanOnlyRestEnforcement:
 
     def test_deliver_manual_human_only_api_key_returns_403(self, client: TestClient) -> None:
         deliver = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.deliver_manual = deliver
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1088,8 +1088,8 @@ class TestHumanOnlyRestEnforcement:
         human_only check resolves None and never over-blocks."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
@@ -1111,8 +1111,8 @@ class TestHumanOnlyRestEnforcement:
         policy, not an escape hatch)."""
         reject = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.reject = reject
             _override_principal(via_api_key=True)
@@ -1135,7 +1135,7 @@ class TestHumanOnlyClaimEnforcement:
     @pytest.fixture(autouse=True)
     def _no_real_audit_db(self) -> Generator[None, None, None]:
         with patch(
-            "modulo.api.routes.hitl.get_or_create_engine",
+            "farna.api.routes.hitl.get_or_create_engine",
             side_effect=RuntimeError("no db in unit tests"),
         ):
             yield
@@ -1185,8 +1185,8 @@ class TestHumanOnlyClaimEnforcement:
     def test_claim_human_only_api_key_returns_403(self, client: TestClient) -> None:
         claim = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock()),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=True)
@@ -1205,8 +1205,8 @@ class TestHumanOnlyClaimEnforcement:
         human-only, so an API-key claim is denied."""
         claim = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock()),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=True)
@@ -1224,9 +1224,9 @@ class TestHumanOnlyClaimEnforcement:
         emit = AsyncMock()
         claim = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+            patch("farna.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock()),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=True)
@@ -1247,8 +1247,8 @@ class TestHumanOnlyClaimEnforcement:
         """Browser JWTs claim human_only gates — the UI is their surface."""
         claim = AsyncMock(return_value=self._gate_claim_mock())
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=False)
@@ -1266,8 +1266,8 @@ class TestHumanOnlyClaimEnforcement:
         """``human_only: false`` opts the gate out — API-key claims work."""
         claim = AsyncMock(return_value=self._gate_claim_mock())
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=True)
@@ -1288,8 +1288,8 @@ class TestHumanOnlyClaimEnforcement:
         labelling corrupted the FAR-611 sweep-alarm input)."""
         claim = AsyncMock(return_value=self._gate_claim_mock())
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=False, client_kind="programmatic")
@@ -1308,8 +1308,8 @@ class TestHumanOnlyClaimEnforcement:
         its config is unresolvable — the API-key claim is denied."""
         claim = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl.transition_run", new=AsyncMock()),
         ):
             mgr_cls.return_value.claim = claim
             _override_principal(via_api_key=True)
@@ -1332,7 +1332,7 @@ class TestHumanOnlyClientKindEnforcement:
     @pytest.fixture(autouse=True)
     def _no_real_audit_db(self) -> Generator[None, None, None]:
         with patch(
-            "modulo.api.routes.hitl.get_or_create_engine",
+            "farna.api.routes.hitl.get_or_create_engine",
             side_effect=RuntimeError("no db in unit tests"),
         ):
             yield
@@ -1360,8 +1360,8 @@ class TestHumanOnlyClientKindEnforcement:
         API-key marker."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False, client_kind="programmatic")
@@ -1379,7 +1379,7 @@ class TestHumanOnlyClientKindEnforcement:
         """Route-matrix completeness: the approve-with-modification decision
         route denies a programmatic-class JWT exactly like approve."""
         modify = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.approve_with_modification = modify
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1398,7 +1398,7 @@ class TestHumanOnlyClientKindEnforcement:
         with no snapshot to walk. (The session double returns the routed
         scalar directly — the config dict IS the stamp value.)"""
         approve = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(snapshot_id=None), claim_row={"human_only": True})
@@ -1415,8 +1415,8 @@ class TestHumanOnlyClientKindEnforcement:
         """An unknown client_kind value is NOT 'browser' — fail closed."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False, client_kind="hologram")
@@ -1434,8 +1434,8 @@ class TestHumanOnlyClientKindEnforcement:
         browser and the browser hot path is unchanged."""
         approve = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=False, client_kind="browser")
@@ -1453,7 +1453,7 @@ class TestHumanOnlyClientKindEnforcement:
         principal carries client_kind=programmatic from the dependency, but
         the OR subsumes doubles that set only the marker)."""
         approve = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True, client_kind="browser")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1467,7 +1467,7 @@ class TestHumanOnlyClientKindEnforcement:
 
     def test_deliver_manual_programmatic_client_kind_returns_403(self, client: TestClient) -> None:
         deliver = AsyncMock()
-        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+        with patch("farna.api.routes.hitl.HITLManager") as mgr_cls:
             mgr_cls.return_value.deliver_manual = deliver
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1486,8 +1486,8 @@ class TestHumanOnlyClientKindEnforcement:
         denied (intended policy)."""
         reject = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
-            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+            patch("farna.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("farna.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
         ):
             mgr_cls.return_value.reject = reject
             _override_principal(via_api_key=False, client_kind="programmatic")
@@ -1511,7 +1511,7 @@ class TestHumanOnlyDenialAudit:
         """Default: fail the audit engine lookup (no DB in unit tests). Tests
         that assert the audit WRITE override this with a mock chain."""
         with patch(
-            "modulo.api.routes.hitl.get_or_create_engine",
+            "farna.api.routes.hitl.get_or_create_engine",
             side_effect=RuntimeError("no db in unit tests"),
         ):
             yield
@@ -1535,8 +1535,8 @@ class TestHumanOnlyDenialAudit:
         action / principal kind / client kind."""
         emit = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager"),
-            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+            patch("farna.api.routes.hitl.HITLManager"),
+            patch("farna.api.routes.hitl._emit_human_only_denial_audit", new=emit),
         ):
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
@@ -1561,8 +1561,8 @@ class TestHumanOnlyDenialAudit:
         action, not the manager method it shares with approve."""
         emit = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.HITLManager"),
-            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+            patch("farna.api.routes.hitl.HITLManager"),
+            patch("farna.api.routes.hitl._emit_human_only_denial_audit", new=emit),
         ):
             _override_principal(via_api_key=False, client_kind="programmatic")
             # run with NO snapshot: the claim stamp is the only config source.
@@ -1585,11 +1585,11 @@ class TestHumanOnlyDenialAudit:
         session = _audit_session_double()
         factory = MagicMock(return_value=_audit_session_ctx(session))
         with (
-            patch("modulo.api.routes.hitl.HITLManager"),
-            patch("modulo.api.routes.hitl.get_or_create_engine", return_value=engine),
-            patch("modulo.api.routes.hitl.get_or_create_session_factory", return_value=factory),
+            patch("farna.api.routes.hitl.HITLManager"),
+            patch("farna.api.routes.hitl.get_or_create_engine", return_value=engine),
+            patch("farna.api.routes.hitl.get_or_create_session_factory", return_value=factory),
             patch(
-                "modulo.api.routes.hitl.append_audit_event",
+                "farna.api.routes.hitl.append_audit_event",
                 new=AsyncMock(side_effect=RuntimeError("audit write boom")),
             ),
         ):
@@ -1622,9 +1622,9 @@ class TestHumanOnlyDenialAudit:
             client_kind="programmatic",
         )
         with (
-            patch("modulo.api.routes.hitl.get_or_create_engine", return_value=engine),
-            patch("modulo.api.routes.hitl.get_or_create_session_factory", return_value=factory),
-            patch("modulo.api.routes.hitl.append_audit_event", new=append),
+            patch("farna.api.routes.hitl.get_or_create_engine", return_value=engine),
+            patch("farna.api.routes.hitl.get_or_create_session_factory", return_value=factory),
+            patch("farna.api.routes.hitl.append_audit_event", new=append),
         ):
             await _emit_human_only_denial_audit(emit_exc)
 
@@ -1801,7 +1801,7 @@ class TestSessionContractErrorIs500Not503:
         _log_key: str,
     ) -> None:
         with patch(
-            "modulo.api.routes.hitl.set_rls_org",
+            "farna.api.routes.hitl.set_rls_org",
             new=AsyncMock(side_effect=InvalidRequestError(_INVALID_REQUEST_MSG)),
         ):
             resp = _call(client, method, url, payload)
@@ -1838,7 +1838,7 @@ class TestSessionContractErrorIs500Not503:
         """
         with (
             patch(
-                "modulo.api.routes.hitl.set_rls_org",
+                "farna.api.routes.hitl.set_rls_org",
                 new=AsyncMock(side_effect=InvalidRequestError(_INVALID_REQUEST_MSG)),
             ),
             caplog.at_level(logging.ERROR),
@@ -1846,10 +1846,10 @@ class TestSessionContractErrorIs500Not503:
             resp = _call(client, method, url, payload)
 
         assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, resp.text
-        shared_messages = [r.getMessage() for r in caplog.records if r.name == "modulo.api.db_error_handling"]
+        shared_messages = [r.getMessage() for r in caplog.records if r.name == "farna.api.db_error_handling"]
         assert log_key in shared_messages, shared_messages
         # A session-contract violation must never be filed as a DB outage.
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert not records, f"a programming error must not write a service_unavailable record: {records}"
 
 
@@ -1877,7 +1877,7 @@ class TestPendingRollbackErrorIs503Not500:
         _log_key: str,
     ) -> None:
         with patch(
-            "modulo.api.routes.hitl.set_rls_org",
+            "farna.api.routes.hitl.set_rls_org",
             new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
         ):
             resp = _call(client, method, url, payload)
@@ -1899,7 +1899,7 @@ class TestPendingRollbackErrorIs503Not500:
     ) -> None:
         with (
             patch(
-                "modulo.api.routes.hitl.set_rls_org",
+                "farna.api.routes.hitl.set_rls_org",
                 new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
             ),
             caplog.at_level(logging.ERROR),
@@ -1907,7 +1907,7 @@ class TestPendingRollbackErrorIs503Not500:
             resp = _call(client, method, url, payload)
 
         assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, resp.text
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert len(records) == 1, records
         payload_record = records[0].__dict__["service_unavailable"]
         assert payload_record["reason"] == "db_transient"
@@ -1954,10 +1954,10 @@ class TestRequireAnswerImpliesValidation:
         """
         validator = AsyncMock(side_effect=AnswerValidationError("answer is required on a choice gate"))
         with (
-            patch("modulo.api.routes.hitl.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.hitl.validate_hitl_answer", new=validator),
+            patch("farna.api.routes.hitl.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.hitl.validate_hitl_answer", new=validator),
             patch(
-                "modulo.api.routes.hitl.HITLManager",
+                "farna.api.routes.hitl.HITLManager",
                 return_value=MagicMock(approve=AsyncMock(return_value="decided")),
             ),
             pytest.raises(HTTPException) as excinfo,
@@ -1985,10 +1985,10 @@ class TestRequireAnswerImpliesValidation:
         """reject / deliver-manual / submit-manual pass neither flag — unchanged."""
         validator = AsyncMock(return_value=None)
         with (
-            patch("modulo.api.routes.hitl.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.hitl.validate_hitl_answer", new=validator),
+            patch("farna.api.routes.hitl.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.hitl.validate_hitl_answer", new=validator),
             patch(
-                "modulo.api.routes.hitl.HITLManager",
+                "farna.api.routes.hitl.HITLManager",
                 return_value=MagicMock(reject=AsyncMock(return_value="decided")),
             ),
         ):

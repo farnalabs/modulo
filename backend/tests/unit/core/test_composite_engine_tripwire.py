@@ -11,7 +11,7 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-_PKG = Path(__file__).resolve().parents[3] / "src" / "modulo" / "core" / "composite_engine"
+_PKG = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "composite_engine"
 
 _FORBIDDEN = ("hitl", "human_only", "claim_expiry", "required_team_id", "gate_config")
 

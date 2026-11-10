@@ -28,8 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
-from modulo.db.models.base import SoftDeleteMixin
-from modulo.db.soft_delete import (
+from farna.db.models.base import SoftDeleteMixin
+from farna.db.soft_delete import (
     _apply_soft_delete_filter,
     include_soft_deleted,
     register_soft_delete_filter,

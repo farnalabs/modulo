@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.npm import NpmConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.npm import NpmConnector
 
 API_BASE = "https://registry.npmjs.org"
 

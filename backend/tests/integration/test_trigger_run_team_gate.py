@@ -33,10 +33,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.jwt import create_access_token
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.jwt import create_access_token
+from farna.settings import Settings, get_settings
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -134,7 +134,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
     supply them. The ORM ``create_team`` helper applies the Python-side defaults
     and keeps this seed in step with the model.
     """
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -154,7 +154,7 @@ async def _seed_team_membership(
     ``team_memberships.role`` is constrained to ``viewer``/``runner``/``operator``
     (``ck_team_memberships_role``); ``member`` is not a valid value.
     """
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -304,7 +304,7 @@ def _stub_run_dispatch() -> Generator[None, None, None]:
     would fail. The route returns 202 once the run exists, so the dispatch side
     effect is irrelevant to these gate assertions.
     """
-    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock):
         yield
 
 
@@ -462,7 +462,7 @@ class TestTriggerRunTeamGateWiring:
     """
 
     def test_team_gate_dependency_declared(self) -> None:
-        from modulo.api.routes.runs import trigger_run
+        from farna.api.routes.runs import trigger_run
 
         tagged = [
             getattr(param.default, "permission", None) for param in inspect.signature(trigger_run).parameters.values()
@@ -926,7 +926,7 @@ class TestTriggerTeamGateWiring:
 
     @pytest.mark.parametrize("route_name", _MUTATION_ROUTES)
     def test_team_gate_dependency_declared(self, route_name: str) -> None:
-        from modulo.api.routes import triggers as triggers_routes
+        from farna.api.routes import triggers as triggers_routes
 
         route_fn = getattr(triggers_routes, route_name)
         tagged = [
@@ -938,7 +938,7 @@ class TestTriggerTeamGateWiring:
 
     @pytest.mark.parametrize("route_name", _READ_ROUTES)
     def test_read_routes_not_team_gated(self, route_name: str) -> None:
-        from modulo.api.routes import triggers as triggers_routes
+        from farna.api.routes import triggers as triggers_routes
 
         route_fn = getattr(triggers_routes, route_name)
         tagged = [

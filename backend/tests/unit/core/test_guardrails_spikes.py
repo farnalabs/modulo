@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.hitl_manager import GateNotFoundError, HITLManager
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.hitl_manager import GateNotFoundError, HITLManager
 
 # ---------------------------------------------------------------------------
 # Spike 1 — deliver_manual unavailable for terminal eval_failed runs

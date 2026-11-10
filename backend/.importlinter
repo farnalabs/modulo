@@ -1,24 +1,24 @@
 [importlinter]
-root_package = modulo
+root_package = farna
 include_external_packages = True
 
 [importlinter:contract:api-does-not-import-langgraph-directly]
 name = API layer uses pipeline_engine, not LangGraph directly
 type = forbidden
 source_modules =
-    modulo.api
+    farna.api
 forbidden_modules =
     langgraph
 ignore_imports =
-    modulo.api.main -> modulo.core.pipeline_engine.modulo_saver
-    modulo.api.routes.runs -> modulo.core.dispatch
-    modulo.api.routes.runs -> modulo.core.trigger_engine
-    modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
-    modulo.api.routes.webhooks -> modulo.core.dispatch
-    modulo.api.routes.webhooks -> modulo.core.trigger_engine
-    modulo.api.routes.triggers -> modulo.core.cron_helpers
-    modulo.api.routes.triggers -> modulo.core.trigger_engine
-    modulo.api.mcp_server -> modulo.core.cron_helpers
+    farna.api.main -> farna.core.pipeline_engine.modulo_saver
+    farna.api.routes.runs -> farna.core.dispatch
+    farna.api.routes.runs -> farna.core.trigger_engine
+    farna.api.routes.hitl -> farna.core.pipeline_engine.executor
+    farna.api.routes.webhooks -> farna.core.dispatch
+    farna.api.routes.webhooks -> farna.core.trigger_engine
+    farna.api.routes.triggers -> farna.core.cron_helpers
+    farna.api.routes.triggers -> farna.core.trigger_engine
+    farna.api.mcp_server -> farna.core.cron_helpers
     # FAR-733: cron_helpers now imports pipeline_engine.executor (for the shared
     # _retry_after_policy matcher used by _should_redispatch_nodeless). executor
     # pulls langgraph, so every API seam that reaches cron_helpers (health,
@@ -26,33 +26,33 @@ ignore_imports =
     # langgraph. cron_helpers is a sanctioned core seam the API already whitelists
     # above, so whitelist the single contaminated edge at the cron_helpers boundary
     # rather than every API entry path.
-    modulo.core.cron_helpers -> modulo.core.pipeline_engine.executor
-    modulo.api.mcp_server -> modulo.core.dispatch
-    modulo.api.routes.pipelines -> modulo.core.reports.quality_report
+    farna.core.cron_helpers -> farna.core.pipeline_engine.executor
+    farna.api.mcp_server -> farna.core.dispatch
+    farna.api.routes.pipelines -> farna.core.reports.quality_report
     # Admin fernet-rotation is a cross-org system operation: it must run on the
     # modulo_system (BYPASSRLS) session factory so the org-scoped rls policies on
     # secrets/connector_instances/model_backends/notification_endpoints do not
     # fail-closed to zero rows. Same exempt seam category as triggers/webhooks ->
     # cron_helpers/dispatch above (admin API drives the cross-org system worker
     # machinery).
-    modulo.api.routes.admin_rotation -> modulo.core.saq_worker
+    farna.api.routes.admin_rotation -> farna.core.saq_worker
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API
 type = forbidden
 source_modules =
-    modulo.connectors
+    farna.connectors
 forbidden_modules =
-    modulo.api
-    modulo.auth
+    farna.api
+    farna.auth
 
 [importlinter:contract:core-does-not-import-modulo-cloud]
 name = Core is zero-coupled to modulo-cloud
 type = forbidden
 source_modules =
-    modulo.core
-    modulo.api
-    modulo.connectors
+    farna.core
+    farna.api
+    farna.connectors
 forbidden_modules =
     modulo_cloud
 
@@ -60,23 +60,23 @@ forbidden_modules =
 name = OTel bridge does not import core business logic
 type = forbidden
 source_modules =
-    modulo.otel_bridge
+    farna.otel_bridge
 forbidden_modules =
-    modulo.core.pipeline_engine
-    modulo.core.hitl_manager
-    modulo.core.eval_engine
+    farna.core.pipeline_engine
+    farna.core.hitl_manager
+    farna.core.eval_engine
 
 [importlinter:contract:core-does-not-import-api]
 name = Core layer never sees FastAPI
 type = forbidden
 source_modules =
-    modulo.core
+    farna.core
 forbidden_modules =
-    modulo.api
+    farna.api
 ignore_imports =
-    modulo.core.feature_flags -> modulo.api.dependencies
-    modulo.core.logging_config -> modulo.api.dependencies
-    modulo.core.dispatch -> modulo.api.dependencies
+    farna.core.feature_flags -> farna.api.dependencies
+    farna.core.logging_config -> farna.api.dependencies
+    farna.core.dispatch -> farna.api.dependencies
     # FAR-1446: the readiness-degradation alert runs as a system cron (core,
     # saq_worker) and MUST evaluate health through the SAME code the
     # /healthz/ready route runs - reimplementing the ~14 sub-checks in a
@@ -85,50 +85,50 @@ ignore_imports =
     # time) and reaches only the health route module, not the FastAPI app
     # wiring - the same lazy in-function seam shape as the three dependencies
     # entries above.
-    modulo.core.health_alerts -> modulo.api.routes.health
+    farna.core.health_alerts -> farna.api.routes.health
 
 [importlinter:contract:db-does-not-import-core]
 name = DB layer has no business logic imports
 type = forbidden
 source_modules =
-    modulo.db
+    farna.db
 forbidden_modules =
-    modulo.core
-    modulo.api
+    farna.core
+    farna.api
 ignore_imports =
     # FAR-523 trigger-delivery bootstrap: the shared trigger/org resolver in
     # db.crud.trigger raises the engine's TriggerNotFoundError (same
     # exception-mapping category as the pipeline_snapshot -> core.exceptions
     # seam below — db exposes the read, core owns the exception type).
-    modulo.db.crud.trigger -> modulo.core.trigger_engine
-    modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
-    modulo.db.crud.run -> modulo.core.exceptions
-    modulo.db.settings_resolver -> modulo.core.exceptions
-    modulo.db.crud.pipeline_snapshot -> modulo.core.composite_engine.expander
-    modulo.db.crud.sso_provider -> modulo.core.audit_logger
-    modulo.db.crud.pipeline -> modulo.core.audit_logger
-    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
-    modulo.db.session -> modulo.core.audit_logger.append_only
+    farna.db.crud.trigger -> farna.core.trigger_engine
+    farna.db.crud.pipeline_snapshot -> farna.core.exceptions
+    farna.db.crud.run -> farna.core.exceptions
+    farna.db.settings_resolver -> farna.core.exceptions
+    farna.db.crud.pipeline_snapshot -> farna.core.composite_engine.expander
+    farna.db.crud.sso_provider -> farna.core.audit_logger
+    farna.db.crud.pipeline -> farna.core.audit_logger
+    farna.db.crud.pipeline_snapshot_versioning -> farna.core.audit_logger
+    farna.db.session -> farna.core.audit_logger.append_only
     # FAR-1561 boot user seeding: the MODULO_USERS seeder appends a SYSTEM-actor
     # audit event for the account + admin role grant it creates (same narrow
     # cross-boundary category as the db.crud.* audit exemptions above - the DB
     # layer only invokes the append; audit-chain semantics stay in core).
-    modulo.db.seed -> modulo.core.audit_logger
-    modulo.db.seed -> modulo.core.audit_logger.labels
+    farna.db.seed -> farna.core.audit_logger
+    farna.db.seed -> farna.core.audit_logger.labels
     # FAR-208 guardrails: the ingestion-edge interception lives in create_run
     # (the single chokepoint for all run-creation dispatch paths), so the DB
     # layer is the ONLY caller of the core guardrail pass. The mapping is a
     # thin DTO conversion (to_engine_definition); all guardrail logic stays in
     # core.
-    modulo.db.crud.run -> modulo.core.guardrails
+    farna.db.crud.run -> farna.core.guardrails
     # FAR-209 Track B — output-side interception: db.crud.run's guardrail
     # selection seams ALSO invoke the output-point exclusion helper
     # (exclude_output_interception_definitions) so the input pass never sees
     # an output-point def. Same narrow cross-boundary category as the FAR-208
     # exemption above: db.crud.run only invokes the filter helper; all
     # guardrail logic stays in core.
-    modulo.db.crud.run -> modulo.core.guardrails.output_intercept
-    modulo.db.crud.run -> modulo.core.eval_engine
+    farna.db.crud.run -> farna.core.guardrails.output_intercept
+    farna.db.crud.run -> farna.core.eval_engine
     # FAR-1293 — the evidence store's first production producer: the guardrail
     # persist seam (db.crud.run._persist_guardrail_eval_results) appends one
     # Evidence fact per guardrail eval decision via
@@ -137,35 +137,35 @@ ignore_imports =
     # row is added). Same narrow cross-boundary category as the FAR-208
     # guardrail seam above: db.crud.run only invokes the write helper; all
     # evidence-layer semantics stay in core.
-    modulo.db.crud.run -> modulo.core.eval_engine.evidence_layer
+    farna.db.crud.run -> farna.core.eval_engine.evidence_layer
     # FAR-967 chunk 10 — run-start verification loads policy-gate pins from
     # the snapshot, recomputes the fingerprint, and applies the operator
     # control (enabled/disabled re-check); same cross-boundary category as
     # the guardrail fingerprint verification exemption above.
-    modulo.db.crud.run -> modulo.core.eval_engine.policy_gate
+    farna.db.crud.run -> farna.core.eval_engine.policy_gate
     # FAR-213 run-termination compensation: the guardrail-blocked terminalization
     # seam lives in create_run (it writes the blocked_partial summary AFTER the
     # terminal status write). Same cross-boundary category as the FAR-208
     # guardrail exemption above — compensation orchestration stays in core;
     # create_run only invokes it.
-    modulo.db.crud.run -> modulo.core.guardrails.compensation
+    farna.db.crud.run -> farna.core.guardrails.compensation
     # FAR-223 item 10 — snapshot creation serializes the pipeline's guardrail
     # rows into ``guardrail_pins_json`` (thin DTO conversion via
     # ``serialize_guardrail_pin``); same cross-boundary category as the run.py
     # guardrail exemption above.
-    modulo.db.crud.pipeline_snapshot -> modulo.core.guardrails
+    farna.db.crud.pipeline_snapshot -> farna.core.guardrails
     # FAR-967 chunk 10 — snapshot creation serializes PolicyGate rows into
     # ``policy_gate_pins_json`` and computes the integrity fingerprint (thin
     # DTO conversion + deterministic hash); same cross-boundary category as
     # the guardrail pin exemption above.
-    modulo.db.crud.pipeline_snapshot -> modulo.core.eval_engine.policy_gate
+    farna.db.crud.pipeline_snapshot -> farna.core.eval_engine.policy_gate
     # FAR-1743 / ADR 037 rev 2 — snapshot mint resolves each sandbox_agent
     # node's ``model_class`` registry class and bakes ``_resolved_model`` /
     # ``_model_origin`` (the pure decision function + registry read live in
     # core.model_class_registry; the DB layer only invokes it at the mint
     # seam) — same narrow cross-boundary category as the guardrail/policy-pin
     # exemptions above.
-    modulo.db.crud.pipeline_snapshot -> modulo.core.model_class_registry
+    farna.db.crud.pipeline_snapshot -> farna.core.model_class_registry
     # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
     # variant / transition_run / request_cancellation) invokes the run-outcome
     # classifier inline, so every terminalizer that funnels through db.crud.run
@@ -177,7 +177,7 @@ ignore_imports =
     # cross-boundary wiring category as the audit_logger / composite_engine
     # exceptions above: db.crud.run exposes the terminal write, classify.py is
     # the pure decision function.
-    modulo.db.crud.run -> modulo.core.pipeline_engine.classify
+    farna.db.crud.run -> farna.core.pipeline_engine.classify
     # FAR-795: the create-time journey hydration write consults the per-org
     # agent-mint budget (consume_agent_mint_budget) before minting agent-sourced
     # journey rows, so the budget cap is enforced at the create path too. The
@@ -185,7 +185,7 @@ ignore_imports =
     # session/transaction as the mint; all budget-statement semantics live in
     # core.runtime_config.mint_budget (same narrow cross-boundary category as the
     # classify.py / audit_logger / composite_engine exceptions above).
-    modulo.db.crud.run -> modulo.core.runtime_config.mint_budget
+    farna.db.crud.run -> farna.core.runtime_config.mint_budget
     # FAR-583: the run_node_outputs store write raises DualWriteError
     # fail-closed out of the DB layer; the failure orchestration (terminalize
     # + the aggregated error event) lives entirely in core and may NOT be
@@ -196,25 +196,25 @@ ignore_imports =
     # pipeline_impact is the PURE decision function, db.crud.pipeline_snapshot_versioning
     # only invokes it (same cross-boundary wiring category as the classify.py /
     # audit_logger exceptions above).
-    modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
+    farna.db.crud.pipeline_snapshot_versioning -> farna.core.pipeline_impact
     # FAR-2054: the exhaustive per-seam guardrail coverage derivation lives in
     # core.guardrails.coverage (pure decision function). create_run (the single
     # run-creation chokepoint) only invokes it. Same narrow cross-boundary
     # category as the FAR-208 guardrail seam above.
-    modulo.db.crud.run -> modulo.core.guardrails.coverage
+    farna.db.crud.run -> farna.core.guardrails.coverage
     # FAR-220: the prompt-rollback restore write re-uses the shared Agent save
     # gate (validate_agent_git_content_values) so a legacy history entry
     # carrying an unpinned git content ref cannot re-poison a clean Agent row.
     # Same narrow cross-boundary category as the pure-decision-function
     # exemptions above: the CRUD layer only invokes the pure validation
     # function; the gate semantics stay in core.
-    modulo.db.crud.agent -> modulo.core.pipeline_engine.git_content
+    farna.db.crud.agent -> farna.core.pipeline_engine.git_content
     # FAR-535 — the demo auto-login gate (kill switch + demo-org slug/role
-    # constants) lives in modulo.core.demo as the neutral surface shared by the
+    # constants) lives in farna.core.demo as the neutral surface shared by the
     # auth route and this boot seed. The seed only READS the constants/config
     # helper (no core business logic flows into db), the same narrow
     # cross-boundary category as the pure-decision-function exemptions above.
-    modulo.db.seed_demo -> modulo.core.demo
+    farna.db.seed_demo -> farna.core.demo
     # FAR-1593 — pipeline-creation guardrail freshness: create_pipeline (the
     # single ORM chokepoint every creation path funnels through — REST, MCP,
     # templates, onboarding, library install, workflow import, clone)
@@ -226,128 +226,128 @@ ignore_imports =
     # Same narrow cross-boundary category as the FAR-208 guardrail seam above:
     # db.crud.pipeline only invokes the seed entry point; all config parsing
     # and row building stays in core.guardrails.materialise.
-    modulo.db.crud.pipeline -> modulo.core.guardrails.materialise
+    farna.db.crud.pipeline -> farna.core.guardrails.materialise
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core
 type = forbidden
 source_modules =
-    modulo.connectors
+    farna.connectors
 forbidden_modules =
-    modulo.core
+    farna.core
 ignore_imports =
     # Shell resolves workspace sessions via the DB layer.
-    modulo.connectors.shell -> modulo.db.session
+    farna.connectors.shell -> farna.db.session
     # FAR-587: shell's hub-resolution guard maps the hub's typed
     # ProviderNotConfiguredError to the connector's fail-soft ValueError
     # contract - a single exception-type import (no core behaviour flows in).
-    modulo.connectors.shell -> modulo.core.runtime_provider
+    farna.connectors.shell -> farna.core.runtime_provider
     # The REST connector (FAR-408) binds its SSRF + output-injection port at the
-    # composition root (connector_hub) and never imports ``modulo.core`` directly;
+    # composition root (connector_hub) and never imports ``farna.core`` directly;
     # this contract enforces that the connector stays decoupled. Any attempt to
-    # pull ``modulo.core`` into ``modulo.connectors.rest`` must fail here.
+    # pull ``farna.core`` into ``farna.connectors.rest`` must fail here.
     # User/org-supplied base_url SSRF validation: the singleton guard lives in
-    # modulo.core.ssrf. Every base_url-bearing connector imports it directly to
+    # farna.core.ssrf. Every base_url-bearing connector imports it directly to
     # validate the egress target before building the httpx client (FAR-SSRF).
     # This is a deliberate, narrow exception for a shared security primitive —
     # the connectors stay decoupled from all other core business logic. The
     # guard honors SSRF_ALLOW_PRIVATE_RANGES so self-hosted targets remain
     # reachable when the operator opts in.
-    modulo.connectors.gitea -> modulo.core.ssrf
-    modulo.connectors.gitlab -> modulo.core.ssrf
-    modulo.connectors.jira -> modulo.core.ssrf
-    modulo.connectors.youtrack -> modulo.core.ssrf
-    modulo.connectors.sonarqube -> modulo.core.ssrf
-    modulo.connectors.teamcity -> modulo.core.ssrf
-    modulo.connectors.onepassword -> modulo.core.ssrf
-    modulo.connectors.sentry -> modulo.core.ssrf
-    modulo.connectors.azure_key_vault -> modulo.core.ssrf
-    modulo.connectors.azure_pipelines -> modulo.core.ssrf
-    modulo.connectors.azure_repos -> modulo.core.ssrf
-    modulo.connectors.confluence -> modulo.core.ssrf
-    modulo.connectors.grafana -> modulo.core.ssrf
-    modulo.connectors.jenkins -> modulo.core.ssrf
-    modulo.connectors.n8n -> modulo.core.ssrf
+    farna.connectors.gitea -> farna.core.ssrf
+    farna.connectors.gitlab -> farna.core.ssrf
+    farna.connectors.jira -> farna.core.ssrf
+    farna.connectors.youtrack -> farna.core.ssrf
+    farna.connectors.sonarqube -> farna.core.ssrf
+    farna.connectors.teamcity -> farna.core.ssrf
+    farna.connectors.onepassword -> farna.core.ssrf
+    farna.connectors.sentry -> farna.core.ssrf
+    farna.connectors.azure_key_vault -> farna.core.ssrf
+    farna.connectors.azure_pipelines -> farna.core.ssrf
+    farna.connectors.azure_repos -> farna.core.ssrf
+    farna.connectors.confluence -> farna.core.ssrf
+    farna.connectors.grafana -> farna.core.ssrf
+    farna.connectors.jenkins -> farna.core.ssrf
+    farna.connectors.n8n -> farna.core.ssrf
     # FAR-512: github / slack / linear / rest now pin their validated IP via the
-    # shared SSRF security primitive (modulo.core.ssrf) just like the other
+    # shared SSRF security primitive (farna.core.ssrf) just like the other
     # base_url-bearing connectors above — the same narrow exception for a shared
     # security primitive, keeping the connectors decoupled from all other core
     # business logic. github/slack/linear/rest pin the validated address onto the
     # transport (closing the DNS-rebinding window) instead of only re-validating.
-    modulo.connectors.github -> modulo.core.ssrf
-    modulo.connectors.linear -> modulo.core.ssrf
-    modulo.connectors.rest -> modulo.core.ssrf
-    modulo.connectors.slack -> modulo.core.ssrf
+    farna.connectors.github -> farna.core.ssrf
+    farna.connectors.linear -> farna.core.ssrf
+    farna.connectors.rest -> farna.core.ssrf
+    farna.connectors.slack -> farna.core.ssrf
     # The GitLab CI runner takes its base_url from tenant connector config
     # (connector_hub passes config['base_url'] straight through), so it is on the
     # same external trust boundary as the connectors above and needs the guard.
-    modulo.connectors.ci_runner.gitlab_ci -> modulo.core.ssrf
+    farna.connectors.ci_runner.gitlab_ci -> farna.core.ssrf
     # Self-hosted Woodpecker/Drone CI and Plane (FAR-1766/1767) take their
     # base_url from tenant connector config - same narrow exception for the
     # shared SSRF security primitive as the CI runners above.
-    modulo.connectors.ci_runner.woodpecker -> modulo.core.ssrf
-    modulo.connectors.plane -> modulo.core.ssrf
+    farna.connectors.ci_runner.woodpecker -> farna.core.ssrf
+    farna.connectors.plane -> farna.core.ssrf
     # FAR-526B: the GitHub Actions CI runner pins the hardcoded api.github.com via
     # the shared SSRF primitive, and the GitHub/Trello ticket-tracker connectors
     # pin their base_url host. Same narrow exception for the shared security
     # primitive as the other base_url-bearing connectors.
-    modulo.connectors.ci_runner.github_actions -> modulo.core.ssrf
-    modulo.connectors.ticket_tracker.github -> modulo.core.ssrf
-    modulo.connectors.ticket_tracker.trello -> modulo.core.ssrf
+    farna.connectors.ci_runner.github_actions -> farna.core.ssrf
+    farna.connectors.ticket_tracker.github -> farna.core.ssrf
+    farna.connectors.ticket_tracker.trello -> farna.core.ssrf
     # FAR-526C: EVERY connector (including the fixed-vendor-host ones below) now
     # builds its client through the pinned transport, so the whole connector
     # egress surface imports the shared SSRF security primitive. Same narrow
     # exception as the base_url-bearing connectors above: the connectors stay
     # decoupled from all other core business logic; only the shared security
     # primitive is imported.
-    modulo.connectors.asana -> modulo.core.ssrf
-    modulo.connectors.bitbucket -> modulo.core.ssrf
-    modulo.connectors.buildkite -> modulo.core.ssrf
-    modulo.connectors.circleci -> modulo.core.ssrf
-    modulo.connectors.codeclimate -> modulo.core.ssrf
-    modulo.connectors.datadog -> modulo.core.ssrf
-    modulo.connectors.discord -> modulo.core.ssrf
-    modulo.connectors.dropbox_paper -> modulo.core.ssrf
-    modulo.connectors.monday -> modulo.core.ssrf
-    modulo.connectors.microsoft_teams -> modulo.core.ssrf
-    modulo.connectors.notion -> modulo.core.ssrf
-    modulo.connectors.npm -> modulo.core.ssrf
-    modulo.connectors.opsgenie -> modulo.core.ssrf
-    modulo.connectors.pagerduty -> modulo.core.ssrf
-    modulo.connectors.pypi -> modulo.core.ssrf
-    modulo.connectors.sharepoint -> modulo.core.ssrf
-    modulo.connectors.shortcut -> modulo.core.ssrf
-    modulo.connectors.snyk -> modulo.core.ssrf
-    modulo.connectors.trello -> modulo.core.ssrf
+    farna.connectors.asana -> farna.core.ssrf
+    farna.connectors.bitbucket -> farna.core.ssrf
+    farna.connectors.buildkite -> farna.core.ssrf
+    farna.connectors.circleci -> farna.core.ssrf
+    farna.connectors.codeclimate -> farna.core.ssrf
+    farna.connectors.datadog -> farna.core.ssrf
+    farna.connectors.discord -> farna.core.ssrf
+    farna.connectors.dropbox_paper -> farna.core.ssrf
+    farna.connectors.monday -> farna.core.ssrf
+    farna.connectors.microsoft_teams -> farna.core.ssrf
+    farna.connectors.notion -> farna.core.ssrf
+    farna.connectors.npm -> farna.core.ssrf
+    farna.connectors.opsgenie -> farna.core.ssrf
+    farna.connectors.pagerduty -> farna.core.ssrf
+    farna.connectors.pypi -> farna.core.ssrf
+    farna.connectors.sharepoint -> farna.core.ssrf
+    farna.connectors.shortcut -> farna.core.ssrf
+    farna.connectors.snyk -> farna.core.ssrf
+    farna.connectors.trello -> farna.core.ssrf
     # FAR-1650: the shared egress TLS-context factory (connectors/_egress.py)
     # resolves its cached context's trust_env through core.ssrf's
     # default_trust_env (the single SSRF_TRUST_PROXY read). Same narrow
     # shared-security-primitive category as every entry above: no other core
     # logic flows into the connectors layer.
-    modulo.connectors._egress -> modulo.core.ssrf
+    farna.connectors._egress -> farna.core.ssrf
 
 [importlinter:contract:no-concrete-runtime-provider-imports]
 name = Concrete runtime providers are only imported inside core/runtime_provider (FAR-587)
 type = forbidden
 source_modules =
-    modulo
+    farna
 forbidden_modules =
-    modulo.core.runtime_provider.docker
-    modulo.core.runtime_provider.e2b
-    modulo.core.runtime_provider.k8s
-    modulo.core.runtime_provider.local
-    modulo.core.runtime_provider.local_docker
+    farna.core.runtime_provider.docker
+    farna.core.runtime_provider.e2b
+    farna.core.runtime_provider.k8s
+    farna.core.runtime_provider.local
+    farna.core.runtime_provider.local_docker
 ignore_imports =
     # The factory itself wires the concrete providers (build_hub lazy imports).
-    modulo.core.runtime_provider -> modulo.core.runtime_provider.docker
-    modulo.core.runtime_provider -> modulo.core.runtime_provider.e2b
-    modulo.core.runtime_provider -> modulo.core.runtime_provider.k8s
-    modulo.core.runtime_provider -> modulo.core.runtime_provider.local
-    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.docker
-    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.e2b
+    farna.core.runtime_provider -> farna.core.runtime_provider.docker
+    farna.core.runtime_provider -> farna.core.runtime_provider.e2b
+    farna.core.runtime_provider -> farna.core.runtime_provider.k8s
+    farna.core.runtime_provider -> farna.core.runtime_provider.local
+    farna.core.runtime_provider.hub -> farna.core.runtime_provider.docker
+    farna.core.runtime_provider.hub -> farna.core.runtime_provider.e2b
     # FAR-1051: the second hub entry point (RuntimeProviderHub.initialise)
     # wires the concrete Kubernetes provider too, so both factories agree.
-    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.k8s
+    farna.core.runtime_provider.hub -> farna.core.runtime_provider.k8s
     # The deprecated local_docker adapter (ADR 044) delegates to the canonical
     # Docker provider; it stays inside the package and is out of D2 scope.
-    modulo.core.runtime_provider.local_docker -> modulo.core.runtime_provider.docker
+    farna.core.runtime_provider.local_docker -> farna.core.runtime_provider.docker

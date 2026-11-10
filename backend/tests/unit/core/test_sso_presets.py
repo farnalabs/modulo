@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.core.sso_presets import (
+from farna.core.sso_presets import (
     PRESETS,
     get_preset,
     list_presets,

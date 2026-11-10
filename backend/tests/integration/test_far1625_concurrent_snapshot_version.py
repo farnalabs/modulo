@@ -34,13 +34,13 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-from modulo.db.crud.run import create_run
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+from farna.db.crud.run import create_run
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

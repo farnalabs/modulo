@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     create_parameter_schema,
     create_parameter_set,
     delete_parameter_schema,
@@ -75,31 +75,31 @@ def _make_mock_set(
 
 
 class TestCreateParameterSchema(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await create_parameter_schema(name="test")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_parameter_schema(name="test")
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.create_schema")
     async def test_returns_created_schema(
         self,
         mock_create: AsyncMock,
@@ -118,9 +118,9 @@ class TestCreateParameterSchema(AuthContext):
         assert result["data"]["name"] == "deploy-params"
         assert result["data"]["version"] == 1
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.create_schema")
     async def test_integrity_error_returns_conflict(
         self,
         mock_create: AsyncMock,
@@ -132,9 +132,9 @@ class TestCreateParameterSchema(AuthContext):
         result = await create_parameter_schema(name="duplicate")
         assert result["error"] == "conflict"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.create_schema")
     async def test_programming_error_returns_migration_required(
         self,
         mock_create: AsyncMock,
@@ -146,9 +146,9 @@ class TestCreateParameterSchema(AuthContext):
         result = await create_parameter_schema(name="test")
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.create_schema")
     async def test_generic_error_returns_tool_error(
         self,
         mock_create: AsyncMock,
@@ -167,14 +167,14 @@ class TestCreateParameterSchema(AuthContext):
 
 
 class TestUpdateParameterSchema(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await update_parameter_schema(schema_id="not-a-uuid", version=1)
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_not_found(
         self,
         mock_get: AsyncMock,
@@ -186,10 +186,10 @@ class TestUpdateParameterSchema(AuthContext):
         result = await update_parameter_schema(schema_id=str(uuid.uuid4()), version=1)
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_schema.update_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_schema.update_schema")
     async def test_returns_updated_schema(
         self,
         mock_update: AsyncMock,
@@ -211,10 +211,10 @@ class TestUpdateParameterSchema(AuthContext):
         assert result["data"]["version"] == 2
         assert result["data"]["name"] == "updated-name"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_schema.update_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_schema.update_schema")
     async def test_version_conflict_returns_error(
         self,
         mock_update: AsyncMock,
@@ -240,14 +240,14 @@ class TestUpdateParameterSchema(AuthContext):
 
 
 class TestDeleteParameterSchema(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await delete_parameter_schema(schema_id="not-a-uuid")
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_not_found(
         self,
         mock_get: AsyncMock,
@@ -259,10 +259,10 @@ class TestDeleteParameterSchema(AuthContext):
         result = await delete_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_schema.soft_delete_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_schema.soft_delete_schema")
     async def test_returns_deleted(
         self,
         mock_delete: AsyncMock,
@@ -286,14 +286,14 @@ class TestDeleteParameterSchema(AuthContext):
 
 
 class TestRestoreParameterSchema(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await restore_parameter_schema(schema_id="not-a-uuid")
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_not_found(
         self,
         mock_get: AsyncMock,
@@ -305,10 +305,10 @@ class TestRestoreParameterSchema(AuthContext):
         result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_schema.restore_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_schema.restore_schema")
     async def test_returns_restored(
         self,
         mock_restore: AsyncMock,
@@ -332,14 +332,14 @@ class TestRestoreParameterSchema(AuthContext):
 
 
 class TestCreateParameterSet(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await create_parameter_set(schema_id="not-a-uuid", name="test")
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_schema_not_found(
         self,
         mock_get: AsyncMock,
@@ -351,10 +351,10 @@ class TestCreateParameterSet(AuthContext):
         result = await create_parameter_set(schema_id=str(uuid.uuid4()), name="test")
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.create_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.create_set")
     async def test_returns_created_set(
         self,
         mock_create: AsyncMock,
@@ -375,10 +375,10 @@ class TestCreateParameterSet(AuthContext):
         assert result["data"]["id"] == str(ps.id)
         assert result["data"]["name"] == "production"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.create_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.create_set")
     async def test_integrity_error_returns_conflict(
         self,
         mock_create: AsyncMock,
@@ -400,14 +400,14 @@ class TestCreateParameterSet(AuthContext):
 
 
 class TestUpdateParameterSet(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await update_parameter_set(schema_id="bad", set_id="bad", version=1)
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_schema_not_found(
         self,
         mock_get: AsyncMock,
@@ -423,10 +423,10 @@ class TestUpdateParameterSet(AuthContext):
         )
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.get_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.get_set")
     async def test_set_not_found(
         self,
         mock_get_set: AsyncMock,
@@ -445,9 +445,9 @@ class TestUpdateParameterSet(AuthContext):
         )
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_cross_org_schema_reads_as_not_found(
         self,
         mock_get_schema: AsyncMock,
@@ -465,11 +465,11 @@ class TestUpdateParameterSet(AuthContext):
         )
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.get_set")
-    @patch("modulo.db.crud.parameter_set.update_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.get_set")
+    @patch("farna.db.crud.parameter_set.update_set")
     async def test_returns_updated_set(
         self,
         mock_update: AsyncMock,
@@ -495,11 +495,11 @@ class TestUpdateParameterSet(AuthContext):
         assert result["data"]["version"] == 2
         assert result["data"]["name"] == "updated-set"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.get_set")
-    @patch("modulo.db.crud.parameter_set.update_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.get_set")
+    @patch("farna.db.crud.parameter_set.update_set")
     async def test_version_conflict_returns_error(
         self,
         mock_update: AsyncMock,
@@ -529,14 +529,14 @@ class TestUpdateParameterSet(AuthContext):
 
 
 class TestDeleteParameterSet(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await delete_parameter_set(schema_id="bad", set_id="bad")
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_schema_not_found(
         self,
         mock_get: AsyncMock,
@@ -551,11 +551,11 @@ class TestDeleteParameterSet(AuthContext):
         )
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.get_set")
-    @patch("modulo.db.crud.parameter_set.soft_delete_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.get_set")
+    @patch("farna.db.crud.parameter_set.soft_delete_set")
     async def test_returns_deleted(
         self,
         mock_delete: AsyncMock,
@@ -585,14 +585,14 @@ class TestDeleteParameterSet(AuthContext):
 
 
 class TestRestoreParameterSet(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
         result = await restore_parameter_set(schema_id="bad", set_id="bad")
         assert result["error"] == "invalid_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
     async def test_schema_not_found(
         self,
         mock_get: AsyncMock,
@@ -607,11 +607,11 @@ class TestRestoreParameterSet(AuthContext):
         )
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.parameter_schema.get_schema")
-    @patch("modulo.db.crud.parameter_set.get_set")
-    @patch("modulo.db.crud.parameter_set.restore_set")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.parameter_schema.get_schema")
+    @patch("farna.db.crud.parameter_set.get_set")
+    @patch("farna.db.crud.parameter_set.restore_set")
     async def test_returns_restored(
         self,
         mock_restore: AsyncMock,

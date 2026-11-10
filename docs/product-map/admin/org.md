@@ -3,11 +3,11 @@ id: feat-org
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/org_settings.py
-  - backend/src/modulo/api/routes/admin_orgs.py
-  - backend/src/modulo/api/routes/admin_feature_flags.py
-  - backend/src/modulo/api/routes/admin_org_feature_flags.py
-  - backend/src/modulo/api/routes/admin.py
+  - backend/src/farna/api/routes/org_settings.py
+  - backend/src/farna/api/routes/admin_orgs.py
+  - backend/src/farna/api/routes/admin_feature_flags.py
+  - backend/src/farna/api/routes/admin_org_feature_flags.py
+  - backend/src/farna/api/routes/admin.py
   - frontend/src/views/AdminOrgSettingsView.vue
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
@@ -36,12 +36,12 @@ kill-switch, authorization enforcement).
 ## Behaviors
 
 - [x] `GET /api/v1/org/settings` returns the org's display currency for any
-      authenticated org member (`backend/src/modulo/api/routes/org_settings.py`)
+      authenticated org member (`backend/src/farna/api/routes/org_settings.py`)
 - [x] `GET /api/v1/org/settings/guardrails/kill-switch` returns the kill-switch
       state (read-only for non-admins)
 - [x] Admin endpoints handle org CRUD, license management, trigger pause/unpause,
       guardrails kill-switch toggle, and authorization enforcement flag
-      (`backend/src/modulo/api/routes/admin_orgs.py`,
+      (`backend/src/farna/api/routes/admin_orgs.py`,
       `backend/tests/unit/api/test_admin_orgs.py`)
 - [x] Org-wide trigger pause is admin-only with audit logging; toggling to the
       current state is an idempotent no-op
@@ -52,7 +52,7 @@ kill-switch, authorization enforcement).
       `resource_type=org`, payload `{flag_name, enabled}`) through
       `append_audit_event_isolated`, fail-open so a broken append never rolls back
       the already-committed override
-      (`backend/src/modulo/api/routes/admin_feature_flags.py`,
+      (`backend/src/farna/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`)
 - [x] Internal-only flags stay off the customer-facing catalog (FAR-2230):
       `system_maps` (Beta System Maps) is a default-OFF, internal-only flag, so
@@ -62,8 +62,8 @@ kill-switch, authorization enforcement).
       dedicated `system_maps_access` grant, and the toggle route refuses the flag
       without that grant; the response cache key carries the caller's visibility
       class so an internal catalog can never be served to an ordinary caller
-      (`backend/src/modulo/core/feature_flags.py`,
-      `backend/src/modulo/api/routes/admin_feature_flags.py`,
+      (`backend/src/farna/core/feature_flags.py`,
+      `backend/src/farna/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`,
       `backend/tests/unit/core/test_feature_flag_registry.py`)
 - [x] Org admins govern their own organization's low-sensitivity community
@@ -77,8 +77,8 @@ kill-switch, authorization enforcement).
       the flag cache and emit the existing `feature_flag_override_set` /
       `feature_flag_override_cleared` audit events; the card renders on
       `/admin/org` outside the team-tier gate
-      (`backend/src/modulo/api/routes/admin_org_feature_flags.py`,
-      `backend/src/modulo/core/feature_flags.py`,
+      (`backend/src/farna/api/routes/admin_org_feature_flags.py`,
+      `backend/src/farna/core/feature_flags.py`,
       `backend/tests/unit/api/test_admin_org_feature_flags.py`,
       `frontend/src/views/AdminOrgSettingsView.vue`,
       `frontend/src/__tests__/AdminOrgSettingsView.spec.ts`)

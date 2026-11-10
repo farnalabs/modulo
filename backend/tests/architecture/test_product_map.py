@@ -104,7 +104,7 @@ def test_every_registered_feature_has_a_description():
 
 
 def test_documentation_indexer_surfaces_product_map_features():
-    from modulo.core.documentation_indexer import DocumentationIndex
+    from farna.core.documentation_indexer import DocumentationIndex
 
     index = DocumentationIndex.build(MANIFEST_PATH)
     by_path = {entry.heading_path: entry for entry in index.entries}

@@ -56,8 +56,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.auth.jwt import create_access_token
-from modulo.core import cron_helpers as ch
+from farna.auth.jwt import create_access_token
+from farna.core import cron_helpers as ch
 
 pytestmark = [
     pytest.mark.integration,
@@ -106,7 +106,7 @@ async def _seed_schema(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.
     """A committed Schema + version row the manual node's output can point at."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.crud.schema import create_schema, create_schema_version
+    from farna.db.crud.schema import create_schema, create_schema_version
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -235,7 +235,7 @@ async def _tick_and_capture_fire(monkeypatch: pytest.MonkeyPatch, trigger_id: uu
     monkeypatch.setattr(ch, "_enqueue_fire_job_async", _spy)
     await ch.fire_due_triggers()
     assert captured, f"scheduler tick enqueued no fire job for cron trigger {trigger_id}"
-    assert captured["_function"] == "modulo.core.saq_worker.fire_cron_trigger"
+    assert captured["_function"] == "farna.core.saq_worker.fire_cron_trigger"
     return captured
 
 

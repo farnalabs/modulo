@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.eval.mute_policy import (
+from farna.core.eval.mute_policy import (
     DEFAULT_MUTE_WINDOW_DAYS,
     evaluate_mute_policy_for_definition,
     get_definitions_near_mute_threshold,
@@ -21,7 +21,7 @@ class TestEvaluateMutePolicyForDefinition:
         """Test evaluation uses default window when not specified."""
         mock_session = AsyncMock()
 
-        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval:
+        with patch("farna.core.eval.mute_policy.evaluate_mute_policy") as mock_eval:
             mock_eval.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.5,
@@ -37,7 +37,7 @@ class TestEvaluateMutePolicyForDefinition:
         """Test evaluation with custom window."""
         mock_session = AsyncMock()
 
-        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval:
+        with patch("farna.core.eval.mute_policy.evaluate_mute_policy") as mock_eval:
             mock_eval.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.5,
@@ -102,7 +102,7 @@ class TestGetDefinitionsNearMuteThreshold:
         mock_result.scalars.return_value.all.return_value = [mock_eval]
         mock_session.execute.return_value = mock_result
 
-        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
+        with patch("farna.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
             mock_eval_policy.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.47,
@@ -136,7 +136,7 @@ class TestGetDefinitionsNearMuteThreshold:
         mock_result.scalars.return_value.all.return_value = [mock_eval]
         mock_session.execute.return_value = mock_result
 
-        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
+        with patch("farna.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
             mock_eval_policy.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.9,
@@ -176,7 +176,7 @@ class TestRecordMuteAuditEvent:
         """Test recording mute audit event."""
         mock_session = AsyncMock()
 
-        with patch("modulo.core.audit_logger.append_audit_event") as mock_append:
+        with patch("farna.core.audit_logger.append_audit_event") as mock_append:
             await record_mute_audit_event(
                 mock_session,
                 "550e8400-e29b-41d4-a716-446655440000",
@@ -208,7 +208,7 @@ class TestRecordMuteAuditEvent:
         """Test recording unmute audit event."""
         mock_session = AsyncMock()
 
-        with patch("modulo.core.audit_logger.append_audit_event") as mock_append:
+        with patch("farna.core.audit_logger.append_audit_event") as mock_append:
             await record_mute_audit_event(
                 mock_session,
                 "550e8400-e29b-41d4-a716-446655440000",
@@ -240,7 +240,7 @@ class TestRecordMuteAuditEvent:
         mock_result.scalars.return_value.all.return_value = [mock_eval]
         mock_session.execute.return_value = mock_result
 
-        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
+        with patch("farna.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
             mock_eval_policy.return_value = {
                 "should_mute": False,
                 "acceptance_rate": 0.5,

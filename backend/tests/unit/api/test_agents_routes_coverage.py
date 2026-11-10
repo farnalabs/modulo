@@ -24,12 +24,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.prompt_optimizer import OptimizationFailedError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.prompt_optimizer import OptimizationFailedError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -109,7 +109,7 @@ _UPDATE_BODY = {
     "template_id": None,
 }
 
-_PREFIX = "modulo.api.routes.agents."
+_PREFIX = "farna.api.routes.agents."
 
 
 def _make_session() -> AsyncMock:
@@ -578,7 +578,7 @@ def test_optimize_optimizer_failure_returns_500(
         patch(f"{_PREFIX}set_rls_org", new_callable=AsyncMock),
         patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
         patch(f"{_PREFIX}create_secrets_backend", return_value=sb),
-        patch("modulo.core.model_backend_hub._build_backend", return_value=AsyncMock()),
+        patch("farna.core.model_backend_hub._build_backend", return_value=AsyncMock()),
         patch(f"{_PREFIX}PromptOptimizer", return_value=optimizer),
     ):
         resp = http.post(_OPTIMIZE_URL, json={"eval_result_ids": [str(uuid.uuid4())]})
@@ -614,7 +614,7 @@ def test_optimize_llm_call_handles_string_and_list_content(client: tuple[TestCli
         patch(f"{_PREFIX}set_rls_org", new_callable=AsyncMock),
         patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
         patch(f"{_PREFIX}create_secrets_backend", return_value=sb),
-        patch("modulo.core.model_backend_hub._build_backend", return_value=backend),
+        patch("farna.core.model_backend_hub._build_backend", return_value=backend),
         patch(f"{_PREFIX}PromptOptimizer", side_effect=_capture_llm_call),
     ):
         resp = http.post(_OPTIMIZE_URL, json={"eval_result_ids": [str(uuid.uuid4())]})

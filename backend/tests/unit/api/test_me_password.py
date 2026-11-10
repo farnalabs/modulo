@@ -8,12 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.passwords import hash_password
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.auth.passwords import hash_password
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -97,12 +97,12 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user) as mock_get,
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user) as mock_get,
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
             ),
         ):
@@ -126,12 +126,12 @@ class TestChangePassword:
         old_hash = user.password_hash
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user) as mock_get,
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user) as mock_get,
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
             ),
         ):
@@ -153,9 +153,9 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -172,9 +172,9 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -191,9 +191,9 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -221,9 +221,9 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=None)
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -238,9 +238,9 @@ class TestChangePassword:
 
     def test_user_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=None),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.get_account_by_id", return_value=None),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -260,15 +260,15 @@ class TestChangePassword:
         mock_family_2.family_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
             patch(
-                "modulo.api.routes.me.list_families_for_account",
+                "farna.api.routes.me.list_families_for_account",
                 return_value=[mock_family_1, mock_family_2],
             ) as mock_list,
-            patch("modulo.api.routes.me.blacklist_family", return_value=True) as mock_blacklist,
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.blacklist_family", return_value=True) as mock_blacklist,
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
             ),
         ):
@@ -288,12 +288,12 @@ class TestChangePassword:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
-            patch("modulo.api.routes.me.blacklist_family", return_value=True),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.list_families_for_account", return_value=[]),
+            patch("farna.api.routes.me.blacklist_family", return_value=True),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
             ) as mock_audit,
         ):
@@ -324,13 +324,13 @@ class TestChangePassword:
         mock_family.family_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
             patch(
-                "modulo.api.routes.me.list_families_for_account",
+                "farna.api.routes.me.list_families_for_account",
                 return_value=[mock_family],
             ),
             patch(
-                "modulo.api.routes.me.blacklist_family",
+                "farna.api.routes.me.blacklist_family",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("blacklist failed"),
             ),
@@ -358,13 +358,13 @@ class TestChangePassword:
         family_2.family_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("farna.api.routes.me.get_account_by_id", return_value=user),
             patch(
-                "modulo.api.routes.me.list_families_for_account",
+                "farna.api.routes.me.list_families_for_account",
                 return_value=[family_1, family_2],
             ),
             patch(
-                "modulo.api.routes.me.blacklist_family",
+                "farna.api.routes.me.blacklist_family",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("blacklist failed"),
             ) as mock_blacklist,

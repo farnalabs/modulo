@@ -55,7 +55,7 @@ _SEEDED_CUMULATIVE = 4242
 def _alembic_config(db_url: str) -> Config:
     config = Config(f"{BACKEND_ROOT}/alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", f"{BACKEND_ROOT}/src/modulo/db/migrations")
+    config.set_main_option("script_location", f"{BACKEND_ROOT}/src/farna/db/migrations")
     config.config_file_name = None
     return config
 

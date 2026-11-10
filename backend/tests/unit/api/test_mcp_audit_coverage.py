@@ -23,9 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.api.mcp_audit as mcp_audit
-import modulo.api.mcp_server as ms
-from modulo.api.mcp_audit import mcp_audited
+import farna.api.mcp_audit as mcp_audit
+import farna.api.mcp_server as ms
+from farna.api.mcp_audit import mcp_audited
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.test_mcp_server_coverage_gaps import _AuthContext
 
@@ -101,7 +101,7 @@ def _delete_pipeline_patches() -> Any:
     return (
         patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
         patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-        patch("modulo.db.crud.pipeline.soft_delete_pipeline", new=AsyncMock(return_value=True)),
+        patch("farna.db.crud.pipeline.soft_delete_pipeline", new=AsyncMock(return_value=True)),
     )
 
 
@@ -321,7 +321,7 @@ class TestFreshSession:
         async def _fake_audit_session() -> AsyncGenerator[Any, None]:
             yield sentinel
 
-        import modulo.core.audit_coverage as audit_coverage
+        import farna.core.audit_coverage as audit_coverage
 
         monkeypatch.setattr(audit_coverage, "audit_session", _fake_audit_session)
 

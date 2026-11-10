@@ -9,7 +9,7 @@ import jwt as pyjwt
 import pytest
 from jwt import InvalidTokenError as JWTError
 
-from modulo.auth.oauth import (
+from farna.auth.oauth import (
     MAX_REDIRECT_URI_LENGTH,
     SCOPE_ALIASES,
     AuthlibClientWrapper,
@@ -51,7 +51,7 @@ from modulo.auth.oauth import (
     validate_redirect_uri,
     verify_pkce,
 )
-from modulo.auth.permissions import PERMISSIONS, grants_permit
+from farna.auth.permissions import PERMISSIONS, grants_permit
 from tests.unit.auth.conftest import _make_session_mock
 
 _SECRET_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ab"

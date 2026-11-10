@@ -4,9 +4,9 @@ import uuid
 
 import pytest
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.inference import Finding, infer
-from modulo.determination.scanner import ScanSample
+from farna.connectors.base import ConnectorType
+from farna.determination.inference import Finding, infer
+from farna.determination.scanner import ScanSample
 
 from .helpers import iso_days_ago, issues_sample, make_sample
 

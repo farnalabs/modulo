@@ -50,9 +50,9 @@ from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.api.dependencies import get_or_create_engine
-from modulo.api.routes.health import _check_db_hygiene
-from modulo.settings import get_settings
+from farna.api.dependencies import get_or_create_engine
+from farna.api.routes.health import _check_db_hygiene
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -89,8 +89,8 @@ async def _dispose_shared_engines() -> None:
     module, and the check would silently grade the WRONG database. Dropping
     the globals forces a rebuild from the current settings on the next call.
     """
-    from modulo.api import dependencies as api_dependencies
-    from modulo.db import session as db_session
+    from farna.api import dependencies as api_dependencies
+    from farna.db import session as db_session
 
     for module, attr in ((api_dependencies, "_engine"), (db_session, "_shared_engine")):
         engine = getattr(module, attr)

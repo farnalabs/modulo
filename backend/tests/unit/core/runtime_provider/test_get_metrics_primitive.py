@@ -25,14 +25,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     RuntimeProviderError,
     WorkspaceMetrics,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 
 class _NoMetricsProvider(RuntimeProvider):
@@ -117,7 +117,7 @@ def test_workspace_metrics_is_frozen() -> None:
 
 
 def test_workspace_metrics_exported_in_all() -> None:
-    import modulo.core.runtime_provider as pkg
+    import farna.core.runtime_provider as pkg
 
     assert "WorkspaceMetrics" in pkg.__all__
     assert pkg.WorkspaceMetrics is WorkspaceMetrics

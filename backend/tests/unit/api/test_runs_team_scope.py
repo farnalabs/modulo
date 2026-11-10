@@ -15,19 +15,19 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     get_db_session,
     get_plan_context,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import (
+from farna.api.main import app
+from farna.auth.dependencies import (
     get_current_tenant_user,
     get_current_tenant_user_or_api_key,
     get_current_user,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -235,11 +235,11 @@ class TestTriggerRunTeamScope:
         try:
             client = TestClient(app)
             with (
-                patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
-                patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
-                patch("modulo.api.routes.runs.create_run", return_value=run),
-                patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
-                patch("modulo.api.routes.runs.set_rls_org"),
+                patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
+                patch("farna.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
+                patch("farna.api.routes.runs.create_run", return_value=run),
+                patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+                patch("farna.api.routes.runs.set_rls_org"),
             ):
                 resp = client.post(
                     "/api/v1/runs",
@@ -284,11 +284,11 @@ class TestTriggerRunTeamScope:
         try:
             client = TestClient(app)
             with (
-                patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
-                patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
-                patch("modulo.api.routes.runs.create_run", return_value=run),
-                patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
-                patch("modulo.api.routes.runs.set_rls_org"),
+                patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
+                patch("farna.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
+                patch("farna.api.routes.runs.create_run", return_value=run),
+                patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+                patch("farna.api.routes.runs.set_rls_org"),
             ):
                 resp = client.post(
                     "/api/v1/runs",
@@ -314,11 +314,11 @@ class TestTriggerRunTeamScope:
         try:
             client = TestClient(app)
             with (
-                patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
-                patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
-                patch("modulo.api.routes.runs.create_run", return_value=run),
-                patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
-                patch("modulo.api.routes.runs.set_rls_org"),
+                patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
+                patch("farna.api.routes.runs.create_snapshot_from_live_graph", return_value=_make_snapshot()),
+                patch("farna.api.routes.runs.create_run", return_value=run),
+                patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+                patch("farna.api.routes.runs.set_rls_org"),
             ):
                 resp = client.post(
                     "/api/v1/runs",
@@ -353,7 +353,7 @@ class TestTriggerRunTeamScopeResolver:
     @pytest.mark.asyncio
     async def test_resolver_reads_pipeline_id_from_body(self) -> None:
         """Resolver extracts pipeline_id from the JSON request body."""
-        from modulo.api.team_scope import resolve_trigger_run_team_scope
+        from farna.api.team_scope import resolve_trigger_run_team_scope
 
         pid = uuid.uuid4()
 
@@ -379,7 +379,7 @@ class TestTriggerRunTeamScopeResolver:
     @pytest.mark.asyncio
     async def test_resolver_returns_none_for_missing_pipeline(self) -> None:
         """Resolver returns None when pipeline_id doesn't match any row."""
-        from modulo.api.team_scope import resolve_trigger_run_team_scope
+        from farna.api.team_scope import resolve_trigger_run_team_scope
 
         pid = uuid.uuid4()
         mock_session = AsyncMock()
@@ -399,7 +399,7 @@ class TestTriggerRunTeamScopeResolver:
     @pytest.mark.asyncio
     async def test_resolver_returns_none_for_empty_body(self) -> None:
         """Resolver returns None when the body has no pipeline_id."""
-        from modulo.api.team_scope import resolve_trigger_run_team_scope
+        from farna.api.team_scope import resolve_trigger_run_team_scope
 
         mock_session = AsyncMock()
         # FAR-1639: sync contract typed explicitly (see _make_mock_session).
@@ -414,7 +414,7 @@ class TestTriggerRunTeamScopeResolver:
     @pytest.mark.asyncio
     async def test_resolver_returns_none_for_invalid_uuid(self) -> None:
         """Resolver returns None for a non-UUID pipeline_id."""
-        from modulo.api.team_scope import resolve_trigger_run_team_scope
+        from farna.api.team_scope import resolve_trigger_run_team_scope
 
         mock_session = AsyncMock()
         # FAR-1639: sync contract typed explicitly (see _make_mock_session).
@@ -462,7 +462,7 @@ class TestResolveTriggerTeamScope:
 
     @pytest.mark.asyncio
     async def test_team_private_trigger_resolves_owner_and_visibility(self) -> None:
-        from modulo.api.team_scope import resolve_trigger_team_scope
+        from farna.api.team_scope import resolve_trigger_team_scope
 
         row = (_TEAM_ID, "team")
         resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(row))
@@ -472,7 +472,7 @@ class TestResolveTriggerTeamScope:
 
     @pytest.mark.asyncio
     async def test_org_visible_trigger_resolves_without_team(self) -> None:
-        from modulo.api.team_scope import resolve_trigger_team_scope
+        from farna.api.team_scope import resolve_trigger_team_scope
 
         row = (None, "org")
         resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(row))
@@ -483,14 +483,14 @@ class TestResolveTriggerTeamScope:
     @pytest.mark.asyncio
     async def test_trigger_with_missing_pipeline_resolves_none(self) -> None:
         """A trigger whose pipeline row is absent resolves to None (dependency 404s)."""
-        from modulo.api.team_scope import resolve_trigger_team_scope
+        from farna.api.team_scope import resolve_trigger_team_scope
 
         resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(None))
         assert resource is None
 
     @pytest.mark.asyncio
     async def test_missing_path_param_resolves_none(self) -> None:
-        from modulo.api.team_scope import resolve_trigger_team_scope
+        from farna.api.team_scope import resolve_trigger_team_scope
 
         resource = await resolve_trigger_team_scope(self._request(None), self._session(None))
         assert resource is None
@@ -500,7 +500,7 @@ class TestResolveTriggerTeamScope:
         """A malformed trigger_id fails closed with 400 instead of skipping the gate."""
         from fastapi import HTTPException
 
-        from modulo.api.team_scope import resolve_trigger_team_scope
+        from farna.api.team_scope import resolve_trigger_team_scope
 
         session = self._session(None)
         with pytest.raises(HTTPException) as excinfo:

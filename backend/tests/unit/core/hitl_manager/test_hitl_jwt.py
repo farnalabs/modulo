@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt as pyjwt
 import pytest
 
-from modulo.auth.jwt import _ALGORITHM, create_claim_token
-from modulo.core.hitl_manager import (
+from farna.auth.jwt import _ALGORITHM, create_claim_token
+from farna.core.hitl_manager import (
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
 )
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 
 _KEY = "test_secret_key_32_bytes_long!!!!!!"
 _ORG = uuid.uuid4()
@@ -230,7 +230,7 @@ async def test_claim_with_secret_key_forwards_expiry_minutes() -> None:
     unclaimed_gate = _gate()
     session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
 
-    with patch("modulo.core.hitl_manager._create_claim_jwt") as mock_jwt:
+    with patch("farna.core.hitl_manager._create_claim_jwt") as mock_jwt:
         mock_jwt.return_value = "signed.jwt.token"
         mgr = HITLManager(secret_key=_KEY)
         await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=90)
@@ -265,7 +265,7 @@ async def test_claim_without_secret_key_generates_opaque_token() -> None:
 
     session.execute = _capture_execute
 
-    with patch("modulo.core.hitl_manager.secrets.token_urlsafe", return_value="opaque-token-abc") as mock_tok:
+    with patch("farna.core.hitl_manager.secrets.token_urlsafe", return_value="opaque-token-abc") as mock_tok:
         mgr = HITLManager()
         await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 

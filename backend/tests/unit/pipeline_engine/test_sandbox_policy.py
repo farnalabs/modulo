@@ -22,14 +22,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     _validate_allowlist_host,
     _validate_sandbox_git_credentials_config,
     _validate_sandbox_read_only_config,
     derive_sandbox_capabilities,
     is_valid_egress_host,
 )
-from modulo.core.pipeline_engine.sandbox_policy import (
+from farna.core.pipeline_engine.sandbox_policy import (
     _GH_PR_GUARD_CLAIM_RECEIPT,
     _GH_PR_GUARD_CLAIM_SENTINEL,
     _GH_PR_GUARD_FINGERPRINT,
@@ -267,7 +267,7 @@ def test_read_only_script_executes_clearly(tmp_path) -> None:
 def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
     """Executing the credential helper itself: it echoes the token for
     github.com and nothing for any other host (executes the real sh snippet)."""
-    from modulo.core.pipeline_engine.sandbox_policy import _credential_helper_script
+    from farna.core.pipeline_engine.sandbox_policy import _credential_helper_script
 
     helper = _credential_helper_script()
     token = "ghp_testtoken123"
@@ -728,7 +728,7 @@ async def test_apply_sandbox_policy_guard_step_stderr_is_mirrored_into_the_log(
     class _StderrSandbox:
         commands = _StderrCommands()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.sandbox_policy"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.sandbox_policy"):
         await apply_sandbox_policy(
             _StderrSandbox(),
             read_only=False,
@@ -1170,7 +1170,7 @@ async def test_second_flagged_node_in_one_run_installs_a_pre_planted_refusal(
     # harvested receipt / delivered pr_url arms are covered separately below).
     assert settle_run_pr_guard(scope, "node-1", f"created {_GH_PR_GUARD_CLAIM_SENTINEL}") == "spent"
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.sandbox_policy"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.sandbox_policy"):
         node2 = _FakeSandbox()
         await apply_sandbox_policy(
             node2,
@@ -1467,8 +1467,8 @@ def test_corroboration_pr_url_regex_is_pinned_to_node_runners_extraction() -> No
     against the streams with this mirror, so an isolated edit to either copy
     would silently change spend/release outcomes with no other failing test.
     Pin both copies together (pattern AND flags) so drift fails here."""
-    import modulo.core.pipeline_engine.node_runner as node_runner
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.node_runner as node_runner
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     assert sandbox_policy._GH_PR_URL_RE.pattern == node_runner._PR_URL_PATTERN.pattern, (
         "sandbox_policy's corroboration mirror must stay identical to node_runner's extraction"
@@ -1655,7 +1655,7 @@ def test_run_pr_guard_ledger_is_bounded() -> None:
     engine process: eviction kicks in past the cap, the NEWEST entries (the
     ones most likely to have flagged nodes in flight) survive, and the cap
     holds afterwards."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     reset_run_pr_guard_claims()
     cap = sandbox_policy._MAX_RUN_PR_GUARD_CLAIMS
@@ -1703,7 +1703,7 @@ async def test_harvest_bounded_timeout_cancels_and_drains_the_probe(
     returned while the inner probe task kept running against a container the
     teardown was about to destroy (and never awaited it). The wrapper must
     return ``None`` (receipt unknown) AND leave no live probe behind."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     started = asyncio.Event()
     probe_cancelled = asyncio.Event()
@@ -1772,7 +1772,7 @@ async def test_harvest_bounded_cancellation_is_reraised_after_the_probe_is_drain
 def test_canonical_scope_uuid_returns_none_for_an_absent_scope() -> None:
     """An empty / absent scope canonicalises to ``None``: no run id means no
     cross-node sharing, so the key builder short-circuits before parsing."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     assert sandbox_policy._canonical_scope_uuid(None) is None
     assert sandbox_policy._canonical_scope_uuid("") is None
@@ -1789,7 +1789,7 @@ def test_settle_spend_without_an_entry_still_honours_the_ledger_bound() -> None:
     """Spend evidence for a scope with no ledger entry records SPENT, and that
     insertion is still bounded — a long-lived engine process cannot grow the
     ledger without limit through settles alone."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     reset_run_pr_guard_claims()
     cap = sandbox_policy._MAX_RUN_PR_GUARD_CLAIMS
@@ -1806,7 +1806,7 @@ def test_settle_spend_without_an_entry_still_honours_the_ledger_bound() -> None:
 def test_is_valid_delivered_pr_url_rejects_a_url_that_fails_to_parse() -> None:
     """A ``pr_url`` that makes ``urlsplit`` raise is never a spend signal: the
     parse guard fail-closes to ``False`` instead of propagating."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     assert sandbox_policy._is_valid_delivered_pr_url("http://[::1") is False
     assert sandbox_policy._is_valid_delivered_pr_url("N/A") is False
@@ -1846,8 +1846,8 @@ def test_is_valid_delivered_pr_url_is_pinned_to_the_classifier_spec(url: str) ->
     failing test. Pin both truth tables together so drift fails here — the same
     protection ``test_corroboration_pr_url_regex_is_pinned_to_node_runners_extraction``
     gives the ``_GH_PR_URL_RE`` mirror."""
-    import modulo.core.pipeline_engine.classify as classify
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.classify as classify
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     assert sandbox_policy._is_valid_delivered_pr_url(url) is classify._is_valid_pr_url(url), (
         f"the delivered-pr_url mirror must agree with the classifier spec on {url!r}"
@@ -1858,7 +1858,7 @@ def test_pr_url_corroboration_skips_empty_streams_and_non_matching_urls() -> Non
     """The stream scan skips falsy streams and keeps scanning past a
     non-matching PR URL until the reported one is found (and rejects a missing
     or blank ``pr_url`` outright)."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     target = "https://github.com/org/repo/pull/1"
     assert (
@@ -1875,7 +1875,7 @@ def test_pr_url_corroboration_skips_empty_streams_and_non_matching_urls() -> Non
 async def test_cancel_and_drain_harvest_skips_an_already_done_probe() -> None:
     """A probe that finished before the drain was asked to cancel it is left
     alone — there is nothing to cancel and the wait returns immediately."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     probe: asyncio.Future[bool | None] = asyncio.ensure_future(asyncio.sleep(0, result=True))
     await probe
@@ -1887,7 +1887,7 @@ async def test_cancel_and_drain_harvest_swallows_a_nested_cancellation() -> None
     """A cancellation landing while the drain itself waits is swallowed: the
     probe is already cancelled, and the caller re-raises its OWN recorded
     cancellation after teardown."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     released = asyncio.Event()
 
@@ -1915,7 +1915,7 @@ async def test_cancel_and_drain_harvest_consumes_a_probe_that_outlives_the_bound
     """A probe that ignores its cancellation and outlives the drain bound gets
     a done-callback that consumes its later outcome — a late failure is never
     surfaced as asyncio's 'exception was never retrieved'."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     monkeypatch.setattr(sandbox_policy, "_HARVEST_DRAIN_TIMEOUT", 0.05)
     finished = asyncio.Event()
@@ -1947,7 +1947,7 @@ async def test_cancel_and_drain_harvest_consumes_a_probe_that_outlives_the_bound
 async def test_consume_harvest_probe_outcome_handles_every_terminal_state() -> None:
     """The done-callback is total: a cancelled probe is a no-op, a clean probe
     is a no-op, and a failed probe's exception is retrieved (never leaked)."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     cancelled: asyncio.Future[bool | None] = asyncio.ensure_future(asyncio.sleep(3600))
     cancelled.cancel()
@@ -1974,7 +1974,7 @@ async def test_harvest_bounded_reports_unknown_when_the_probe_is_cancelled() -> 
     """A probe coroutine that raises ``CancelledError`` itself leaves its task
     cancelled; the wrapper reports the receipt as unknown (``None``) instead of
     propagating the cancellation into the caller's teardown forensics."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     async def _cancelled(command: list[str]) -> SimpleNamespace:
         raise asyncio.CancelledError
@@ -1986,7 +1986,7 @@ async def test_harvest_bounded_reports_unknown_on_a_base_exception() -> None:
     """Even a non-``Exception`` BaseException from the probe becomes an unknown
     receipt (``None``): the finally caller must never see an unexpected failure
     escape the best-effort harvest."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     class _ProbeExploded(BaseException):
         pass

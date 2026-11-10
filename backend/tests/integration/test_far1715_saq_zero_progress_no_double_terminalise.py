@@ -32,9 +32,9 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core import cron_helpers as ch
-from modulo.core.cron_helpers import _terminalize_aged_nodeless_zombies
-from modulo.core.pipeline_execution import _sweep_org_saq_zero_progress_runs
+from farna.core import cron_helpers as ch
+from farna.core.cron_helpers import _terminalize_aged_nodeless_zombies
+from farna.core.pipeline_execution import _sweep_org_saq_zero_progress_runs
 
 pytestmark = pytest.mark.integration
 

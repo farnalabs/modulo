@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 
 
 def mock_begin(session: AsyncMock) -> None:

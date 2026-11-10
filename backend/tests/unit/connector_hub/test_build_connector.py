@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -21,12 +21,12 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, WoodpeckerCIRunner
-from modulo.connectors.github import GitHubConnector
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.plane import PlaneConnector
-from modulo.core.connector_hub import _build_connector
+from farna.connectors.ci_runner import GitHubActionsCIRunner, WoodpeckerCIRunner
+from farna.connectors.github import GitHubConnector
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.plane import PlaneConnector
+from farna.core.connector_hub import _build_connector
 from tests.unit.connector_hub._fixtures import BUILD_CASES
 
 # ShellConnector is deprecated (ADR 044) and warns on construction.
@@ -209,7 +209,7 @@ def test_github_family_client_targets_the_configured_ghes_base(monkeypatch: pyte
     re-hardcoded ``api.github.com`` inside ``_client`` fails here. The SSRF
     resolver is stubbed so no real DNS lookup happens.
     """
-    from modulo.core import ssrf
+    from farna.core import ssrf
 
     monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda host: ["93.184.216.34"])
     connector = _build_connector(type_id, {"base_url": "https://ghe.example.com/api/v3"}, {"token": "tok"})
@@ -244,7 +244,7 @@ def test_build_ticket_tracker_unknown_provider_raises() -> None:
 
 def test_build_plugin_registry_fallback() -> None:
     """An unknown type_id is delegated to the plugin registry when registered there."""
-    from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+    from farna.core.plugin_registry import PluginManifest, PluginRegistry
 
     class _PluginConnector(ConnectorBase):
         @property
@@ -266,7 +266,7 @@ def test_build_plugin_registry_fallback() -> None:
         lambda config, creds: _PluginConnector(),
         PluginManifest(PLUGIN_ID="pkg-demo", display_name="Demo", description="", version="1"),
     )
-    with patch("modulo.core.connector_hub.get_plugin_registry", return_value=registry):
+    with patch("farna.core.connector_hub.get_plugin_registry", return_value=registry):
         connector = _build_connector("my_custom_connector", {}, {})
     assert isinstance(connector, _PluginConnector)
     assert connector.connector_type == ConnectorType.CUSTOM

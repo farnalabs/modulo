@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.exceptions import TriggersPausedError
-from modulo.db.settings_resolver import (
+from farna.core.exceptions import TriggersPausedError
+from farna.db.settings_resolver import (
     ensure_triggers_resumable,
     get_effective_setting,
     org_is_paused,
@@ -54,11 +54,11 @@ class TestGetEffectiveSetting:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org({"other": 1})),
             )
             m.setattr(
-                "modulo.db.settings_resolver.get_config",
+                "farna.db.settings_resolver.get_config",
                 AsyncMock(return_value=MagicMock(value="system_wide")),
             )
             assert await get_effective_setting(session, _ORG_ID, "theme") == "system_wide"
@@ -69,24 +69,24 @@ class TestGetEffectiveSetting:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org({"feature_enabled": False})),
             )
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             assert await get_effective_setting(session, _ORG_ID, "feature_enabled", default=True) is False
 
     async def test_zero_org_value_beats_default(self) -> None:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({"max_items": 0})))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({"max_items": 0})))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             assert await get_effective_setting(session, _ORG_ID, "max_items", default=10) == 0
 
     async def test_empty_string_org_value_beats_default(self) -> None:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({"name": ""})))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({"name": ""})))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             assert not await get_effective_setting(session, _ORG_ID, "name", default="fallback")
 
     async def test_org_read_error_falls_through_to_system_config(self) -> None:
@@ -95,11 +95,11 @@ class TestGetEffectiveSetting:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(side_effect=SQLAlchemyError("org read failed")),
             )
             m.setattr(
-                "modulo.db.settings_resolver.get_config",
+                "farna.db.settings_resolver.get_config",
                 AsyncMock(return_value=MagicMock(value="system_wide")),
             )
             assert await get_effective_setting(session, _ORG_ID, "theme") == "system_wide"
@@ -108,10 +108,10 @@ class TestGetEffectiveSetting:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(side_effect=SQLAlchemyError("org read failed")),
             )
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             assert await get_effective_setting(session, _ORG_ID, "theme", default="light") == "light"
 
     async def test_config_read_error_returns_default(self) -> None:
@@ -119,9 +119,9 @@ class TestGetEffectiveSetting:
         resolver is best-effort, never surfaces a config read failure."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
             m.setattr(
-                "modulo.db.settings_resolver.get_config",
+                "farna.db.settings_resolver.get_config",
                 AsyncMock(side_effect=SQLAlchemyError("config read failed")),
             )
             assert await get_effective_setting(session, _ORG_ID, "theme", default="light") == "light"
@@ -132,11 +132,11 @@ class TestGetEffectiveSetting:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org(["not", "a", "dict"])),
             )
             m.setattr(
-                "modulo.db.settings_resolver.get_config",
+                "farna.db.settings_resolver.get_config",
                 AsyncMock(return_value=MagicMock(value="system_wide")),
             )
             assert await get_effective_setting(session, _ORG_ID, "theme") == "system_wide"
@@ -240,14 +240,14 @@ class TestEnsureTriggersResumable:
     async def test_paused_raises_triggers_paused_error(self) -> None:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.org_is_paused", AsyncMock(return_value=True))
+            m.setattr("farna.db.settings_resolver.org_is_paused", AsyncMock(return_value=True))
             with pytest.raises(TriggersPausedError):
                 await ensure_triggers_resumable(session, _ORG_ID)
 
     async def test_paused_error_carries_trigger_context(self) -> None:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.org_is_paused", AsyncMock(return_value=True))
+            m.setattr("farna.db.settings_resolver.org_is_paused", AsyncMock(return_value=True))
             with pytest.raises(TriggersPausedError) as excinfo:
                 await ensure_triggers_resumable(
                     session,
@@ -262,7 +262,7 @@ class TestEnsureTriggersResumable:
     async def test_active_org_allows_resume(self) -> None:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.org_is_paused", AsyncMock(return_value=False))
+            m.setattr("farna.db.settings_resolver.org_is_paused", AsyncMock(return_value=False))
             assert await ensure_triggers_resumable(session, _ORG_ID) is None
 
     async def test_read_error_propagates_not_converted_to_paused(self) -> None:
@@ -271,7 +271,7 @@ class TestEnsureTriggersResumable:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.org_is_paused",
+                "farna.db.settings_resolver.org_is_paused",
                 AsyncMock(side_effect=SQLAlchemyError("db down")),
             )
             with pytest.raises(SQLAlchemyError):
@@ -298,10 +298,10 @@ class TestResolveSchemaValidatorMode:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org({"schema_validator_mode": "strict"})),
             )
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
 
@@ -309,9 +309,9 @@ class TestResolveSchemaValidatorMode:
         """When system_config has the key set, it wins over the env var."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
             m.setattr(
-                "modulo.db.settings_resolver.get_config",
+                "farna.db.settings_resolver.get_config",
                 AsyncMock(return_value=MagicMock(value="strict")),
             )
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
@@ -322,8 +322,8 @@ class TestResolveSchemaValidatorMode:
         used as the first-boot seed."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
 
@@ -331,8 +331,8 @@ class TestResolveSchemaValidatorMode:
         """When no runtime setting AND no env var, defaults to 'lenient'."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.delenv("MODULO_SCHEMA_VALIDATOR_MODE", raising=False)
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
 
@@ -341,18 +341,18 @@ class TestResolveSchemaValidatorMode:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org({"schema_validator_mode": "bogus"})),
             )
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
 
     async def test_invalid_env_var_coerces_to_lenient(self) -> None:
         """An invalid env var value with no DB setting coerces to 'lenient'."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "BOGUS")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
 
@@ -361,8 +361,8 @@ class TestResolveSchemaValidatorMode:
         system_config then env var."""
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=None))
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, None) == "strict"
 
@@ -371,9 +371,9 @@ class TestResolveSchemaValidatorMode:
         session = AsyncMock()
         with pytest.MonkeyPatch().context() as m:
             m.setattr(
-                "modulo.db.settings_resolver.get_organisation",
+                "farna.db.settings_resolver.get_organisation",
                 AsyncMock(return_value=_Org({"schema_validator_mode": "lenient"})),
             )
-            m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
+            m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
             m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"

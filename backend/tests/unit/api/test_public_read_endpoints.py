@@ -18,7 +18,7 @@ from collections.abc import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.main import app
+from farna.api.main import app
 
 
 @pytest.fixture(autouse=True)

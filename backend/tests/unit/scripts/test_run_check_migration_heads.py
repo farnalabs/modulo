@@ -42,7 +42,7 @@ class _Completed:
 
 
 def _versions_dir(tmp_path: Path) -> Path:
-    versions = tmp_path / "backend" / "src" / "modulo" / "db" / "migrations" / "versions"
+    versions = tmp_path / "backend" / "src" / "farna" / "db" / "migrations" / "versions"
     versions.mkdir(parents=True)
     return versions
 
@@ -99,9 +99,9 @@ class TestRead:
 class TestChangedNames:
     def test_staged_diff_filters_to_migration_versions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         stdout = (
-            "backend/src/modulo/db/migrations/versions/0062_add_widget.py\n"
-            "backend/src/modulo/api/routes/triggers.py\n"
-            "backend/src/modulo/db/migrations/versions/0063_fix.py\n"
+            "backend/src/farna/db/migrations/versions/0062_add_widget.py\n"
+            "backend/src/farna/api/routes/triggers.py\n"
+            "backend/src/farna/db/migrations/versions/0063_fix.py\n"
             "README.md\n"
         )
         calls: list[list[str]] = []
@@ -120,7 +120,7 @@ class TestChangedNames:
 
         def _fake_run(cmd, **_kwargs):
             calls.append(list(cmd))
-            return _Completed(0, stdout="backend/src/modulo/db/migrations/versions/0062_add_widget.py\n")
+            return _Completed(0, stdout="backend/src/farna/db/migrations/versions/0062_add_widget.py\n")
 
         monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 

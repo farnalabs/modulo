@@ -22,8 +22,8 @@ with contextlib.suppress(FileNotFoundError, OSError):
 
 from collections.abc import AsyncGenerator
 
-from modulo.api.dependencies import get_system_db_session
-from modulo.api.main import app
+from farna.api.dependencies import get_system_db_session
+from farna.api.main import app
 from tests.bdd.conftest import (
     make_mock_pipeline,
     make_mock_run,
@@ -52,7 +52,7 @@ class _ProvisionedSystemSettings:
 
 @pytest.fixture(autouse=True)
 def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.api import dependencies as _deps
+    from farna.api import dependencies as _deps
 
     monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
@@ -63,15 +63,15 @@ def _patch_trigger_run(client, request, *, pipeline=None, run=None, payload=None
         pipeline = make_mock_pipeline(id=_PIPELINE_ID, name=request.node._pipeline_name)
     run = run or make_mock_run(status="pending", trigger_type="manual")
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=make_mock_snapshot(),
         ),
-        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -144,7 +144,7 @@ def no_trigger_exists(trigger_id: str, request, mock_session):
 
 def _post_webhook(client, request, payload, *, error=None, trigger_missing=False, paused=False):
     """POST /api/v1/triggers/{name}/webhook with the current route's patch targets."""
-    from modulo.core import trigger_engine as trigger_engine_module
+    from farna.core import trigger_engine as trigger_engine_module
 
     handle_webhook = AsyncMock(
         return_value=(
@@ -162,9 +162,9 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
     mock_session = request.getfixturevalue("mock_session")
     mock_session.add = MagicMock()
     with (
-        patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=make_mock_snapshot(),
         ),
@@ -172,15 +172,15 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
         # _dispatch_webhook_run: the route fires it as a background task — a
         # no-op patch keeps the BDD test hermetic (the old pipeline_executor_task
         # target was removed in the Celery->SAQ cutover).
-        patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
+        patch("farna.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
         # Org-wide pause gate: the mocked org read is a MagicMock that would
         # fail-closed as paused — force the deterministic state instead.
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=paused),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=paused),
         # Route-level timestamp/HMAC validation against the mocked trigger's
         # MagicMock config_json would 400/401 the happy path — bypass it (the
         # engine-level HMAC handling is covered by webhook_hmac.feature).
-        patch("modulo.api.routes.webhooks.verify_timestamp", return_value=1700000000),
-        patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
+        patch("farna.api.routes.webhooks.verify_timestamp", return_value=1700000000),
+        patch("farna.api.routes.webhooks.verify_hmac", return_value=True),
     ):
         headers = {
             "X-Modulo-Timestamp": "1700000000",
@@ -226,7 +226,7 @@ def webhook_valid_hmac(name: str, payload, client, request):
 
 @when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and valid HMAC raising duplicate"))
 def webhook_duplicate(name: str, payload, client, request):
-    from modulo.core.trigger_engine import DuplicateWebhookError
+    from farna.core.trigger_engine import DuplicateWebhookError
 
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     _post_webhook(client, request, payload_dict, error=DuplicateWebhookError(payload_hash="x"))
@@ -234,7 +234,7 @@ def webhook_duplicate(name: str, payload, client, request):
 
 @when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and valid HMAC raising rate_limit"))
 def webhook_rate_limited(name: str, payload, client, request):
-    from modulo.core.trigger_engine import PipelineRateLimitError
+    from farna.core.trigger_engine import PipelineRateLimitError
 
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     _post_webhook(
@@ -247,7 +247,7 @@ def webhook_rate_limited(name: str, payload, client, request):
 
 @when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and invalid HMAC"))
 def webhook_invalid_hmac(name: str, payload, client, request):
-    from modulo.core.trigger_engine import HmacValidationError
+    from farna.core.trigger_engine import HmacValidationError
 
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     _post_webhook(client, request, payload_dict, error=HmacValidationError())
@@ -255,7 +255,7 @@ def webhook_invalid_hmac(name: str, payload, client, request):
 
 @when(parsers.parse("I POST /api/v1/triggers/{name}/webhook with payload {payload} and no HMAC"))
 def webhook_no_hmac(name: str, payload, client, request):
-    from modulo.core.trigger_engine import HmacValidationError
+    from farna.core.trigger_engine import HmacValidationError
 
     payload_dict = json.loads(payload) if isinstance(payload, str) else payload
     _post_webhook(client, request, payload_dict, error=HmacValidationError())
@@ -319,7 +319,7 @@ def list_trigger_events(name: str, limit: int, client, request, mock_session):
         return trigger_row
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.triggers.set_rls_org", new_callable=AsyncMock),
         patch.object(mock_session, "execute", side_effect=_fake_execute),
     ):
         resp = client.get(f"/api/v1/triggers/{name}/events?limit={limit}")

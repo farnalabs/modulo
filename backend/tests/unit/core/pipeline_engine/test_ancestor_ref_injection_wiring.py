@@ -32,8 +32,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from modulo.core.pipeline_engine.graph_cache import _compute_dag_ancestor_ids
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.graph_cache import _compute_dag_ancestor_ids
+from farna.core.pipeline_engine.node_runner import (
     _fold_ancestor_emission_refs,
     make_node_fn,
 )
@@ -194,10 +194,10 @@ async def _invoke_node(
     fn = make_node_fn(node_def, dag_ancestor_ids=ancestor_ids)
     state = _declaring_state(create_refs=create_refs, artifacts=artifacts)
     with (
-        patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
-        patch("modulo.core.pipeline_engine.node_runner.work_item_refs_cap", lambda: cap),
-        patch("modulo.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
-        patch("modulo.core.pipeline_engine.node_runner._render_agent_prompt", new=_recording_render),
+        patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+        patch("farna.core.pipeline_engine.node_runner.work_item_refs_cap", lambda: cap),
+        patch("farna.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
+        patch("farna.core.pipeline_engine.node_runner._render_agent_prompt", new=_recording_render),
     ):
         result = await fn(state)
     return captured.get("work_item_refs"), result
@@ -284,9 +284,9 @@ class TestAssemblyFailOpen:
     async def test_assembly_failure_injects_empty_and_counts(self) -> None:
         counter_events: list[str] = []
         with (
-            patch("modulo.core.pipeline_engine.node_runner.collect_injected_refs", side_effect=RuntimeError("boom")),
+            patch("farna.core.pipeline_engine.node_runner.collect_injected_refs", side_effect=RuntimeError("boom")),
             patch(
-                "modulo.core.pipeline_engine.node_runner.notify_refs_event",
+                "farna.core.pipeline_engine.node_runner.notify_refs_event",
                 side_effect=lambda name, *a, **kw: counter_events.append(name),
             ),
         ):
@@ -310,8 +310,8 @@ class TestAssemblyFailOpen:
         snapshot = repr(state)
         fn = make_node_fn(_declaring_node_def(), dag_ancestor_ids=_D_ANC)
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
-            patch("modulo.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
         ):
             result = await fn(state)
         assert repr(state) == snapshot

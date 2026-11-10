@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
-from modulo.core.trigger_engine.agent_signal import _log_signal_event, fire_agent_signal
-from modulo.db.settings_resolver import PAUSE_SKIP_REASON
+from farna.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+from farna.core.trigger_engine.agent_signal import _log_signal_event, fire_agent_signal
+from farna.db.settings_resolver import PAUSE_SKIP_REASON
 
 
 def _make_trigger(
@@ -86,7 +86,7 @@ def _setup_session(
 
 @pytest.fixture
 def mock_create_run() -> Any:
-    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as m:
+    with patch("farna.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as m:
         m.return_value = MagicMock(id=uuid.uuid4())
         yield m
 

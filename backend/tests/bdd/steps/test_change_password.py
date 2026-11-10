@@ -43,14 +43,14 @@ def step_change_password(
     request: Any,
     ctx: dict[str, Any],
 ) -> None:
-    from modulo.auth.passwords import hash_password
+    from farna.auth.passwords import hash_password
 
     with (
-        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
-        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
-        patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
-        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
+        patch("farna.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("farna.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("farna.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+        patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+        patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = hash_password("correct-horse-battery")
@@ -83,9 +83,9 @@ def step_change_password_no_local(
     ctx: dict[str, Any],
 ) -> None:
     with (
-        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
-        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+        patch("farna.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("farna.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("farna.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = None

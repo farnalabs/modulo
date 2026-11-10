@@ -16,15 +16,15 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.routes.admin_orgs import (
+from farna.api.routes.admin_orgs import (
     SetOrgGuardrailsKillSwitchRequest,
     admin_get_org_guardrails_kill_switch,
     admin_set_org_guardrails_kill_switch,
 )
-from modulo.core import guardrails as guardrails_module
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
+from farna.core import guardrails as guardrails_module
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

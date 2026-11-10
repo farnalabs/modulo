@@ -9,27 +9,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api import mcp_server
-from modulo.api.dependencies import require_in_dev_operator
-from modulo.api.routes.pipelines import (
+from farna.api import mcp_server
+from farna.api.dependencies import require_in_dev_operator
+from farna.api.routes.pipelines import (
     _grants_deny_guardrail_admin,
     _grants_deny_privilege,
     _is_guardrail_admin,
     _is_privileged,
 )
-from modulo.auth import api_key as api_key_mod
-from modulo.auth.api_key import ApiKeyGrantsUnavailableError, api_key_grants_enabled
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.db.crud.hitl_review_guard import (
+from farna.auth import api_key as api_key_mod
+from farna.auth.api_key import ApiKeyGrantsUnavailableError, api_key_grants_enabled
+from farna.auth.jwt import TenantPrincipal
+from farna.core.feature_flags import FeatureFlagRegistry
+from farna.db.crud.hitl_review_guard import (
     GuardrailBindingStripDenied,
     enforce_guardrail_binding_strip,
     resolve_effective_privilege,
 )
 
-_ROLE_PATH = "modulo.db.crud.org_membership.resolve_role_from_membership"
-_ROWS_PATH = "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows"
-_ENGINE_PATH = "modulo.api.dependencies.get_or_create_engine"
+_ROLE_PATH = "farna.db.crud.org_membership.resolve_role_from_membership"
+_ROWS_PATH = "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows"
+_ENGINE_PATH = "farna.api.dependencies.get_or_create_engine"
 
 
 def _principal(role: str, grants: frozenset[str] | None) -> TenantPrincipal:
@@ -266,7 +266,7 @@ class TestMintStrictFlagRead:
 
     @staticmethod
     async def _mint(grants: list[str] | None, scope: str) -> None:
-        from modulo.api.routes import api_keys as routes
+        from farna.api.routes import api_keys as routes
 
         req = MagicMock()
         req.name = "k"

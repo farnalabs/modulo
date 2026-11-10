@@ -30,7 +30,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0190_hitl_claim_context_json"
 
@@ -190,7 +190,7 @@ class TestSymmetryAndModelParity:
         assert "delete from" not in source.lower()
 
     def test_model_matches_upgraded_schema(self) -> None:
-        from modulo.db.models.hitl_claim import HitlClaim
+        from farna.db.models.hitl_claim import HitlClaim
 
         column = HitlClaim.__table__.c.context_json
         assert column.nullable is True

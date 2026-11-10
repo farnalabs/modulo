@@ -19,10 +19,10 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
@@ -179,8 +179,8 @@ class TestWrite:
             return dict(patch or {})
 
         with (
-            patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
-            patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+            patch("farna.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
+            patch("farna.api.routes.admin._record_org_audit", new=AsyncMock()),
         ):
             resp = await client_admin.put(_PATH, json={_KEY: 4500})
         assert resp.status_code == 200
@@ -202,8 +202,8 @@ class TestWrite:
             return dict(patch or {})
 
         with (
-            patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
-            patch("modulo.api.routes.admin._record_org_audit", new=AsyncMock()),
+            patch("farna.api.routes._org_settings.update_org_settings_patch", new=_fake_patch),
+            patch("farna.api.routes.admin._record_org_audit", new=AsyncMock()),
         ):
             resp = await client_admin.put(_PATH, json={_KEY: None})
         assert resp.status_code == 200

@@ -1,0 +1,1385 @@
+"""Shared FastAPI dependencies and utilities.
+
+NOTE: Module-level globals `_engine` and `_session_factory` are used here
+to cache a single engine + session-factory across the process lifetime.
+This is thread-safe for async (single event-loop) usage but creates a
+singleton that persists across tests — override via `app.dependency_overrides`
+if test isolation is needed.
+
+The engine itself is NOT built here: ``get_or_create_engine`` delegates to
+``modulo.db.session.get_shared_engine`` so the API, dispatch, the SAQ worker
+and crons all share one per-process pool with identical Fly/HAProxy knobs
+(``pool_pre_ping``, ``statement_cache_size=0``) instead of each maintaining a
+divergent second pool.
+"""
+
+import logging
+import threading
+import uuid
+from collections.abc import AsyncGenerator, Callable
+from contextvars import Token
+from datetime import UTC, datetime
+from typing import Any, cast
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.params import Depends as DependsParameter
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import InvalidTokenError as JWTError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
+
+from farna.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE
+from farna.api.db_error_handling import raise_session_contract_error
+from farna.api.models.problem import ProblemException, ProblemType
+from farna.api.team_scope import TeamGateDenial, TeamScopeProvider, evaluate_team_gate
+from farna.auth.dependencies import (
+    bind_principal_context,
+    get_current_tenant_user,
+    get_current_tenant_user_or_api_key,
+    get_current_user,
+)
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
+from farna.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
+    SYSTEM_MAPS_READ_PERMISSION,
+    PermissionConfigurationError,
+    PermissionDenied,
+    assert_grant,
+    assert_org_role,
+    reset_authz_enforce,
+    resolve_required,
+    set_authz_enforce,
+)
+from farna.auth.team_rbac import ORG_ROLE_HIERARCHY
+from farna.core.feature_flags import TIER_RANK, PlanContext
+from farna.db.models.organisation import SYSTEM_ORG_ID, Organisation
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.db.settings_resolver import resolve_authz_enforce
+from farna.settings import Settings, get_settings
+
+_CODE_PERMISSION_DENIED = "permission.denied"
+
+_CODE_DEPENDENCIES_CHECK = "dependencies._check"
+
+# Pre-auth plan resolution failure (fail-closed). Deliberately generic: the
+# anonymous surface must not reveal licence state or tenant ambiguity, and a
+# 5xx (never a 402/allow) is the only safe answer.
+MSG_PLAN_UNAVAILABLE = "The instance plan could not be resolved. Try again later."
+
+
+def _enforce_key_grant(principal: TenantPrincipal, permission: str) -> None:
+    """Raise a 403 when the principal's API-key grant-set does not permit ``permission``.
+
+    A grant-set denial gets its own detail + log reason (``not_granted``), not
+    the role message. ``key_grants is None`` (JWTs, legacy keys) is a no-op; a
+    malformed value fails closed inside ``assert_grant``.
+    """
+    try:
+        assert_grant(principal.key_grants, permission)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={"permission": permission, "reason": "not_granted"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' is not granted to this API key",
+        ) from exc
+
+
+async def _assert_tenant_permission(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    permission: str,
+    required: str,
+) -> None:
+    """Resolve authz enforce and assert the principal's org role.
+
+    Single-sources the kill-switch read, fail-closed default, and 403 mapping
+    shared by ``require_permission`` and ``require_permission_any_credential``.
+    """
+    token: Token[bool | None] | None = None
+    try:
+        if principal.organisation_id is not None:
+            try:
+                async with session.begin():
+                    enforce = await resolve_authz_enforce(session, principal.organisation_id)
+            except SQLAlchemyError:
+                # Kill-switch read failure defaults to ENFORCE (fail-closed,
+                # ADR 047 DECISION 3): a DB blip must not fail-open the
+                # org-role gate.
+                logger.exception("permission.kill_switch_read_failed")
+                enforce = True
+            token = set_authz_enforce(enforce)
+        try:
+            assert_org_role(principal.org_role, required, permission)
+        except PermissionDenied as exc:
+            logger.warning(
+                _CODE_PERMISSION_DENIED,
+                extra={
+                    "permission": permission,
+                    "required": required,
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires '{required}' role",
+            ) from exc
+        # FAR-1477 / ADR 058: grant-set leg — effective = grant_set INTERSECT
+        # bundle(live_role). Deny-only and kill-switch-INELIGIBLE (a grant-set
+        # only ever narrows). ``key_grants is None`` (JWTs, legacy keys) is a no-op.
+        _enforce_key_grant(principal, permission)
+    finally:
+        if token is not None:
+            reset_authz_enforce(token)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _tagged_dep(
+    dep: object,
+    *,
+    permission: str,
+    permission_kind: str,
+    min_role: str | None = None,
+) -> DependsParameter:
+    """Attach introspection metadata to a ``Depends`` object.
+
+    ``fastapi.params.Depends`` is a frozen dataclass, so the tags are set via
+    ``object.__setattr__``. The introspection test reads ``_dep.permission``
+    and ``_dep.permission_kind`` (and ``min_role`` for scoped-hybrid variants)
+    off the dependency default.
+    """
+    object.__setattr__(dep, "permission", permission)
+    object.__setattr__(dep, "permission_kind", permission_kind)
+    if min_role is not None:
+        object.__setattr__(dep, "min_role", min_role)
+    return cast("DependsParameter", dep)
+
+
+def require_permission(permission: str) -> Any:
+    """FastAPI dependency factory — require the current tenant's org role.
+
+    Resolves the minimum role for ``permission`` at factory-creation time so a
+    typo'd permission key fails fast at import. The dependency wraps
+    ``get_current_tenant_user`` and compares the principal's org role against
+    the hierarchy, raising 403 on denial.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_permission("pipeline.graph.update"))
+    """
+    required = resolve_required(permission)
+
+    async def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        await _assert_tenant_permission(session, principal, permission, required)
+        return principal
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
+
+
+def require_in_dev_operator(
+    principal: TenantPrincipal,
+    permission: str,
+    *,
+    require_dev_mode: bool = False,
+    settings: Settings | None = None,
+) -> None:
+    """Enforce the operator gate for an In-Dev reveal on a list endpoint.
+
+    Called by list handlers that accept ``?include_in_dev=true``; the override
+    must only be honoured for operator+ principals (ADR 010 disclosure control
+    — In-Dev items are deliberately hidden from the UI and all list endpoints).
+    The base ``connector.list`` / ``model_backend.list`` / ``library.search``
+    permissions remain viewer-level so ordinary listing is unchanged; only the
+    In-Dev reveal is gated (``*.list.in_dev`` resolves to ``operator``).
+
+    ``require_dev_mode`` is used by retained internal preview surfaces whose
+    access must be disabled in an Alpha deployment, even for an operator with
+    the matching grant. It intentionally defaults to false so the existing
+    connector/model-backend/library In-Dev list gates keep their established
+    role-and-grant behaviour.
+
+    Fail-closed and NEVER lifted by the org authz kill switch (ADR 047 DECISION
+    3 scope pin): the In-Dev disclosure control is deliberately
+    ``kill_switch_eligible=False`` so an org that disables authz enforcement
+    still cannot expose pre-release items to viewers/runners.
+    """
+    if require_dev_mode and not getattr(settings or get_settings(), "modulo_dev_mode", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This internal feature requires developer mode",
+        )
+    required = resolve_required(permission)
+    try:
+        assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={
+                "permission": permission,
+                "required": required,
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' requires '{required}' role",
+        ) from exc
+    # FAR-1477: a grant-bearing key must also hold the In-Dev permission.
+    _enforce_key_grant(principal, permission)
+
+
+def _require_internal_system_maps_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Keep the system maps API surface on the internal path only.
+
+    System Maps deliberately has its own grant, separate from the retained
+    lifecycle-map ``library.search.in_dev`` grant. Legacy JWTs and keys without
+    an explicit grant-set keep the role-based behaviour; grant-bearing keys must
+    carry the dedicated System Maps grant.
+    """
+    require_in_dev_operator(
+        principal,
+        SYSTEM_MAPS_ACCESS_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
+    return principal
+
+
+def _require_published_system_maps_read(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> TenantPrincipal:
+    """Authorize the published System Maps read model for every viewer.
+
+    This is intentionally separate from the internal authoring gate: published
+    maps are a viewer-readable product surface, while discovery and every
+    mutation remain developer-mode/operator-only. The feature entitlement is
+    checked by the router dependency; this dependency only establishes the
+    tenant permission and API-key grant boundary.
+    """
+    required = resolve_required(SYSTEM_MAPS_READ_PERMISSION)
+    try:
+        assert_org_role(principal.org_role, required, SYSTEM_MAPS_READ_PERMISSION)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={
+                "permission": SYSTEM_MAPS_READ_PERMISSION,
+                "required": required,
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{SYSTEM_MAPS_READ_PERMISSION}' requires '{required}' role",
+        ) from exc
+    _enforce_key_grant(principal, SYSTEM_MAPS_READ_PERMISSION)
+    return principal
+
+
+def _system_maps_internal_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+) -> bool:
+    """Return whether a read caller may also inspect unpublished revisions.
+
+    Resolves the settings from the module-level ``get_settings`` name at call
+    time rather than binding a ``Depends`` default, so the internal gate is
+    always evaluated against the same settings surface as
+    ``_require_internal_system_maps_access``.
+    """
+    try:
+        _require_internal_system_maps_access(principal, get_settings())
+    except HTTPException:
+        return False
+    return True
+
+
+def require_permission_any_credential(permission: str) -> Any:
+    """FastAPI dependency factory — require the org role for JWT OR API-key callers.
+
+    Resolves the principal via `get_current_tenant_user_or_api_key` so both
+    user JWTs and `mk_` org API keys are accepted (the documented CI/CD
+    credential path, PRD \u00a75.2). API-key roles are clamped to the key owner's
+    LIVE org role via `_clamp_role` (a demoted operator's key degrades). The
+    org-role floor and kill-switch ContextVar behave identically to
+    `require_permission`.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_permission_any_credential("run.trigger"))
+    """
+    required = resolve_required(permission)
+
+    async def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        await _assert_tenant_permission(session, principal, permission, required)
+        return principal
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant_or_api_key")
+
+
+def require_system_permission(permission: str) -> DependsParameter:
+    """FastAPI dependency factory — strict ``is_system_admin`` only.
+
+    No org-role fall-through (license-gate bypass). Resolves the permission
+    key at factory-creation time for import-time fail-fast, but the actual
+    gate is purely the principal's ``is_system_admin`` flag.
+
+    .. code-block:: python
+
+       current_user: AuthenticatedPrincipal = Depends(require_system_permission("org.email.manage"))
+    """
+    resolve_required(permission)
+
+    def _check(
+        current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    ) -> AuthenticatedPrincipal:
+        if not current_user.is_system_admin:
+            logger.warning(
+                _CODE_PERMISSION_DENIED,
+                extra={
+                    "permission": permission,
+                    "required": "system_admin",
+                    "actual": "org_role_only",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires system admin role",
+            )
+        return current_user
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="system")
+
+
+def require_system_or_org_admin(permission: str) -> Any:
+    """FastAPI dependency factory — the one true hybrid.
+
+    Passes if the principal is a system admin OR holds org role ``admin``
+    in the current tenant. Used for destructive org-level operations where
+    both an org admin and a system admin must be allowed.
+
+    .. code-block:: python
+
+       principal: TenantPrincipal = Depends(require_system_or_org_admin("org.delete"))
+    """
+    resolve_required(permission)
+
+    def _check(
+        principal: TenantPrincipal = Depends(get_current_tenant_user),
+    ) -> TenantPrincipal:
+        if principal.is_system_admin:
+            return principal
+        try:
+            # Destructive operations are NEVER lifted by the kill switch
+            # (ADR 047 DECISION 3 scope pin): org deletion stays gated on the
+            # org-admin role even when authz.enforce is off.
+            assert_org_role(principal.org_role, "admin", permission, kill_switch_eligible=False)
+        except PermissionDenied as exc:
+            logger.warning(
+                _CODE_PERMISSION_DENIED,
+                extra={
+                    "permission": permission,
+                    "required": "admin",
+                    "actual": principal.org_role,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission}' requires org admin role",
+            ) from exc
+        return principal
+
+    return _tagged_dep(Depends(_check), permission=permission, permission_kind="system_or_org")
+
+
+async def _resolve_live_org_role(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> str | None:
+    """Return the caller's live org role in the target org, or `None`.
+
+    Delegates to the single membership lookup in `auth.dependencies`
+    (ADR 047 live-role re-read); keeps the name for existing callers.
+    """
+    from farna.auth.dependencies import resolve_role_from_membership
+
+    return await resolve_role_from_membership(
+        session,
+        str(account_id),
+        str(org_id),
+    )
+
+
+def require_target_org_role(
+    permission: str,
+    min_role: str,
+    kill_switch_eligible: bool = True,
+) -> DependsParameter:
+    """FastAPI dependency factory — scoped-hybrid reads and mutations.
+
+    Passes if the principal is a system admin OR holds a live membership in
+    the *target* org (read from the route path param ``org_id``) at ``min_role``
+    or higher. A multi-org member operating with current-org B gains access to
+    org A at the minimum role; a non-member is denied.
+
+    Reads variant: ``org.email.view``/``org.license.view`` at ``operator``.
+    Mutations variant: ``org.email.manage`` at ``admin``.
+
+    ``min_role`` must equal the permission's registry-resolved role
+    (``PERMISSIONS`` is the single source of truth); a mismatch is a
+    configuration error and fails fast at factory-creation time.
+
+    ``kill_switch_eligible`` (default True) mirrors
+    ``require_system_or_org_admin``'s hardcoded ``kill_switch_eligible=False``:
+    pass False for destructive gates (e.g. the org trigger-pause toggle) so the
+    org authz kill-switch can never lift them.
+
+    .. code-block:: python
+
+       _: AuthenticatedPrincipal = Depends(require_target_org_role("org.email.view", "operator"))
+    """
+    resolved = resolve_required(permission)
+    if min_role not in ORG_ROLE_HIERARCHY:
+        raise PermissionConfigurationError(f"min_role '{min_role}' is not a valid org role")
+    if min_role != resolved:
+        raise PermissionConfigurationError(
+            f"min_role '{min_role}' for '{permission}' does not match the registry-resolved role '{resolved}'",
+        )
+
+    async def _check(
+        request: Request,
+        current_user: AuthenticatedPrincipal = Depends(get_current_user),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> AuthenticatedPrincipal:
+        org_id_raw = request.path_params.get("org_id")
+        if org_id_raw is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing org_id path parameter",
+            )
+        if current_user.is_system_admin:
+            return current_user
+        try:
+            org_id = uuid.UUID(str(org_id_raw))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid org_id path parameter",
+            ) from None
+        token: Token[bool | None] | None = None
+        try:
+            try:
+                async with session.begin():
+                    role = await _resolve_live_org_role(session, current_user.account_id, org_id)
+                    enforce = await resolve_authz_enforce(session, org_id)
+                token = set_authz_enforce(enforce)
+            except SQLAlchemyError as exc:
+                raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
+                logger.exception("permission.live_role_read_failed")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+                ) from None
+            try:
+                assert_org_role(role, min_role, permission, kill_switch_eligible=kill_switch_eligible)
+            except PermissionDenied as exc:
+                logger.warning(
+                    _CODE_PERMISSION_DENIED,
+                    extra={
+                        "permission": permission,
+                        "required": min_role,
+                        "actual": role,
+                        "target_org_id": str(org_id),
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permission '{permission}' requires '{min_role}' role in target organisation",
+                ) from exc
+            return current_user
+        finally:
+            if token is not None:
+                reset_authz_enforce(token)
+
+    return _tagged_dep(
+        Depends(_check),
+        permission=permission,
+        permission_kind="scoped_hybrid",
+        min_role=min_role,
+    )
+
+
+def resolve_audit_principal(
+    request: Request,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Audit-event principal for cross-org admin routes.
+
+    ``audited()`` records an ORG-scoped event, so it needs a ``TenantPrincipal``.
+    These routes deliberately authenticate through ``get_current_user``
+    (``require_system_permission`` / ``require_target_org_role``) so a system
+    admin whose JWT carries NO organisation claim can still act on the org in
+    the path - the contract ``TestSystemAdminExplicitOrgParam`` pins as "the
+    JWT org_id is ignored; the path org_id is used". Resolving the audit
+    principal with ``get_current_tenant_user`` instead would 403 that
+    capability (and re-read identity), so this derives the acting organisation
+    from the ``{org_id}`` path parameter first and falls back to the JWT claim.
+
+    **This never refuses a request.** It solved BEFORE the route's own
+    ``require_*`` check (route-level dependencies are solved first), so any
+    ``raise`` here turns the audit wrapper into an ACCESS GATE ahead of the
+    real one - the FAR-1538 residual on the seven ``require_system_permission``
+    system-wide admin routes, where an org-less system-admin JWT was 403'd by
+    the audit dependency rather than admitted by the route. When neither the
+    path nor the claim yields an organisation, the event is attributed to the
+    instance partition (``SYSTEM_ORG_ID``); an absent ``org_role`` claim maps
+    to the established neutral ``""`` sentinel (the same fallback ``auth.jwt``
+    uses when minting tokens) - a role is never fabricated.
+
+    Access control is unchanged: the route's own ``require_*`` dependency still
+    decides who may act. This only names the organisation the audit event is
+    written against.
+
+    Lives here (the shared dependency module) because both ``admin_orgs`` and
+    ``admin_email`` need it, and a route module importing a sibling route
+    module for a dependency is a cycle waiting to happen.
+    """
+    org_id: uuid.UUID | None = None
+    raw_org = request.path_params.get("org_id")
+    if raw_org is not None:
+        try:
+            org_id = uuid.UUID(str(raw_org))
+        except ValueError:
+            org_id = None
+    if org_id is None:
+        org_id = current_user.organisation_id
+    if org_id is None:
+        # System-wide route, no tenant anywhere: attribute the event to the
+        # instance partition rather than refusing - a refusal would be the
+        # audit wrapper gating access (and would record nothing at all).
+        org_id = SYSTEM_ORG_ID
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=org_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+    )
+
+
+def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvider) -> Any:
+    """Team-scoped gate matching RLS visibility: membership (any role) OR org-admin.
+
+    Mirrors the DB team-visibility RLS policy (migration 0002:375-383,
+    0003:911-919) exactly:
+
+    .. code-block:: text
+
+       visibility='org' OR visibility IS NULL
+       OR owner_team_id IS NULL
+       OR membership (any team role)
+       OR org_role='admin'
+
+    ``admin`` bypasses before any DB work (RLS parity — the org-admin sees every
+    team-scoped row). Rows with ``visibility='org'`` or ``owner_team_id IS NULL``
+    are NOT team-gated (org-role floor only). The org-role floor itself is
+    enforced by ``require_permission`` on the same endpoint — this dependency
+    adds ONLY the membership-or-admin gate. Team *role* remains dead code until
+    Phase 3; any membership row qualifies.
+
+    ``resource_team_id_provider`` resolves the target row's ``owner_team_id``
+    and ``visibility`` from the request (path params + a DB lookup); see
+    ``modulo.api.team_scope``. ``runs`` is intentionally not team-gated — it has
+    no ``visibility`` column (org-role floor only, ADR 047 iteration-7 special).
+
+    .. code-block:: python
+
+       _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope)
+    """
+    return _team_membership_or_admin_dep(resource_team_id_provider, get_current_tenant_user)
+
+
+def require_team_membership_or_admin_any_credential(resource_team_id_provider: TeamScopeProvider) -> Any:
+    """Any-credential variant of the team gate (JWT OR ``mk_`` org API key).
+
+    Same visibility/membership matrix as :func:`require_team_membership_or_admin`,
+    but the principal resolves via ``get_current_tenant_user_or_api_key`` so
+    declarative apply (FAR-681) can update team-gated resources (pipelines)
+    with org API keys. Roles are clamped to the key owner's LIVE org role.
+    The org-role floor itself is still enforced by the route's own permission
+    dependency, so this variant only widens WHO can present a credential —
+    the gate body is single-sourced (the deny_break_glass_mint_dependency
+    parameterization precedent).
+
+    FAR-681 team boundary: a team-scoped key (principal ``team_id`` set) is
+    additionally restricted to resources owned by its OWN team — the key
+    OWNER's memberships are irrelevant. This mirrors the MCP boundary
+    (``mcp_server._team_scoped_key_mismatch``): a team-A-scoped key whose
+    owner is also in team B must not mutate team-B resources.
+    """
+    return _team_membership_or_admin_dep(resource_team_id_provider, get_current_tenant_user_or_api_key)
+
+
+def _team_membership_or_admin_dep(
+    resource_team_id_provider: TeamScopeProvider,
+    principal_dependency: Callable[..., Any],
+) -> Any:
+    """Single-sourced team-gate body, parameterized by the principal dependency.
+
+    The principal dependency is the ONLY difference between the stock
+    (JWT-only) and any-credential variants; the visibility/membership matrix
+    must never be duplicated across the two.
+    """
+
+    async def _check(
+        request: Request,
+        principal: TenantPrincipal = Depends(principal_dependency),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        if principal.org_role == "admin":
+            return principal
+        # FAR-681: a team-scoped org API key carries a HARD team boundary —
+        # the key OWNER's memberships are irrelevant (the MCP boundary,
+        # mcp_server._team_scoped_key_mismatch). Org-wide keys and JWTs carry
+        # team_id=None and keep the owner-membership matrix below. A
+        # team-scoped key can never hold the admin role (mint/update guard in
+        # auth.api_key), so the admin early-return above never bypasses this.
+        key_team_id: uuid.UUID | None = getattr(principal, "team_id", None)
+        try:
+            # ONE transaction: RLS context (set_config ... is_local) is scoped
+            # to the transaction and reverts on COMMIT, so the provider read
+            # and the membership check MUST share a single session.begin() or
+            # the second query runs with an empty app.organisation_id and
+            # team_memberships RLS filters every row (hard 403 on Postgres).
+            async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
+                row = await resource_team_id_provider(request, session)
+                # FAR-1513: the matrix itself is single-sourced in
+                # evaluate_team_gate — the MCP per-row trigger guards evaluate
+                # the SAME body against team-blind-resolved rows, so the two
+                # surfaces cannot drift.
+                denial: TeamGateDenial | None = await evaluate_team_gate(
+                    session,
+                    row_present=row is not None,
+                    owner_team_id=row.owner_team_id if row is not None else None,
+                    visibility=row.visibility if row is not None else None,
+                    account_id=principal.account_id,
+                    org_role=principal.org_role,
+                    team_key_id=key_team_id,
+                )
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
+            logger.exception("permission.team_scope_read_failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            ) from None
+        if denial is None:
+            return principal
+        if denial.kind == "membership":
+            logger.warning(
+                _CODE_PERMISSION_DENIED,
+                extra={
+                    "permission": "team.membership_or_admin",
+                    "required": "team_membership",
+                    "actual": principal.org_role,
+                    "owner_team_id": str(denial.owner_team_id) if denial.owner_team_id else None,
+                },
+            )
+        raise HTTPException(status_code=denial.status_code, detail=denial.detail)
+
+    return _tagged_dep(
+        Depends(_check),
+        permission="team.membership_or_admin",
+        permission_kind="team_scope",
+    )
+
+
+async def resolve_anonymous_plan_with_tenant(
+    settings: Settings,
+    session: AsyncSession,
+) -> tuple[PlanContext, Organisation | None]:
+    """Resolve the pre-auth plan context AND the trusted tenant, once.
+
+    Shared by :func:`resolve_anonymous_plan_context` (the gate dependency) and
+    the SSO discovery route, which needs the SAME tenant the plan decision used
+    (FAR-2060). Resolving both in one transaction closes the TOCTOU window where
+    the plan was decided over one org read and the provider listing over another.
+
+    The tenant is :func:`modulo.db.crud.organisation.resolve_login_tenant`'s
+    canonical answer — derived server-side from the database, never from
+    anything the caller supplies (body, header, query or path).
+
+    Two DISTINCT states, never collapsed:
+
+    * **no tenant to bind** (multi-org, or an unconfigured instance with zero
+      login-active orgs) -> the licence ladder runs at system scope
+      (``org=None``). This is a determinate answer.
+    * **single-org but the tenant cannot be identified** (zero rows, or a stray
+      extra row, on an instance whose invariant says it is one org) -> FAIL
+      CLOSED with a 503. Falling through to system scope here would widen the
+      entitlement lookup on an instance that cannot say which tenant it is.
+
+    A failure to resolve the plan at all (e.g. a malformed ``tier_catalog`` row
+    raising ``TypeError``) is also a 503 — NEVER a Community fallback. A
+    Community context reports ``has_license_key() == False``, which the
+    degraded-authentication carve-out would read as "no licence resolved" and
+    ALLOW, turning a resolution bug into an authentication bypass (FAR-2059).
+    "Resolution failed" and "no licence resolved" are therefore separate
+    states: failed re-raises; only a genuinely resolved plan can return.
+
+    Security note: these are authentication entry-point routes — they must be
+    reachable before a session exists. Never make a route anonymous that
+    previously required a user unless it is one of the documented pre-auth SSO
+    login/callback/SAML routes. Resolving the tenant's licence here changes only
+    WHETHER the gate passes — licence state and tenant identity are never
+    written into an anonymous response.
+    """
+    from farna.core.feature_flags import resolve_plan_context as _resolve
+    from farna.db.crud.organisation import resolve_login_tenant
+
+    try:
+        async with session.begin():
+            is_single_org, org = await resolve_login_tenant(session, settings)
+            if is_single_org and org is None:
+                # Single-org invariant with no unambiguous tenant: fail closed.
+                logger.error(
+                    "api.dependencies.anonymous_plan_tenant_unresolved",
+                    extra={"reason": ("Single-org instance with no uniquely identifiable tenant")},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=MSG_PLAN_UNAVAILABLE,
+                )
+            return await _resolve(settings, session, org=org), org
+    except HTTPException:
+        raise
+    except (TypeError, AttributeError):
+        # A malformed catalog row or a session that cannot run the resolution is
+        # an operational failure, NOT "no licence". Surfacing it as a 5xx keeps
+        # the gate fail-closed and distinguishes it from the deliberate
+        # degraded-authentication path.
+        logger.exception("api.dependencies.anonymous_plan_context_resolution_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_PLAN_UNAVAILABLE,
+        ) from None
+
+
+async def resolve_anonymous_plan_context(settings: Settings, session: AsyncSession) -> PlanContext:
+    """Resolve the plan context WITHOUT a user (pre-auth login-page surface).
+
+    Shared by ``require_feature_anonymous`` and the SSO discovery route
+    (``/auth/sso/providers``). Mirrors :func:`get_plan_context` minus the
+    ``get_current_user`` dependency.
+
+    FAR-2060 — tenant scope: the licence is NOT resolved from system scope
+    alone. When the instance has exactly one login-active org, that org is the
+    trusted tenant and the full ladder runs over it (org-level key -> system
+    in-memory -> system env var), so an organisation-scoped Team key enables
+    SSO for the organisation it belongs to. With zero or multiple login-active
+    orgs there is no single tenant to bind, so the ladder runs with ``org=None``
+    (system scope). The org is NEVER taken from caller input.
+
+    A resolution failure raises a 503 (fail closed); there is no
+    ``CommunityTier`` fallback, because that would be indistinguishable from
+    "no licence resolved" and would let the degraded-authentication carve-out
+    ALLOW. See :func:`resolve_anonymous_plan_with_tenant`.
+    """
+    ctx, _org = await resolve_anonymous_plan_with_tenant(settings, session)
+    return ctx
+
+
+def _feature_required_detail(feature_name: str, current_tier: str) -> str:
+    """Operator-facing 402 detail that is only as specific as the flag allows.
+
+    FAR-2060: a bare "not available on your plan" reads as an IdP bug, so a
+    genuine plan-tier restriction names the licence scope an operator must
+    install. But naming a licence for a feature that is merely switched off is
+    a falsehood the operator cannot act on (a community-tier flag like
+    ``system_maps`` is default-off in ``DEFAULT_OFF_FLAGS`` / ``INTERNAL_FLAGS``;
+    no licence would enable it). The declared tier is therefore read from the
+    flag catalog first:
+
+    * declared tier ABOVE the caller's tier -> the feature genuinely needs a
+      licence, so name the Team scope;
+    * declared tier at or below the caller's tier -> the feature is enabled on
+      this plan but switched off for the organisation, so say that and never
+      claim a licence is missing;
+    * unknown name -> fail closed with a neutral message; never invent a
+      licence requirement for a flag this build does not know.
+    """
+    from farna.core.feature_flags import declared_feature_tier
+
+    declared_tier = declared_feature_tier(feature_name)
+    if declared_tier is None:
+        return f"{feature_name} is not available"
+    if TIER_RANK.get(declared_tier, 0) > TIER_RANK.get(current_tier, 0):
+        return (
+            f"{feature_name} is not available on your plan — it requires a Team licence "
+            "installed at system or organisation scope"
+        )
+    return (
+        f"{feature_name} is not enabled for this organisation — the feature is switched "
+        "off, not restricted by your licence"
+    )
+
+
+def require_feature_anonymous(
+    feature_name: str,
+    *,
+    allow_degraded_authentication: bool = False,
+) -> DependsParameter:
+    """Pre-auth feature gate — resolves the plan WITHOUT a user.
+
+    Use on authentication entry-point routes (SSO login, callback, SAML
+    ACS/metadata) that must be reachable before any session exists. The plan is
+    resolved over the trusted tenant (see
+    :func:`resolve_anonymous_plan_context`). There is NO ``CommunityTier``
+    fallback: a resolution failure is a 503, never an allow.
+
+    ``allow_degraded_authentication`` (FAR-2059) opts an AUTHENTICATION entry
+    point into the degrade-never-strand policy: when NO valid licence resolves
+    at any scope (a key lapsed past ``license.LICENCE_GRACE_DAYS`` is cleared by
+    ``get_license`` and is therefore indistinguishable from an absent one
+    here), the request is allowed through so the user can sign in; entitlement
+    is enforced post-auth, where the plan resolves to Community and every Team
+    feature stays off. A licence that DOES resolve but does not grant the
+    feature is a determinate entitlement decision, so it keeps returning 402
+    with a scope-naming detail.
+
+    INVARIANT — "there is no licence state in which no administrator can reach
+    the licence screen": this gate is deliberately ROLE-BLIND. At the IdP
+    hand-off there is no identity yet, so every sign-in (admin or not) is
+    allowed through on the degraded path; the admin then reaches
+    ``GET /api/v1/admin/license`` (guarded by an org-admin permission, never by
+    a licence) and installs a new key. Never make this branch depend on a plan
+    having a key, and never put a licence gate on the licence endpoint — either
+    change turns a lapse into a lockout with no way back in. The invariant is
+    pinned by ``tests/unit/api/test_sso_licence_admin_invariant.py``.
+
+    Returns 402 Payment Required when the feature is unavailable — never 401.
+    The gate is fail-closed: if plan resolution itself fails, the resolver
+    raises a 5xx and the route is DENIED — never permitted. "Resolution failed"
+    is deliberately not encoded as ``has_license_key() == False``, because the
+    degraded-authentication branch would read that as "no licence" and allow.
+
+    .. code-block:: python
+
+       _: object = require_feature_anonymous("sso")  # route parameter
+
+    FAR-2059 / FAR-2060: authentication is not an entitlement, so an SSO-only
+    deployment keeps signing users in on a lapsed key — but the pre-auth gate is
+    NOT a blanket bypass: it still refuses a determinate unlicensed feature.
+    """
+
+    def _check(ctx: PlanContext = Depends(get_anonymous_plan_context)) -> None:
+        if ctx.feature_enabled(feature_name):
+            return
+        if allow_degraded_authentication and not ctx.has_license_key():
+            logger.warning(
+                "feature.anonymous_degraded_authentication",
+                extra={"feature": feature_name},
+            )
+            return
+        raise ProblemException(
+            ProblemType.FEATURE_REQUIRED,
+            detail=_feature_required_detail(feature_name, ctx.tier()),
+            instance=feature_name,
+        )
+
+    return cast("DependsParameter", Depends(_check))
+
+
+def require_feature(feature_name: str) -> DependsParameter:
+    """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
+
+    Returns 402 Payment Required when the feature is unavailable.
+    Use as a default value in route parameters or in ``dependencies=[...]``:
+
+    .. code-block:: python
+
+       _: object = require_feature("sso")           # route parameter
+       dependencies=[require_feature("team_rbac")]  # decorator
+    """
+
+    def _check(ctx: PlanContext = Depends(get_plan_context)) -> None:
+        if not ctx.feature_enabled(feature_name):
+            raise ProblemException(
+                ProblemType.FEATURE_REQUIRED,
+                detail=_feature_required_detail(feature_name, ctx.tier()),
+                instance=feature_name,
+            )
+
+    return cast("DependsParameter", Depends(_check))
+
+
+def pg_connection_string(database_url: str) -> str:
+    """Strip the SQLAlchemy driver prefix to get a driver-native URL.
+
+    Any explicit ``sslmode`` already present in the URL is preserved
+    verbatim. When the URL carries no ``sslmode`` the URL is returned
+    unchanged so the driver applies its own default — libpq ``prefer``
+    (try TLS, fall back to plaintext). This helper must NEVER silently
+    force ``sslmode=disable`` (FAR-1426): forcing plaintext breaks every
+    real checkpointer connection built here (boot schema init, HITL
+    resume) on a deployment whose Postgres requires TLS. Settings now
+    PRESERVES an operator's ``sslmode`` on Postgres URLs (FAR-1440, see
+    ``modulo.db.url_utils``), so a settings-derived URL reaches this
+    helper with its ``sslmode`` intact and libpq honours it directly.
+    """
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
+
+
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def get_or_create_engine(_settings: Settings) -> AsyncEngine:
+    """Return the process-global engine, creating it if necessary.
+
+    This is the non-Depends version — use it outside FastAPI route handlers
+    (e.g. in the MCP sub-app or background tasks) to share the same connection
+    pool used by the main API.
+
+    Delegates to :func:`modulo.db.session.get_shared_engine` — the one engine
+    factory per process — so dispatch, the SAQ worker, crons and the API share
+    a single pool with identical Fly/HAProxy knobs (``pool_pre_ping``,
+    ``statement_cache_size=0``) instead of maintaining divergent pools. The
+    API's pool sizing (20/10) is passed as the creation-time override; the
+    first caller in the process fixes the pool size for everyone. ``settings``
+    is retained for signature compatibility — the shared factory reads the
+    process settings via ``get_settings()``.
+    """
+    global _engine
+    if _engine is None:
+        from farna.db.session import get_shared_engine
+
+        _engine = get_shared_engine(pool_size=20, max_overflow=10)
+    return _engine
+
+
+def get_or_create_session_factory(
+    engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
+    """Return the process-global session factory, creating it if necessary."""
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    return _session_factory
+
+
+_SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
+_SYSTEM_SESSION_FACTORY: async_sessionmaker[AsyncSession] | None = None
+# True when the system engine fell back to the NOBYPASSRLS app engine (see
+# get_or_create_system_engine): in that state bootstrap reads that MUST be
+# instance-global (pre-auth trigger/org resolution, cross-org admin ops)
+# silently match zero rows, so hot-path callers must refuse loudly (503)
+# instead of 404ing every delivery.
+_SYSTEM_ENGINE_IS_FALLBACK = False
+# Guards the lazy engine singleton below: without it, two concurrent
+# first-requests could each run the check-then-set and leak the loser's
+# connection pool. The critical section contains no awaits, and the function
+# is sync — an asyncio.Lock cannot be used from sync code, so a
+# threading.Lock is the correct primitive here.
+_SYSTEM_ENGINE_LOCK = threading.Lock()
+
+# Statement (command) timeout for the system engine's asyncpg connections. The
+# app engine sets none (its connect_args carry only the connect timeout and
+# the Fly/HAProxy knobs), but the system session now sits on the pre-auth
+# trigger-delivery hot path — a hung statement there stalls external webhook
+# deliveries. 10s mirrors the connect timeout above.
+_SYSTEM_DB_COMMAND_TIMEOUT_SECONDS = 10
+
+
+def system_engine_is_fallback() -> bool:
+    """Whether the system engine is the NOBYPASSRLS app-engine fallback.
+
+    True when ``MODULO_SYSTEM_DATABASE_URL`` is unset. In that state the
+    system session cannot actually bypass RLS, so bootstrap reads that must
+    be instance-global (pre-auth trigger/org resolution, cross-org admin ops)
+    match zero rows and fail closed. Callers on external ingress paths must
+    refuse loudly (503) instead of silently 404ing every delivery.
+
+    Ensures the engine singleton is initialised before reading the flag: the
+    flag is only set as a side effect of :func:`get_or_create_system_engine`,
+    so a caller that reaches this predicate before any system-session user
+    would otherwise read a stale False purely due to call ordering. The
+    factory is idempotent and lock-guarded, so this is a no-op after the
+    first request.
+    """
+    get_or_create_system_engine()
+    return _SYSTEM_ENGINE_IS_FALLBACK
+
+
+def get_or_create_system_engine() -> AsyncEngine:
+    """Return the process-global system engine (``modulo_system`` role, BYPASSRLS).
+
+    Used for cross-org reads that must bypass per-org RLS — e.g. pre-auth SSO
+    provider resolution (provider config is instance-global, not tenant data)
+    and the FAR-523 trigger-delivery bootstrap. Mirrors
+    ``saq_worker._get_system_async_engine``: when ``MODULO_SYSTEM_DATABASE_URL``
+    is set, builds a dedicated engine connected as the ``modulo_system`` role
+    (LOGIN, BYPASSRLS); otherwise falls back to the regular engine with a
+    warning AND records the fallback via :func:`system_engine_is_fallback` —
+    the fallback runs as ``modulo_app`` (NOBYPASSRLS), so an RLS-scoped read
+    returns zero rows and callers must fail loud rather than treat the empty
+    result as "not found".
+    """
+    global _SYSTEM_ASYNC_ENGINE, _SYSTEM_ENGINE_IS_FALLBACK
+    if _SYSTEM_ASYNC_ENGINE is None:
+        with _SYSTEM_ENGINE_LOCK:
+            if _SYSTEM_ASYNC_ENGINE is None:
+                settings = get_settings()
+                if settings.modulo_system_database_url:
+                    from sqlalchemy.engine import make_url
+                    from sqlalchemy.ext.asyncio import create_async_engine
+
+                    # Guard on the URL's actual driver scheme, not an env-var
+                    # assumption: a non-Postgres system URL (SQLite) must build
+                    # WITHOUT the asyncpg connect knobs — its driver has no
+                    # ssl/statement_cache_size params and
+                    # split_postgres_sslmode rejects non-Postgres schemes.
+                    system_url = settings.modulo_system_database_url
+                    system_connect_args: dict[str, Any] = {
+                        "timeout": 10,
+                        "command_timeout": _SYSTEM_DB_COMMAND_TIMEOUT_SECONDS,
+                    }
+                    if str(make_url(system_url).drivername).startswith("postgres"):
+                        from farna.db.url_utils import split_postgres_sslmode
+
+                        system_url, system_ssl_arg = split_postgres_sslmode(system_url)
+                        system_connect_args["ssl"] = system_ssl_arg
+                        system_connect_args["statement_cache_size"] = 0
+                    _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                        system_url,
+                        pool_pre_ping=True,
+                        pool_size=20,
+                        max_overflow=10,
+                        # FAR-1524: settings-driven recycle window, strictly
+                        # below the Fly HAProxy 30m session timeout — same
+                        # contract as db.session._build_engine.
+                        pool_recycle=settings.db_pool_recycle_seconds,
+                        pool_timeout=30,
+                        connect_args=system_connect_args,
+                    )
+                else:
+                    _SYSTEM_ENGINE_IS_FALLBACK = True
+                    logger.warning(
+                        "api.system_engine_fallback",
+                        extra={
+                            "reason": (
+                                "MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider "
+                                "resolution falls back to a scoped app read (single-org)"
+                            )
+                        },
+                    )
+                    _SYSTEM_ASYNC_ENGINE = get_or_create_engine(settings)
+    return _SYSTEM_ASYNC_ENGINE
+
+
+def get_or_create_system_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the process-global system session factory (``modulo_system`` role)."""
+    global _SYSTEM_SESSION_FACTORY
+    if _SYSTEM_SESSION_FACTORY is None:
+        _SYSTEM_SESSION_FACTORY = async_sessionmaker(
+            get_or_create_system_engine(),
+            expire_on_commit=False,
+            autobegin=False,
+        )
+    return _SYSTEM_SESSION_FACTORY
+
+
+def _get_system_session_factory() -> async_sessionmaker[AsyncSession]:
+    return get_or_create_system_session_factory()
+
+
+async def get_system_db_session(
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_system_session_factory),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a system (``modulo_system``, BYPASSRLS) AsyncSession for global reads.
+
+    Transaction management is left to the caller (mirrors ``get_db_session``).
+    The system role sees all orgs; pre-auth SSO route resolution relies on it so
+    provider resolution is instance-global instead of pinned to the first org.
+    """
+    async with factory() as session:
+        yield session
+
+
+def _get_engine(settings: Settings = Depends(get_settings)) -> AsyncEngine:
+    return get_or_create_engine(settings)
+
+
+def _get_session_factory(
+    engine: AsyncEngine = Depends(_get_engine),
+) -> async_sessionmaker[AsyncSession]:
+    return get_or_create_session_factory(engine)
+
+
+async def get_db_session(
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Yield an AsyncSession.
+
+    Transaction management is left to the caller.  ``ProgrammingError``
+    (missing DB table) is caught centrally and converted to a 501 so that
+    unhandled migration gaps don't leak raw 500s to the client.
+    """
+    async with factory() as session:
+        try:
+            yield session
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
+
+
+async def get_anonymous_plan_context(
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> PlanContext:
+    """DI-overridable anonymous plan context for pre-auth routes.
+
+    Resolves the plan WITHOUT a user over the trusted tenant: an org-scoped
+    licence for the single login-active org, then the system-level licence
+    (FAR-2060). Mirrors :func:`get_plan_context` minus ``get_current_user``.
+    A resolution failure raises a 5xx rather than falling back to Community —
+    see :func:`resolve_anonymous_plan_with_tenant`.
+
+    Tests can override this via
+    ``app.dependency_overrides[get_anonymous_plan_context]`` to control
+    feature gating on pre-auth SSO routes without providing authentication
+    credentials.
+    """
+    return await resolve_anonymous_plan_context(settings, session)
+
+
+async def get_plan_context(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> PlanContext:
+    """FastAPI dependency — resolve plan context per-org.
+
+    Resolution order:
+    1. Org-level license key (from ``org.settings_json["license_key"]``)
+    2. System-level license (in-memory store or env var)
+    3. Organisation.plan_id (per-org, from DB)
+    4. SystemConfig.default_plan (deployment-wide, from DB)
+    5. CommunityTier (default fallback)
+    """
+    from farna.core.feature_flags import CommunityTier, resolve_plan_context
+    from farna.db.crud.organisation import get_organisation
+
+    org = None
+    if current_user.organisation_id is not None:
+        try:
+            async with session.begin():
+                org = await get_organisation(session, current_user.organisation_id)
+        except ProgrammingError:
+            logger.exception("api.dependencies")
+
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="This feature is not available. Run database migrations to enable it.",
+            ) from None
+
+        except (TypeError, AttributeError):
+            logger.warning("Session does not support async begin() — returning CommunityTier")
+
+            return CommunityTier()
+
+    try:
+        async with session.begin():
+            return await resolve_plan_context(settings, session, org=org)
+
+    except (TypeError, AttributeError):
+        logger.warning("Session does not support resolve_plan_context — returning CommunityTier")
+
+        return CommunityTier()
+
+
+async def get_current_tenant_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+    # Injected by FastAPI; None only for the direct (non-DI) calls in tests —
+    # see auth.dependencies.get_current_user for why the annotation must stay
+    # bare ``Request``.
+    request: Request = None,  # type: ignore[assignment]
+) -> TenantPrincipal | None:
+    """Optional tenant principal (``None`` when unauthenticated).
+
+    Fail-closed for break-glass accounts (plan v17, deliverable (B)): ANY
+    break-glass account — live or denied — resolving through this optional path
+    is treated as deny and returns ``None``, so webhook routes never grant a
+    break-glass account org context or a permission bypass. The account is
+    loaded by PK (``session.get``); if it cannot be read the path folds to
+    ``None`` (a DB blip must not fail-open a break-glass principal).
+
+    The login-route create_family mint for break-glass logins is DELIBERATELY
+    excluded — it IS the recovery path. Consumers import this function directly
+    from ``modulo.api.dependencies`` (the previous PEP 562 lazy re-export in
+    ``auth.dependencies`` was removed; ``webhooks.py`` imports it here).
+    """
+    if credentials is None:
+        return None
+    try:
+        principal = decode_principal(credentials.credentials, settings.secret_key)
+        if principal.organisation_id is None or principal.org_role is None:
+            return None
+    except JWTError:
+        return None
+
+    # Bind before the break-glass DB read below: the organisation is already
+    # known from the claim, so an ERROR on that read (or later in the request)
+    # is attributed rather than dropped (FAR-1417). Monotonic — a denial still
+    # leaves the org of the credential that was presented.
+    bind_principal_context(request, principal)
+
+    try:
+        from farna.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+        from farna.db.models.account import Account
+
+        now = datetime.now(UTC)
+        async with session.begin():
+            account = await session.get(Account, principal.account_id)
+    except SQLAlchemyError:
+        logger.exception("auth.break_glass_optional_read_failed")
+        return None
+
+    if account is not None and account.is_break_glass is True:
+        is_break_glass_account = is_break_glass_denied(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ) or is_break_glass_live(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        )
+        if is_break_glass_account:
+            logger.warning(
+                "auth.break_glass_optional_denied",
+                extra={"account_id": str(principal.account_id), "username": principal.username},
+            )
+            return None
+
+    return TenantPrincipal(
+        username=principal.username,
+        organisation_id=principal.organisation_id,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        is_system_admin=principal.is_system_admin,
+        # FAR-634: propagate the JWT's credential class (browser for legacy
+        # tokens without the claim).
+        client_kind=principal.client_kind,
+    )
+
+
+def deny_break_glass_mint_dependency(
+    principal_dependency: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Build the break-glass secret-mint deny dependency, parameterized.
+
+    Break-glass accounts can NEVER mint secrets or credentials — live OR denied
+    (plan v17, API-key + long-lived deny). This factory single-sources the deny
+    rule (the union of the shared ``is_break_glass_denied`` / ``is_break_glass_live``
+    decisions from ``db.crud.break_glass_deny``) so it is NEVER duplicated across
+    the secret-bearing routes — only the principal dependency differs.
+
+    Pass ``get_current_user`` for JWT-only routes (the stock ``deny_break_glass_mint``)
+    and ``get_current_tenant_user_or_api_key`` for routes that must also accept
+    org API-key (``mk_``) credentials — declarative apply, FAR-681. The resolved
+    principal must expose ``account_id`` and ``username``; the deny is applied to
+    the KEY'S OWNING account (an API key minted for a break-glass account must
+    not mint credentials either).
+
+    The account is loaded by primary key (``session.get``) and the ``is True``
+    identity check guards against ORM test doubles whose auto-created attributes
+    are truthy mocks, not booleans. A DB read failure folds to 503 (fail-closed:
+    a blip must not fail-open a break-glass mint).
+    """
+
+    async def _check(
+        principal: Any = Depends(principal_dependency),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> Any:
+        try:
+            from farna.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+            from farna.db.models.account import Account
+
+            now = datetime.now(UTC)
+            async with session.begin():
+                account = await session.get(Account, principal.account_id)
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, _CODE_DEPENDENCIES_CHECK)
+            logger.exception("permission.break_glass_mint_read_failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            ) from None
+        if account is None:
+            return principal
+        if account.is_break_glass is True:
+            is_break_glass_account = is_break_glass_denied(
+                is_break_glass=account.is_break_glass,
+                break_glass_expires_at=account.break_glass_expires_at,
+                break_glass_deactivated_at=account.break_glass_deactivated_at,
+                active=account.active,
+                now=now,
+            ) or is_break_glass_live(
+                is_break_glass=account.is_break_glass,
+                break_glass_expires_at=account.break_glass_expires_at,
+                break_glass_deactivated_at=account.break_glass_deactivated_at,
+                active=account.active,
+                now=now,
+            )
+            if is_break_glass_account:
+                logger.warning(
+                    "permission.break_glass_mint_denied",
+                    extra={"account_id": str(principal.account_id), "username": principal.username},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Break-glass accounts cannot create or modify secrets/credentials",
+                )
+        return principal
+
+    return _check
+
+
+#: Stock JWT-only deny marker, used on the enumerated secret-bearing routes.
+deny_break_glass_mint = deny_break_glass_mint_dependency(get_current_user)
+
+#: Any-credential variant (accepts org ``mk_`` API keys) for model-backends
+#: create/patch — declarative apply (FAR-681) mints backends with org keys.
+deny_break_glass_mint_any_credential = deny_break_glass_mint_dependency(get_current_tenant_user_or_api_key)

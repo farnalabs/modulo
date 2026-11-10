@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import get_run_output, get_run_status
+from farna.api.mcp_server import get_run_output, get_run_status
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -53,8 +53,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     the mocked session cannot serve the real repo queries, so the stub
     reassembles from whatever the (per-test mocked) ``get_run`` returns,
     exactly as the real reader serves the reassembled legacy shapes."""
-    import modulo.api.mcp_server as mcp_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.mcp_server as mcp_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(mcp_module.get_run, "return_value", None)
@@ -100,7 +100,7 @@ class _AuthContext:
     """Set/teardown the MCP ContextVars so tool handlers reach the DB layer."""
 
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -109,7 +109,7 @@ class _AuthContext:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
@@ -119,9 +119,9 @@ class _AuthContext:
 
 
 class TestGetRunOutputPureReturnContract(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_default_response_contains_no_telemetry_keys(
         self,
         mock_session: AsyncMock,
@@ -155,9 +155,9 @@ class TestGetRunOutputPureReturnContract(_AuthContext):
 
 
 class TestGetRunStatusDerivesFromTelemetry(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_derives_failed_status_from_telemetry(
         self,
         mock_session: AsyncMock,
@@ -185,9 +185,9 @@ class TestGetRunStatusDerivesFromTelemetry(_AuthContext):
 
 
 class TestSeededSecretNeverLeaks(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_seeded_secret_in_agent_stdout_never_in_any_mcp_response(
         self,
         mock_session: AsyncMock,

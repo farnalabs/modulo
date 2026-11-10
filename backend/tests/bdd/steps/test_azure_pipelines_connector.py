@@ -34,7 +34,7 @@ def ctx() -> dict:
 
 @given("an Azure Pipelines connector with valid credentials")
 def azp_connector(ctx: dict) -> None:
-    from modulo.connectors.azure_pipelines import AzurePipelinesConnector
+    from farna.connectors.azure_pipelines import AzurePipelinesConnector
 
     ctx["connector"] = AzurePipelinesConnector(token="apt_test", organization=ORG, project=PROJECT)
 
@@ -82,7 +82,7 @@ def azp_query_runs(ctx: dict, pipeline_id: str) -> None:
 
 @when(parsers.parse('I write resource "run" with pipeline_id "{pipeline_id}" and branch "{branch}"'))
 def azp_write_run(ctx: dict, pipeline_id: str, branch: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     body = {
@@ -105,7 +105,7 @@ def azp_write_run(ctx: dict, pipeline_id: str, branch: str) -> None:
 
 @when(parsers.parse('I write resource "release" with definition_id "{definition_id}"'))
 def azp_write_release(ctx: dict, definition_id: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     body = {"id": 1, "name": "Release 1"}
@@ -123,7 +123,7 @@ def azp_write_release(ctx: dict, definition_id: str) -> None:
 
 @when('I query resource "invalid"')
 def azp_query_invalid(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     with respx.mock, pytest.raises(ValueError, match="Unsupported query resource"):
@@ -157,7 +157,7 @@ def azp_is_error(ctx: dict) -> None:
 
 
 def _azp_query(ctx: dict, resource: str, url: str, body: dict, filters: dict | None = None) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     with respx.mock:

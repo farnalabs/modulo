@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob, expire_stale_claims
+from farna.core.hitl_manager.expiry_job import ClaimExpiryJob, expire_stale_claims
 
 from .conftest import mock_begin as _mock_begin
 from .conftest import session_factory as _mock_session_factory
@@ -132,10 +132,10 @@ async def _run_expire_once(
     with (
         patch.object(job, "_session_factory", factory),
         patch(
-            "modulo.core.hitl_manager.expiry_job.append_audit_event",
+            "farna.core.hitl_manager.expiry_job.append_audit_event",
             new=AsyncMock(side_effect=audit_side_effect),
         ) as mock_audit,
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
+        patch("farna.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
     ):
         expired = await job._expire_once()
 
@@ -348,7 +348,7 @@ async def test_run_loop_ticks_then_sleeps_and_logs_expired() -> None:
 
     with (
         patch(
-            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            "farna.core.hitl_manager.expiry_job.asyncio.sleep",
             new=AsyncMock(side_effect=asyncio.CancelledError),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -370,7 +370,7 @@ async def test_run_loop_survives_tick_failure() -> None:
         if ticks["n"] >= 2:
             job._stop_event.set()
 
-    with patch("modulo.core.hitl_manager.expiry_job.asyncio.sleep", new=_sleep):
+    with patch("farna.core.hitl_manager.expiry_job.asyncio.sleep", new=_sleep):
         await job._run()
 
     assert job._expire_once.await_count == 2
@@ -384,7 +384,7 @@ async def test_run_loop_stops_when_sleep_cancelled() -> None:
 
     with (
         patch(
-            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            "farna.core.hitl_manager.expiry_job.asyncio.sleep",
             new=AsyncMock(side_effect=asyncio.CancelledError),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -402,7 +402,7 @@ async def test_run_loop_stops_when_tick_cancelled() -> None:
 
     with (
         patch(
-            "modulo.core.hitl_manager.expiry_job.asyncio.sleep",
+            "farna.core.hitl_manager.expiry_job.asyncio.sleep",
             new=AsyncMock(),
         ) as mock_sleep,
         pytest.raises(asyncio.CancelledError),
@@ -486,8 +486,8 @@ async def test_org_list_query_runs_inside_begin() -> None:
     factory = MagicMock(return_value=_FakeSessionCtx(fake_session))
 
     with (
-        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
+        patch("farna.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
+        patch("farna.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
     ):
         expired = await expire_stale_claims(factory, notifier=None)
 
@@ -580,7 +580,7 @@ async def test_expire_stale_claims_resets_claim_and_run_sql() -> None:
         MagicMock(),
     )
 
-    with patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
+    with patch("farna.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
         await expire_stale_claims(_expire_sql_factory(session))
 
     claim_update = session.execute.await_args_list[-2][0][0]
@@ -610,7 +610,7 @@ async def test_expire_stale_claims_processes_multiple_orgs_independently() -> No
         MagicMock(),
     )
 
-    with patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
+    with patch("farna.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
         expired = await expire_stale_claims(_expire_sql_factory(session))
 
     assert {entry["organisation_id"] for entry in expired} == {org_a, org_b}

@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from click.testing import CliRunner
 
-import modulo.cli.main as cli_main
-from modulo.launcher.manifest import ManifestSecurityError
-from modulo.launcher.upgrade import UpgradeError
-from modulo.support.bundle import BundleTooLargeError, RedactionGateError
+import farna.cli.main as cli_main
+from farna.launcher.manifest import ManifestSecurityError
+from farna.launcher.upgrade import UpgradeError
+from farna.support.bundle import BundleTooLargeError, RedactionGateError
 
 
 def test_doctor_report_builds_archive(tmp_path: Path):
@@ -51,7 +51,7 @@ def test_env_raw():
 
 
 def test_env_settings_unavailable(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: (_ for _ in ()).throw(RuntimeError("settings boom")))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: (_ for _ in ()).throw(RuntimeError("settings boom")))
     result = CliRunner().invoke(cli_main.cli, ["env"])
     assert result.exit_code == 1
     assert "settings unavailable" in result.output
@@ -69,7 +69,7 @@ def test_package_version_exception(monkeypatch: pytest.MonkeyPatch):
 def test_resolve_data_dir_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test _resolve_data_dir raises ClickException when default_data_dir fails."""
     monkeypatch.setattr(
-        "modulo.launcher.entry.default_data_dir",
+        "farna.launcher.entry.default_data_dir",
         lambda: (_ for _ in ()).throw(RuntimeError("no data dir")),
     )
     CliRunner().invoke(cli_main.cli, ["start", "--data-dir", str(tmp_path)])
@@ -82,11 +82,11 @@ def test_resolve_data_dir_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 def test_start_repair_symlink(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test start command repair_current_symlink path (when data_dir is None)."""
     mock_run_start = MagicMock(return_value=0)
-    monkeypatch.setattr("modulo.launcher.entry.run_start", mock_run_start)
+    monkeypatch.setattr("farna.launcher.entry.run_start", mock_run_start)
     mock_repair = MagicMock(return_value="1.0.0")
-    monkeypatch.setattr("modulo.launcher.upgrade.repair_current_symlink", mock_repair)
+    monkeypatch.setattr("farna.launcher.upgrade.repair_current_symlink", mock_repair)
     # Mock default_data_dir to return tmp_path so data_dir=None resolves to it
-    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.entry.default_data_dir", lambda: tmp_path)
 
     result = CliRunner().invoke(cli_main.cli, ["start"])
     assert result.exit_code == 0
@@ -109,7 +109,7 @@ def test_status_branches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             },
         }
     )
-    monkeypatch.setattr("modulo.launcher.supervisor.collect_status", mock_collect)
+    monkeypatch.setattr("farna.launcher.supervisor.collect_status", mock_collect)
 
     result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -132,7 +132,7 @@ def test_status_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             "components": {},
         }
     )
-    monkeypatch.setattr("modulo.launcher.supervisor.collect_status", mock_collect)
+    monkeypatch.setattr("farna.launcher.supervisor.collect_status", mock_collect)
 
     result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path), "--json"])
     assert result.exit_code == 0
@@ -144,7 +144,7 @@ def test_status_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_launcher_data_dir_or_none_exception(monkeypatch: pytest.MonkeyPatch):
     """Test _launcher_data_dir_or_none returns None on exception."""
     monkeypatch.setattr(
-        "modulo.launcher.entry.default_data_dir",
+        "farna.launcher.entry.default_data_dir",
         lambda: (_ for _ in ()).throw(Exception("fail")),
     )
     assert cli_main._launcher_data_dir_or_none(None) is None
@@ -154,7 +154,7 @@ def test_launcher_data_dir_or_none_not_dir(monkeypatch: pytest.MonkeyPatch, tmp_
     """Test _launcher_data_dir_or_none returns None when path is not a dir."""
     file_path = tmp_path / "notadir"
     file_path.write_text("x")
-    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: file_path)
+    monkeypatch.setattr("farna.launcher.entry.default_data_dir", lambda: file_path)
     assert cli_main._launcher_data_dir_or_none(None) is None
 
 
@@ -162,8 +162,8 @@ def test_support_redaction_gate_error(monkeypatch: pytest.MonkeyPatch, tmp_path:
     """Test support command RedactionGateError path."""
     mock_build = AsyncMock()
     mock_build.side_effect = RedactionGateError(member="test_member", reasons=["reason1", "reason2"])
-    monkeypatch.setattr("modulo.support.bundle.build_bundle_async", mock_build)
-    monkeypatch.setattr("modulo.support.bundle.generate_ref", lambda: "test-ref")
+    monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
+    monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
     result = CliRunner().invoke(
         cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
@@ -179,8 +179,8 @@ def test_support_bundle_too_large(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     """Test support command BundleTooLargeError path."""
     mock_build = AsyncMock()
     mock_build.side_effect = BundleTooLargeError("too big")
-    monkeypatch.setattr("modulo.support.bundle.build_bundle_async", mock_build)
-    monkeypatch.setattr("modulo.support.bundle.generate_ref", lambda: "test-ref")
+    monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
+    monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
     result = CliRunner().invoke(
         cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
@@ -193,8 +193,8 @@ def test_support_os_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test support command OSError path."""
     mock_build = AsyncMock()
     mock_build.side_effect = OSError("permission denied")
-    monkeypatch.setattr("modulo.support.bundle.build_bundle_async", mock_build)
-    monkeypatch.setattr("modulo.support.bundle.generate_ref", lambda: "test-ref")
+    monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
+    monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
     result = CliRunner().invoke(
         cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
@@ -208,8 +208,8 @@ def test_support_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mock_result = MagicMock()
     mock_result.to_json_dict.return_value = {"ref": "test-ref", "size": 123}
     mock_build = AsyncMock(return_value=mock_result)
-    monkeypatch.setattr("modulo.support.bundle.build_bundle_async", mock_build)
-    monkeypatch.setattr("modulo.support.bundle.generate_ref", lambda: "test-ref")
+    monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
+    monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
     result = CliRunner().invoke(
         cli_main.cli,
@@ -230,8 +230,8 @@ def test_logs_follow_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def mock_follow(path):
         follow_called["called"] = True
 
-    monkeypatch.setattr("modulo.cli.main._follow_log", mock_follow)
-    monkeypatch.setattr("modulo.launcher.supervisor.log_paths", lambda _: {"app": log_file})
+    monkeypatch.setattr("farna.cli.main._follow_log", mock_follow)
+    monkeypatch.setattr("farna.launcher.supervisor.log_paths", lambda _: {"app": log_file})
 
     result = CliRunner().invoke(cli_main.cli, ["logs", "app", "--data-dir", str(tmp_path), "-f"])
     # The follow path will call _follow_log which we mocked
@@ -256,8 +256,8 @@ def test_rotate_log_or_exit_locked(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     mock_read_lock = MagicMock(return_value=MagicMock(pid=123))
     mock_pid_alive = MagicMock(return_value=True)
-    monkeypatch.setattr("modulo.launcher.supervisor._read_lock_holder", mock_read_lock)
-    monkeypatch.setattr("modulo.launcher.supervisor._pid_alive", mock_pid_alive)
+    monkeypatch.setattr("farna.launcher.supervisor._read_lock_holder", mock_read_lock)
+    monkeypatch.setattr("farna.launcher.supervisor._pid_alive", mock_pid_alive)
 
     result = CliRunner().invoke(cli_main.cli, ["logs", "--rotate", "app", "--data-dir", str(tmp_path)])
     assert result.exit_code == 1
@@ -273,7 +273,7 @@ def test_service_install_warnings(monkeypatch: pytest.MonkeyPatch):
     mock_result.started = True
     mock_result.linger_enabled = True
     mock_result.warnings = ["warning1", "warning2"]
-    monkeypatch.setattr("modulo.launcher.service.install", lambda: mock_result)
+    monkeypatch.setattr("farna.launcher.service.install", lambda: mock_result)
 
     result = CliRunner().invoke(cli_main.cli, ["service", "install"])
     assert result.exit_code == 0
@@ -293,7 +293,7 @@ def test_service_uninstall_warnings(monkeypatch: pytest.MonkeyPatch):
     mock_result.disabled = True
     mock_result.linger_disabled = True
     mock_result.warnings = ["uninstall warning"]
-    monkeypatch.setattr("modulo.launcher.service.uninstall", lambda: mock_result)
+    monkeypatch.setattr("farna.launcher.service.uninstall", lambda: mock_result)
 
     result = CliRunner().invoke(cli_main.cli, ["service", "uninstall"])
     assert result.exit_code == 0
@@ -308,7 +308,7 @@ def test_service_uninstall_warnings(monkeypatch: pytest.MonkeyPatch):
 def test_service_status_error(monkeypatch: pytest.MonkeyPatch):
     """Test service status command error path."""
     monkeypatch.setattr(
-        "modulo.launcher.service.status",
+        "farna.launcher.service.status",
         lambda **_: (_ for _ in ()).throw(RuntimeError("service status failed")),
     )
 
@@ -329,7 +329,7 @@ def test_service_status_launcher_error(monkeypatch: pytest.MonkeyPatch):
             "launcher": {"error": "launcher not found"},
         }
     )
-    monkeypatch.setattr("modulo.launcher.service.status", mock_status)
+    monkeypatch.setattr("farna.launcher.service.status", mock_status)
 
     result = CliRunner().invoke(cli_main.cli, ["service", "status"])
     assert result.exit_code == 0
@@ -351,7 +351,7 @@ def test_service_status_launcher_ok(monkeypatch: pytest.MonkeyPatch):
             },
         }
     )
-    monkeypatch.setattr("modulo.launcher.service.status", mock_status)
+    monkeypatch.setattr("farna.launcher.service.status", mock_status)
 
     result = CliRunner().invoke(cli_main.cli, ["service", "status"])
     assert result.exit_code == 0
@@ -361,7 +361,7 @@ def test_service_status_launcher_ok(monkeypatch: pytest.MonkeyPatch):
 def test_clear_degraded_os_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test clear-degraded command OSError path."""
     monkeypatch.setattr(
-        "modulo.launcher.supervisor.clear_degraded_record",
+        "farna.launcher.supervisor.clear_degraded_record",
         lambda _: (_ for _ in ()).throw(OSError("permission denied")),
     )
 
@@ -372,7 +372,7 @@ def test_clear_degraded_os_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 def test_clear_degraded_removed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test clear-degraded command when state is removed."""
-    monkeypatch.setattr("modulo.launcher.supervisor.clear_degraded_record", lambda _: True)
+    monkeypatch.setattr("farna.launcher.supervisor.clear_degraded_record", lambda _: True)
 
     result = CliRunner().invoke(cli_main.cli, ["clear-degraded", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -381,7 +381,7 @@ def test_clear_degraded_removed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 def test_clear_degraded_not_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test clear-degraded command when no state present."""
-    monkeypatch.setattr("modulo.launcher.supervisor.clear_degraded_record", lambda _: False)
+    monkeypatch.setattr("farna.launcher.supervisor.clear_degraded_record", lambda _: False)
 
     result = CliRunner().invoke(cli_main.cli, ["clear-degraded", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -394,8 +394,8 @@ def test_upgrade_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mock_result.previous_version = "1.0.0"
     mock_result.version = "2.0.0"
     mock_result.snapshot = tmp_path / "snapshot.sql"
-    monkeypatch.setattr("modulo.launcher.upgrade.perform_upgrade", lambda *a, **k: mock_result)
-    monkeypatch.setattr("modulo.launcher.upgrade.default_install_root", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.upgrade.perform_upgrade", lambda *a, **k: mock_result)
+    monkeypatch.setattr("farna.launcher.upgrade.default_install_root", lambda: tmp_path)
 
     result = CliRunner().invoke(cli_main.cli, ["upgrade", "2.0.0", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -409,8 +409,8 @@ def test_upgrade_no_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mock_result.previous_version = "1.0.0"
     mock_result.version = "2.0.0"
     mock_result.snapshot = None
-    monkeypatch.setattr("modulo.launcher.upgrade.perform_upgrade", lambda *a, **k: mock_result)
-    monkeypatch.setattr("modulo.launcher.upgrade.default_install_root", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.upgrade.perform_upgrade", lambda *a, **k: mock_result)
+    monkeypatch.setattr("farna.launcher.upgrade.default_install_root", lambda: tmp_path)
 
     result = CliRunner().invoke(cli_main.cli, ["upgrade", "2.0.0", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -421,10 +421,10 @@ def test_upgrade_no_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_upgrade_upgrade_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test upgrade command UpgradeError path."""
     monkeypatch.setattr(
-        "modulo.launcher.upgrade.perform_upgrade",
+        "farna.launcher.upgrade.perform_upgrade",
         lambda *a, **k: (_ for _ in ()).throw(UpgradeError("upgrade failed")),
     )
-    monkeypatch.setattr("modulo.launcher.upgrade.default_install_root", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.upgrade.default_install_root", lambda: tmp_path)
 
     result = CliRunner().invoke(cli_main.cli, ["upgrade", "2.0.0", "--data-dir", str(tmp_path)])
     assert result.exit_code == 1
@@ -434,10 +434,10 @@ def test_upgrade_upgrade_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_upgrade_manifest_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Test upgrade command ManifestSecurityError path."""
     monkeypatch.setattr(
-        "modulo.launcher.upgrade.perform_upgrade",
+        "farna.launcher.upgrade.perform_upgrade",
         lambda *a, **k: (_ for _ in ()).throw(ManifestSecurityError("manifest invalid")),
     )
-    monkeypatch.setattr("modulo.launcher.upgrade.default_install_root", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.upgrade.default_install_root", lambda: tmp_path)
 
     result = CliRunner().invoke(cli_main.cli, ["upgrade", "2.0.0", "--data-dir", str(tmp_path)])
     assert result.exit_code == 1
@@ -452,7 +452,7 @@ def test_init_once_register_legacy_commands_duplicate(monkeypatch: pytest.Monkey
     dummy_cmd = click.Command("backup")
     monkeypatch.setattr(cli_main.cli, "commands", {"backup": dummy_cmd})
     monkeypatch.setattr(
-        "modulo.cli.backup.cli",
+        "farna.cli.backup.cli",
         MagicMock(commands={"backup": click.Command("backup")}),
     )
 
@@ -466,7 +466,7 @@ def test_init_once_register_users_command_duplicate(monkeypatch: pytest.MonkeyPa
 
     dummy_cmd = click.Command("users")
     monkeypatch.setattr(cli_main.cli, "commands", {"users": dummy_cmd})
-    monkeypatch.setattr("modulo.cli.users.users", click.Command("users"))
+    monkeypatch.setattr("farna.cli.users.users", click.Command("users"))
 
     with pytest.raises(RuntimeError, match="already registered on the modulo group"):
         cli_main._init_once_register_users_command()
@@ -478,7 +478,7 @@ def test_init_once_register_evidence_command_duplicate(monkeypatch: pytest.Monke
 
     dummy_cmd = click.Command("evidence")
     monkeypatch.setattr(cli_main.cli, "commands", {"evidence": dummy_cmd})
-    monkeypatch.setattr("modulo.cli.evidence.evidence", click.Command("evidence"))
+    monkeypatch.setattr("farna.cli.evidence.evidence", click.Command("evidence"))
 
     with pytest.raises(RuntimeError, match="already registered on the modulo group"):
         cli_main._init_once_register_evidence_command()
@@ -491,7 +491,7 @@ def test_init_once_register_backfill_base_url_command_duplicate(monkeypatch: pyt
     dummy_cmd = click.Command("backfill-model-backend-base-url")
     monkeypatch.setattr(cli_main.cli, "commands", {"backfill-model-backend-base-url": dummy_cmd})
     monkeypatch.setattr(
-        "modulo.cli.backfill_model_backend_base_url.backfill_model_backend_base_url",
+        "farna.cli.backfill_model_backend_base_url.backfill_model_backend_base_url",
         click.Command("backfill-model-backend-base-url"),
     )
 
@@ -508,7 +508,7 @@ def test_status_components_not_dict(monkeypatch: pytest.MonkeyPatch, tmp_path: P
             "components": "not a dict",
         }
     )
-    monkeypatch.setattr("modulo.launcher.supervisor.collect_status", mock_collect)
+    monkeypatch.setattr("farna.launcher.supervisor.collect_status", mock_collect)
 
     result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -527,7 +527,7 @@ def test_status_component_not_dict_continue(monkeypatch: pytest.MonkeyPatch, tmp
             },
         }
     )
-    monkeypatch.setattr("modulo.launcher.supervisor.collect_status", mock_collect)
+    monkeypatch.setattr("farna.launcher.supervisor.collect_status", mock_collect)
 
     result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -540,9 +540,9 @@ def test_support_summary_lines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mock_result = MagicMock()
     mock_result.to_json_dict.return_value = {"ref": "test-ref"}
     mock_build = AsyncMock(return_value=mock_result)
-    monkeypatch.setattr("modulo.support.bundle.build_bundle_async", mock_build)
-    monkeypatch.setattr("modulo.support.bundle.generate_ref", lambda: "test-ref")
-    monkeypatch.setattr("modulo.support.bundle.summary_lines", lambda r: ["line1", "line2"])
+    monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
+    monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
+    monkeypatch.setattr("farna.support.bundle.summary_lines", lambda r: ["line1", "line2"])
 
     result = CliRunner().invoke(
         cli_main.cli,
@@ -562,7 +562,7 @@ def test_logs_follow_path_direct(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     def mock_follow(path):
         observed_paths.append(path)
 
-    monkeypatch.setattr("modulo.cli.main._follow_log", mock_follow)
+    monkeypatch.setattr("farna.cli.main._follow_log", mock_follow)
     cli_main._echo_log_contents(log_file, follow=True)
 
     assert observed_paths == [log_file]
@@ -626,7 +626,7 @@ def test_service_status_launcher_error_branch(monkeypatch: pytest.MonkeyPatch):
             "launcher": {"error": "launcher not found"},
         }
     )
-    monkeypatch.setattr("modulo.launcher.service.status", mock_status)
+    monkeypatch.setattr("farna.launcher.service.status", mock_status)
 
     result = CliRunner().invoke(cli_main.cli, ["service", "status"])
 

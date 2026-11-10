@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 
-from modulo.connectors._safe_int import safe_int
+from farna.connectors._safe_int import safe_int
 
 DEFAULT = 7
 

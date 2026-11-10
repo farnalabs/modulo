@@ -30,22 +30,22 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.in_app_notifications import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.in_app_notifications import (
     _DASHBOARD_LEVELS,
     NotificationPreferencesResponse,
     _load_dashboard_level,
     _preference_change_is_noop,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.notifier.event_mapper import notification_categories
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
-from modulo.db.models.org_membership import OrgMembership
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.notifier.event_mapper import notification_categories
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.notification import Dismissal, Notification, NotificationPreference
+from farna.db.models.org_membership import OrgMembership
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_A = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -187,8 +187,8 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
 
     with (
-        patch("modulo.api.routes.in_app_notifications.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.in_app_notifications.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.in_app_notifications.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.in_app_notifications.set_rls_user_context", new=AsyncMock()),
     ):
         yield TestClient(app)
 
@@ -494,7 +494,7 @@ def test_load_dashboard_level_missing_account_uses_the_declared_default() -> Non
     stored value absent). Both must yield the single declared default.
     """
     with patch(
-        "modulo.api.routes.in_app_notifications.get_account_by_id",
+        "farna.api.routes.in_app_notifications.get_account_by_id",
         new=AsyncMock(return_value=None),
     ):
         loaded = asyncio.run(_load_dashboard_level(MagicMock(), _USER_A))
@@ -582,7 +582,7 @@ def _success_audit_calls(emit: AsyncMock) -> list:
 
 
 def test_put_with_actual_change_emits_success_audit(client: TestClient) -> None:
-    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+    with patch("farna.core.audit_coverage._emit", new=AsyncMock()) as emit:
         resp = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": True}})
         assert resp.status_code == 200, resp.text
     assert len(_success_audit_calls(emit)) == 1
@@ -596,7 +596,7 @@ def test_put_no_op_change_emits_no_success_audit(client: TestClient) -> None:
     first = client.put(_PREFERENCES_PATH, json=warm)
     assert first.status_code == 200, first.text
 
-    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+    with patch("farna.core.audit_coverage._emit", new=AsyncMock()) as emit:
         replay = client.put(
             _PREFERENCES_PATH, json={"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}}
         )
@@ -610,7 +610,7 @@ def test_put_back_to_original_state_emits_audit_again(client: TestClient) -> Non
     first = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": True}})
     assert first.status_code == 200, first.text
 
-    with patch("modulo.core.audit_coverage._emit", new=AsyncMock()) as emit:
+    with patch("farna.core.audit_coverage._emit", new=AsyncMock()) as emit:
         second = client.put(_PREFERENCES_PATH, json={"notification_opt_outs": {"run.failed": False}})
         assert second.status_code == 200, second.text
     assert len(_success_audit_calls(emit)) == 1
@@ -661,7 +661,7 @@ def test_preference_change_is_noop(
 def test_put_preferences_bounds_the_row_lock_before_its_first_write(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from modulo.api.routes import in_app_notifications as mod
+    from farna.api.routes import in_app_notifications as mod
 
     order: list[str] = []
 

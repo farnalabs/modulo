@@ -16,10 +16,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
-from modulo.core.guardrails import FieldRedactionMode, FieldRedactionPolicy
-from modulo.core.guardrails import loop_intercept as li
-from modulo.core.guardrails.loop_intercept import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from farna.core.guardrails import FieldRedactionMode, FieldRedactionPolicy
+from farna.core.guardrails import loop_intercept as li
+from farna.core.guardrails.loop_intercept import (
     DEFAULT_LOOP_INTERCEPT_PATTERNS,
     MAX_LOOP_INTERCEPT_ARGS_BYTES,
     LoopInterceptConfig,
@@ -31,7 +31,7 @@ from modulo.core.guardrails.loop_intercept import (
     tool_matches_patterns,
     validate_loop_intercept_config_errors,
 )
-from modulo.core.guardrails.sandbox_bridge import BridgeClient
+from farna.core.guardrails.sandbox_bridge import BridgeClient
 
 _ORG_ID = uuid.uuid4()
 
@@ -549,7 +549,7 @@ class _FakeProc:
 def test_wrap_command_block_kills_child_and_emits_marker(monkeypatch, capsys):
     """A 'before' block decision from the Modulo side KILLS the wrapped child
     and writes a MODULO_BRIDGE_BLOCKED marker + non-zero exit (3)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
@@ -574,7 +574,7 @@ def test_wrap_command_block_kills_child_and_emits_marker(monkeypatch, capsys):
 def test_wrap_command_allowed_event_passes_through(monkeypatch, capsys):
     """An allowed 'before' event (and any non-event stdout line) is echoed
     through unchanged; the child is NOT killed."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
     proc = _FakeProc([b"agent says hello", event_line], wait_code=0)
@@ -598,7 +598,7 @@ def test_wrap_command_allowed_event_passes_through(monkeypatch, capsys):
 def test_wrap_command_bridge_failure_is_fail_open(monkeypatch, capsys):
     """A bridge failure (unreachable endpoint) during wrap NEVER blocks the
     command — the child runs to completion (best-effort fail-open)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
@@ -619,7 +619,7 @@ def test_wrap_command_bridge_failure_is_fail_open(monkeypatch, capsys):
 def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
     """A redact decision emits a MODULO_BRIDGE_REDACTED line (masked args) and
     the child is allowed to proceed."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = (
         b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": '
@@ -646,7 +646,7 @@ def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
 
 def test_notify_cli_exit_code_3_on_block(monkeypatch):
     """The ``--notify`` CLI returns exit code 3 on a block decision, 0 on pass."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.setattr(
         sb.BridgeClient,
@@ -668,7 +668,7 @@ def test_notify_cli_exit_code_3_on_block(monkeypatch):
 def test_notify_cli_downgraded_block_exit_0(monkeypatch):
     """A ``block_on_guardrail: false`` downgrade (action=block, blocked=false)
     must NOT make the ``--notify`` CLI exit non-zero — the block is record-only."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.setattr(
         sb.BridgeClient,
@@ -681,7 +681,7 @@ def test_notify_cli_downgraded_block_exit_0(monkeypatch):
 def test_bridge_main_help_wrap_config_and_bad_json(monkeypatch, tmp_path, capsys):
     """The bridge CLI's non-notify branches: help, --wrap resolution, --config,
     and a malformed --notify payload (event {} -> still a dict, no crash)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     # No arguments: print help and exit 2 (no client is built beyond defaults).
     assert sb.main([]) == 2
@@ -724,7 +724,7 @@ def test_decide_before_honours_blocked_flag(monkeypatch):
     """``decide_before`` must refuse ONLY on an actual refusal (action=block AND
     blocked=true). A downgraded block (action=block, blocked=false) — the
     ``block_on_guardrail: false`` case — must be allowed (record-only)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     # blocked=true -> refuse.
     monkeypatch.setattr(
@@ -751,7 +751,7 @@ def test_decide_before_honours_blocked_flag(monkeypatch):
 def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
     """A ``block_on_guardrail: false`` downgrade (action=block, blocked=false)
     must NOT kill the wrapped child — the call proceeds (record-only)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
@@ -775,7 +775,7 @@ def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
 def test_wrap_command_empty_argv_guard_runs_before_launch(monkeypatch, capsys):
     """An empty argv is refused with exit 2 BEFORE any child is launched —
     the guard must stay ahead of the spawn path."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     launched = False
 
@@ -797,7 +797,7 @@ def test_wrap_command_empty_argv_guard_runs_before_launch(monkeypatch, capsys):
 def test_wrap_command_launches_exactly_the_shaped_argv(monkeypatch):
     """The orchestrator shapes argv inline (``/bin/sh -c "<joined argv>"``)
     and the launcher execs exactly that fixed list — never shell=True."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     captured: dict = {}
 
@@ -820,7 +820,7 @@ def test_wrap_command_launches_exactly_the_shaped_argv(monkeypatch):
 def test_spawn_and_collect_launch_failure_is_fail_closed(monkeypatch, capsys):
     """An OSError from the launch reports the error and returns 1 — the
     wrapper never proceeds without a child (fail-closed)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     def _failing_popen(*args, **kwargs):
         raise OSError("No such file or directory")
@@ -837,7 +837,7 @@ def test_spawn_and_collect_launch_failure_is_fail_closed(monkeypatch, capsys):
 def test_spawn_and_collect_missing_stdout_fails_closed(monkeypatch):
     """A child started without a stdout stream raises instead of running with
     no event interception (collection failure is fail-closed)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     class _NoStdoutProc:
         stdout = None
@@ -851,7 +851,7 @@ def test_spawn_and_collect_missing_stdout_fails_closed(monkeypatch):
 def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
     """A malformed event payload (invalid JSON) is treated as an empty event:
     forwarded with an empty tool name, fail-open, and never echoed to stdout."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b"MODULO_BRIDGE_EVENT: {broken json"
     proc = _FakeProc([event_line], wait_code=0)
@@ -877,7 +877,7 @@ def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
 def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
     """An 'after' event is reported via ``notify_after`` (never ``decide_before``)
     and the child continues — the event line is never echoed to stdout."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = (
         b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, '
@@ -913,7 +913,7 @@ def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
 def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
     """A well-formed JSON event that is not an object (e.g. a list) is treated
     as no event: nothing is forwarded or echoed, the child continues."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b"MODULO_BRIDGE_EVENT: [1, 2, 3]"
     proc = _FakeProc([event_line], wait_code=0)
@@ -939,7 +939,7 @@ def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
 def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.chdir(tmp_path)
 
@@ -1094,7 +1094,7 @@ def test_spawn_audit_returns_when_no_loop():
 async def test_run_audit_raises_when_no_sink():
     """_run_audit raises RuntimeError when audit_sink is None."""
     server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig())
-    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+    with patch("farna.core.guardrails.loop_intercept._log") as mock_log:
         await server._run_audit([li.LoopInterceptAuditRecord("test", {})])
     # Should log the exception
     mock_log.exception.assert_called()
@@ -1107,7 +1107,7 @@ async def test_run_audit_catches_sink_exception():
         raise RuntimeError("sink failed")
 
     server = li.LoopInterceptCallbackServer(EvalEngine(), [], LoopInterceptConfig(), audit_sink=_failing_sink)
-    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+    with patch("farna.core.guardrails.loop_intercept._log") as mock_log:
         await server._run_audit([li.LoopInterceptAuditRecord("test", {})])
     mock_log.exception.assert_called()
 
@@ -1163,7 +1163,7 @@ async def test_load_guardrails_returns_empty_on_exception():
 
     factory = MagicMock(return_value=_Ctx())
     # The try/except in load_loop_intercept_guardrails catches the error
-    with patch("modulo.core.guardrails.loop_intercept._log"):
+    with patch("farna.core.guardrails.loop_intercept._log"):
         result = await li.load_loop_intercept_guardrails(factory, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
     assert result == []
 
@@ -1207,7 +1207,7 @@ async def test_persist_audit_catches_exception():
             pass
 
     factory = MagicMock(return_value=_Ctx())
-    with patch("modulo.core.guardrails.loop_intercept._log") as mock_log:
+    with patch("farna.core.guardrails.loop_intercept._log") as mock_log:
         await li.persist_loop_interception_audit(
             factory,
             org_id=uuid.uuid4(),
@@ -1240,7 +1240,7 @@ def test_bridge_client_source_ships_escalate_protocol():
 def test_decide_before_escalate_always_refuses(monkeypatch):
     """An ``escalate`` decision is a refusal regardless of the ``blocked`` flag —
     escalate has no record-only downgrade."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.setattr(
         sb.BridgeClient,
@@ -1258,7 +1258,7 @@ def test_wrap_command_escalate_kills_child_and_emits_typed_marker(monkeypatch, c
     """An ``escalate`` decision kills the wrapped child, emits a
     ``MODULO_BRIDGE_ESCALATED:<json>`` marker carrying the escalation context,
     and exits with the dedicated escalate exit code (distinct from block)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
@@ -1289,7 +1289,7 @@ def test_wrap_command_escalate_kills_child_and_emits_typed_marker(monkeypatch, c
 
 def test_wrap_command_escalate_leaves_no_blocked_marker(monkeypatch, capsys):
     """An escalate must not masquerade as a block (no BLOCKED marker on stdout)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
@@ -1311,7 +1311,7 @@ def test_wrap_command_escalate_leaves_no_blocked_marker(monkeypatch, capsys):
 def test_notify_cli_escalate_emits_marker_and_exit_4(monkeypatch, capsys):
     """The ``--notify`` CLI emits the escalate marker and exits with the
     dedicated escalate code."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.setattr(
         sb.BridgeClient,
@@ -1326,7 +1326,7 @@ def test_notify_cli_escalate_emits_marker_and_exit_4(monkeypatch, capsys):
 
 def test_parse_bridge_escalation_marker_round_trip():
     """A marker emitted by the bridge parses back to a typed payload."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     marker_line = sb.ESCALATED_MARKER + json.dumps(
         {
@@ -1382,7 +1382,7 @@ def test_args_sha256_falls_back_to_empty_on_unserialisable_args():
     dict hashes the empty string rather than raising (FAR-1694 S2)."""
     import hashlib
 
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     circular: dict = {}
     circular["self"] = circular
@@ -1397,7 +1397,7 @@ def test_notify_cli_escalate_preserves_the_event_direction(monkeypatch, capsys):
     ``_escalation_payload`` must stamp the event's ACTUAL direction, not a
     hardcoded ``before`` — otherwise a ``--notify direction=after`` escalation
     is mislabelled (review finding 2, FAR-1694 S2)."""
-    import modulo.core.guardrails.sandbox_bridge as sb
+    import farna.core.guardrails.sandbox_bridge as sb
 
     monkeypatch.setattr(
         sb.BridgeClient,

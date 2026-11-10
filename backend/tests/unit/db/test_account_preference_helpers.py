@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud.account import (
+from farna.db.crud.account import (
     Account,
     AccountNotFoundError,
     set_hitl_email_preference,

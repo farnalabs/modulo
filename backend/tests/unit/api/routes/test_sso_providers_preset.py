@@ -15,14 +15,14 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session, get_system_db_session
-from modulo.api.main import app
+from farna.api.dependencies import get_db_session, get_system_db_session
+from farna.api.main import app
 
 _VALID_32 = "a" * 32
 
 
 def _make_settings(**overrides: object) -> object:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     kwargs: dict = {
         "database_url": "postgresql+asyncpg://localhost/test",
@@ -103,12 +103,12 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch(
-                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                "farna.api.routes.sso.resolve_anonymous_plan_with_tenant",
                 new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
-            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
-            patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
+            patch("farna.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
+            patch("farna.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):
             resp = http.get("/api/v1/auth/sso/providers")
 
@@ -130,12 +130,12 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch(
-                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                "farna.api.routes.sso.resolve_anonymous_plan_with_tenant",
                 new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
-            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
-            patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
+            patch("farna.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
+            patch("farna.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):
             resp = http.get("/api/v1/auth/sso/providers")
 
@@ -152,7 +152,7 @@ class TestSsoProvidersDiscovery:
         mock_plan.feature_enabled.return_value = False
 
         with patch(
-            "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+            "farna.api.routes.sso.resolve_anonymous_plan_with_tenant",
             new=AsyncMock(return_value=(mock_plan, None)),
         ):
             resp = http.get("/api/v1/auth/sso/providers")
@@ -173,12 +173,12 @@ class TestSsoProvidersDiscovery:
 
         with (
             patch(
-                "modulo.api.routes.sso.resolve_anonymous_plan_with_tenant",
+                "farna.api.routes.sso.resolve_anonymous_plan_with_tenant",
                 new=AsyncMock(return_value=(mock_plan, MagicMock(id="00000000-0000-0000-0000-000000000001"))),
             ),
-            patch("modulo.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
-            patch("modulo.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.sso.parse_oidc_providers", return_value=[]),
+            patch("farna.api.routes.sso._list_enabled_oidc_for_org", new=AsyncMock(return_value=[provider])),
+            patch("farna.api.routes.sso._get_enabled_saml_global", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.sso.parse_oidc_providers", return_value=[]),
         ):
             resp = http.get("/api/v1/auth/sso/providers")
 

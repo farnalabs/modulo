@@ -26,20 +26,20 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.mcp_server import (
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.mcp_server import (
     _MSG_DB_MIGRATION_REQUIRED,
     _MSG_UNEXPECTED_ERROR,
     _system_maps_discovery_session,
     _system_maps_http_error_payload,
     discover_system_map,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
-from modulo.settings import Settings
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.mcp.helpers import ORG_ID, USER_ID
 
@@ -132,13 +132,13 @@ def _patch_discovery_session(session: AsyncMock) -> Any:
     async def _cm() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    return patch("modulo.api.mcp_server._system_maps_discovery_session", return_value=_cm())
+    return patch("farna.api.mcp_server._system_maps_discovery_session", return_value=_cm())
 
 
 @pytest.fixture(autouse=True)
 def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Operator caller with the System Maps grant, as an org-scoped API key."""
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_key_grants,
@@ -151,7 +151,7 @@ def _mcp_auth_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     # Developer mode is part of the internal gate; the production default is
     # OFF, so an authorised scenario must opt in explicitly.
-    monkeypatch.setattr("modulo.api.mcp_server.get_settings", lambda: _make_settings())
+    monkeypatch.setattr("farna.api.mcp_server.get_settings", lambda: _make_settings())
     _ctx_org_id.set(ORG_ID)
     _ctx_user_id.set(USER_ID)
     _ctx_role.set("operator")
@@ -176,8 +176,8 @@ async def test_authorized_caller_gets_unpublished_draft_report() -> None:
     """Operator + grant + dev mode + feature reaches inference and persistence."""
     session = _discovery_session()
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
         patch.object(
             SystemMapDiscoveryRepository,
@@ -203,13 +203,13 @@ async def test_authorized_caller_gets_unpublished_draft_report() -> None:
 @pytest.mark.asyncio
 async def test_viewer_role_is_refused() -> None:
     """An ordinary (viewer) caller is refused and no discovery work runs."""
-    from modulo.api.mcp_server import _ctx_role
+    from farna.api.mcp_server import _ctx_role
 
     _ctx_role.set("viewer")
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -221,13 +221,13 @@ async def test_viewer_role_is_refused() -> None:
 @pytest.mark.asyncio
 async def test_grant_set_without_system_maps_access_is_refused() -> None:
     """A grant-bearing credential must carry the dedicated grant."""
-    from modulo.api.mcp_server import _ctx_key_grants
+    from farna.api.mcp_server import _ctx_key_grants
 
     _ctx_key_grants.set(frozenset({"pipeline.list"}))
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -240,10 +240,10 @@ async def test_grant_set_without_system_maps_access_is_refused() -> None:
 async def test_developer_mode_off_is_refused() -> None:
     """The dev-mode leg refuses even an operator holding the grant."""
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server.get_settings", return_value=_make_settings(dev_mode=False)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server.get_settings", return_value=_make_settings(dev_mode=False)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -258,9 +258,9 @@ async def test_system_maps_feature_off_is_refused_before_discovery() -> None:
     """The feature-flag leg (REST ``require_feature``) refuses with a branchable code."""
     feature_error = {"error": "feature_required", "detail": "system_maps is not available on your plan"}
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=feature_error)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=feature_error)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -271,7 +271,7 @@ async def test_system_maps_feature_off_is_refused_before_discovery() -> None:
 
 @pytest.mark.asyncio
 async def test_revoked_token_returns_auth_expired() -> None:
-    with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
+    with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
         result = await discover_system_map()
 
     assert result["error"] == "auth_expired"
@@ -281,9 +281,9 @@ async def test_revoked_token_returns_auth_expired() -> None:
 async def test_empty_name_is_a_validation_error() -> None:
     """Input is validated before any session or discovery work is opened."""
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map(name="")
 
@@ -309,9 +309,9 @@ async def test_ai_options_are_forwarded_and_serialized() -> None:
     )
     session = _discovery_session()
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.system_maps.discover_system_map", new=rest_handler),
         _patch_discovery_session(session),
     ):
         result = await discover_system_map(model_backend_id=backend_id, eval_definition_id=eval_id)
@@ -328,14 +328,14 @@ async def test_ai_options_are_forwarded_and_serialized() -> None:
 async def test_discovery_uses_the_authenticated_tenant() -> None:
     """The reused handler receives the MCP caller's org/account/role, not a default."""
     rest_handler = AsyncMock(return_value=SimpleNamespace(model_dump=MagicMock(return_value={"ok": True})))
-    from modulo.api.mcp_server import _ctx_role
+    from farna.api.mcp_server import _ctx_role
 
     _ctx_role.set("admin")
     session = _discovery_session()
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.system_maps.discover_system_map", new=rest_handler),
         _patch_discovery_session(session),
     ):
         result = await discover_system_map(name="scoped")
@@ -354,8 +354,8 @@ async def test_discovery_queries_are_tenant_scoped() -> None:
     """Inventory reads filter the caller's org and the RLS context is bound to it."""
     session = _discovery_session()
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
         patch.object(
             SystemMapDiscoveryRepository,
@@ -451,8 +451,8 @@ async def test_mcp_and_rest_paths_persist_the_same_draft(rest_client: TestClient
 
         mcp_session = _discovery_session()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
             _patch_discovery_session(mcp_session),
         ):
             mcp_report = await discover_system_map(name="same-draft")
@@ -480,9 +480,9 @@ async def test_mcp_and_rest_paths_persist_the_same_draft(rest_client: TestClient
 async def _call_tool_with_rest_handler_error(exc: BaseException) -> dict[str, Any]:
     """Drive the tool with a mocked route handler that raises *exc*."""
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock(side_effect=exc)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock(side_effect=exc)),
         _patch_discovery_session(_discovery_session()),
     ):
         return await discover_system_map()
@@ -598,7 +598,7 @@ async def test_discovery_session_yields_the_factory_session() -> None:
     session.__aexit__ = AsyncMock(return_value=False)
     factory = MagicMock(return_value=session)
 
-    with patch("modulo.api.mcp_server._get_session_factory", return_value=factory):
+    with patch("farna.api.mcp_server._get_session_factory", return_value=factory):
         async with _system_maps_discovery_session() as yielded:
             assert yielded is session
 
@@ -622,10 +622,10 @@ async def test_programming_error_maps_to_migration_required() -> None:
 async def test_real_route_session_contract_error_keeps_its_own_code() -> None:
     """Without the unwrap this is a generic 500 -> ``server_error``."""
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch(
-            "modulo.api.routes.system_maps.set_rls_org",
+            "farna.api.routes.system_maps.set_rls_org",
             new=AsyncMock(side_effect=InvalidRequestError("session outside transaction")),
         ),
         _patch_discovery_session(_discovery_session()),
@@ -646,8 +646,8 @@ async def test_real_route_uuid5_revision_collision_is_a_retryable_conflict() -> 
     rename a map instead of retrying the idempotent write.
     """
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
         patch.object(
             SystemMapDiscoveryRepository,
@@ -673,8 +673,8 @@ async def test_real_route_uuid5_revision_collision_is_a_retryable_conflict() -> 
 async def test_real_route_name_conflict_still_maps_to_name_conflict() -> None:
     """A genuine name clash keeps its distinct code."""
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch.object(
             SystemMapDiscoveryRepository,
             "get_or_create_draft",
@@ -691,8 +691,8 @@ async def test_real_route_name_conflict_still_maps_to_name_conflict() -> None:
 @pytest.mark.asyncio
 async def test_real_route_value_error_is_a_non_leaking_server_error() -> None:
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
         patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=_draft_map())),
         patch.object(
             SystemMapDiscoveryRepository,
@@ -714,14 +714,14 @@ async def test_real_route_value_error_is_a_non_leaking_server_error() -> None:
 @pytest.mark.asyncio
 async def test_team_scoped_credential_is_refused_before_discovery() -> None:
     """A team-scoped key must not trigger an org-wide inventory scan."""
-    from modulo.api.mcp_server import _ctx_team_id
+    from farna.api.mcp_server import _ctx_team_id
 
     team_id = uuid.uuid4()
     _ctx_team_id.set(team_id)
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -734,13 +734,13 @@ async def test_team_scoped_credential_is_refused_before_discovery() -> None:
 
 @pytest.mark.asyncio
 async def test_user_scoped_api_key_is_refused_before_discovery() -> None:
-    from modulo.api.mcp_server import _ctx_key_scope
+    from farna.api.mcp_server import _ctx_key_scope
 
     _ctx_key_scope.set("user")
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
-        patch("modulo.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.routes.system_maps.discover_system_map", new=AsyncMock()) as rest_handler,
     ):
         result = await discover_system_map()
 
@@ -753,15 +753,15 @@ async def test_user_scoped_api_key_is_refused_before_discovery() -> None:
 @pytest.mark.asyncio
 async def test_team_less_identity_session_is_allowed() -> None:
     """A JWT session is the user's own org-wide identity — not a team key."""
-    from modulo.api.mcp_server import _ctx_auth_type, _ctx_key_scope
+    from farna.api.mcp_server import _ctx_auth_type, _ctx_key_scope
 
     _ctx_key_scope.set("user")
     _ctx_auth_type.set("jwt")
     rest_handler = AsyncMock(return_value=SimpleNamespace(model_dump=MagicMock(return_value={"ok": True})))
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.system_maps.discover_system_map", new=rest_handler),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.system_maps.discover_system_map", new=rest_handler),
         _patch_discovery_session(_discovery_session()),
     ):
         result = await discover_system_map()
@@ -772,7 +772,7 @@ async def test_team_less_identity_session_is_allowed() -> None:
 
 def test_route_handler_without_a_wrapper_is_used_as_is() -> None:
     """The unwrap helper tolerates a plain (already-undecorated) function."""
-    from modulo.api.mcp_server import _unwrap_system_maps_route_handler
+    from farna.api.mcp_server import _unwrap_system_maps_route_handler
 
     async def handler() -> None:
         return None

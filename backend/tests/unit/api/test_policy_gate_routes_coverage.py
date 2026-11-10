@@ -27,13 +27,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes.evals as evals_routes
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
-from modulo.settings import Settings, get_settings
+import farna.api.routes.evals as evals_routes
+from farna.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud._gate_advisory_lock import with_gate_advisory_lock
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -247,9 +247,9 @@ def _patch_route_side_effects():
     result queue limited to the eval/gate lookups under test.
     """
     with (
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock),
     ):
         yield
 
@@ -887,7 +887,7 @@ def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock
     """F4: the update path must run check_author_warnings and return the
     warnings in PolicyGateResponse.warnings — not create-only.
     """
-    from modulo.core.eval_engine.author_warnings import AuthorWarning
+    from farna.core.eval_engine.author_warnings import AuthorWarning
 
     http, session = client
     _queue_execute(
@@ -901,7 +901,7 @@ def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock
     )
     fake_warnings = [AuthorWarning("temporal_ordering", "Producer runs after gate.")]
     with patch(
-        "modulo.api.routes.evals.check_author_warnings",
+        "farna.api.routes.evals.check_author_warnings",
         new_callable=AsyncMock,
         return_value=fake_warnings,
     ):
@@ -932,7 +932,7 @@ async def test_collect_author_warnings_checks_top_level_and_nested_detection_key
     session = _make_session()
     check = AsyncMock(return_value=[])
     eval_row = _eval_row(config_json={"evidence_key": "top.key", "detection": {"evidence_key": "det.key"}})
-    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+    with patch("farna.api.routes.evals.check_author_warnings", new=check):
         warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
 
     assert not warnings
@@ -946,7 +946,7 @@ async def test_collect_author_warnings_ignores_non_dict_detection() -> None:
     session = _make_session()
     check = AsyncMock(return_value=[])
     eval_row = _eval_row(config_json={"detection": "not-a-mapping"})
-    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+    with patch("farna.api.routes.evals.check_author_warnings", new=check):
         warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
 
     assert not warnings
@@ -959,7 +959,7 @@ async def test_collect_author_warnings_ignores_detection_without_evidence_key() 
     session = _make_session()
     check = AsyncMock(return_value=[])
     eval_row = _eval_row(config_json={"detection": {"key": "threshold"}})
-    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+    with patch("farna.api.routes.evals.check_author_warnings", new=check):
         warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
 
     assert not warnings
@@ -974,9 +974,9 @@ async def test_collect_author_warnings_check_failure_is_logged_and_swallowed(
     session = _make_session()
     eval_row = _eval_row(config_json={"evidence_key": "flaky.key"})
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.evals"),
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.evals"),
         patch(
-            "modulo.api.routes.evals.check_author_warnings",
+            "farna.api.routes.evals.check_author_warnings",
             new=AsyncMock(side_effect=RuntimeError("author check down")),
         ),
     ):
@@ -1230,7 +1230,7 @@ def test_create_gate_audit_payload_carries_enabled(client: tuple[TestClient, Asy
     gate.enabled = True
     with (
         patch.object(evals_routes, "_create_gate", new=AsyncMock(return_value=gate)),
-        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
+        patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
     ):
         resp = http.post(_GATE_URL, json={"action": "warn"})
 
@@ -1254,7 +1254,7 @@ def test_update_gate_audit_payload_carries_enabled(client: tuple[TestClient, Asy
             _result(scalar_one_or_none=gate),
         ],
     )
-    with patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
+    with patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
         resp = http.put(_GATE_URL, json={"action": "block"})
 
     assert resp.status_code == 200, resp.text
@@ -1377,7 +1377,7 @@ def test_toggle_gate_audit_records_enabled_transition(client: tuple[TestClient, 
             _result(scalar_one_or_none=_toggle_gate_row(enabled=True)),
         ],
     )
-    with patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
+    with patch("farna.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
         resp = http.patch(_TOGGLE_URL, json={"enabled": False})
 
     assert resp.status_code == 200, resp.text
@@ -1402,7 +1402,7 @@ def test_toggle_gate_audit_failure_still_succeeds(client: tuple[TestClient, Asyn
         ],
     )
     with patch(
-        "modulo.api.routes.evals.append_audit_event",
+        "farna.api.routes.evals.append_audit_event",
         new=AsyncMock(side_effect=RuntimeError("audit down")),
     ):
         resp = http.patch(_TOGGLE_URL, json={"enabled": False})

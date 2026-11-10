@@ -24,12 +24,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import InvalidRequestError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.pipeline import PipelineHasActiveRunsError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.pipeline import PipelineHasActiveRunsError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -161,8 +161,8 @@ def test_patch_pipeline_returns_200_when_updated_at_is_db_computed(
         return pipeline
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=_make_current_pipeline())),
-        patch("modulo.api.routes.pipelines.update_pipeline", new=AsyncMock(side_effect=_apply_update)),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=_make_current_pipeline())),
+        patch("farna.api.routes.pipelines.update_pipeline", new=AsyncMock(side_effect=_apply_update)),
     ):
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"description": "after"})
 
@@ -177,7 +177,7 @@ def test_patch_pipeline_still_rejects_missing_pipeline(
     make_client: Callable[[], tuple[TestClient, _ExpiredPipeline]],
 ) -> None:
     client, _ = make_client()
-    with patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=None)):
+    with patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=None)):
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"description": "after"})
 
     assert resp.status_code == 404
@@ -188,9 +188,9 @@ def test_patch_pipeline_still_409_on_active_runs(
 ) -> None:
     client, _ = make_client()
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=_make_current_pipeline())),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=_make_current_pipeline())),
         patch(
-            "modulo.api.routes.pipelines.update_pipeline",
+            "farna.api.routes.pipelines.update_pipeline",
             new=AsyncMock(side_effect=PipelineHasActiveRunsError(3)),
         ),
     ):

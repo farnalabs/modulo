@@ -86,7 +86,7 @@ def test_check_c1_chars_files_pattern_matches_workflow_files():
     assert compiled.search(".github/workflows/ci.yml")
     assert compiled.search(".github/workflows/ci.yaml")
     assert compiled.search(".github/workflows/sub/deploy.yml")
-    assert not compiled.search("backend/src/modulo/api/routes/runs.py")
+    assert not compiled.search("backend/src/farna/api/routes/runs.py")
 
 
 def test_every_uv_run_invocation_is_frozen():
@@ -132,7 +132,7 @@ def test_check_uv_lock_files_pattern_covers_every_lock_input():
     unexpected = [
         path
         for path in (
-            "backend/src/modulo/api/routes/runs.py",
+            "backend/src/farna/api/routes/runs.py",
             "backend/tests/unit/scripts/test_run_check_uv_lock.py",
             "scripts/run_vulture.py",
             "frontend/package.json",

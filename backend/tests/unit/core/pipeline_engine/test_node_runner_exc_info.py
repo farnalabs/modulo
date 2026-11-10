@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine import node_runner as nr
 
 
 async def test_read_run_raw_output_markers_failure() -> None:
@@ -61,7 +61,7 @@ def test_connector_on_unknown_read_failure() -> None:
 
 def test_connector_gate_enabled_killswitch_failure() -> None:
     with (
-        patch("modulo.settings.get_settings", side_effect=RuntimeError("boom")),
+        patch("farna.settings.get_settings", side_effect=RuntimeError("boom")),
         patch.object(nr, "_log") as log,
     ):
         result = nr._connector_gate_enabled("fail_open", node_id="n", run_id="r")

@@ -18,14 +18,14 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.determination import router as determination_router
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.determination.comparison import ProposalComparison
-from modulo.determination.models import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.determination import router as determination_router
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.determination.comparison import ProposalComparison
+from farna.determination.models import (
     DeterminationAttempt,
     ProposalConfidence,
     ProposalContract,
@@ -194,8 +194,8 @@ def audit_calls() -> Generator[dict[str, list[dict[str, Any]]], None, None]:
         coarse_calls.append(kwargs)
 
     with (
-        patch("modulo.api.routes.determination.append_audit_event", new=fake_rich_audit),
-        patch("modulo.core.audit_logger.append_audit_event", new=fake_coarse_audit),
+        patch("farna.api.routes.determination.append_audit_event", new=fake_rich_audit),
+        patch("farna.core.audit_logger.append_audit_event", new=fake_coarse_audit),
     ):
         yield {"rich": rich_calls, "coarse": coarse_calls}
 

@@ -40,7 +40,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
-VERSIONS_DIR = str(Path(REPO_ROOT, "backend", "src", "modulo", "db", "migrations", "versions"))
+VERSIONS_DIR = str(Path(REPO_ROOT, "backend", "src", "farna", "db", "migrations", "versions"))
 
 _RE_REVISION = re.compile(r"(?m)^revision:\s*str\s*=\s*\"([^\"]+)\"")
 _RE_DOWN_STRING = re.compile(r"(?m)^down_revision:.*=\s*\"([^\"]+)\"")
@@ -55,7 +55,7 @@ def _resolve_repo_root() -> str:
     result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
     if result.returncode == 0:
         cwd_top = result.stdout.strip()
-        if cwd_top and Path(cwd_top, "backend", "src", "modulo", "db", "migrations", "versions").is_dir():
+        if cwd_top and Path(cwd_top, "backend", "src", "farna", "db", "migrations", "versions").is_dir():
             return cwd_top
     return REPO_ROOT
 
@@ -78,7 +78,7 @@ def _changed_names(diff_range: str | None) -> list[str]:
             text=True,
             check=False,
         )
-    prefix = "backend/src/modulo/db/migrations/versions/"
+    prefix = "backend/src/farna/db/migrations/versions/"
     names = []
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
@@ -258,7 +258,7 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = _resolve_repo_root()
-    versions_dir = str(Path(repo_root, "backend", "src", "modulo", "db", "migrations", "versions"))
+    versions_dir = str(Path(repo_root, "backend", "src", "farna", "db", "migrations", "versions"))
 
     if not Path(versions_dir).is_dir():
         print(f"check-migration-heads: versions dir not found at {versions_dir} - skipping", file=sys.stderr)

@@ -42,7 +42,7 @@ from kubernetes_asyncio import config as k8s_config
 from kubernetes_asyncio.client import V1Namespace, V1ObjectMeta, V1ServiceAccount
 from kubernetes_asyncio.client.exceptions import ApiException
 
-from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
 
 _log = logging.getLogger(__name__)
 

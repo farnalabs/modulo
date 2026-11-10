@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _apply_node_connector_binding,
     _validate_binding_arguments,
     bind_connector_to_node,
@@ -275,7 +275,7 @@ async def test_the_tool_persists_the_query_payload_and_echoes_it() -> None:
     assertions are on the node dict that would be flushed, which is exactly the
     shape ``_connector_inputs`` consumes at run start.
     """
-    from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+    from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
     pipeline_id = uuid.uuid4()
     node_id = uuid.uuid4()
@@ -308,11 +308,11 @@ async def test_the_tool_persists_the_query_payload_and_echoes_it() -> None:
 
     try:
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session", return_value=session_scope),
-            patch("modulo.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=connector)),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session", return_value=session_scope),
+            patch("farna.db.crud.connector_instance.get_connector_instance", new=AsyncMock(return_value=connector)),
             patch(
-                "modulo.db.crud.pipeline._graph_content_unchanged",
+                "farna.db.crud.pipeline._graph_content_unchanged",
                 return_value=True,
             ),
         ):

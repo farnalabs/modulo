@@ -14467,7 +14467,7 @@ def test_self_asserting_bdd_step_lens_flags_fabricated_responses():
         (
             "@when('I GET /api/v1/me')\n"
             "def get_me(request):\n"
-            "    from modulo.api.main import app\n"
+            "    from farna.api.main import app\n"
             "    client = TestClient(app)\n"
             "    request.node._resp = client.get('/api/v1/me')\n"
         ),

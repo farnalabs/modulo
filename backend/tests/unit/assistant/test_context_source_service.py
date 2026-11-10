@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.assistant.context_source_service import AssistantContextSourceService
-from modulo.db.models.assistant_context_source import AssistantContextSource
+from farna.core.assistant.context_source_service import AssistantContextSourceService
+from farna.db.models.assistant_context_source import AssistantContextSource
 
 
 def _mock_source_row(
@@ -96,7 +96,7 @@ class TestAssistantContextSourceServiceGetEffectiveConfig:
         user_id: uuid.UUID,
     ) -> None:
         config = await service.get_effective_config(org_id, user_id)
-        from modulo.core.assistant.config_service import AssistantConfig
+        from farna.core.assistant.config_service import AssistantConfig
 
         assert isinstance(config, AssistantConfig)
 

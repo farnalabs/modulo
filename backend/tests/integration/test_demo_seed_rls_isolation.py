@@ -14,12 +14,12 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db import seed_demo as seed_demo_module
-from modulo.db.models.account import Account
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.seed_demo import seed_demo
-from modulo.settings import get_settings
+from farna.db import seed_demo as seed_demo_module
+from farna.db.models.account import Account
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.seed_demo import seed_demo
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 

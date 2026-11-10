@@ -11,9 +11,9 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.model_backend import list_backends_referencing_fallback
-from modulo.db.models.base import Base
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.crud.model_backend import list_backends_referencing_fallback
+from farna.db.models.base import Base
+from farna.db.models.model_backend import ModelBackend
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from anyio import Path
 
-from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.local import LocalRuntimeProvider, create_local_provider_from_env
+from farna.core.runtime_provider import ExecResult, WorkspaceSpec
+from farna.core.runtime_provider.local import LocalRuntimeProvider, create_local_provider_from_env
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ class TestLocalRuntimeProvider:
     ) -> None:
         spec.repo_url = "https://github.com/acme/app"
         rmtree = MagicMock()
-        monkeypatch.setattr("modulo.core.runtime_provider.local.shutil.rmtree", rmtree)
+        monkeypatch.setattr("farna.core.runtime_provider.local.shutil.rmtree", rmtree)
 
         async def _fake_run(command: list[str], cwd: str, cmd_timeout: int | None) -> ExecResult:
             raise RuntimeError("clone failed")
@@ -313,9 +313,9 @@ class TestLocalRuntimeProvider:
         def _rmtree_fails(path: str, ignore_errors: bool = False) -> None:
             raise OSError("cannot remove")
 
-        monkeypatch.setattr("modulo.core.runtime_provider.local.shutil.rmtree", _rmtree_fails)
+        monkeypatch.setattr("farna.core.runtime_provider.local.shutil.rmtree", _rmtree_fails)
 
-        with caplog.at_level("ERROR", logger="modulo.core.runtime_provider.local"):
+        with caplog.at_level("ERROR", logger="farna.core.runtime_provider.local"):
             await provider.destroy_workspace(ref)
 
         assert "Failed to remove workspace" in caplog.text

@@ -6,15 +6,15 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval.finding_resolver import (
+from farna.core.eval.finding_resolver import (
     apply_mute_policy,
     compute_acceptance_rate,
     evaluate_mute_policy,
     resolve_finding,
     unmute_definition,
 )
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
 
 pytestmark = pytest.mark.integration
 

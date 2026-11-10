@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller import (
+from farna.core.cost_controller import (
     check_pipeline_circuit_breaker,
     reset_pipeline_circuit_breaker,
     sum_pipeline_monthly_spend,
@@ -156,7 +156,7 @@ class TestCheckPipelineCircuitBreaker:
         update_result = MagicMock()
         mock_session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result, update_result])
         dispatch_mock = AsyncMock()
-        with patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock):
+        with patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock):
             approved, reason = await check_pipeline_circuit_breaker(
                 mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(100)
             )
@@ -236,7 +236,7 @@ class TestUnifiedPausedStateFold:
     async def test_trip_folds_the_unified_state(self, mock_session: AsyncMock) -> None:
         pipeline = _make_pipeline(threshold=Decimal(1000))
         mock_session.execute = AsyncMock(return_value=MagicMock())
-        with patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
+        with patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
             tripped = await trip_pipeline_circuit_breaker(
                 mock_session,
                 org_id=_ORG_ID,
@@ -268,7 +268,7 @@ class TestUnifiedPausedStateFold:
         )
         pipeline.run_disabled_at = operator_pause_at
         mock_session.execute = AsyncMock(return_value=MagicMock())
-        with patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
+        with patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
             tripped = await trip_pipeline_circuit_breaker(
                 mock_session,
                 org_id=_ORG_ID,

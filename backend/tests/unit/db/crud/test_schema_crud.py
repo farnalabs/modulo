@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.schema import SchemaDeletionProtectedError
+from farna.db.crud.base import PageResult
+from farna.db.crud.schema import SchemaDeletionProtectedError
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SCHEMA_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -46,8 +46,8 @@ def _exec_result(scalar_value: object = None) -> MagicMock:
 
 class TestCreateSchema:
     async def test_creates_schema_with_org_id(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.schema.Schema", return_value=_make_schema()) as schema_cls:
-            from modulo.db.crud.schema import create_schema
+        with patch("farna.db.crud.schema.Schema", return_value=_make_schema()) as schema_cls:
+            from farna.db.crud.schema import create_schema
 
             result = await create_schema(
                 mock_session,
@@ -67,8 +67,8 @@ class TestCreateSchema:
         assert result is not None
 
     async def test_create_schema_minimal(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.schema.Schema", return_value=_make_schema()) as schema_cls:
-            from modulo.db.crud.schema import create_schema
+        with patch("farna.db.crud.schema.Schema", return_value=_make_schema()) as schema_cls:
+            from farna.db.crud.schema import create_schema
 
             await create_schema(mock_session, org_id=_ORG_ID, name="metrics", account_id=_ACCOUNT_ID)
         kwargs = schema_cls.call_args.kwargs
@@ -80,13 +80,13 @@ class TestGetSchema:
     async def test_returns_schema_when_found(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         mock_session.execute = AsyncMock(return_value=_exec_result(schema))
-        from modulo.db.crud.schema import get_schema
+        from farna.db.crud.schema import get_schema
 
         assert await get_schema(mock_session, _SCHEMA_ID) is schema
 
     async def test_returns_none_when_missing(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(None))
-        from modulo.db.crud.schema import get_schema
+        from farna.db.crud.schema import get_schema
 
         assert await get_schema(mock_session, _SCHEMA_ID) is None
 
@@ -99,7 +99,7 @@ class TestListSchemas:
         listing.scalars = MagicMock(return_value=list(schemas))
         mock_session.execute = AsyncMock(side_effect=[count_mock, listing])
 
-        from modulo.db.crud.schema import list_schemas
+        from farna.db.crud.schema import list_schemas
 
         result = await list_schemas(mock_session, limit=2)
         assert isinstance(result, PageResult)
@@ -110,7 +110,7 @@ class TestListSchemas:
 
     async def test_folder_filter_applies(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=[_count_result(0), MagicMock(scalars=MagicMock(return_value=[]))])
-        from modulo.db.crud.schema import list_schemas
+        from farna.db.crud.schema import list_schemas
 
         result = await list_schemas(mock_session, folder_id=_FOLDER_ID)
         assert result.total == 0
@@ -118,7 +118,7 @@ class TestListSchemas:
 
     async def test_programming_error_returns_empty(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.schema import list_schemas
+        from farna.db.crud.schema import list_schemas
 
         result = await list_schemas(mock_session)
         assert isinstance(result, PageResult)
@@ -130,7 +130,7 @@ class TestListSchemas:
         mock_session.execute = AsyncMock(side_effect=[count_mock])
         schemas = [_make_schema()]
         with (
-            patch("modulo.db.crud.schema.CursorPaginator") as paginator_cls,
+            patch("farna.db.crud.schema.CursorPaginator") as paginator_cls,
         ):
             paginate_result = MagicMock(
                 items=schemas,
@@ -138,7 +138,7 @@ class TestListSchemas:
                 has_more=True,
             )
             paginator_cls.return_value.paginate = AsyncMock(return_value=paginate_result)
-            from modulo.db.crud.schema import list_schemas
+            from farna.db.crud.schema import list_schemas
 
             result = await list_schemas(mock_session, cursor="abc", limit=5)
         paginator_cls.return_value.paginate.assert_awaited_once()
@@ -152,25 +152,25 @@ class TestUpdateAndDeprecate:
     async def test_update_schema(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         with (
-            patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)),
-            patch("modulo.db.crud.schema.apply_updates") as apply_updates,
+            patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)),
+            patch("farna.db.crud.schema.apply_updates") as apply_updates,
         ):
-            from modulo.db.crud.schema import update_schema
+            from farna.db.crud.schema import update_schema
 
             result = await update_schema(mock_session, _SCHEMA_ID, {"name": "renamed"})
         apply_updates.assert_called_once_with(schema, {"name": "renamed"})
         assert result is schema
 
     async def test_update_schema_missing_returns_none(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=None)):
-            from modulo.db.crud.schema import update_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=None)):
+            from farna.db.crud.schema import update_schema
 
             assert await update_schema(mock_session, _SCHEMA_ID, {}) is None
 
     async def test_deprecate_schema_sets_flag_and_timestamp(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import deprecate_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import deprecate_schema
 
             result = await deprecate_schema(mock_session, _SCHEMA_ID)
         assert result.deprecated is True
@@ -178,23 +178,23 @@ class TestUpdateAndDeprecate:
         mock_session.flush.assert_awaited_once()
 
     async def test_deprecate_missing_returns_none(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=None)):
-            from modulo.db.crud.schema import deprecate_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=None)):
+            from farna.db.crud.schema import deprecate_schema
 
             assert await deprecate_schema(mock_session, _SCHEMA_ID) is None
 
 
 class TestDeleteSchema:
     async def test_returns_false_when_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=None)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=None)):
+            from farna.db.crud.schema import delete_schema
 
             assert await delete_schema(mock_session, _SCHEMA_ID) is False
 
     async def test_system_schema_raises_409(self, mock_session: AsyncMock) -> None:
         schema = _make_schema(system=True)
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             with pytest.raises(HTTPException) as exc_info:
                 await delete_schema(mock_session, _SCHEMA_ID)
@@ -203,8 +203,8 @@ class TestDeleteSchema:
     async def test_agent_reference_blocks_deletion(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         mock_session.execute = AsyncMock(side_effect=[_count_result(2), _count_result(0), _count_result(0)])
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             with pytest.raises(SchemaDeletionProtectedError) as exc_info:
                 await delete_schema(mock_session, _SCHEMA_ID)
@@ -217,8 +217,8 @@ class TestDeleteSchema:
         mock_session.execute = AsyncMock(
             side_effect=[_count_result(0), _count_result(2), _count_result(0)],
         )
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             with pytest.raises(SchemaDeletionProtectedError) as exc_info:
                 await delete_schema(mock_session, _SCHEMA_ID)
@@ -227,8 +227,8 @@ class TestDeleteSchema:
     async def test_library_reference_blocks_deletion(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         mock_session.execute = AsyncMock(side_effect=[_count_result(0), _count_result(0), _count_result(1)])
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             with pytest.raises(SchemaDeletionProtectedError) as exc_info:
                 await delete_schema(mock_session, _SCHEMA_ID)
@@ -241,8 +241,8 @@ class TestDeleteSchema:
 
     async def test_force_skips_checks_and_deletes(self, mock_session: AsyncMock) -> None:
         schema = _make_schema(system=True)
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             result = await delete_schema(mock_session, _SCHEMA_ID, force=True)
         assert result is True
@@ -252,8 +252,8 @@ class TestDeleteSchema:
     async def test_combined_references_listed_in_detail(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         mock_session.execute = AsyncMock(side_effect=[_count_result(1), _count_result(1), _count_result(1)])
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             with pytest.raises(SchemaDeletionProtectedError) as exc_info:
                 await delete_schema(mock_session, _SCHEMA_ID)
@@ -265,8 +265,8 @@ class TestDeleteSchema:
     async def test_successful_delete_without_references(self, mock_session: AsyncMock) -> None:
         schema = _make_schema()
         mock_session.execute = AsyncMock(side_effect=[_count_result(0), _count_result(0), _count_result(0)])
-        with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
-            from modulo.db.crud.schema import delete_schema
+        with patch("farna.db.crud.schema.get_schema", AsyncMock(return_value=schema)):
+            from farna.db.crud.schema import delete_schema
 
             result = await delete_schema(mock_session, _SCHEMA_ID)
         assert result is True
@@ -277,8 +277,8 @@ class TestSchemaVersions:
     async def test_create_schema_version(self, mock_session: AsyncMock) -> None:
         created = MagicMock()
         created.organisation_id = _ORG_ID
-        with patch("modulo.db.crud.schema.SchemaVersion", return_value=created) as sv_cls:
-            from modulo.db.crud.schema import create_schema_version
+        with patch("farna.db.crud.schema.SchemaVersion", return_value=created) as sv_cls:
+            from farna.db.crud.schema import create_schema_version
 
             result = await create_schema_version(
                 mock_session,
@@ -300,7 +300,7 @@ class TestSchemaVersions:
     async def test_get_schema_version_found_and_missing(self, mock_session: AsyncMock) -> None:
         sv = MagicMock()
         mock_session.execute = AsyncMock(side_effect=[_exec_result(sv), _exec_result(None)])
-        from modulo.db.crud.schema import get_schema_version
+        from farna.db.crud.schema import get_schema_version
 
         assert await get_schema_version(mock_session, _SCHEMA_ID, "1.0.0") is sv
         assert await get_schema_version(mock_session, _SCHEMA_ID, "9.9.9") is None
@@ -310,7 +310,7 @@ class TestSchemaVersions:
         count_mock = _count_result(2)
         listing = MagicMock(scalars=MagicMock(return_value=list(versions)))
         mock_session.execute = AsyncMock(side_effect=[count_mock, listing])
-        from modulo.db.crud.schema import list_schema_versions
+        from farna.db.crud.schema import list_schema_versions
 
         result = await list_schema_versions(mock_session, _SCHEMA_ID, page=2, page_size=10)
         assert result.total == 2
@@ -319,7 +319,7 @@ class TestSchemaVersions:
 
     async def test_list_schema_versions_programming_error(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.schema import list_schema_versions
+        from farna.db.crud.schema import list_schema_versions
 
         result = await list_schema_versions(mock_session, _SCHEMA_ID)
         assert result.total == 0

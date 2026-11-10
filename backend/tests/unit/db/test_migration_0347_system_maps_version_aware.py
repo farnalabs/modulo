@@ -32,7 +32,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / "0347_system_maps_version_aware.py"
 
 _T1 = datetime(2026, 1, 1, 12, 0)

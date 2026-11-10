@@ -31,7 +31,7 @@ import pytest
 from tests.unit._source_scan import iter_source_text
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = BACKEND_ROOT / "src" / "modulo"
+SRC_ROOT = BACKEND_ROOT / "src" / "farna"
 _DEF_PATTERN = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
 
 
@@ -125,7 +125,7 @@ def test_shared_guardrail_validator_still_present() -> None:
     # callable is exercised for real by test_eval_redirect_unit.py
     # (TestValidatorMatrix); here we probe liveness with a call that must not
     # raise so the import is bound to a functioning function.
-    from modulo.core.eval_engine.eval_definition_write import validate_guardrail_request
+    from farna.core.eval_engine.eval_definition_write import validate_guardrail_request
 
     # FAR-1103 chunk 5a retired the ``failure_behaviour`` parameter from the
     # shared validator (it is no longer part of the public request shape); the
@@ -280,7 +280,7 @@ def test_read_paths_query_evals_not_eval_definitions() -> None:
 
 def test_eval_def_to_dict_accepts_eval_row() -> None:
     """Criterion 23 - the shared response mapper accepts an ``Eval`` row."""
-    from modulo.api.routes.evals import _eval_def_to_dict
+    from farna.api.routes.evals import _eval_def_to_dict
 
     eval_row = SimpleNamespace(
         id=uuid.uuid4(),

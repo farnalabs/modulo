@@ -10,8 +10,8 @@ import pytest
 from sqlalchemy import Column, String, Uuid
 from sqlalchemy.orm import declarative_base
 
-from modulo.core import housekeeping as hk
-from modulo.core.housekeeping import (
+from farna.core import housekeeping as hk
+from farna.core.housekeeping import (
     _SCANNERS,
     ENTITY_MODEL_MAP,
     SCANNERS_BY_CATEGORY,
@@ -147,7 +147,7 @@ class TestScanAll:
                 entity_type="secret",
             )
         ]
-        with patch("modulo.core.housekeeping._SCANNERS", scanners):
+        with patch("farna.core.housekeeping._SCANNERS", scanners):
             results = await scan_all(session, uuid.uuid4())
 
         assert len(results) == 1
@@ -164,7 +164,7 @@ class TestScanAll:
             raise RuntimeError("boom")
 
         with patch(
-            "modulo.core.housekeeping._SCANNERS",
+            "farna.core.housekeeping._SCANNERS",
             [
                 Scanner(
                     category="orphan_secrets",
@@ -200,7 +200,7 @@ class TestScanAll:
     async def test_scan_all_returns_category_for_every_scanner(self) -> None:
         session = await self._fake_session()
         with patch(
-            "modulo.core.housekeeping._SCANNERS",
+            "farna.core.housekeeping._SCANNERS",
             [
                 Scanner(
                     category="empty_teams",
@@ -232,7 +232,7 @@ class TestScanAll:
 
         with (
             patch(
-                "modulo.core.housekeeping._SCANNERS",
+                "farna.core.housekeeping._SCANNERS",
                 [
                     Scanner(
                         category="empty_lifecycle_maps",
@@ -243,7 +243,7 @@ class TestScanAll:
                     )
                 ],
             ),
-            caplog.at_level(logging.ERROR, logger="modulo.core.housekeeping"),
+            caplog.at_level(logging.ERROR, logger="farna.core.housekeeping"),
         ):
             results = await scan_all(await self._fake_session(), uuid.uuid4())
 
@@ -253,7 +253,7 @@ class TestScanAll:
         assert not results[0].candidates
 
         # ... but it does NOT present as a clean scan: the failure is logged.
-        records = [record for record in caplog.records if record.name == "modulo.core.housekeeping"]
+        records = [record for record in caplog.records if record.name == "farna.core.housekeeping"]
         assert len(records) == 1
         message = records[0].getMessage()
         assert "empty_lifecycle_maps" in message
@@ -270,7 +270,7 @@ class TestScanAll:
         """The failure signal distinguishes a failed scanner from a genuinely empty one (FAR-1906)."""
         with (
             patch(
-                "modulo.core.housekeeping._SCANNERS",
+                "farna.core.housekeeping._SCANNERS",
                 [
                     Scanner(
                         category="empty_teams",
@@ -281,7 +281,7 @@ class TestScanAll:
                     )
                 ],
             ),
-            caplog.at_level(logging.ERROR, logger="modulo.core.housekeeping"),
+            caplog.at_level(logging.ERROR, logger="farna.core.housekeeping"),
         ):
             results = await scan_all(await self._fake_session(), uuid.uuid4())
 
@@ -289,7 +289,7 @@ class TestScanAll:
         assert not results[0].candidates
         assert results[0].status == "ok"
         assert results[0].error is None
-        records = [record for record in caplog.records if record.name == "modulo.core.housekeeping"]
+        records = [record for record in caplog.records if record.name == "farna.core.housekeeping"]
         assert not records
 
 
@@ -480,6 +480,6 @@ class TestScannerRegistry:
             description="Orphan rows referencing a missing organisation",
             entity_type=None,
         )
-        with patch("modulo.core.housekeeping._SCANNERS", [detection_only]):
+        with patch("farna.core.housekeeping._SCANNERS", [detection_only]):
             results = await scan_all(_fake_scan_session(), uuid.uuid4())
         assert results[0].candidates[0].entity_type == "invalid_org_fk"

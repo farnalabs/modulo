@@ -7,10 +7,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.routes.admin import router as admin_router
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.routes.admin import router as admin_router
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
 from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid.uuid4()
@@ -72,7 +72,7 @@ def client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
-    with patch("modulo.api.routes.admin.set_rls_org", AsyncMock()):
+    with patch("farna.api.routes.admin.set_rls_org", AsyncMock()):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -84,7 +84,7 @@ def viewer_client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
-    with patch("modulo.api.routes.admin.set_rls_org", AsyncMock()):
+    with patch("farna.api.routes.admin.set_rls_org", AsyncMock()):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -231,7 +231,7 @@ class TestGlobalSearchEndpoint:
 
     def test_ordinary_admin_search_excludes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
-        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+        with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
             resp = client.get("/api/v1/admin/search?q=map&type=library")
         assert resp.status_code == 200
         assert not resp.json()["results"]
@@ -240,7 +240,7 @@ class TestGlobalSearchEndpoint:
 
     def test_internal_admin_search_includes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
-        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
             resp = client.get("/api/v1/admin/search?q=map&type=library")
         assert resp.status_code == 200
         query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
@@ -250,7 +250,7 @@ class TestGlobalSearchEndpoint:
         self, client: TestClient, mock_db: AsyncMock
     ) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
-        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+        with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
             resp = client.get("/api/v1/admin/search?q=lifecycle&type=audit")
         assert resp.status_code == 200
         assert not resp.json()["results"]
@@ -262,7 +262,7 @@ class TestGlobalSearchEndpoint:
         self, client: TestClient, mock_db: AsyncMock
     ) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
-        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+        with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
             resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
         assert resp.status_code == 200
         assert not resp.json()["results"]
@@ -274,7 +274,7 @@ class TestGlobalSearchEndpoint:
         self, client: TestClient, mock_db: AsyncMock
     ) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
-        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
             resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
         assert resp.status_code == 200
         query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
@@ -286,7 +286,7 @@ class TestGlobalSearchEndpoint:
         from sqlalchemy import text as sa_text
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from modulo.api.routes.admin import _search_audit, _SearchParams
+        from farna.api.routes.admin import _search_audit, _SearchParams
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async_session = async_sessionmaker(engine)

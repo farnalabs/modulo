@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.db.models.system_config import SystemConfig
+from farna.db.models.system_config import SystemConfig
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -57,9 +57,9 @@ def _set_monitor_auth(request) -> None:
     admin here, so we override ``get_current_user`` to a system admin; the
     viewer scenario overrides it to a viewer so the 403 path is still covered.
     """
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
 
     is_viewer = getattr(request.node, "_viewer_auth", False)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -78,14 +78,14 @@ def _bdd_get_monitor_config(client: TestClient, request) -> None:
     stored = getattr(request.node, "_monitor_stored_backends", None)
     if getattr(request.node, "_viewer_auth", False):
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
             resp = client.get(_URL)
     elif db_error is not None:
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             side_effect=db_error,
         ):
@@ -94,14 +94,14 @@ def _bdd_get_monitor_config(client: TestClient, request) -> None:
         stored_config = dict(_DEFAULT_CONFIG)
         stored_config["backends"] = stored
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             return_value=SystemConfig(key="monitor_backends", value=stored_config),
         ):
             resp = client.get(_URL)
     else:
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -116,7 +116,7 @@ def _bdd_put_monitor_config(client: TestClient, request, backends: str) -> None:
 
     parsed = json.loads(f"[{backends}]")
     with patch(
-        "modulo.api.routes.admin_monitor_config.update_config",
+        "farna.api.routes.admin_monitor_config.update_config",
         new_callable=AsyncMock,
         side_effect=_fake_set_config,
     ):
@@ -134,7 +134,7 @@ def _bdd_put_monitor_config_with_token(client: TestClient, request, backends: st
     if "datadog_rum" in parsed:
         payload["datadog_rum"] = {"clientToken": "pub123456", "site": "datadoghq.com"}
     with patch(
-        "modulo.api.routes.admin_monitor_config.update_config",
+        "farna.api.routes.admin_monitor_config.update_config",
         new_callable=AsyncMock,
         side_effect=_fake_set_config,
     ):

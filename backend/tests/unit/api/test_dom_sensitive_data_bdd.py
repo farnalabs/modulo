@@ -13,16 +13,16 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     SensitiveValue,
     is_sensitive_key,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -153,11 +153,11 @@ class TestCredentialsMaskedInApiResponse:
 
         with (
             patch(
-                "modulo.api.routes.connectors.get_connector_instance",
+                "farna.api.routes.connectors.get_connector_instance",
                 return_value=mock_connector,
             ),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/connectors/{mock_connector.id}")
 
@@ -169,11 +169,11 @@ class TestCredentialsMaskedInApiResponse:
 
         with (
             patch(
-                "modulo.api.routes.connectors.get_connector_instance",
+                "farna.api.routes.connectors.get_connector_instance",
                 return_value=mock_connector,
             ),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/connectors/{mock_connector.id}")
 
@@ -255,7 +255,7 @@ class TestRevealSsoClientSecret:
         mock_provider.client_secret = "sso-secret-value"
         _setup_session_execute(mock_provider)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
@@ -280,7 +280,7 @@ class TestRevealSsoClientSecret:
         mock_provider.client_secret = "sso-secret-value"
         _setup_session_execute(mock_provider)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
@@ -316,7 +316,7 @@ class TestRevealExpiry:
         mock_provider.client_secret = "test-secret"
         _setup_session_execute(mock_provider)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()

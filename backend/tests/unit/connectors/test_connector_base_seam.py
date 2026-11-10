@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -30,8 +30,8 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.security import CredentialRedactor
-from modulo.core import ssrf
+from farna.connectors.security import CredentialRedactor
+from farna.core import ssrf
 
 _PUBLIC = "93.184.216.34"
 

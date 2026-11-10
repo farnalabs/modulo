@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.db.bootstrap import _write_env_file
+from farna.db.bootstrap import _write_env_file
 
 requires_posix = pytest.mark.skipif(sys.platform != "linux", reason="POSIX mode/symlink semantics")
 

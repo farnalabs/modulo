@@ -24,15 +24,15 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.team_scope import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.team_scope import (
     validate_owner_team_for_create,
     validate_team_transition_for_update,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -120,7 +120,7 @@ class TestPipelineCreateTeamGateEndpoint:
     def test_create_with_foreign_org_team_returns_404(self, make_client: Callable[..., TestClient]) -> None:
         """404 even for admins — a missing team is never silently persisted."""
         client = make_client(org_role="admin", team_found=False)
-        with patch("modulo.api.routes.pipelines.create_pipeline", new=AsyncMock()) as create_pipeline:
+        with patch("farna.api.routes.pipelines.create_pipeline", new=AsyncMock()) as create_pipeline:
             resp = client.post("/api/v1/pipelines", json=_CREATE_BODY)
         assert resp.status_code == 404
         create_pipeline.assert_not_called()
@@ -128,8 +128,8 @@ class TestPipelineCreateTeamGateEndpoint:
     def test_create_with_non_member_team_returns_403(self, make_client: Callable[..., TestClient]) -> None:
         client = make_client(org_role="operator")
         with (
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
-            patch("modulo.api.routes.pipelines.create_pipeline", new=AsyncMock()) as create_pipeline,
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
+            patch("farna.api.routes.pipelines.create_pipeline", new=AsyncMock()) as create_pipeline,
         ):
             resp = client.post("/api/v1/pipelines", json=_CREATE_BODY)
         assert resp.status_code == 403
@@ -138,10 +138,10 @@ class TestPipelineCreateTeamGateEndpoint:
     def test_create_with_member_team_reaches_crud(self, make_client: Callable[..., TestClient]) -> None:
         client = make_client(org_role="operator")
         with (
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
-            patch("modulo.api.routes.pipelines._pipeline_response", new=MagicMock(return_value=MagicMock())),
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
+            patch("farna.api.routes.pipelines._pipeline_response", new=MagicMock(return_value=MagicMock())),
             patch(
-                "modulo.api.routes.pipelines.create_pipeline",
+                "farna.api.routes.pipelines.create_pipeline",
                 new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
             ) as create_pipeline,
         ):
@@ -173,7 +173,7 @@ class TestValidateOwnerTeamForCreate:
         result.first.return_value = (_TEAM_ID,)
         with (
             patch.object(session, "execute", new=AsyncMock(return_value=result)),
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
             pytest.raises(HTTPException) as exc_info,
         ):
             await validate_owner_team_for_create(session, await _principal(), _TEAM_ID)
@@ -186,7 +186,7 @@ class TestValidateOwnerTeamForCreate:
         membership_exists = AsyncMock(return_value=True)
         with (
             patch.object(session, "execute", new=AsyncMock(return_value=result)),
-            patch("modulo.api.team_scope.team_membership_exists", new=membership_exists),
+            patch("farna.api.team_scope.team_membership_exists", new=membership_exists),
         ):
             await validate_owner_team_for_create(session, await _principal(), _TEAM_ID)
         membership_exists.assert_awaited_once()
@@ -198,7 +198,7 @@ class TestValidateOwnerTeamForCreate:
         result.first.return_value = (_TEAM_ID,)
         with (
             patch.object(session, "execute", new=AsyncMock(return_value=result)),
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock()) as membership,
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock()) as membership,
         ):
             await validate_owner_team_for_create(session, await _principal("admin"), _TEAM_ID)
         membership.assert_not_awaited()
@@ -210,7 +210,7 @@ class TestValidateTeamTransitionForUpdate:
     async def test_reassignment_without_membership_raises_403(self) -> None:
         session = configure_mock_session(AsyncMock())
         with (
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=False)),
             pytest.raises(HTTPException) as exc_info,
         ):
             await validate_team_transition_for_update(
@@ -229,7 +229,7 @@ class TestValidateTeamTransitionForUpdate:
         result.first.return_value = None
         with (
             patch.object(session, "execute", new=AsyncMock(return_value=result)),
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
             pytest.raises(HTTPException) as exc_info,
         ):
             await validate_team_transition_for_update(
@@ -244,7 +244,7 @@ class TestValidateTeamTransitionForUpdate:
 
     async def test_admin_bypasses_membership(self) -> None:
         session = configure_mock_session(AsyncMock())
-        with patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock()) as membership:
+        with patch("farna.api.team_scope.team_membership_exists", new=AsyncMock()) as membership:
             await validate_team_transition_for_update(
                 session,
                 await _principal("admin"),
@@ -272,7 +272,7 @@ class TestValidateTeamTransitionForUpdate:
         session = configure_mock_session(AsyncMock())
         with (
             patch.object(session, "execute", new=AsyncMock()) as execute,
-            patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock()) as membership_exists,
+            patch("farna.api.team_scope.team_membership_exists", new=AsyncMock()) as membership_exists,
         ):
             await validate_team_transition_for_update(
                 session,

@@ -22,10 +22,10 @@ from types import ModuleType
 
 from sqlalchemy import CheckConstraint, Index
 
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.models.run import TERMINAL_STATUSES, Run
 
 _NAME = "0284_add_rejected_run_status"
-_PATH = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_NAME}.py"
+_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_NAME}.py"
 
 
 def _load() -> ModuleType:

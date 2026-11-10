@@ -9,11 +9,11 @@ import pytest
 from cryptography.exceptions import InvalidSignature
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -119,7 +119,7 @@ class TestBrowseRegistry:
     def test_list_all_primitives(self, client: TestClient) -> None:
         items = [_ranked_item(), _ranked_item(slug="modulo/other-schema", score=0.5)]
         with patch(
-            "modulo.api.routes.registry.list_registry_primitives_ranked",
+            "farna.api.routes.registry.list_registry_primitives_ranked",
             return_value=items,
         ):
             resp = client.get(PRIMITIVES_URL)
@@ -131,7 +131,7 @@ class TestBrowseRegistry:
     def test_list_primitives_with_pagination(self, client: TestClient) -> None:
         items = [_ranked_item(slug=f"modulo/item-{i}", score=1.0 - i * 0.1) for i in range(5)]
         with patch(
-            "modulo.api.routes.registry.list_registry_primitives_ranked",
+            "farna.api.routes.registry.list_registry_primitives_ranked",
             return_value=items,
         ):
             resp = client.get(f"{PRIMITIVES_URL}?page=1&page_size=2")
@@ -143,7 +143,7 @@ class TestBrowseRegistry:
     def test_search_returns_matching_results(self, client: TestClient) -> None:
         items = [_ranked_item(slug="modulo/prd-input-schema", score=0.75)]
         with patch(
-            "modulo.api.routes.registry.list_registry_primitives_ranked",
+            "farna.api.routes.registry.list_registry_primitives_ranked",
             return_value=items,
         ):
             resp = client.get(f"{PRIMITIVES_URL}?search=prd")
@@ -153,7 +153,7 @@ class TestBrowseRegistry:
 
     def test_search_no_results(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.registry.list_registry_primitives_ranked",
+            "farna.api.routes.registry.list_registry_primitives_ranked",
             return_value=[],
         ):
             resp = client.get(f"{PRIMITIVES_URL}?search=zzzzz")
@@ -172,10 +172,10 @@ class TestGetPrimitive:
     def test_get_primitive_detail(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=True),
         ):
             resp = client.get(f"{PRIMITIVES_URL}/modulo/prd-input-schema")
         assert resp.status_code == 200
@@ -185,7 +185,7 @@ class TestGetPrimitive:
         assert data["integrity_ok"] is True
 
     def test_get_primitive_not_found(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.get_registry_primitive", return_value=None):
+        with patch("farna.api.routes.registry.get_registry_primitive", return_value=None):
             resp = client.get(f"{PRIMITIVES_URL}/unknown/nope")
         assert resp.status_code == 404
         data = resp.json()
@@ -194,10 +194,10 @@ class TestGetPrimitive:
     def test_get_primitive_slug_with_special_chars(self, client: TestClient) -> None:
         entry = _make_entry(slug="modulo/special-v1.0")
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=False),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="community"),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=False),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=False),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="community"),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=False),
         ):
             resp = client.get(f"{PRIMITIVES_URL}/modulo/special-v1.0")
         assert resp.status_code == 200
@@ -216,9 +216,9 @@ class TestPublishPrimitive:
     def test_publish_v1_creates_entry(self, client: TestClient) -> None:
         entry = _make_entry(slug="communityuser/my-workflow")
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature"),
-            patch("modulo.api.routes.registry.get_publisher_status"),
+            patch("farna.api.routes.registry.publish_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature"),
+            patch("farna.api.routes.registry.get_publisher_status"),
         ):
             resp = client.post(
                 PUBLISH_URL,
@@ -283,10 +283,10 @@ class TestPublishV2:
         entry = _make_entry(slug="signeduser/signed-flow")
         keypair = {"private_key": "bb" * 32}
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
-            patch("modulo.api.routes.registry.crypto_generate_keypair", return_value=keypair),
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True),
+            patch("farna.api.routes.registry.publish_primitive", return_value=entry),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=True),
+            patch("farna.api.routes.registry.crypto_generate_keypair", return_value=keypair),
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=True),
             patch("cryptography.hazmat.primitives.serialization.load_pem_public_key", _mock_load_pem),
         ):
             resp = client.post(
@@ -307,7 +307,7 @@ class TestPublishV2:
         assert data["verified"] is True
 
     def test_publish_v2_signature_fails(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.crypto_pem_verify", return_value=False):
+        with patch("farna.api.routes.registry.crypto_pem_verify", return_value=False):
             resp = client.post(
                 PUBLISH_V2_URL,
                 json={
@@ -326,10 +326,10 @@ class TestPublishV2:
     def test_verify_v2_with_default_key(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(VERIFY_URL)
         assert resp.status_code == 200
@@ -339,8 +339,8 @@ class TestPublishV2:
 
     def test_verify_v2_unknown_primitive_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=None),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=None),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get("/api/v1/registry/verify/unknown/missing")
         assert resp.status_code == 404
@@ -355,11 +355,11 @@ class TestDownloadPrimitive:
     def test_download_creates_local_copy(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
-            patch("modulo.api.routes.registry.create_library_primitive"),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("farna.api.routes.registry.create_library_primitive"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.post(DOWNLOADS_URL)
         assert resp.status_code == 200
@@ -370,8 +370,8 @@ class TestDownloadPrimitive:
 
     def test_download_unknown_primitive_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=None),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=None),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.post("/api/v1/registry/primitives/unknown/nope/download")
         assert resp.status_code == 404
@@ -379,11 +379,11 @@ class TestDownloadPrimitive:
     def test_download_increments_count(self, client: TestClient) -> None:
         entry = _make_entry(download_count=5)
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
-            patch("modulo.api.routes.registry.create_library_primitive"),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("farna.api.routes.registry.create_library_primitive"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.post(DOWNLOADS_URL)
         assert resp.status_code == 200
@@ -401,7 +401,7 @@ class TestRegisterPublisher:
         mock_pub = MagicMock()
         mock_pub.fingerprint = "abcdef1234567890"
         mock_pub.author = "verifieduser"
-        with patch("modulo.api.routes.registry.register_publisher", return_value=mock_pub):
+        with patch("farna.api.routes.registry.register_publisher", return_value=mock_pub):
             resp = client.post(
                 PUBLISHERS_URL,
                 json={
@@ -422,7 +422,7 @@ class TestRegisterPublisher:
         mock_pub = MagicMock()
         mock_pub.fingerprint = "abcdef1234567890"
         mock_pub.author = "duplicate"
-        with patch("modulo.api.routes.registry.register_publisher", return_value=mock_pub):
+        with patch("farna.api.routes.registry.register_publisher", return_value=mock_pub):
             resp = client.post(
                 PUBLISHERS_URL,
                 json={
@@ -448,14 +448,14 @@ class TestRegisterPublisher:
 
 class TestRevokePublisher:
     def test_revoke_existing_publisher(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.revoke_publisher", return_value=True):
+        with patch("farna.api.routes.registry.revoke_publisher", return_value=True):
             resp = client.post("/api/v1/registry/publishers/abcdef1234567890/revoke")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "revoked"
 
     def test_revoke_nonexistent_publisher_404(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.revoke_publisher", return_value=False):
+        with patch("farna.api.routes.registry.revoke_publisher", return_value=False):
             resp = client.post("/api/v1/registry/publishers/0000000000000000/revoke")
         assert resp.status_code == 404
 
@@ -467,7 +467,7 @@ class TestListPublishers:
         mock_pub.name = "Modulo Team"
         mock_pub.fingerprint = "abc123"
         mock_pub.website = "https://modulo.ai"
-        with patch("modulo.api.routes.registry.list_verified_publishers", return_value=[mock_pub]):
+        with patch("farna.api.routes.registry.list_verified_publishers", return_value=[mock_pub]):
             resp = client.get(PUBLISHERS_URL)
         assert resp.status_code == 200
         data = resp.json()
@@ -475,7 +475,7 @@ class TestListPublishers:
         assert data[0]["name"] == "Modulo Team"
 
     def test_list_publishers_empty(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.list_verified_publishers", return_value=[]):
+        with patch("farna.api.routes.registry.list_verified_publishers", return_value=[]):
             resp = client.get(PUBLISHERS_URL)
         assert resp.status_code == 200
         assert not resp.json()
@@ -486,7 +486,7 @@ class TestListPublishers:
         active.name = "Active Pub"
         active.fingerprint = "active_key"
         active.website = ""
-        with patch("modulo.api.routes.registry.list_verified_publishers", return_value=[active]):
+        with patch("farna.api.routes.registry.list_verified_publishers", return_value=[active]):
             resp = client.get(PUBLISHERS_URL)
         assert resp.status_code == 200
         data = resp.json()
@@ -575,11 +575,11 @@ class TestTrustAnchor:
     def test_trust_anchor_verification_true(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=True),
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(
                 f"{VERIFY_URL}?public_key_pem=LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KZmFrZQotLS0tLUVORCBQVUJMSUMgS0VZLS0tLS0K"
@@ -591,11 +591,11 @@ class TestTrustAnchor:
     def test_trust_anchor_verification_false(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=False),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=True),
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=False),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_pem=YmFk")
         assert resp.status_code == 200

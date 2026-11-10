@@ -12,16 +12,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller import org_auto_pause
-from modulo.core.cost_controller.org_auto_pause import (
+from farna.core.cost_controller import org_auto_pause
+from farna.core.cost_controller.org_auto_pause import (
     AUTO_PAUSE_REASON_DAILY_LIMIT,
     AUTO_PAUSE_REASON_SPEND_CEILING,
     ORG_TRIGGERS_AUTO_PAUSED_EVENT,
     circuit_breaker_enabled_for_org,
     maybe_auto_pause_org_triggers,
 )
-from modulo.core.notifier import EVENT_ORG_TRIGGERS_AUTO_PAUSED
-from modulo.db.models.organisation import Organisation
+from farna.core.notifier import EVENT_ORG_TRIGGERS_AUTO_PAUSED
+from farna.db.models.organisation import Organisation
 
 
 def _org(
@@ -128,7 +128,7 @@ async def test_audit_failure_is_fail_open() -> None:
 
 
 def test_reason_labels_cover_both_reasons() -> None:
-    from modulo.core.cost_controller.org_auto_pause import _REASON_LABELS
+    from farna.core.cost_controller.org_auto_pause import _REASON_LABELS
 
     assert _REASON_LABELS[AUTO_PAUSE_REASON_DAILY_LIMIT]
     assert _REASON_LABELS[AUTO_PAUSE_REASON_SPEND_CEILING]
@@ -144,9 +144,9 @@ def _patched_notifier(dispatch_event: AsyncMock):
     notifier = MagicMock()
     notifier.dispatch_event = dispatch_event
     return (
-        patch("modulo.core.notifier.Notifier", return_value=notifier),
-        patch("modulo.db.session.get_shared_engine", return_value=MagicMock()),
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
+        patch("farna.core.notifier.Notifier", return_value=notifier),
+        patch("farna.db.session.get_shared_engine", return_value=MagicMock()),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
         notifier,
     )
 

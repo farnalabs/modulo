@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
-from modulo.core.mcp.scope_validator import (
+from farna.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
+from farna.core.mcp.scope_validator import (
     CALLER_SCOPE_REQUIREMENTS,
     SYSTEM_ADMIN_TOOLS,
     TOOL_SCOPE_REQUIREMENTS,
@@ -116,8 +116,8 @@ class TestCheckToolScope:
             check_tool_scope("runner", "list_api_keys")
 
     def test_query_analytics_resolves_to_viewer(self) -> None:
-        from modulo.auth.permissions import resolve_required
-        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+        from farna.auth.permissions import resolve_required
+        from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
         assert TOOL_SCOPE_REQUIREMENTS["query_analytics"] == "analytics.query"
         assert resolve_required("analytics.query") == "viewer"
@@ -134,8 +134,8 @@ class TestCheckToolScope:
         must hold both: the claim alone does not lift the role floor, and the
         admin role alone does not satisfy the claim.
         """
-        from modulo.auth.permissions import resolve_required
-        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+        from farna.auth.permissions import resolve_required
+        from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
         for tool in ("list_housekeeping", "perform_housekeeping"):
             assert TOOL_SCOPE_REQUIREMENTS[tool] == "housekeeping.manage"
@@ -154,7 +154,7 @@ class TestCheckToolScope:
         """FAR-1930: ``MCPSystemAdminRequiredError`` is selected from the leg
         the resolver REPORTS — never by re-resolving. A denial on any other leg
         stays a plain ``MCPAuthorizationError``."""
-        from modulo.core.mcp.scope_validator import MCPSystemAdminRequiredError
+        from farna.core.mcp.scope_validator import MCPSystemAdminRequiredError
 
         with pytest.raises(MCPSystemAdminRequiredError):
             check_tool_scope("admin", "list_housekeeping")
@@ -169,7 +169,7 @@ class TestCheckToolScope:
         depended on an unstated leg-ordering invariant). Pins the reported leg
         for the system-admin, grants and unmapped legs — so reordering a leg
         after the system-admin leg changes this test, not just the subclass."""
-        import modulo.core.mcp.scope_validator as sv
+        import farna.core.mcp.scope_validator as sv
 
         base = {
             "tool": "list_housekeeping",
@@ -672,7 +672,7 @@ class TestConstants:
 
     def test_tool_requirements_resolve_to_valid_roles(self) -> None:
         valid_roles = {"viewer", "runner", "operator", "admin"}
-        from modulo.auth.permissions import resolve_required
+        from farna.auth.permissions import resolve_required
 
         for tool, permission_key in TOOL_SCOPE_REQUIREMENTS.items():
             role = resolve_required(permission_key)
@@ -709,10 +709,10 @@ class TestToolHandlerScopeErrorFormat:
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:
         """Mock ``validate_current_auth`` and set auth context so scope checks are reached."""
-        from modulo.api.mcp_server import _ctx_org_id
+        from farna.api.mcp_server import _ctx_org_id
 
         token = _ctx_org_id.set(uuid.UUID(_FAKE_ID))
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
         _ctx_org_id.reset(token)
 
@@ -733,7 +733,7 @@ class TestToolHandlerScopeErrorFormat:
     ) -> None:
         import importlib
 
-        mcp = importlib.import_module("modulo.api.mcp_server")
+        mcp = importlib.import_module("farna.api.mcp_server")
         handler = getattr(mcp, handler_name)
         mcp._ctx_role.set(None)
         result = await handler(**kwargs)
@@ -743,8 +743,8 @@ class TestToolHandlerScopeErrorFormat:
         }
 
     async def test_review_hitl_approve_requires_operator(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import review_hitl as _rh
+        from farna.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import review_hitl as _rh
 
         _role.set("viewer")
         result = await _rh(
@@ -757,8 +757,8 @@ class TestToolHandlerScopeErrorFormat:
         assert "requires 'operator' role, got 'viewer'" in result["detail"]
 
     async def test_review_hitl_approve_runner_rejected(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import review_hitl as _rh
+        from farna.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import review_hitl as _rh
 
         _role.set("runner")
         result = await _rh(
@@ -771,14 +771,14 @@ class TestToolHandlerScopeErrorFormat:
         assert "requires 'operator' role, got 'runner'" in result["detail"]
 
     async def test_review_hitl_claim_runner_passes_check(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import review_hitl as _rh
+        from farna.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import review_hitl as _rh
 
         _role.set("runner")
         gate = MagicMock(claim_token="claim-token", expires_at=None)
         with (
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.HITLManager") as manager_class,
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.HITLManager") as manager_class,
         ):
             mock_session.return_value.__aenter__.return_value = make_session_scope()
             manager_class.return_value.claim = AsyncMock(return_value=gate)
@@ -790,26 +790,26 @@ class TestToolHandlerScopeErrorFormat:
             assert result.get("error") != "insufficient_scope"
 
     async def test_list_pipelines_no_scope_check(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import list_pipelines_tool as _lpt
+        from farna.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import list_pipelines_tool as _lpt
 
         _role.set(None)
         page = MagicMock(items=[], total=0, next_cursor=None, has_more=False)
         with (
-            patch("modulo.api.mcp_server._session"),
-            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
+            patch("farna.api.mcp_server._session"),
+            patch("farna.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
         ):
             result = await _lpt()
         assert "insufficient_scope" not in result
 
     async def test_get_run_status_no_scope_check(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import get_run_status as _grs
+        from farna.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import get_run_status as _grs
 
         _role.set(None)
         with (
-            patch("modulo.api.mcp_server._session"),
-            patch("modulo.api.mcp_server.get_run", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server._session"),
+            patch("farna.api.mcp_server.get_run", new=AsyncMock(return_value=None)),
         ):
             result = await _grs(run_id=_FAKE_ID)
         assert "insufficient_scope" not in result
@@ -831,7 +831,7 @@ def _patch_caller_scoped_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     """Register a synthetic caller-scoped tool in the scope maps for one test."""
     import types
 
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     patched = {
         **sv._TOOL_SCOPE_REQUIREMENTS,
@@ -1041,7 +1041,7 @@ class TestCallerScopeClassificationFailFast:
         """Pin ``create_pipeline`` with a typo'd classification for one test."""
         import types
 
-        import modulo.core.mcp.scope_validator as sv
+        import farna.core.mcp.scope_validator as sv
 
         patched = {**sv._CALLER_SCOPE_REQUIREMENTS, "create_pipeline": "orgonly"}
         monkeypatch.setattr(sv, "_CALLER_SCOPE_REQUIREMENTS", patched)
@@ -1088,7 +1088,7 @@ class TestCheckToolScopeDelegation:
     that detailed resolver so it never re-resolves.)"""
 
     def test_seam_check_tool_scope_calls_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.mcp.scope_validator as sv
+        import farna.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
@@ -1110,8 +1110,8 @@ class TestCheckToolScopeDelegation:
         """The production wiring: an MCP tool handler → _check_agent_tool_scope
         → check_tool_scope → _resolve_tool_access_detail, with
         key_scope/auth_type threaded from the request ContextVars."""
-        import modulo.api.mcp_server as ms
-        import modulo.core.mcp.scope_validator as sv
+        import farna.api.mcp_server as ms
+        import farna.core.mcp.scope_validator as sv
 
         calls: list[dict[str, object]] = []
 
@@ -1126,10 +1126,10 @@ class TestCheckToolScopeDelegation:
         token_type = ms._ctx_auth_type.set("api_key")
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server._session"),
+                patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+                patch("farna.api.mcp_server._session"),
                 patch(
-                    "modulo.api.mcp_server._load_pending_hitl_reviews",
+                    "farna.api.mcp_server._load_pending_hitl_reviews",
                     new=AsyncMock(return_value=([], 0)),
                 ),
             ):
@@ -1213,7 +1213,7 @@ class TestCallerScopeClassification:
 
     def test_self_suffix_derives_caller_scoped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_caller_scoped_tool(monkeypatch)
-        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+        from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
         assert classify_caller_scope(_CALLER_SCOPED_TEST_TOOL, TOOL_SCOPE_REQUIREMENTS[_CALLER_SCOPED_TEST_TOOL]) == (
             "caller-scoped"

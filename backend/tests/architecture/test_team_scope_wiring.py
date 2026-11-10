@@ -29,8 +29,8 @@ from typing import Any
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase
 
-from modulo.api.team_scope import TEAM_SCOPED_RESOLVERS
-from modulo.db.models import (
+from farna.api.team_scope import TEAM_SCOPED_RESOLVERS
+from farna.db.models import (
     Journey,
     Run,
     SuiteRun,
@@ -51,7 +51,7 @@ MODEL_TO_RESOLVER_KEY: dict[type[Any], str] = {}
 
 def _collect_team_scoped_models() -> None:
     """Populate MODEL_TO_RESOLVER_KEY by scanning all declarative models."""
-    from modulo.db.models import Base
+    from farna.db.models import Base
 
     assert issubclass(Base, DeclarativeBase)
     for mapper in Base.registry.mappers:
@@ -278,7 +278,7 @@ class TestTeamScopeWiring:
         This makes that omission a test failure (not a security gap — the
         org-role floor still applies — but a missing-decision gap).
         """
-        from modulo.db.models import Base
+        from farna.db.models import Base
 
         allowlisted = {model.__tablename__ for model, _reason in MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY}
         accounted_for = set(TEAM_SCOPED_RESOLVERS) | allowlisted
@@ -305,7 +305,7 @@ class TestRouteWiring:
         its ``team_scope`` tag (a refactor dropping the dependency) fails this
         test instead of silently exposing team-private maps to any org member.
         """
-        import modulo.api.routes.lifecycle_maps as lifecycle_routes
+        import farna.api.routes.lifecycle_maps as lifecycle_routes
 
         missing: list[str] = []
         for name in _LIFECYCLE_MAP_GATED_ENDPOINTS:
@@ -325,7 +325,7 @@ class TestRouteWiring:
         They stay on the org-role floor; the DB policy (0287) filters their
         result sets by visibility.
         """
-        import modulo.api.routes.lifecycle_maps as lifecycle_routes
+        import farna.api.routes.lifecycle_maps as lifecycle_routes
 
         wrongly_gated = [
             name
@@ -364,7 +364,7 @@ class TestRouteWiring:
         import inspect
         import pkgutil
 
-        import modulo.api.routes as routes_pkg
+        import farna.api.routes as routes_pkg
 
         seen_gates = 0
         lifecycle_gates = 0
@@ -433,7 +433,7 @@ class TestRouteWiring:
         import re
         from pathlib import Path
 
-        versions = Path(__file__).resolve().parents[2] / "src" / "modulo" / "db" / "migrations" / "versions"
+        versions = Path(__file__).resolve().parents[2] / "src" / "farna" / "db" / "migrations" / "versions"
         corpus = "\n".join(p.read_text(encoding="utf-8") for p in versions.glob("*.py"))
         missing = [
             t

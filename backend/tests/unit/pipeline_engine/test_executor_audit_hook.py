@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 
 class _FakeSession:
@@ -62,9 +62,9 @@ class TestContextWriteAuditHook:
             rls_orgs.append(org_id)
 
         with (
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", fake_append),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.append_audit_event", fake_append),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
             await hook(
@@ -101,9 +101,9 @@ class TestContextWriteAuditHook:
             return None
 
         with (
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", fake_append),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.append_audit_event", fake_append),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
             await hook({})
@@ -127,9 +127,9 @@ class TestContextWriteAuditHook:
             return None
 
         with (
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", failing_append),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.append_audit_event", failing_append),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
             caplog.at_level(logging.ERROR),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)
@@ -148,9 +148,9 @@ class TestContextWriteAuditHook:
             return None
 
         with (
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", hanging_append),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", fake_rls),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.append_audit_event", hanging_append),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", fake_rls),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock()),
             caplog.at_level(logging.WARNING),
         ):
             hook = executor._dispatch_context_write_audit(org_id, run_id)

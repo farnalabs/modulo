@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import CheckConstraint, Column, String, UniqueConstraint
 
-from modulo.db.models.notification import NotificationPreference
+from farna.db.models.notification import NotificationPreference
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0115_notification_preferences"
@@ -39,7 +39,7 @@ _MIGRATION_DOWN_REVISION = "0114_org_api_keys_run_id"
 
 _UNIQUE_NAME = "uq_notification_preferences_org_account_category"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

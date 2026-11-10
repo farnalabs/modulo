@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import list_runs
+from farna.api.mcp_server import list_runs
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -66,7 +66,7 @@ class _AuthContext:
     """Set/teardown the MCP ContextVars so the tool handler reaches the DB layer."""
 
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -75,7 +75,7 @@ class _AuthContext:
         _ctx_user_id.set(_PLACEHOLDER_ACCOUNT_ID)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
@@ -85,10 +85,10 @@ class _AuthContext:
 
 
 class TestListRunsCost(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_includes_cost_fields(
         self,
         mock_db_list_runs: AsyncMock,
@@ -117,10 +117,10 @@ class TestListRunsCost(_AuthContext):
         mock_db_list_runs.assert_awaited_once()
         mock_child_rollup.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_aggregate_is_own_plus_child(
         self,
         mock_db_list_runs: AsyncMock,
@@ -141,10 +141,10 @@ class TestListRunsCost(_AuthContext):
         assert item["child_runs_count"] == 3
         assert item["aggregate_cost_usd"] == 7.625
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_missing_cost_matches_rest_zero_shape(
         self,
         mock_db_list_runs: AsyncMock,
@@ -165,10 +165,10 @@ class TestListRunsCost(_AuthContext):
         assert item["child_runs_count"] == 0
         assert item["aggregate_cost_usd"] == 0.0
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_child_rollup_skipped_when_page_empty(
         self,
         mock_db_list_runs: AsyncMock,
@@ -185,10 +185,10 @@ class TestListRunsCost(_AuthContext):
         assert result["total"] == 0
         mock_child_rollup.assert_not_awaited()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_mixed_page_per_run_rollup(
         self,
         mock_db_list_runs: AsyncMock,
@@ -218,10 +218,10 @@ class TestListRunsCost(_AuthContext):
 class TestListRunsErrorDetail(_AuthContext):
     """REST parity for ``error_detail`` (the Daily Watcher's hang-death signal)."""
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_returns_error_detail_alongside_error_code(
         self,
         mock_db_list_runs: AsyncMock,
@@ -241,10 +241,10 @@ class TestListRunsErrorDetail(_AuthContext):
         assert item["error_code"] == "node.cancelled"
         assert item["error_detail"] == "run likely hung"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_error_detail_nullable_when_no_error(
         self,
         mock_db_list_runs: AsyncMock,
@@ -263,10 +263,10 @@ class TestListRunsErrorDetail(_AuthContext):
         assert item["error_code"] is None
         assert item["error_detail"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_error_detail_preview_truncated_to_200(
         self,
         mock_db_list_runs: AsyncMock,
@@ -285,10 +285,10 @@ class TestListRunsErrorDetail(_AuthContext):
         assert item["error_detail"].endswith("…")
         assert len(item["error_detail"]) == 201
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.list_runs")
     async def test_error_detail_preview_redacts_secrets(
         self,
         mock_db_list_runs: AsyncMock,
@@ -309,7 +309,7 @@ class TestListRunsErrorDetail(_AuthContext):
 
 
 class TestListRunsCostErrors(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_runs()
         assert result["error"] == "auth_expired"

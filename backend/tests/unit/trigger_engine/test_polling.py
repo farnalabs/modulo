@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.connectors.base import ConnectorResult
-from modulo.core.trigger_engine.polling import (
+from farna.connectors.base import ConnectorResult
+from farna.core.trigger_engine.polling import (
     _build_polling_connector,
     _count_active_runs,
     _daily_spend_limit_reached,
@@ -20,7 +20,7 @@ from modulo.core.trigger_engine.polling import (
     _update_next_fire_no_last,
     evaluate_condition,
 )
-from modulo.db.models.trigger import Trigger
+from farna.db.models.trigger import Trigger
 
 # ---------------------------------------------------------------------------
 # evaluate_condition — pure function tests
@@ -135,11 +135,11 @@ class TestBuildPollingConnector:
                 _build_polling_connector(connector_type, config, credentials)
         else:
             connector = _build_polling_connector(connector_type, config, credentials)
-            from modulo.connectors.filesystem import FilesystemConnector
-            from modulo.connectors.github import GitHubConnector
-            from modulo.connectors.gitlab import GitLabConnector
-            from modulo.connectors.jira import JiraConnector
-            from modulo.connectors.slack import SlackConnector
+            from farna.connectors.filesystem import FilesystemConnector
+            from farna.connectors.github import GitHubConnector
+            from farna.connectors.gitlab import GitLabConnector
+            from farna.connectors.jira import JiraConnector
+            from farna.connectors.slack import SlackConnector
 
             cls = {
                 "FilesystemConnector": FilesystemConnector,
@@ -188,7 +188,7 @@ _VALID_32 = "a" * 32
 
 @pytest.fixture
 def mock_settings():
-    with patch("modulo.core.cron_helpers.get_settings") as mock:
+    with patch("farna.core.cron_helpers.get_settings") as mock:
         settings = MagicMock()
         settings.database_url = "postgresql+asyncpg://localhost/test"
         settings.fernet_key = _VALID_32
@@ -221,15 +221,15 @@ def mock_db_components(mock_settings):
     engine = MagicMock()
 
     with (
-        patch("modulo.db.session.get_shared_engine", return_value=engine),
-        patch("modulo.core.cron_helpers.async_sessionmaker", return_value=factory),
+        patch("farna.db.session.get_shared_engine", return_value=engine),
+        patch("farna.core.cron_helpers.async_sessionmaker", return_value=factory),
     ):
         yield session
 
 
 @pytest.fixture
 def mock_secrets_backend():
-    with patch("modulo.core.secrets_backend.create_secrets_backend") as mock:
+    with patch("farna.core.secrets_backend.create_secrets_backend") as mock:
         backend = AsyncMock()
         backend.get_secret.return_value = '{"token": "test-token"}'
         mock.return_value = backend
@@ -238,7 +238,7 @@ def mock_secrets_backend():
 
 @pytest.fixture
 def mock_connector():
-    with patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock:
+    with patch("farna.core.trigger_engine.polling._build_polling_connector") as mock:
         connector = AsyncMock()
         connector.query.return_value = ConnectorResult(
             records=[{"issue": {"number": 1, "title": "Bug"}}],
@@ -250,7 +250,7 @@ def mock_connector():
 
 @pytest.fixture
 def mock_create_run():
-    with patch("modulo.db.crud.run.create_run") as mock:
+    with patch("farna.db.crud.run.create_run") as mock:
         run_mock = MagicMock()
         run_mock.id = uuid.uuid4()
         mock.return_value = run_mock
@@ -405,8 +405,8 @@ class TestDailySpendLimit:
         )
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(
@@ -443,8 +443,8 @@ class TestDailySpendLimit:
         )
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event", new_callable=AsyncMock),
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event", new_callable=AsyncMock),
         ):
             result = await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
@@ -586,7 +586,7 @@ class TestPollingLogging:
         trigger = _make_trigger()
         _setup_session_for_polling(session, trigger, connector_instance=None, active_run_count=0)
 
-        with patch("modulo.core.cron_helpers._log.warning") as mock_warning:
+        with patch("farna.core.cron_helpers._log.warning") as mock_warning:
             await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
                 org_id=_ORG_ID,
@@ -650,7 +650,7 @@ class TestFirePollingTriggerSkips:
         trigger = _make_trigger(config={"poll_interval_seconds": 60})
         _setup_session_for_polling(session, trigger, lock_acquired=False)
 
-        with patch("modulo.db.crud.run.create_run") as mock_cr:
+        with patch("farna.db.crud.run.create_run") as mock_cr:
             result = await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
                 org_id=_ORG_ID,
@@ -675,7 +675,7 @@ class TestFirePollingTriggerSkips:
             trigger_missing=True,
         )
 
-        with patch("modulo.db.crud.run.create_run") as mock_cr:
+        with patch("farna.db.crud.run.create_run") as mock_cr:
             result = await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
                 org_id=_ORG_ID,
@@ -697,7 +697,7 @@ class TestFirePollingTriggerSkips:
         trigger = _make_trigger(active=False, config={"poll_interval_seconds": 60})
         _setup_session_for_polling(session, trigger)
 
-        with patch("modulo.db.crud.run.create_run") as mock_cr:
+        with patch("farna.db.crud.run.create_run") as mock_cr:
             result = await _fire_polling_trigger(
                 trigger_id=_TRIGGER_ID,
                 org_id=_ORG_ID,
@@ -753,8 +753,8 @@ class TestFirePollingTriggerSkips:
         _setup_session_for_polling(session, trigger, active_run_count=2)
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(
@@ -798,8 +798,8 @@ class TestFirePollingTriggerErrorPaths:
         build_mock.side_effect = ValueError("invalid credentials")
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(
@@ -832,8 +832,8 @@ class TestFirePollingTriggerErrorPaths:
         connector.query.side_effect = TimeoutError()
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(
@@ -866,8 +866,8 @@ class TestFirePollingTriggerErrorPaths:
         connector.query.side_effect = RuntimeError("upstream 502")
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(
@@ -897,10 +897,10 @@ class TestFirePollingTriggerErrorPaths:
         _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
             patch(
-                "modulo.core.trigger_engine.polling.evaluate_condition",
+                "farna.core.trigger_engine.polling.evaluate_condition",
                 side_effect=ValueError("Invalid JMESPath expression"),
             ),
         ):
@@ -949,7 +949,7 @@ class TestFirePollingTriggerErrorPaths:
         else:
             with (
                 patch(
-                    "modulo.core.trigger_engine.polling.evaluate_condition",
+                    "farna.core.trigger_engine.polling.evaluate_condition",
                     side_effect=asyncio.CancelledError(),
                 ),
                 pytest.raises(asyncio.CancelledError),
@@ -993,8 +993,8 @@ class TestFirePollingTriggerNoMatch:
         _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
 
         with (
-            patch("modulo.db.crud.run.create_run") as mock_cr,
-            patch("modulo.core.cron_helpers._log_poll_event") as mock_event,
+            patch("farna.db.crud.run.create_run") as mock_cr,
+            patch("farna.core.cron_helpers._log_poll_event") as mock_event,
         ):
             mock_event.return_value = MagicMock(id=uuid.uuid4())
             result = await _fire_polling_trigger(

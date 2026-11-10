@@ -15,10 +15,10 @@ rules:
       include:
         - "**/backend/src/**"
       exclude:
-        - "**/backend/src/modulo/db/crud/pipeline.py"
-        - "**/backend/src/modulo/db/crud/pipeline_snapshot_versioning.py"
-        - "**/backend/src/modulo/db/crud/hitl_review_guard.py"
-        - "**/backend/src/modulo/core/workflow_import_export/**"
-        - "**/backend/src/modulo/api/routes/templates.py"
-        - "**/backend/src/modulo/api/routes/library.py"
-        - "**/backend/src/modulo/db/models/pipeline_edge.py"
+        - "**/backend/src/farna/db/crud/pipeline.py"
+        - "**/backend/src/farna/db/crud/pipeline_snapshot_versioning.py"
+        - "**/backend/src/farna/db/crud/hitl_review_guard.py"
+        - "**/backend/src/farna/core/workflow_import_export/**"
+        - "**/backend/src/farna/api/routes/templates.py"
+        - "**/backend/src/farna/api/routes/library.py"
+        - "**/backend/src/farna/db/models/pipeline_edge.py"

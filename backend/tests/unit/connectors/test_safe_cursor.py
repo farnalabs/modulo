@@ -18,7 +18,7 @@ that falls back to ``None``.
 
 import pytest
 
-from modulo.connectors._safe_cursor import safe_cursor
+from farna.connectors._safe_cursor import safe_cursor
 
 
 @pytest.mark.parametrize(

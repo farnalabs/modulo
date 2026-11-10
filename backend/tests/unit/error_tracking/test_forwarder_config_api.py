@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.auth.jwt import AuthenticatedPrincipal
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -45,7 +45,7 @@ class _AllFeatures:
 def _make_app(org_role: str = "admin") -> FastAPI:
     app = FastAPI()
 
-    from modulo.api.routes.error_forwarder_config import router as forwarder_config_router
+    from farna.api.routes.error_forwarder_config import router as forwarder_config_router
 
     app.include_router(forwarder_config_router)
 
@@ -60,8 +60,8 @@ def _make_app(org_role: str = "admin") -> FastAPI:
     async def _override_db():
         return _make_session_mock()
 
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.auth.dependencies import get_current_user
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
@@ -116,7 +116,7 @@ class TestTestConnectionSsrfGuard:
         app = _make_app()
         with TestClient(app) as client:
             with patch(
-                "modulo.api.routes.error_forwarder_config.get_forwarder",
+                "farna.api.routes.error_forwarder_config.get_forwarder",
             ) as mock_get:
                 fwd_instance = AsyncMock()
                 mock_get.return_value = fwd_instance
@@ -136,9 +136,9 @@ class TestTestConnectionSsrfGuard:
         app = _make_app()
         with TestClient(app) as client:
             with (
-                patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get,
+                patch("farna.api.routes.error_forwarder_config.get_forwarder") as mock_get,
                 patch(
-                    "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                    "farna.api.routes.error_forwarder_config.validate_outbound_url_async",
                     new=AsyncMock(side_effect=ValueError("targets a private/internal network address")),
                 ),
             ):

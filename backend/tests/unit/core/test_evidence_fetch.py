@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import Select
 from sqlalchemy.dialects import postgresql
 
-from modulo.core.eval_engine.evidence_layer import fetch
+from farna.core.eval_engine.evidence_layer import fetch
 
 _FAKE_ROWS: list[str] = ["row-a", "row-b"]
 

@@ -11,14 +11,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from farna.core.audit_coverage import audit_session
+from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -95,7 +95,7 @@ def _install_scim_overrides(session: AsyncMock) -> None:
         )
 
     app.dependency_overrides[audit_session] = audit_override
-    from modulo.api.routes.scim import get_scim_audit_principal
+    from farna.api.routes.scim import get_scim_audit_principal
 
     app.dependency_overrides[get_scim_audit_principal] = audit_principal
 
@@ -271,7 +271,7 @@ class TestScimRouteDispatch:
         session = _session()
         _install_scim_overrides(session)
         with patch(
-            "modulo.api.routes.scim.scim_list_users", new_callable=AsyncMock, return_value=([account], 3)
+            "farna.api.routes.scim.scim_list_users", new_callable=AsyncMock, return_value=([account], 3)
         ) as listing:
             response = TestClient(app).get(
                 "/scim/v2/Users?filter=userName%20eq%20%5C%22user@example.com%5C%22&startIndex=2&count=1",
@@ -286,8 +286,8 @@ class TestScimRouteDispatch:
     @pytest.mark.parametrize(
         ("path", "patch_target"),
         [
-            pytest.param("/scim/v2/Users", "modulo.api.routes.scim.scim_list_users", id="users"),
-            pytest.param("/scim/v2/Groups", "modulo.api.routes.scim.scim_list_groups", id="groups"),
+            pytest.param("/scim/v2/Users", "farna.api.routes.scim.scim_list_users", id="users"),
+            pytest.param("/scim/v2/Groups", "farna.api.routes.scim.scim_list_groups", id="groups"),
         ],
     )
     def test_list_routes_map_database_errors(self, path: str, patch_target: str) -> None:
@@ -301,7 +301,7 @@ class TestScimRouteDispatch:
         service = MagicMock(id=_USER_ID, kind="service")
         session = _session()
         _install_scim_overrides(session)
-        with patch("modulo.api.routes.scim.scim_get_user", new_callable=AsyncMock, return_value=service):
+        with patch("farna.api.routes.scim.scim_get_user", new_callable=AsyncMock, return_value=service):
             response = TestClient(app).get(
                 f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
             )
@@ -310,7 +310,7 @@ class TestScimRouteDispatch:
     def test_get_group_not_found_returns_scim_error(self) -> None:
         session = _session()
         _install_scim_overrides(session)
-        with patch("modulo.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=None):
+        with patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=None):
             response = TestClient(app).get(
                 f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
             )
@@ -319,9 +319,7 @@ class TestScimRouteDispatch:
     def test_get_group_maps_database_error(self) -> None:
         session = _session()
         _install_scim_overrides(session)
-        with patch(
-            "modulo.api.routes.scim.scim_get_group", new_callable=AsyncMock, side_effect=SQLAlchemyError("down")
-        ):
+        with patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, side_effect=SQLAlchemyError("down")):
             response = TestClient(app).get(
                 f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
             )
@@ -335,7 +333,7 @@ class TestScimRouteDispatch:
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "replace-me", "value": {}}],
         }
-        with patch("modulo.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=group):
+        with patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=group):
             response = TestClient(app).patch(
                 f"/scim/v2/Groups/{_GROUP_ID}",
                 json=body,
@@ -354,9 +352,9 @@ class TestScimRouteDispatch:
             ],
         }
         with (
-            patch("modulo.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=group),
-            patch("modulo.api.routes.scim.scim_remove_group_member", new_callable=AsyncMock) as remove_member,
-            patch("modulo.api.routes.scim.scim_list_group_members", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.scim.scim_remove_group_member", new_callable=AsyncMock) as remove_member,
+            patch("farna.api.routes.scim.scim_list_group_members", new_callable=AsyncMock, return_value=[]),
         ):
             response = TestClient(app).patch(
                 f"/scim/v2/Groups/{_GROUP_ID}",
@@ -371,12 +369,12 @@ class TestScimRouteDispatch:
         [
             pytest.param(
                 f"/scim/v2/Users/{_USER_ID}",
-                "modulo.api.routes.scim.scim_get_user",
+                "farna.api.routes.scim.scim_get_user",
                 id="replace-user",
             ),
             pytest.param(
                 f"/scim/v2/Groups/{_GROUP_ID}",
-                "modulo.api.routes.scim.scim_get_group",
+                "farna.api.routes.scim.scim_get_group",
                 id="replace-group",
             ),
         ],
@@ -399,7 +397,7 @@ class TestMeRouteDispatch:
         session = _session()
         _install_common_overrides(session)
         account = MagicMock(kind="service")
-        with patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account):
             response = TestClient(app).get("/api/v1/me/settings")
         assert response.status_code == 404
 
@@ -407,7 +405,7 @@ class TestMeRouteDispatch:
         session = _session()
         _install_common_overrides(session)
         with patch(
-            "modulo.api.routes.me.update_account_preferences",
+            "farna.api.routes.me.update_account_preferences",
             new_callable=AsyncMock,
             return_value={"theme": "dark", "locale": "en-GB"},
         ) as update:
@@ -421,12 +419,12 @@ class TestMeRouteDispatch:
         account = MagicMock(password_hash="hash", must_change_password=True, kind="human")
         family = MagicMock(family_id="family-1")
         with (
-            patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account),
-            patch("modulo.api.routes.me.verify_password", return_value=True),
-            patch("modulo.api.routes.me.validate_password_strength"),
-            patch("modulo.api.routes.me.hash_password", return_value="new-hash"),
-            patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock, return_value=[family]),
-            patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock, side_effect=SQLAlchemyError("down")),
+            patch("farna.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account),
+            patch("farna.api.routes.me.verify_password", return_value=True),
+            patch("farna.api.routes.me.validate_password_strength"),
+            patch("farna.api.routes.me.hash_password", return_value="new-hash"),
+            patch("farna.api.routes.me.list_families_for_account", new_callable=AsyncMock, return_value=[family]),
+            patch("farna.api.routes.me.blacklist_family", new_callable=AsyncMock, side_effect=SQLAlchemyError("down")),
         ):
             response = TestClient(app).put(
                 "/api/v1/me/password",
@@ -439,13 +437,13 @@ class TestMeRouteDispatch:
         _install_common_overrides(session)
         account = MagicMock(password_hash="hash", must_change_password=True, kind="human")
         with (
-            patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account),
-            patch("modulo.api.routes.me.verify_password", return_value=True),
-            patch("modulo.api.routes.me.validate_password_strength"),
-            patch("modulo.api.routes.me.hash_password", return_value="new-hash"),
-            patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.me.get_account_by_id", new_callable=AsyncMock, return_value=account),
+            patch("farna.api.routes.me.verify_password", return_value=True),
+            patch("farna.api.routes.me.validate_password_strength"),
+            patch("farna.api.routes.me.hash_password", return_value="new-hash"),
+            patch("farna.api.routes.me.list_families_for_account", new_callable=AsyncMock, return_value=[]),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("audit"),
             ),
@@ -470,7 +468,7 @@ class TestMeRouteDispatch:
             created_at=None,
             updated_at=None,
         )
-        with patch("modulo.api.routes.me.get_user_skill_or_404", new_callable=AsyncMock, return_value=skill):
+        with patch("farna.api.routes.me.get_user_skill_or_404", new_callable=AsyncMock, return_value=skill):
             response = TestClient(app).put(
                 f"/api/v1/me/assistant/skills/{skill.id}",
                 json={"name": "new", "description": "desc", "triggers": ["ask"], "body": "new body", "active": False},

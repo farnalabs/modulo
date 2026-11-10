@@ -8,7 +8,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.schema import (
+from farna.db.crud.schema import (
     SchemaDeletionProtectedError,
     create_schema,
     create_schema_version,
@@ -91,8 +91,8 @@ async def test_delete_schema_protected_by_agent_reference(
     test_user: uuid.UUID,
 ) -> None:
     """delete_schema must raise SchemaDeletionProtectedError when an agent references it."""
-    from modulo.db.crud.agent import create_agent
-    from modulo.db.crud.model_backend import create_model_backend
+    from farna.db.crud.agent import create_agent
+    from farna.db.crud.model_backend import create_model_backend
 
     schema = await create_schema(
         rls_session,

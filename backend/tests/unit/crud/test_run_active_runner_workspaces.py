@@ -26,12 +26,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     RUNNER_HOST_RESOURCE_FILTER_SQL,
     RUNNER_TOMBSTONE_EXCLUSION_SQL,
     count_active_runner_dispatches_for_org,
 )
-from modulo.db.models.run import TERMINAL_STATUSES
+from farna.db.models.run import TERMINAL_STATUSES
 from tests.unit.crud.helpers import compile_sql
 
 _ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -71,7 +71,7 @@ async def _count_sql_and_value(
     class _Settings:
         runner_capacity_gate_enabled = flag_on
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _Settings())
 
     session = MagicMock()
 

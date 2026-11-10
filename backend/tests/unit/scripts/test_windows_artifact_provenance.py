@@ -277,7 +277,7 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
         stage / "runtime/python/python312.dll",
         stage / "runtime/bin/python3.exe",
         stage / "runtime/bin/python312.dll",
-        stage / "backend/src/modulo/__init__.py",
+        stage / "backend/src/farna/__init__.py",
         stage / "runtime/python/Lib/site-packages/modulo_dep/__init__.py",
         stage / "frontend-dist/index.html",
         stage / "bin/modulo.exe",
@@ -353,7 +353,7 @@ def test_staging_twice_is_byte_identical_and_never_nests(tmp_path: Path, repo_ro
     assert first.returncode == 0, first.stderr
     initial = snapshot_tree(stage)
     assert initial
-    assert (stage / "backend/src/modulo/core/engine.py").is_file()
+    assert (stage / "backend/src/farna/core/engine.py").is_file()
 
     second = stage_bundle(
         script,
@@ -392,7 +392,7 @@ def test_launcher_clean_environment_contract(launcher_source: str) -> None:
 
 def test_launcher_contract(launcher_source: str) -> None:
     assert 'L"python3.exe"' in launcher_source
-    assert "modulo.cli.main" in launcher_source
+    assert "farna.cli.main" in launcher_source
     assert "CreateProcessW(python_exe" in launcher_source
     assert "CreateProcessW" in launcher_source
     assert 'L"python"' in launcher_source

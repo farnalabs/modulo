@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from modulo.db.migrations import env as migration_env
+from farna.db.migrations import env as migration_env
 
 # tests/unit/db/ -> tests/unit/ -> tests/ -> backend/.
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -111,7 +111,7 @@ def test_caller_configured_url_wins_over_ambient_database_url() -> None:
 
 def test_caller_override_is_logged_with_redacted_targets(caplog: pytest.LogCaptureFixture) -> None:
     """A divergence is never silent, and the log carries no credentials."""
-    caplog.set_level("INFO", logger="modulo.db.migrations.env")
+    caplog.set_level("INFO", logger="farna.db.migrations.env")
     config = _config()
     config.set_main_option(
         migration_env._CONFIG_KEY_SQLALCHEMY_URL,

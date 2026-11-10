@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from modulo.core.pipeline_engine.event_broker import BrokerRegistry, RunEventBroker
+from farna.core.pipeline_engine.event_broker import BrokerRegistry, RunEventBroker
 
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -234,7 +234,7 @@ class TestBrokerRegistry:
         assert self.registry.active_run_count == 0
 
     def test_get_registry_returns_singleton(self) -> None:
-        from modulo.core.pipeline_engine.event_broker import get_registry
+        from farna.core.pipeline_engine.event_broker import get_registry
 
         r1 = get_registry()
         r2 = get_registry()

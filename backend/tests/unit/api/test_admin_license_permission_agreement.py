@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from modulo.api.main import app
+from farna.api.main import app
 from tests.unit.api.route_introspection import get_all_apiroutes, get_permission_tag
 
 REPO_ROOT = Path(__file__).resolve().parents[4]

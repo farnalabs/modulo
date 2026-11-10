@@ -20,10 +20,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import workflow_import_export as wix
-from modulo.core.library_service import install as install_mod
-from modulo.core.library_service._seed_data import MODULO_ORG_ID
-from modulo.core.library_service.install import (
+from farna.core import workflow_import_export as wix
+from farna.core.library_service import install as install_mod
+from farna.core.library_service._seed_data import MODULO_ORG_ID
+from farna.core.library_service.install import (
     CollectionInstallError,
     CollectionNotPublishedError,
     PinResolutionError,
@@ -41,7 +41,7 @@ from modulo.core.library_service.install import (
     _transient_primitives,
     install_collection,
 )
-from modulo.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.library_primitive import LibraryPrimitive
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

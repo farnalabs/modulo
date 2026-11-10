@@ -36,17 +36,17 @@ from fastapi import FastAPI, Request, Response
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
-from modulo.api.middleware.catch_all import CatchAllMiddleware
-from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
-from modulo.api.routes.webhooks import router
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.api.dependencies import _get_engine, get_db_session, get_system_db_session
+from farna.api.middleware.catch_all import CatchAllMiddleware
+from farna.api.middleware.correlation_id import CorrelationIdMiddleware
+from farna.api.routes.webhooks import router
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 from tests.unit.api.conftest import make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-000000000071")
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000072")
-_WEBHOOK_LOGGER = "modulo.api.db_error_reporting"
+_WEBHOOK_LOGGER = "farna.api.db_error_reporting"
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +64,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 class _RecordingSink:
@@ -192,10 +192,10 @@ async def test_db_failure_after_the_bootstrap_is_attributed_to_the_trigger_org(
     app, seen = _build_app()
 
     with (
-        patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ),

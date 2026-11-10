@@ -29,8 +29,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _build_file_io_provider,
     _file_io_provider_for,
@@ -40,7 +40,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _write_file_via_provider,
     make_sandbox_agent_fn,
 )
-from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo
+from farna.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo
 from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -358,7 +358,7 @@ def test_build_file_io_provider_constructs_real_e2b_provider(
     Restores the R1 hub seam the autouse bridge fixture replaced, so this
     exercises the REAL chain rather than the mock-sandbox bridge.
     """
-    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    from farna.core.runtime_provider.e2b import E2BRuntimeProvider
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     monkeypatch.setattr(nr, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
@@ -369,7 +369,7 @@ def test_build_file_io_provider_constructs_real_e2b_provider(
 def test_build_file_io_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
@@ -395,7 +395,7 @@ async def test_provider_resolution_fails_closed_without_a_credential(
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_file_io_provider", builder)
 
     with pytest.raises(RuntimeProviderError, match="E2B runtime provider"):
         await _file_io_provider_for("sbx-nokey")
@@ -407,7 +407,7 @@ async def test_provider_resolution_fails_closed_when_the_builder_yields_nothing(
 ) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        "farna.core.pipeline_engine.node_runner._build_file_io_provider",
         MagicMock(return_value=None),
     )
     with pytest.raises(RuntimeProviderError, match="E2B runtime provider"):
@@ -556,10 +556,10 @@ async def test_bridge_writes_land_through_the_provider(monkeypatch: pytest.Monke
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=AsyncMock(return_value=[MagicMock()]),
         ),
-        patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
+        patch("farna.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
     ):
         result = await fn(_run_state())
 

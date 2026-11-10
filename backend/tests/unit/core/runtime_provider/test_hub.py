@@ -6,18 +6,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     ProviderNotConfiguredError,
     RuntimeProvider,
     UnknownProviderTypeError,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 
 class _StubProvider(RuntimeProvider):
@@ -36,7 +36,7 @@ class _StubProvider(RuntimeProvider):
         *,
         timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecResult:
-        from modulo.core.runtime_provider import ExecResult
+        from farna.core.runtime_provider import ExecResult
 
         return ExecResult(exit_code=0, stdout="", stderr="")
 
@@ -418,7 +418,7 @@ class TestInitialise:
         real_import = cast(Any, __import__)
 
         def _fake_import(name: str, *args: object, **kwargs: object) -> object:
-            if name == "modulo.core.runtime_provider.k8s":
+            if name == "farna.core.runtime_provider.k8s":
                 raise ImportError("kubernetes-asyncio not installed")
             return real_import(name, *args, **kwargs)
 

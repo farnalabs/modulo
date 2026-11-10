@@ -203,7 +203,7 @@ Everything above gets you a running stack. Now you'll build and run your first r
 2. Click **Add Model Backend** and fill in the form: a name, a display name, a **Provider** (e.g. `openai` or `anthropic`), a **Model ID**, and the provider's **API key**.
 3. Click **Create**. The new backend runs a best-effort health check on save and shows a **Configured** badge once its credentials are stored.
 
-No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`. The API authenticates with Bearer tokens, so log in first (the seeded `admin` account from `MODULO_USERS` in your `.env`):
+No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/farna/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`. The API authenticates with Bearer tokens, so log in first (the seeded `admin` account from `MODULO_USERS` in your `.env`):
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \

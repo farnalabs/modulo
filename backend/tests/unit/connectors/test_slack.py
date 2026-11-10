@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.slack import (
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.slack import (
     SlackAPIError,
     SlackAuthError,
     SlackConnector,

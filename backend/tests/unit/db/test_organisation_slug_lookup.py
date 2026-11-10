@@ -14,7 +14,7 @@ a database.
 
 from unittest.mock import MagicMock
 
-from modulo.db.crud.organisation import get_organisation_by_slug
+from farna.db.crud.organisation import get_organisation_by_slug
 
 
 def _capture_statement() -> object:

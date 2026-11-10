@@ -31,10 +31,10 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core import cost_settings as cs
+from farna.core import cost_settings as cs
 
 BACKEND = Path(__file__).resolve().parent.parent.parent.parent
-ROUTERS = BACKEND / "src" / "modulo" / "api" / "routes"
+ROUTERS = BACKEND / "src" / "farna" / "api" / "routes"
 
 
 def _router_imports(router: str) -> set[str]:
@@ -43,7 +43,7 @@ def _router_imports(router: str) -> set[str]:
     tree = ast.parse(source)
     imported: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "modulo.core.cost_settings":
+        if isinstance(node, ast.ImportFrom) and node.module == "farna.core.cost_settings":
             imported.update(alias.name for alias in node.names)
     return imported
 
@@ -176,6 +176,6 @@ class TestCrossRouterWiring:
             for node in ast.walk(tree):
                 assert not (
                     isinstance(node, ast.ImportFrom)
-                    and node.module == "modulo.core.cost_settings"
+                    and node.module == "farna.core.cost_settings"
                     and node.names[0].name == "*"
                 )

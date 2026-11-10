@@ -10,13 +10,13 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.team import TeamUpdateOutcome
-from modulo.db.models.account import KIND_SERVICE
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.team import TeamUpdateOutcome
+from farna.db.models.account import KIND_SERVICE
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -285,23 +285,23 @@ class TestUserDeactivateAuthorization:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=_fake_offboarding_account()),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
-            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
+            patch("farna.api.routes.admin.assert_not_last_admin", AsyncMock()),
             patch(
-                "modulo.api.routes.admin.list_team_memberships_for_account",
+                "farna.api.routes.admin.list_team_memberships_for_account",
                 AsyncMock(return_value=[membership_one, membership_two]),
             ),
             patch(
-                "modulo.api.routes.admin.remove_team_member",
+                "farna.api.routes.admin.remove_team_member",
                 AsyncMock(return_value=True),
             ) as remove_member,
-            patch("modulo.core.audit_logger.append_audit_event", AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", AsyncMock()),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/deactivate")
 
@@ -319,17 +319,17 @@ class TestUserDeactivateAuthorization:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=_fake_offboarding_account(active=True)),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
-            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
-            patch("modulo.api.routes.admin.list_team_memberships_for_account", AsyncMock(return_value=[])),
-            patch("modulo.api.routes.admin.remove_team_member", AsyncMock()),
-            patch("modulo.core.audit_logger.append_audit_event", AsyncMock()),
+            patch("farna.api.routes.admin.assert_not_last_admin", AsyncMock()),
+            patch("farna.api.routes.admin.list_team_memberships_for_account", AsyncMock(return_value=[])),
+            patch("farna.api.routes.admin.remove_team_member", AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", AsyncMock()),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/deactivate")
 
@@ -346,14 +346,14 @@ class TestUserDeactivateAuthorization:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=_fake_offboarding_account(active=True)),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", AsyncMock()),
+            patch("farna.core.audit_logger.append_audit_event", AsyncMock()),
         ):
             resp = admin_rls_client.post(f"{self.URL}/{_OTHER_USER_ID}/reactivate")
 
@@ -391,14 +391,14 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
         membership.role = "operator"
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=self._service_target()),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=membership),
             ),
-            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
+            patch("farna.api.routes.admin.assert_not_last_admin", AsyncMock()),
         ):
             resp = admin_rls_client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"org_role": "admin"})
 
@@ -408,11 +408,11 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
     def test_deactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=self._service_target()),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=MagicMock()),
             ),
         ):
@@ -424,11 +424,11 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
     def test_reactivate_rejects_service_target(self, admin_rls_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=self._service_target()),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=MagicMock()),
             ),
         ):
@@ -440,11 +440,11 @@ class TestServiceAccountTargetRejectedOnUserAdminSurface:
     def test_reset_password_rejects_service_target(self, admin_rls_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=self._service_target()),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=MagicMock()),
             ),
         ):
@@ -480,9 +480,9 @@ class TestServiceAccountCrossOrgTargetIsNotFound:
         account.active = True
         account.decommissioned_at = None
         stack = ExitStack()
-        stack.enter_context(patch("modulo.api.routes.admin.get_account_by_id", AsyncMock(return_value=account)))
+        stack.enter_context(patch("farna.api.routes.admin.get_account_by_id", AsyncMock(return_value=account)))
         stack.enter_context(
-            patch("modulo.api.routes.admin.get_membership_by_account_and_org", AsyncMock(return_value=None))
+            patch("farna.api.routes.admin.get_membership_by_account_and_org", AsyncMock(return_value=None))
         )
         return stack
 
@@ -531,12 +531,12 @@ class TestUpdateUserDeactivationRevocation:
         stack = ExitStack()
         for ctx in (
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=_fake_membership(deactivated=deactivated)),
             ),
-            patch("modulo.api.routes.admin.assert_not_last_admin", AsyncMock()),
+            patch("farna.api.routes.admin.assert_not_last_admin", AsyncMock()),
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=_fake_offboarding_account(active=True)),
             ),
         ):
@@ -647,7 +647,7 @@ class TestDeletionRequest:
         the refusal fires before any CRUD call, so a raising CRUD cannot leak
         through as a 409."""
         with patch(
-            "modulo.db.crud.org_deletion.request_org_deletion",
+            "farna.db.crud.org_deletion.request_org_deletion",
             new_callable=AsyncMock,
             side_effect=ValueError("Organisation is already deleted"),
         ) as request_deletion:
@@ -688,7 +688,7 @@ class TestDeletionConfirm:
         """An invalid token can no longer produce a 409: confirmation is
         refused before the token is ever looked at."""
         with patch(
-            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            "farna.db.crud.org_deletion.confirm_org_deletion",
             new_callable=AsyncMock,
             side_effect=ValueError("Invalid deletion token"),
         ) as confirm_deletion:
@@ -698,7 +698,7 @@ class TestDeletionConfirm:
 
     def test_expired_token_never_reaches_deletion_crud(self, client: TestClient) -> None:
         with patch(
-            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            "farna.db.crud.org_deletion.confirm_org_deletion",
             new_callable=AsyncMock,
             side_effect=ValueError("Deletion token has expired"),
         ) as confirm_deletion:
@@ -708,7 +708,7 @@ class TestDeletionConfirm:
 
     def test_org_not_found_never_reaches_deletion_crud(self, client: TestClient) -> None:
         with patch(
-            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            "farna.db.crud.org_deletion.confirm_org_deletion",
             new_callable=AsyncMock,
             side_effect=ValueError("Organisation not found"),
         ) as confirm_deletion:
@@ -723,10 +723,10 @@ class TestOrgExport:
     def test_admin_exports_org_returns_200(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.db.crud.org_deletion.export_org_data",
+                "farna.db.crud.org_deletion.export_org_data",
                 return_value=_EXPORT,
             ),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -746,10 +746,10 @@ class TestOrgExport:
     def test_org_not_found_returns_404(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.db.crud.org_deletion.export_org_data",
+                "farna.db.crud.org_deletion.export_org_data",
                 side_effect=ValueError("Organisation not found"),
             ),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 404
@@ -808,7 +808,7 @@ class TestAdminListTeamsOwnedResourceCount:
         page_result = MagicMock(items=[team_a, team_b], total=2, page=1, page_size=20)
 
         # Configure the RLS mock session so the member-count GROUP BY query returns [team_a:3].
-        from modulo.api.dependencies import get_db_session
+        from farna.api.dependencies import get_db_session
 
         session = _make_mock_session()
         member_row = MagicMock()
@@ -824,11 +824,11 @@ class TestAdminListTeamsOwnedResourceCount:
         admin_rls_client.app.dependency_overrides[get_db_session] = override_session
         try:
             with (
-                patch("modulo.api.routes.admin.list_teams", new=AsyncMock(return_value=page_result)),
-                patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-                patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+                patch("farna.api.routes.admin.list_teams", new=AsyncMock(return_value=page_result)),
+                patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+                patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
                 patch(
-                    "modulo.api.routes.admin.count_owned_resources",
+                    "farna.api.routes.admin.count_owned_resources",
                     new=AsyncMock(return_value={team_a.id: 4, team_b.id: 2}),
                 ),
             ):
@@ -873,12 +873,12 @@ class TestAdminUpdateTeamOptimisticLock:
 
         with (
             patch(
-                "modulo.api.routes.admin.update_team_if_unchanged",
+                "farna.api.routes.admin.update_team_if_unchanged",
                 new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
             ),
-            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
         ):
             resp = admin_rls_client.put(
                 f"{self.URL}/{team.id}",
@@ -892,16 +892,16 @@ class TestAdminUpdateTeamOptimisticLock:
 
         with (
             patch(
-                "modulo.api.routes.admin.update_team_if_unchanged",
+                "farna.api.routes.admin.update_team_if_unchanged",
                 new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
             ),
-            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.api.routes.admin.crud_update_team",
+                "farna.api.routes.admin.crud_update_team",
                 new=AsyncMock(),
             ) as crud_update_mock,
-            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
         ):
             resp = admin_rls_client.put(
                 f"{self.URL}/{team.id}",
@@ -915,12 +915,12 @@ class TestAdminUpdateTeamOptimisticLock:
 
         with (
             patch(
-                "modulo.api.routes.admin.update_team_if_unchanged",
+                "farna.api.routes.admin.update_team_if_unchanged",
                 new=AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)),
             ),
-            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
         ):
             resp = admin_rls_client.put(
                 f"{self.URL}/{team.id}",
@@ -932,14 +932,14 @@ class TestAdminUpdateTeamOptimisticLock:
         team = self._mock_team(uuid.uuid4(), "Updated")
         expected = team.updated_at.isoformat()
         with (
-            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.api.routes.admin.update_team_if_unchanged",
+                "farna.api.routes.admin.update_team_if_unchanged",
                 new=AsyncMock(return_value=(TeamUpdateOutcome.UPDATED, team)),
             ),
-            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
-            patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
         ):
             resp = admin_rls_client.put(
                 f"{self.URL}/{team.id}",
@@ -963,7 +963,7 @@ class TestUpdateTeamIfUnchanged:
         result.scalar_one_or_none = MagicMock(return_value=team)
         session.execute = AsyncMock(return_value=result)
 
-        from modulo.db.crud.team import update_team_if_unchanged
+        from farna.db.crud.team import update_team_if_unchanged
 
         outcome, returned = await update_team_if_unchanged(
             session,
@@ -987,7 +987,7 @@ class TestUpdateTeamIfUnchanged:
         exists_result.scalar_one_or_none = MagicMock(return_value=team.id)
         session.execute = AsyncMock(side_effect=[update_result, exists_result])
 
-        from modulo.db.crud.team import update_team_if_unchanged
+        from farna.db.crud.team import update_team_if_unchanged
 
         outcome, returned = await update_team_if_unchanged(
             session,
@@ -1011,7 +1011,7 @@ class TestUpdateTeamIfUnchanged:
         exists_result.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(side_effect=[update_result, exists_result])
 
-        from modulo.db.crud.team import update_team_if_unchanged
+        from farna.db.crud.team import update_team_if_unchanged
 
         outcome, returned = await update_team_if_unchanged(
             session,
@@ -1026,7 +1026,7 @@ class TestUpdateTeamIfUnchanged:
     async def test_unparseable_expected_timestamp_returns_stale(self) -> None:
         session = _make_mock_session()
 
-        from modulo.db.crud.team import update_team_if_unchanged
+        from farna.db.crud.team import update_team_if_unchanged
 
         outcome, returned = await update_team_if_unchanged(
             session,
@@ -1089,9 +1089,9 @@ class TestAdminReassignAllTeamResources:
         team.id = _ORG_ID
         team.organisation_id = _ORG_ID
         with (
-            patch("modulo.api.routes.admin.get_team", return_value=team),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.set_rls_user_context"),
+            patch("farna.api.routes.admin.get_team", return_value=team),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_user_context"),
         ):
             resp = client.post(self.URL)
         assert resp.status_code == 200
@@ -1108,9 +1108,9 @@ class TestAdminReassignAllTeamResources:
         team.id = _ORG_ID
         team.organisation_id = _ORG_ID
         with (
-            patch("modulo.api.routes.admin.get_team", return_value=team),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.set_rls_user_context"),
+            patch("farna.api.routes.admin.get_team", return_value=team),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_user_context"),
         ):
             resp = client.post(self.URL)
         assert resp.status_code == 200
@@ -1123,9 +1123,9 @@ class TestAdminReassignAllTeamResources:
     ) -> None:
         client, _session = admin_client_and_session
         with (
-            patch("modulo.api.routes.admin.get_team", return_value=None),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.set_rls_user_context"),
+            patch("farna.api.routes.admin.get_team", return_value=None),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_user_context"),
         ):
             resp = client.post(self.URL)
         assert resp.status_code == 404
@@ -1139,9 +1139,9 @@ class TestAdminReassignAllTeamResources:
         team.id = uuid.uuid4()
         team.organisation_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.admin.get_team", return_value=team),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.set_rls_user_context"),
+            patch("farna.api.routes.admin.get_team", return_value=team),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_user_context"),
         ):
             resp = client.post(self.URL)
         assert resp.status_code == 404
@@ -1193,9 +1193,9 @@ class TestBillingOverviewAggregation:
 
         try:
             with (
-                patch("modulo.api.routes.admin.set_rls_org"),
-                patch("modulo.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
-                patch("modulo.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+                patch("farna.api.routes.admin.set_rls_org"),
+                patch("farna.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
+                patch("farna.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
             ):
                 resp = client.get(self.URL)
         finally:
@@ -1240,9 +1240,9 @@ class TestBillingOverviewAggregation:
 
         try:
             with (
-                patch("modulo.api.routes.admin.set_rls_org"),
-                patch("modulo.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
-                patch("modulo.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+                patch("farna.api.routes.admin.set_rls_org"),
+                patch("farna.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
+                patch("farna.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
             ):
                 resp = client.get(self.URL)
         finally:
@@ -1273,13 +1273,13 @@ class TestOrgSlugImmutability:
         fake_org.created_at = _NOW
 
         with (
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_org"),
             patch(
-                "modulo.api.routes.admin.get_organisation",
+                "farna.api.routes.admin.get_organisation",
                 AsyncMock(return_value=fake_org),
             ),
             patch(
-                "modulo.api.routes.admin.update_organisation",
+                "farna.api.routes.admin.update_organisation",
                 AsyncMock(return_value=fake_org),
             ) as mock_update,
         ):
@@ -1298,7 +1298,7 @@ class TestOrgSlugImmutability:
     def test_update_org_model_has_no_slug_field(self) -> None:
         """The request model exposes no slug field — a client cannot even
         express a slug change."""
-        from modulo.api.routes.admin import UpdateOrgRequest
+        from farna.api.routes.admin import UpdateOrgRequest
 
         assert "slug" not in UpdateOrgRequest.model_fields
         assert set(UpdateOrgRequest.model_fields) <= {"name", "logo_url", "plan_id"}
@@ -1331,16 +1331,16 @@ class TestAdminCreateUserAudit:
         membership.role = "runner"
         mock_audit = AsyncMock()
         with (
-            patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.account.create_account",
+                "farna.db.crud.account.create_account",
                 new=AsyncMock(return_value=account),
             ),
-            patch("modulo.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
-            patch("modulo.api.routes.admin.validate_password_strength", return_value=None),
-            patch("modulo.api.routes.admin.hash_password", return_value="hashed"),
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+            patch("farna.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
+            patch("farna.api.routes.admin.validate_password_strength", return_value=None),
+            patch("farna.api.routes.admin.hash_password", return_value="hashed"),
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.append_audit_event", new=mock_audit),
         ):
             resp = client.post(
                 self.URL,
@@ -1375,16 +1375,16 @@ class TestAdminCreateUserAudit:
             raise RuntimeError("audit chain write failed")
 
         with (
-            patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.account.create_account",
+                "farna.db.crud.account.create_account",
                 new=AsyncMock(return_value=account),
             ),
-            patch("modulo.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
-            patch("modulo.api.routes.admin.validate_password_strength", return_value=None),
-            patch("modulo.api.routes.admin.hash_password", return_value="hashed"),
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.append_audit_event", side_effect=_boom),
+            patch("farna.api.routes.admin.create_membership", new=AsyncMock(return_value=membership)),
+            patch("farna.api.routes.admin.validate_password_strength", return_value=None),
+            patch("farna.api.routes.admin.hash_password", return_value="hashed"),
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.append_audit_event", side_effect=_boom),
         ):
             resp = client.post(
                 self.URL,
@@ -1411,14 +1411,14 @@ class TestAdminResetPasswordLifecycle:
         account = _fake_lifecycle_account()
         mock_audit = AsyncMock()
         with (
-            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=MagicMock()),
             ),
-            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
-            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
-            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+            patch("farna.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("farna.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("farna.api.routes.admin.append_audit_event", new=mock_audit),
         ):
             resp = admin_rls_client.post(self.URL)
 
@@ -1440,14 +1440,14 @@ class TestAdminResetPasswordLifecycle:
             raise RuntimeError("audit chain write failed")
 
         with (
-            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=MagicMock()),
             ),
-            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
-            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
-            patch("modulo.api.routes.admin.append_audit_event", side_effect=_boom),
+            patch("farna.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("farna.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("farna.api.routes.admin.append_audit_event", side_effect=_boom),
         ):
             resp = admin_rls_client.post(self.URL)
 
@@ -1459,14 +1459,14 @@ class TestAdminResetPasswordLifecycle:
         account.is_break_glass = True
         mock_audit = AsyncMock()
         with (
-            patch("modulo.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.api.routes.admin.get_account_by_id", new=AsyncMock(return_value=account)),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=MagicMock()),
             ),
-            patch("modulo.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
-            patch("modulo.api.routes.admin.blacklist_family", new=AsyncMock()),
-            patch("modulo.api.routes.admin.append_audit_event", new=mock_audit),
+            patch("farna.api.routes.admin.list_families_for_account", new=AsyncMock(return_value=[])),
+            patch("farna.api.routes.admin.blacklist_family", new=AsyncMock()),
+            patch("farna.api.routes.admin.append_audit_event", new=mock_audit),
         ):
             resp = admin_rls_client.post(self.URL)
 

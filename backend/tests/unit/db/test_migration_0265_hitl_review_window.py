@@ -27,8 +27,8 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import CheckConstraint, DateTime
 
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.pipeline import Pipeline
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.pipeline import Pipeline
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
@@ -37,7 +37,7 @@ _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
 )
-from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
 from tests.conformance.runtime_provider._conformance import (
     assert_destroy_by_ref_idempotent,
     assert_exec_exit_zero,

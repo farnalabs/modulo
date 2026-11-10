@@ -18,9 +18,9 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.analytics import maintenance as maintenance_mod
-from modulo.core.analytics.maintenance import backfill_facts, retention_facts, run_maintenance
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.core.analytics import maintenance as maintenance_mod
+from farna.core.analytics.maintenance import backfill_facts, retention_facts, run_maintenance
+from farna.db.models.run import TERMINAL_STATUSES, Run
 
 pytestmark = pytest.mark.integration
 
@@ -308,7 +308,7 @@ class TestLiveWriter:
         pipeline: uuid.UUID,
         snapshot: uuid.UUID,
     ) -> None:
-        from modulo.core.cost_controller.finalize import finalize_cost
+        from farna.core.cost_controller.finalize import finalize_cost
 
         run_id = await _insert_run(
             db_session,
@@ -356,7 +356,7 @@ class TestLiveWriter:
         pre-write run (status ``'running'``, NULL cost) — the exact
         ``complete_count=0`` / NULL-cost bug seen on recent days in production.
         """
-        from modulo.core.cost_controller.finalize import finalize_cost
+        from farna.core.cost_controller.finalize import finalize_cost
 
         run_id = await _insert_run(
             db_session,
@@ -421,7 +421,7 @@ class TestLiveWriter:
         to recording from the in-memory object on failure, so the terminal
         outcome always commits.
         """
-        from modulo.core.cost_controller.finalize import finalize_cost
+        from farna.core.cost_controller.finalize import finalize_cost
 
         run_id = await _insert_run(
             db_session,
@@ -481,7 +481,7 @@ class TestLiveWriter:
         snapshot: uuid.UUID,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from modulo.core.cost_controller.finalize import finalize_cost
+        from farna.core.cost_controller.finalize import finalize_cost
 
         run_id = await _insert_run(
             db_session,
@@ -495,7 +495,7 @@ class TestLiveWriter:
         async def _boom(*args, **kwargs):
             raise RuntimeError("component read failed")
 
-        monkeypatch.setattr("modulo.core.cost_controller.finalize.load_live_components", _boom)
+        monkeypatch.setattr("farna.core.cost_controller.finalize.load_live_components", _boom)
 
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
@@ -536,7 +536,7 @@ class TestLiveWriter:
         snapshot: uuid.UUID,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from modulo.core.cost_controller.finalize import finalize_cost
+        from farna.core.cost_controller.finalize import finalize_cost
 
         run_id = await _insert_run(
             db_session,
@@ -551,7 +551,7 @@ class TestLiveWriter:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated facts insert failure")
 
-        monkeypatch.setattr("modulo.core.analytics.pg_insert", _boom)
+        monkeypatch.setattr("farna.core.analytics.pg_insert", _boom)
 
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
@@ -607,7 +607,7 @@ class TestLiveWriter:
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             run = await db_session.get(Run, run_id)
-            from modulo.core.analytics import record_run_facts
+            from farna.core.analytics import record_run_facts
 
             assert run is not None
             await record_run_facts(db_session, run)
@@ -652,7 +652,7 @@ class TestLiveWriter:
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             run = await db_session.get(Run, run_id)
-            from modulo.core.analytics import record_run_facts
+            from farna.core.analytics import record_run_facts
 
             assert run is not None
             await record_run_facts(db_session, run)
@@ -678,7 +678,7 @@ class TestLiveWriter:
         pipeline: uuid.UUID,
         snapshot: uuid.UUID,
     ) -> None:
-        from modulo.core.analytics import record_run_facts
+        from farna.core.analytics import record_run_facts
 
         run_id = await _insert_run(
             db_session,
@@ -965,7 +965,7 @@ class TestLiveWriterEnrichment:
         pipeline: uuid.UUID,
         snapshot: uuid.UUID,
     ) -> None:
-        from modulo.core.analytics import record_run_facts
+        from farna.core.analytics import record_run_facts
 
         # A REAL parent run in the same org — runs.parent_run_id is FK'd with a
         # same-organisation trigger, so a synthetic UUID would be rejected.
@@ -1008,8 +1008,8 @@ class TestLiveWriterEnrichment:
             )
         # Seed the run's node output on the new run_node_outputs store (FAR-583):
         # record_run_facts reads output_bytes from there, not runs.outputs_json.
-        from modulo.db.crud.run_node_outputs import replace_run_node_outputs
-        from modulo.db.rls import set_rls_org
+        from farna.db.crud.run_node_outputs import replace_run_node_outputs
+        from farna.db.rls import set_rls_org
 
         async with db_session.begin():
             await set_rls_org(db_session, org)
@@ -1025,7 +1025,7 @@ class TestLiveWriterEnrichment:
             # Post-B2c/FAR-583 record_run_facts derives output_bytes from the
             # run_node_outputs store, not the legacy runs.outputs_json column,
             # so write the run's output there.
-            from modulo.db.crud.run_node_outputs import replace_run_node_outputs
+            from farna.db.crud.run_node_outputs import replace_run_node_outputs
 
             await replace_run_node_outputs(
                 db_session,
@@ -1081,7 +1081,7 @@ class TestLiveWriterEnrichment:
         The shared ``snapshot`` fixture carries ``{}`` graph_json — no ``nodes``
         list — so the graph-derived fields degrade to ``(0, 0, None)``.
         """
-        from modulo.core.analytics import record_run_facts
+        from farna.core.analytics import record_run_facts
 
         run_id = uuid.uuid4()
         async with db_session.begin():
@@ -1134,7 +1134,7 @@ class TestLiveWriterEnrichment:
     ) -> None:
         """A finalized run with trigger_type='ongoing' yields a run_daily_facts
         row whose trigger_type is 'ongoing' (FAR-158 analytics attribution)."""
-        from modulo.core.analytics import record_run_facts
+        from farna.core.analytics import record_run_facts
 
         run_id = uuid.uuid4()
         async with db_session.begin():
@@ -1214,7 +1214,7 @@ class TestSoftDeletedTeamNamePreservation:
     def _register_soft_delete_listener(self) -> None:
         """Idempotent — mirrors production (``db/session.py``) so the filter
         is active exactly as it is in a live deployment."""
-        from modulo.db.soft_delete import register_soft_delete_filter
+        from farna.db.soft_delete import register_soft_delete_filter
 
         register_soft_delete_filter()
 
@@ -1279,7 +1279,7 @@ class TestSoftDeletedTeamNamePreservation:
         without ``include_soft_deleted`` the global filter NULLs both names for
         entities soft-deleted after the run completed (FAR-1653).
         """
-        from modulo.core.analytics import record_run_facts
+        from farna.core.analytics import record_run_facts
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         team_id = await _seed_team(db_engine, org, user, "Far1653 Live Deleted Team", soft_deleted=True)

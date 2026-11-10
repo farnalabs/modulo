@@ -15,9 +15,9 @@ from sqlalchemy import Table
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
+from farna.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _MISSING_ORG = uuid.UUID("00000000-0000-0000-0000-00000000ffff")

@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.library_service.install import agent_entity_fingerprint, schema_entity_fingerprint
-from modulo.core.library_service.upgrade import (
+from farna.core.library_service.install import agent_entity_fingerprint, schema_entity_fingerprint
+from farna.core.library_service.upgrade import (
     NoUpdateAvailableError,
     UpgradeInstallNotFoundError,
     build_collection_delta,
@@ -308,7 +308,7 @@ class TestDetectAndUpdateErrors:
         install = _install()
 
         async def _get(model, obj_id, **kwargs):
-            from modulo.db.models.collection_install import CollectionInstall
+            from farna.db.models.collection_install import CollectionInstall
 
             if model is CollectionInstall:
                 return install
@@ -329,8 +329,8 @@ class TestDetectAndUpdateErrors:
             await upgrade_collection(session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
 
     async def test_upgrade_conflict_when_no_update(self) -> None:
-        from modulo.db.models.collection_install import CollectionInstall
-        from modulo.db.models.library_primitive import LibraryPrimitive
+        from farna.db.models.collection_install import CollectionInstall
+        from farna.db.models.library_primitive import LibraryPrimitive
 
         install = _install()
         collection = _collection(row_id=install.collection_id)

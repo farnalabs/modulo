@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.feedback_manager.status import (
+from farna.core.feedback_manager.status import (
     CORRECTION_TERMINAL_STATUSES,
     VALID_STATUS_TRANSITIONS,
     correction_guardrail_from,

@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 # tests/architecture/ -> tests/ -> backend/ -> repo root.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -50,13 +50,13 @@ _APP_SERVICE = "modulo"
 #: that justifies it. Anything else the compose passes MUST be a Settings name.
 _NON_SETTINGS_ENV: dict[str, tuple[str, ...]] = {
     "DATABASE_ADMIN_URL": (
-        "src/modulo/db/bootstrap.py",
-        "src/modulo/db/migrations/env.py",
-        "src/modulo/api/main.py",
+        "src/farna/db/bootstrap.py",
+        "src/farna/db/migrations/env.py",
+        "src/farna/api/main.py",
     ),
     "MODULO_ENV": (
-        "src/modulo/core/logging_config.py",
-        "src/modulo/api/routes/deployment.py",
+        "src/farna/core/logging_config.py",
+        "src/farna/api/routes/deployment.py",
     ),
 }
 

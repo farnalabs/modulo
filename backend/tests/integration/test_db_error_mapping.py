@@ -23,7 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -96,7 +96,7 @@ class TestDbErrorMapping:
 
     @pytest.fixture
     def patch_progress(self, monkeypatch: pytest.MonkeyPatch):
-        from modulo.api.routes import onboarding
+        from farna.api.routes import onboarding
 
         def _apply(exc: Exception) -> None:
             async def _raise_progress(session: AsyncSession, org_id: uuid.UUID) -> None:

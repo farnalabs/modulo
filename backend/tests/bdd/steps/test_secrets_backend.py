@@ -28,12 +28,12 @@ from cryptography.fernet import Fernet
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-from modulo.db.models.base import Base
-from modulo.db.models.secret import Secret
+from farna.core.secrets_backend import create_secrets_backend
+from farna.core.secrets_backend.fernet import FernetSecretsBackend
+from farna.db.models.base import Base
+from farna.db.models.secret import Secret
 
-logging.getLogger("modulo.core.secrets_backend").setLevel(logging.CRITICAL)
+logging.getLogger("farna.core.secrets_backend").setLevel(logging.CRITICAL)
 
 scenarios("../features/infra/secrets_backend.feature")
 

@@ -63,7 +63,7 @@ def _substitute_pipeline_id(url: str, request: pytest.FixtureRequest) -> str:
     return url
 
 
-def _patch_set_rls(patches: list[Any], module_path: str = "modulo.api.routes.pipelines.set_rls_org") -> None:
+def _patch_set_rls(patches: list[Any], module_path: str = "farna.api.routes.pipelines.set_rls_org") -> None:
     """Patch *set_rls_org* in the given module path so it's a silent no-op."""
     patcher = patch(module_path, new_callable=AsyncMock)
     patcher.start()
@@ -153,7 +153,7 @@ def org_has_pipeline_with_id(
 
 @given(parsers.parse('org "{org}" has pipelines "{pipeline_names}"'))
 def org_has_pipelines(org: str, pipeline_names: str, request: pytest.FixtureRequest) -> None:
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
     from tests.bdd.conftest import make_mock_pipeline
 
     names = [n.strip() for n in pipeline_names.split(",")]
@@ -282,11 +282,11 @@ def crud_post_pipeline(client, url: str, name: str, request: pytest.FixtureReque
 
     actual_url = _map_url(url)
 
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
 
     mock_pipeline = make_mock_pipeline(name=name)
     patcher = patch(
-        "modulo.api.routes.pipelines.create_pipeline",
+        "farna.api.routes.pipelines.create_pipeline",
         new_callable=AsyncMock,
         return_value=mock_pipeline,
     )
@@ -305,22 +305,22 @@ def crud_post_pipeline(client, url: str, name: str, request: pytest.FixtureReque
 @when(parsers.parse("I GET {url}"))
 def crud_get_url(client, url: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Generic GET — patches the route module based on URL pattern."""
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
     actual_url = _map_url(url)
 
     # Determine which router module we are hitting.
     if "pipelines" in actual_url and "runs" not in actual_url:
-        rls_module = "modulo.api.routes.pipelines.set_rls_org"
-        get_module = "modulo.api.routes.pipelines.get_pipeline"
-        list_module = "modulo.api.routes.pipelines.list_pipelines"
+        rls_module = "farna.api.routes.pipelines.set_rls_org"
+        get_module = "farna.api.routes.pipelines.get_pipeline"
+        list_module = "farna.api.routes.pipelines.list_pipelines"
     elif "runs" in actual_url:
-        rls_module = "modulo.api.routes.runs.set_rls_org"
-        get_module = "modulo.api.routes.runs.get_pipeline"  # runs imports get_pipeline too
+        rls_module = "farna.api.routes.runs.set_rls_org"
+        get_module = "farna.api.routes.runs.get_pipeline"  # runs imports get_pipeline too
         list_module = None
     else:
-        rls_module = "modulo.api.routes.pipelines.set_rls_org"
-        get_module = "modulo.api.routes.pipelines.get_pipeline"
+        rls_module = "farna.api.routes.pipelines.set_rls_org"
+        get_module = "farna.api.routes.pipelines.get_pipeline"
         list_module = None
 
     _patch_set_rls(patches, rls_module)
@@ -353,11 +353,11 @@ def crud_patch_pipeline(client, url: str, request: pytest.FixtureRequest, patche
 
     actual_url = _substitute_pipeline_id(_map_url(url), request)
 
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
 
     mock_pipeline = getattr(request.node, "_mock_pipeline", make_mock_pipeline(name="updated"))
     patcher = patch(
-        "modulo.api.routes.pipelines.update_pipeline",
+        "farna.api.routes.pipelines.update_pipeline",
         new_callable=AsyncMock,
         return_value=mock_pipeline,
     )
@@ -378,10 +378,10 @@ def crud_delete_pipeline(client, url: str, request: pytest.FixtureRequest, patch
     """Delete a pipeline via DELETE."""
     actual_url = _substitute_pipeline_id(_map_url(url), request)
 
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
 
     patcher = patch(
-        "modulo.api.routes.pipelines.soft_delete_pipeline",
+        "farna.api.routes.pipelines.soft_delete_pipeline",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -419,15 +419,15 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     )
     request.node._mock_pipeline = mock_pipeline
 
-    _patch_set_rls(patches, "modulo.api.routes.runs.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.runs.set_rls_org")
 
     # get_pipeline in the runs module
-    _patch_get_pipeline(patches, "modulo.api.routes.runs.get_pipeline", mock_pipeline)
+    _patch_get_pipeline(patches, "farna.api.routes.runs.get_pipeline", mock_pipeline)
 
     # create_snapshot_from_live_graph in the runs module
     mock_snapshot = make_mock_snapshot()
     patcher = patch(
-        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        "farna.api.routes.runs.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
         return_value=mock_snapshot,
     )
@@ -444,8 +444,8 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     # returns 429. We model the post-dispatch observable state (a pending run
     # carrying the capacity marker) so the scenario asserts what production
     # actually produces.
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.db.models.run import PIPELINE_CAPACITY_STATUSES
+    from farna.core.pipeline_engine.executor import PipelineExecutor
+    from farna.db.models.run import PIPELINE_CAPACITY_STATUSES
 
     max_concurrent = getattr(request.node, "_max_concurrent", None)
     active_run = getattr(request.node, "_mock_run", None)
@@ -474,7 +474,7 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
         mock_run.error_detail = park_detail
     request.node._mock_run = mock_run
     patcher = patch(
-        "modulo.api.routes.runs.create_run",
+        "farna.api.routes.runs.create_run",
         new_callable=AsyncMock,
         return_value=mock_run,
     )
@@ -483,7 +483,7 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
 
     # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.dispatch_run",
+        "farna.api.routes.runs.dispatch_run",
         new_callable=AsyncMock,
     )
     patcher.start()
@@ -616,14 +616,14 @@ def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest
     )
     request.node._mock_pipeline = mock_pipeline
 
-    _patch_set_rls(patches, "modulo.api.routes.runs.set_rls_org")
-    _patch_get_pipeline(patches, "modulo.api.routes.runs.get_pipeline", mock_pipeline)
+    _patch_set_rls(patches, "farna.api.routes.runs.set_rls_org")
+    _patch_get_pipeline(patches, "farna.api.routes.runs.get_pipeline", mock_pipeline)
 
     mock_snapshot = make_mock_snapshot(
         run_context_defaults={"branch": mock_pipeline.run_context_defaults.get("branch", "main")},
     )
     patcher = patch(
-        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        "farna.api.routes.runs.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
         return_value=mock_snapshot,
     )
@@ -640,7 +640,7 @@ def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest
     mock_run = make_mock_run(pipeline_id=mock_pipeline.id, status="pending")
     request.node._mock_run = mock_run
     patcher = patch(
-        "modulo.api.routes.runs.create_run",
+        "farna.api.routes.runs.create_run",
         new_callable=AsyncMock,
         return_value=mock_run,
     )
@@ -649,7 +649,7 @@ def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest
 
     # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.dispatch_run",
+        "farna.api.routes.runs.dispatch_run",
         new_callable=AsyncMock,
     )
     patcher.start()
@@ -678,7 +678,7 @@ def validation_missing_field(client, field: str, request: pytest.FixtureRequest,
     ``nodes``.  The endpoint rejects with a 422 because ``PipelineCreate``
     requires ``name``.
     """
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
 
     # Send an empty JSON body — missing ``name`` (and any other required field).
     resp = client.post("/api/v1/pipelines", json={})
@@ -698,7 +698,7 @@ def validation_unknown_node_type(client, node_type: str, request: pytest.Fixture
     # TODO: this step should call a dedicated graph-validation endpoint.
     # For now it POSTs to create-pipeline with an empty body to exercise
     # Pydantic validation.
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
     resp = client.post(
         "/api/v1/pipelines",
         json={"nodes": [{"id": str(uuid.uuid4()), "type": node_type}]},
@@ -713,7 +713,7 @@ def validation_cycle(client, request: pytest.FixtureRequest, patches: list[Any])
     Similar to the unknown-node-type step — this requires a dedicated
     graph-validation endpoint.
     """
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
     node_a = uuid.uuid4()
     node_b = uuid.uuid4()
     resp = client.post(
@@ -737,11 +737,11 @@ def validation_valid_minimal(client, request: pytest.FixtureRequest, patches: li
     """POST a minimal valid pipeline config."""
     from tests.bdd.conftest import make_mock_pipeline
 
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
 
     mock_pipeline = make_mock_pipeline(name="single-llm-pipeline")
     patcher = patch(
-        "modulo.api.routes.pipelines.create_pipeline",
+        "farna.api.routes.pipelines.create_pipeline",
         new_callable=AsyncMock,
         return_value=mock_pipeline,
     )
@@ -882,7 +882,7 @@ def check_run_reached_terminal_state(request: pytest.FixtureRequest) -> None:
     response body when the scenario drove a route, otherwise the run object the
     transition step holds.
     """
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.db.models.run import TERMINAL_STATUSES
 
     body = getattr(request.node, "_resp_body", None)
     if isinstance(body, dict) and "status" in body:
@@ -912,7 +912,7 @@ def check_run_parked_for_capacity(request: pytest.FixtureRequest, marker: str) -
     ``map_legacy_code`` (``pipeline_capacity`` -> ``capacity.pipeline``), so the
     assertion checks that caller-facing code.
     """
-    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+    from farna.core.pipeline_engine.error_codes import map_legacy_code
 
     body = getattr(request.node, "_resp_body", None)
     assert isinstance(body, dict), f"Expected the trigger route to return a run payload, got {type(body).__name__}"
@@ -1418,7 +1418,7 @@ def node_produces_suspicious_output(output: str, request: pytest.FixtureRequest)
         # Mock surface: the machine code is stored on ``error_detail`` for
         # ``check_error_code`` to assert. The real Run keeps the identifier in
         # ``error_code`` (String) and prose in ``error_detail`` (Text) - see
-        # backend/src/modulo/db/models/run.py.
+        # backend/src/farna/db/models/run.py.
         mock_run.error_detail = "output_rejected"
     request.node._run_status = "failed"
     request.node._error_code = "output_rejected"
@@ -1499,9 +1499,9 @@ def create_variant_group(client, request: pytest.FixtureRequest, patches: list[A
     mock_group.created_at = None
     mock_group.updated_at = None
 
-    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.variants.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.variants.create_variant_group",
+        "farna.api.routes.variants.create_variant_group",
         new_callable=AsyncMock,
         return_value=mock_group,
     )
@@ -1512,7 +1512,7 @@ def create_variant_group(client, request: pytest.FixtureRequest, patches: list[A
     # source. That guard is exercised by the unit/integration suites; here the
     # create path is mocked, so patch the guard to pass for the happy path.
     patcher = patch(
-        "modulo.api.routes.variants.validate_batch_ownership",
+        "farna.api.routes.variants.validate_batch_ownership",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -1544,9 +1544,9 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
         "merged_payload": {},
     }
 
-    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.variants.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.variants.get_variant_group",
+        "farna.api.routes.variants.get_variant_group",
         new_callable=AsyncMock,
         return_value=mock_group,
     )
@@ -1554,7 +1554,7 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
     patches.append(patcher)
 
     patcher2 = patch(
-        "modulo.api.routes.variants.check_pipeline_run_quota",
+        "farna.api.routes.variants.check_pipeline_run_quota",
         new_callable=AsyncMock,
         return_value=not getattr(request.node, "_variant_at_max_concurrency", False),
     )
@@ -1564,7 +1564,7 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
     mock_run_result = None if getattr(request.node, "_variant_at_max_concurrency", False) else mock_result
 
     patcher3 = patch(
-        "modulo.api.routes.variants.run_variant_weighted",
+        "farna.api.routes.variants.run_variant_weighted",
         new_callable=AsyncMock,
         return_value=mock_run_result,
     )
@@ -1577,9 +1577,9 @@ def run_variant_group(name: str, client, request: pytest.FixtureRequest, patches
 
 @when(parsers.parse("I GET /api/v1/variant-groups/{group_id}"))
 def get_variant_group_by_id(group_id: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.variants.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.variants.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.variants.get_variant_group",
+        "farna.api.routes.variants.get_variant_group",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -1647,7 +1647,7 @@ def create_cron_trigger(
 
     pid = mock_pipeline.id
 
-    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.triggers.set_rls_org")
 
     resp = client.post(
         f"/api/v1/pipelines/{pid}/triggers",
@@ -1695,7 +1695,7 @@ def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any], m
     result.scalar_one_or_none.return_value = mock_trigger
     mock_session.execute.return_value = result
 
-    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.triggers.set_rls_org")
 
     resp = client.post(f"/api/v1/triggers/{trigger_id}/toggle")
     _store_response(request, resp)
@@ -1715,7 +1715,7 @@ def get_cron_preview(client, request: pytest.FixtureRequest, patches: list[Any],
     result.scalar_one_or_none.return_value = mock_trigger
     mock_session.execute.return_value = result
 
-    _patch_set_rls(patches, "modulo.api.routes.triggers.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.triggers.set_rls_org")
 
     resp = client.get(f"/api/v1/triggers/{trigger_id}/cron/preview?count=3")
     _store_response(request, resp)
@@ -1829,21 +1829,21 @@ def start_run_creates_snapshot(pipeline_name: str, client, request: pytest.Fixtu
 
     request.node._mock_snapshot = mock_snap
 
-    _patch_set_rls(patches, "modulo.api.routes.runs.set_rls_org")
-    p1 = patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
+    _patch_set_rls(patches, "farna.api.routes.runs.set_rls_org")
+    p1 = patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
     p1.start()
     patches.append(p1)
     p2 = patch(
-        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        "farna.api.routes.runs.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
         return_value=mock_snap,
     )
     p2.start()
     patches.append(p2)
-    p3 = patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=mock_run)
+    p3 = patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=mock_run)
     p3.start()
     patches.append(p3)
-    p4 = patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock)
+    p4 = patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock)
     p4.start()
     patches.append(p4)
 
@@ -1858,7 +1858,7 @@ def list_snapshots_endpoint(pipeline_name: str, page: int, page_size: int, clien
 
     _patch_set_rls(patches)
     p = patch(
-        "modulo.api.routes.pipelines.list_snapshots",
+        "farna.api.routes.pipelines.list_snapshots",
         return_value=(snapshots, len(snapshots)),
     )
     p.start()
@@ -1872,7 +1872,7 @@ def list_snapshots_endpoint(pipeline_name: str, page: int, page_size: int, clien
 def list_snapshots_missing_pipeline(pipeline_name: str, client, request, patches):
     """List snapshots for a pipeline that does not exist - the route must 404."""
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=None)
+    p = patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=None)
     p.start()
     patches.append(p)
 
@@ -1886,7 +1886,7 @@ def get_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, pa
     snapshot = request.node._mock_snapshot
 
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot)
+    p = patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot)
     p.start()
     patches.append(p)
 
@@ -1902,7 +1902,7 @@ def tag_snapshot_endpoint(snap_ref: str, tag: str, notes: str, client, request, 
     snapshot.notes = notes
 
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.tag_snapshot", return_value=snapshot)
+    p = patch("farna.api.routes.pipelines.tag_snapshot", return_value=snapshot)
     p.start()
     patches.append(p)
 
@@ -1930,10 +1930,10 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
     if getattr(request.node, "_rollback_denied", False):
         # hitl-gate-removal-guard-plan.md v19: a gate-weakening rollback by a
         # non-privileged caller is denied at the service layer.
-        from modulo.db.crud.hitl_review_guard import REASON_INSUFFICIENT_ROLE, HitlReviewWeakeningDenied
+        from farna.db.crud.hitl_review_guard import REASON_INSUFFICIENT_ROLE, HitlReviewWeakeningDenied
 
         p = patch(
-            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            "farna.api.routes.pipelines.rollback_to_snapshot",
             side_effect=HitlReviewWeakeningDenied(
                 reason_code=REASON_INSUFFICIENT_ROLE,
                 correlation_keys=[("a", "b", "normal")],
@@ -1941,7 +1941,7 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
             ),
         )
     else:
-        p = patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot)
+        p = patch("farna.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot)
     p.start()
     patches.append(p)
 
@@ -1964,18 +1964,18 @@ def clone_pipeline_endpoint_bdd(name: str, client, request, patches) -> None:
     cloned.id = uuid.uuid4()
 
     _patch_set_rls(patches)
-    p0 = patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
+    p0 = patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
     p0.start()
     patches.append(p0)
-    p0b = patch("modulo.api.routes.pipelines.check_pipeline_name_available", new_callable=AsyncMock, return_value=True)
+    p0b = patch("farna.api.routes.pipelines.check_pipeline_name_available", new_callable=AsyncMock, return_value=True)
     p0b.start()
     patches.append(p0b)
-    p = patch("modulo.api.routes.pipelines.clone_pipeline", new_callable=AsyncMock, return_value=cloned)
+    p = patch("farna.api.routes.pipelines.clone_pipeline", new_callable=AsyncMock, return_value=cloned)
     p.start()
     patches.append(p)
 
     audit = AsyncMock()
-    p2 = patch("modulo.api.routes.pipelines.append_audit_event", audit)
+    p2 = patch("farna.api.routes.pipelines.append_audit_event", audit)
     p2.start()
     patches.append(p2)
     request.node._clone_audit = audit
@@ -2000,9 +2000,9 @@ def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
 
     _patch_set_rls(patches)
     if not is_latest:
-        p = patch("modulo.api.routes.pipelines.delete_snapshot", return_value=True)
+        p = patch("farna.api.routes.pipelines.delete_snapshot", return_value=True)
     else:
-        p = patch("modulo.api.routes.pipelines.delete_snapshot", return_value=False)
+        p = patch("farna.api.routes.pipelines.delete_snapshot", return_value=False)
     p.start()
     patches.append(p)
 
@@ -2025,7 +2025,7 @@ def diff_snapshots_endpoint(snap_a: str, snap_b: str, client, request, patches):
     }
 
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.diff_snapshots", return_value=diff_result)
+    p = patch("farna.api.routes.pipelines.diff_snapshots", return_value=diff_result)
     p.start()
     patches.append(p)
 

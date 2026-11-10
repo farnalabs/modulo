@@ -8,7 +8,7 @@ renderer, the stored-counterpart resolver, and the bounded detail formatter
 directly, so no detection shape can regress silently.
 """
 
-from modulo.core.graph_validator.mask_sentinel import (
+from farna.core.graph_validator.mask_sentinel import (
     MaskSentinelFinding,
     _value_at_path,
     find_mask_sentinel_values,
@@ -16,7 +16,7 @@ from modulo.core.graph_validator.mask_sentinel import (
     format_mask_sentinel_detail,
     format_mask_sentinel_path,
 )
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
 
 def test_format_path_renders_index_then_nested_key() -> None:

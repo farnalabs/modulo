@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_provider import (
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.runtime_provider import (
     ProviderNotConfiguredError,
     RuntimeProvider,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.hub import RuntimeProviderHub
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/environments/environment_profiles.feature")
@@ -196,7 +196,7 @@ def profile_with_hint(hint: str, ctx):
 
 @given("a LocalRuntimeProvider")
 def local_provider(ctx):
-    from modulo.core.runtime_provider.local import LocalRuntimeProvider
+    from farna.core.runtime_provider.local import LocalRuntimeProvider
 
     ctx["provider"] = LocalRuntimeProvider(max_concurrency=2)
 
@@ -221,7 +221,7 @@ def provider_with_active_workspace(ctx):
 
 @given("a ShellConnector using that provider")
 def shell_connector_with_provider(ctx):
-    from modulo.connectors.shell import ShellConnector
+    from farna.connectors.shell import ShellConnector
 
     with pytest.warns(DeprecationWarning, match="ShellConnector is deprecated"):
         ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
@@ -283,8 +283,8 @@ def snapshot_subset(ctx):
 def post_create_profile(url: str, ctx, client):
     payload = ctx.get("payload", {})
     with (
-        patch("modulo.api.routes.environment_profiles.create_environment_profile") as mock_create,
-        patch("modulo.api.routes.environment_profiles.set_rls_org"),
+        patch("farna.api.routes.environment_profiles.create_environment_profile") as mock_create,
+        patch("farna.api.routes.environment_profiles.set_rls_org"),
     ):
         mock_create.return_value = _fake_profile(
             name=payload.get("name", "test"),
@@ -306,9 +306,9 @@ def post_create_invalid(url: str, ctx, client):
 @when(parsers.parse("I GET {url}"))
 def get_url(url: str, ctx, client):
     with (
-        patch("modulo.api.routes.environment_profiles.list_environment_profiles") as mock_list,
-        patch("modulo.api.routes.environment_profiles.get_environment_profile") as mock_get,
-        patch("modulo.api.routes.environment_profiles.set_rls_org"),
+        patch("farna.api.routes.environment_profiles.list_environment_profiles") as mock_list,
+        patch("farna.api.routes.environment_profiles.get_environment_profile") as mock_get,
+        patch("farna.api.routes.environment_profiles.set_rls_org"),
     ):
         is_alt_org = ctx.get("alt_org", False)
         profile_count = 0 if is_alt_org else ctx.get("profile_count", 0)
@@ -331,8 +331,8 @@ def put_profile(url: str, name: str, ctx, client):
     profile_should_be_none = ctx.get("profile_should_be_none", False)
     is_alt_org = ctx.get("alt_org", False)
     with (
-        patch("modulo.api.routes.environment_profiles.update_environment_profile") as mock_update,
-        patch("modulo.api.routes.environment_profiles.set_rls_org"),
+        patch("farna.api.routes.environment_profiles.update_environment_profile") as mock_update,
+        patch("farna.api.routes.environment_profiles.set_rls_org"),
     ):
         if profile and not profile_should_be_none and not is_alt_org:
             updated = _fake_profile(id=profile.id, name=name)
@@ -348,8 +348,8 @@ def delete_url(url: str, ctx, client):
     profile_should_be_none = ctx.get("profile_should_be_none", False)
     is_alt_org = ctx.get("alt_org", False)
     with (
-        patch("modulo.api.routes.environment_profiles.soft_delete_environment_profile") as mock_delete,
-        patch("modulo.api.routes.environment_profiles.set_rls_org"),
+        patch("farna.api.routes.environment_profiles.soft_delete_environment_profile") as mock_delete,
+        patch("farna.api.routes.environment_profiles.set_rls_org"),
     ):
         if profile and not profile_should_be_none and not is_alt_org:
             mock_delete.return_value = True
@@ -364,9 +364,9 @@ def post_url(url: str, ctx, client):
     test_hub.register(_fake_profile().provider_type, _stub_provider())
 
     with (
-        patch("modulo.api.routes.environment_profiles.get_environment_profile") as mock_get,
-        patch("modulo.api.routes.environment_profiles.set_rls_org"),
-        patch("modulo.api.routes.environment_profiles._get_hub", return_value=test_hub),
+        patch("farna.api.routes.environment_profiles.get_environment_profile") as mock_get,
+        patch("farna.api.routes.environment_profiles.set_rls_org"),
+        patch("farna.api.routes.environment_profiles._get_hub", return_value=test_hub),
     ):
         profile = ctx.get("profile")
         profile_should_be_none = ctx.get("profile_should_be_none", False)
@@ -422,7 +422,7 @@ def destroy_workspace(ctx):
 
 @when(parsers.parse('I execute the command "{command}" via the ShellConnector'))
 def execute_shell_command(command: str, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     result = asyncio.run(
         ctx["connector"].write(
@@ -456,7 +456,7 @@ def validate_snapshot(ctx):
 
 @when(parsers.parse('I authenticate as a user in org "{org}"'))
 def authenticate_as_org(org: str, ctx, request):
-    from modulo.api.main import app
+    from farna.api.main import app
 
     if org != "acme":
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(

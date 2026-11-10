@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from modulo.core.cost_controller.breakdown.aggregate import (
+from farna.core.cost_controller.breakdown.aggregate import (
     _basis_within_limit,
     build_cost_breakdown,
     clamp_reported,
     clamp_to_ceiling,
 )
-from modulo.core.cost_controller.breakdown.constants import (
+from farna.core.cost_controller.breakdown.constants import (
     COST_COLUMN_CAP,
     MAX_REPORTABLE_BAND_USD,
     TOTAL_CLAMPED_MARKER,
 )
-from modulo.core.cost_controller.breakdown.params import CostComponentConfig, RunCostTelemetry
+from farna.core.cost_controller.breakdown.params import CostComponentConfig, RunCostTelemetry
 
 
 def _tel(**kw: object) -> RunCostTelemetry:

@@ -21,7 +21,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from modulo.db.models import (
+from farna.db.models import (
     Base,
     EvalCase,
     EvalDataset,
@@ -29,7 +29,7 @@ from modulo.db.models import (
     purge_soft_deleted_eval_cases,
     validate_dataset_has_cases,
 )
-from modulo.db.soft_delete import include_soft_deleted
+from farna.db.soft_delete import include_soft_deleted
 
 _MIGRATION_PATH = (
     Path(__file__).parents[4]
@@ -95,7 +95,7 @@ def test_eval_case_columns() -> None:
 
 
 def test_eval_dataset_is_org_scoped() -> None:
-    from modulo.db.models.base import OrgScoped
+    from farna.db.models.base import OrgScoped
 
     assert issubclass(EvalDataset, OrgScoped)
 

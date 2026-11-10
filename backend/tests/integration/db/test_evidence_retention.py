@@ -28,18 +28,18 @@ import pytest
 from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.evidence_retention import (
+from farna.core.evidence_retention import (
     EvidenceRetentionPolicy,
     _lock_key_for_org,
     count_evidence_rows,
     purge_evidence,
 )
-from modulo.db.models.evidence import Evidence
-from modulo.db.repositories.locks import _str_to_lock_keys
+from farna.db.models.evidence import Evidence
+from farna.db.repositories.locks import _str_to_lock_keys
 
 pytestmark = pytest.mark.integration
 
-_RETENTION_LOGGER = "modulo.core.evidence_retention"
+_RETENTION_LOGGER = "farna.core.evidence_retention"
 
 
 # ---------------------------------------------------------------------------

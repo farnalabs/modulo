@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -73,7 +73,7 @@ def _set_tenant_principal(role: str) -> None:
 class TestListTiers:
     def test_viewer_allowed(self, client: TestClient) -> None:
         _set_tenant_principal("viewer")
-        with patch("modulo.api.routes.admin_tiers.list_tiers", new=AsyncMock()) as mock_list:
+        with patch("farna.api.routes.admin_tiers.list_tiers", new=AsyncMock()) as mock_list:
             mock_list.return_value = [{"name": "Alpha", "display_name": "Alpha"}]
             resp = client.get("/api/v1/admin/tiers")
         assert resp.status_code == 200
@@ -82,7 +82,7 @@ class TestListTiers:
 
     def test_admin_allowed(self, client: TestClient) -> None:
         _set_tenant_principal("admin")
-        with patch("modulo.api.routes.admin_tiers.list_tiers", new=AsyncMock()) as mock_list:
+        with patch("farna.api.routes.admin_tiers.list_tiers", new=AsyncMock()) as mock_list:
             mock_list.return_value = []
             resp = client.get("/api/v1/admin/tiers")
         assert resp.status_code == 200
@@ -95,7 +95,7 @@ class TestListTiers:
     def test_endpoint_carries_org_config_permission(self) -> None:
         import inspect
 
-        from modulo.api.routes.admin_tiers import list_tiers_endpoint
+        from farna.api.routes.admin_tiers import list_tiers_endpoint
 
         params = inspect.signature(list_tiers_endpoint).parameters
         dep = params["current_user"].default

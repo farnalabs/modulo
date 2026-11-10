@@ -10,9 +10,9 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     SensitiveValue,
     _masked_node_fields,
@@ -22,9 +22,9 @@ from modulo.api.middleware.sensitive_mask import (
     mask_sensitive_value,
     merge_masked_config_json,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -484,7 +484,7 @@ class TestRevealEndpoint:
         self._setup_session_execute(mock_provider)
 
         with (
-            patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory,
+            patch("farna.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory,
         ):
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
@@ -508,7 +508,7 @@ class TestRevealEndpoint:
         mock_provider = MagicMock(client_secret=stored)
         self._setup_session_execute(mock_provider)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
             resp = client.post(
                 "/api/v1/admin/sensitive/reveal",
                 json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
@@ -526,7 +526,7 @@ class TestRevealEndpoint:
         mock_provider = MagicMock(client_secret=encrypted)
         self._setup_session_execute(mock_provider)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url", side_effect=RuntimeError("offline")):
             resp = client.post(
                 "/api/v1/admin/sensitive/reveal",
                 json={"resource_type": "sso_provider", "resource_id": str(provider_id)},
@@ -560,7 +560,7 @@ class TestRevealEndpoint:
         mock_connector.config_json = {"api_key": "real-key", "name": "test"}
         self._setup_session_execute(mock_connector)
 
-        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
+        with patch("farna.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
@@ -594,7 +594,7 @@ class TestRevealEndpoint:
         self._setup_session_execute(mock_provider)
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -610,7 +610,7 @@ class TestRevealEndpoint:
         self._setup_session_execute(mock_config)
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -625,7 +625,7 @@ class TestRevealEndpoint:
         self._setup_session_execute({"endpoint": "http://otel:4317"})
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -644,7 +644,7 @@ class TestRevealEndpoint:
         self._setup_session_execute({"sample_ratio": 0.5})
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -663,7 +663,7 @@ class TestRevealEndpoint:
         self._setup_session_execute(None)
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -708,7 +708,7 @@ class TestRevealEndpoint:
         self._setup_session_execute(mock_provider)
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             side_effect=RuntimeError("Redis unavailable"),
         ):
             resp = client.post(
@@ -757,9 +757,9 @@ def test_connector_response_masks_config_json(client: TestClient) -> None:
     mock_connector.validation_level = None
 
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=mock_connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=mock_connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{connector_id}")
 

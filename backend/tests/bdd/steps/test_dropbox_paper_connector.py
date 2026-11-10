@@ -33,7 +33,7 @@ def ctx() -> dict:
 
 @given("a Dropbox Paper connector configured with valid token")
 def dropbox_paper_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.dropbox_paper import DropboxPaperConnector
+    from farna.connectors.dropbox_paper import DropboxPaperConnector
 
     ctx["connector"] = DropboxPaperConnector(token=_TOKEN)
     ctx["valid"] = True
@@ -41,7 +41,7 @@ def dropbox_paper_connector_valid(ctx: dict) -> None:
 
 @given("a Dropbox Paper connector configured with invalid token")
 def dropbox_paper_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.dropbox_paper import DropboxPaperConnector
+    from farna.connectors.dropbox_paper import DropboxPaperConnector
 
     ctx["connector"] = DropboxPaperConnector(token=_TOKEN)
     ctx["valid"] = False
@@ -62,7 +62,7 @@ def dropbox_paper_health_check(ctx: dict) -> None:
 
 @when(parsers.parse('the connector lists Paper docs with filter "{filter_by}"'))
 def dropbox_paper_query_docs(filter_by: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     json_body = {
         "doc_ids": ["doc1", "doc2"],
@@ -77,7 +77,7 @@ def dropbox_paper_query_docs(filter_by: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector downloads doc "{doc_id}"'))
 def dropbox_paper_query_doc(doc_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     content = "# My Paper Doc\n\nHello world."
     with respx.mock:
@@ -89,7 +89,7 @@ def dropbox_paper_query_doc(doc_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector lists folders at path "{path}"'))
 def dropbox_paper_query_folders(path: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     entries = [
         {".tag": "folder", "name": "My Folder", "id": "id:folder1"},
@@ -106,7 +106,7 @@ def dropbox_paper_query_folders(path: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector creates a Paper doc titled "{title}" with markdown content'))
 def dropbox_paper_write_doc(title: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     content = "# Meeting Notes\n\nAction items for the sprint review."
     result_headers = {
@@ -124,7 +124,7 @@ def dropbox_paper_write_doc(title: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries unsupported resource "{resource}"'))
 def dropbox_paper_query_unsupported(resource: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     with pytest.raises(ValueError, match="Unsupported Dropbox Paper resource"):
         asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource)))
@@ -133,7 +133,7 @@ def dropbox_paper_query_unsupported(resource: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector writes to unsupported resource "{resource}"'))
 def dropbox_paper_write_unsupported(resource: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with pytest.raises(ValueError, match="Unsupported Dropbox Paper write resource"):
         asyncio.run(ctx["connector"].write(ConnectorPayload(resource=resource, data={})))

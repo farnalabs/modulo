@@ -1,0 +1,14259 @@
+"""Factory that builds a cancellable LangGraph node function from a node definition.
+
+Node types:
+  - standard (agent):  agent/connector node; runs the node body, then checks for
+                        outgoing HITL gate edges (handled externally via
+                        intermediate gate nodes).
+  - hitl_review:         intermediate node inserted by build_graph_from_json for
+                        every edge that carries a hitl_review_config.  Calls
+                        interrupt(gate_payload) and blocks until a human reviews
+                        it, unless the effective autonomy level (from run_context
+                        or pipeline default) bypasses the gate.  Also supports
+                        conditional gating via a JMESPath ``condition`` on the
+                        gate config, and eval-before-interrupt for node-scoped
+                        eval definitions.
+  - manual:            placeholder node for SDLC modeling.  No AI agent, no
+                        connector binding, no model backend required.  The human
+                        provides output directly via the HITL review UI.  Output
+                        is validated against output_schema_id before the run
+                        continues.  A log entry is recorded on completion.
+                        Fields required: id, output_schema_id (optional).
+                        Fields NOT required: agent_id, connector_binding,
+                        model_backend_id.
+
+Autonomy integration:
+  - ``manual_approval`` (default):  gate interrupts for human review.
+  - ``notify_on_complete``:         gate auto-approves and records an artifact;
+                                    no interrupt is raised.
+  - ``fully_autonomous``:           gate is silently skipped.
+  - ``human_only`` on gate config:  overrides autonomy —  always interrupts.
+    Defaults to True (FAR-609) when the config omits the field.
+
+Conditional gating ((Section 8.17):
+  - ``condition`` on ``hitl_review_config``:  JMESPath expression evaluated
+    against the current state (upstream node output).  If falsy the gate is
+    skipped.  If truthy or absent the gate proceeds to autonomy checks.
+
+Eval-before-interrupt ((Section 8.17):
+  - ``eval_definitions``:  list of ``EvalDefinition`` DTOs scoped to the
+    upstream node.  Evaluated *after* the condition check but *before* the
+    interrupt.  If any eval with ``failure_behaviour='block'`` fails, an
+    ``EvalBlockedError`` is raised instead of a ``GraphInterrupt``.
+"""
+
+import asyncio
+import base64
+import difflib
+import hashlib
+import json
+import logging
+import math
+import os
+import re as _re
+import socket
+import time
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
+from dataclasses import asdict as _dc_asdict
+from dataclasses import dataclass
+from dataclasses import is_dataclass as _dc_is_dataclass
+from dataclasses import replace as _dc_replace
+from datetime import UTC, datetime
+from enum import StrEnum
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, TypeGuard, cast, get_args
+
+import httpx
+import jinja2
+from jinja2.sandbox import SandboxedEnvironment
+from langchain_core.messages import HumanMessage
+from langgraph.types import interrupt
+
+from farna.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES, connector_binding_operation
+from farna.core.runtime_provider import (
+    ProviderCapabilityUnsupportedError,
+    WorkspaceMetrics,
+)
+from farna.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
+if TYPE_CHECKING:
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.writer import ArtifactWriter
+    from farna.core.runtime_provider import (
+        RuntimeProvider,
+        WorkspaceFileInfo,
+        WorkspaceSpec,
+    )
+
+import typing
+
+from farna.core.agent_event_evidence import parse_step_finish_evidence
+from farna.core.capability_scope import filter_run_context_scope
+from farna.core.cost_controller.breakdown.constants import (
+    MAX_REPORTABLE_BAND_USD,
+    MAX_REPORTABLE_USD_MIN,
+)
+from farna.core.cost_controller.breakdown.metrics import record_out_of_band
+from farna.core.cost_controller.breakdown.params import (
+    REPORTED_TOKEN_CHAIN,
+    coerce_reported_token,
+    is_proven_zero_token_usage,
+)
+from farna.core.credential_issuer import (
+    RUN_CREDENTIAL_PROVENANCE_ENV,
+    IssuedRunCredential,
+    default_credential_issuer,
+)
+from farna.core.eval_engine import EvalEngine, EvalResult
+from farna.core.guardrails.loop_intercept import (
+    BRIDGE_ESCALATED_EXIT_CODE,
+    LoopInterceptConfig,
+    parse_bridge_escalation_marker,
+)
+from farna.core.model_class_registry import effective_model_template_value
+from farna.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    DISPATCH_PROVENANCE_FIELDS,
+    SPLITTABLE_NODE_TYPES,
+    resolve_node_contract_output,
+)
+from farna.core.pipeline_engine.ancestor_refs import collect_injected_refs
+from farna.core.pipeline_engine.decorator import cancellable_node
+from farna.core.pipeline_engine.error_codes import (
+    _CODE_CONNECTOR_FAILED,
+    _CODE_CONNECTOR_UNKNOWN,
+    _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+    sanitize_error_text,
+)
+from farna.core.pipeline_engine.errors import NodeMissingModelBackendError, RouterNoMatchError
+from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO, run_evals_persist_before_decide
+from farna.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from farna.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
+from farna.core.pipeline_engine.idempotency import (
+    node_idempotency_key,
+    read_before_write_ambiguous,
+    read_before_write_suppression,
+)
+from farna.core.pipeline_engine.input_truncation import truncate_input
+from farna.core.pipeline_engine.jmespath_eval import (
+    compile_jmespath,
+    evaluate_jmespath_condition,
+)
+from farna.core.pipeline_engine.llm_judge import (
+    invoke_backend,
+    resolve_model_judge_callable,
+    run_coroutine_sync,
+)
+from farna.core.pipeline_engine.sandbox_errors import (
+    SandboxNodeFailedError as SandboxNodeFailedError,  # noqa: PLC0414 - explicit re-export
+)
+from farna.core.pipeline_engine.sandbox_errors import (
+    SandboxTierRefusedError as SandboxTierRefusedError,  # noqa: PLC0414 - explicit re-export
+)
+from farna.core.pipeline_engine.sandbox_mode import (
+    _validate_sandbox_mode_config,
+    sandbox_jinja_environment,
+)
+from farna.core.provenance import (
+    DISPATCH_DATUM_PROVENANCE,
+    PROVENANCE_ATTESTED,
+    PROVENANCE_KEY,
+    PROVENANCE_REPORTED,
+    WITNESSED_VIA_KEY,
+)
+from farna.core.run_context.autonomy import (
+    AutonomyResolution,
+    is_autonomy_gating_enabled,
+    read_live_earned_autonomy,
+    resolve_autonomy,
+    should_notify_on_complete,
+    should_skip_hitl_review,
+)
+from farna.core.run_context.autonomy_telemetry import (
+    emit_autonomy_clamp_telemetry,
+    emit_autonomy_telemetry,
+)
+from farna.core.schema_registry.contract import write_schema_contract
+from farna.core.schema_registry.rendering import SchemaProfile, render_for_profile
+from farna.db.crud.hitl_review_config import human_only_effective
+from farna.db.lifecycle_refs import (
+    _SOURCE_RANK,
+    WORK_ITEM_REFS_KEY,
+    notify_refs_event,
+    validate_ref_entry,
+)
+from farna.db.rls import set_rls_execution_context, set_rls_org
+from farna.settings import get_settings, work_item_refs_cap
+
+_log = logging.getLogger(__name__)
+
+# FAR-794 slice 2b: node INPUT injection — when a node's ``input_schema_json``
+# declares the ``work_item_refs`` INPUT property, the run's create-time refs
+# are injected READ-ONLY at node start (a prompt template can bind
+# ``{{ work_item_refs }}``). This is a declare-and-opt-in channel, parallel to
+# ``output_schema_json``; the declaration lives on the NODE definition (and
+# the snapshot), not on user input, so caller input can never switch an
+# undeclared node onto this injection path.
+_WORK_ITEM_REFS_INPUT_PROP = "work_item_refs"
+_WORK_ITEM_REFS_INPUT_PROPS = {"work_item_refs", WORK_ITEM_REFS_KEY}
+
+# Same unified cap as the self-report normalisation + finalise merge
+# (FAR-794 slice 2b ONE cap). Drop order is the deterministic rank map.
+_NODE_INPUT_REFS_CAP_DROPPED = "refs_cap_dropped"
+
+
+def _node_declares_work_item_refs(node_def: dict[str, Any]) -> bool:
+    """True when the node's ``input_schema_json`` declares work-item refs.
+
+    Accepts EITHER the reserved carrier key (``_work_item_refs``, slice 2a)
+    or the clean template alias ``work_item_refs`` — both feed the same
+    injected ``work_item_refs`` template variable.
+    """
+    schema_json = node_def.get("input_schema_json")
+    if not isinstance(schema_json, dict):
+        return False
+    properties = schema_json.get("properties")
+    return isinstance(properties, dict) and bool(_WORK_ITEM_REFS_INPUT_PROPS & set(properties))
+
+
+def _validate_node_input_ref_entries(raw: list[Any], node_id: str) -> tuple[list[dict[str, Any]], int]:
+    """Validate each create-time ref entry, fail-open (FAR-795).
+
+    Returns ``(validated, malformed)``. A read or validation failure degrades
+    to fewer/empty validated refs with a warning log (capped at 3) plus a
+    counter event surfaced by the caller.
+    """
+    validated: list[dict[str, Any]] = []
+    malformed = 0
+    for i, entry in enumerate(raw):
+        try:
+            validated.append(validate_ref_entry(entry))
+        except (ValueError, TypeError) as exc:
+            malformed += 1
+            if malformed <= 3:
+                _log.warning(
+                    "node_work_item_refs.validation_failed",
+                    extra={"node_id": node_id, "index": i, "reason": str(exc)},
+                )
+    return validated, malformed
+
+
+def _validated_node_input_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the VALIDATED, UNCAPPED create-time work-item refs (FAR-795).
+
+    This is the validation half of ``_node_input_work_item_refs`` — same
+    reserved carrier (the create-time ``run_context.input._work_item_refs``
+    key from slice 2a; the alias ``work_item_refs`` is a declaration-level
+    key, not a data carrier), same per-entry canonicalisation, same fail-open
+    guarantees (a read or validation failure degrades to fewer/empty refs
+    with a warning log plus a counter event). NO cap is applied here: the
+    union injection path (``collect_injected_refs``) applies the unified cap
+    over create-time + DAG-ancestor refs, keeping ONE cap over the union —
+    separately capping the supplies could drop a create-time entry that the
+    union cap would have kept.
+    """
+    input_obj = run_context.get("input")
+    validated: list[dict[str, Any]] = []
+    malformed = 0
+    if isinstance(input_obj, dict):
+        raw = input_obj.get(WORK_ITEM_REFS_KEY)
+        if isinstance(raw, list):
+            validated, malformed = _validate_node_input_ref_entries(raw, node_id)
+    if malformed:
+        notify_refs_event("malformed_entry", surface="node_input", node_id=node_id, count=malformed)
+    return validated
+
+
+def _node_input_work_item_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the run's CREATE-TIME work-item refs for node input injection.
+
+    Read-only: the carrier is the create-time ``run_context.input._work_item_refs``
+    key reserved in FAR-794 slice 2a; the entry validator canonicalises each
+    entry, so caller input can never forge a malformed stamp through here.
+    This NEVER raises — a read or validation failure degrades to fewer/empty
+    refs with a warning log plus a counter event. Capped at the unified
+    ``modulo_work_item_refs_cap`` with the deterministic rank-ascending drop
+    order (agent first, then derived, then caller, then array position).
+    """
+    candidates = [(i, entry) for i, entry in enumerate(_validated_node_input_refs(node_id, run_context))]
+    cap = work_item_refs_cap()
+    ranked = sorted(
+        range(len(candidates)),
+        key=lambda j: (
+            _SOURCE_RANK.get(str(candidates[j][1].get("source")), 0),
+            candidates[j][0],
+        ),
+    )
+    for j in ranked[: max(len(candidates) - cap, 0)]:
+        notify_refs_event(
+            _NODE_INPUT_REFS_CAP_DROPPED,
+            node_id=node_id,
+            kind=str(candidates[j][1].get("kind")),
+            ref=str(candidates[j][1].get("ref")),
+        )
+    kept_positions = sorted(ranked[len(candidates) - cap :]) if cap else []
+    return [candidates[j][1] for j in kept_positions]
+
+
+# Artifact statuses that mark an attempt as completed-AND-committed: a
+# successful node artifact carries ``completed``; stub/side-effecting nodes
+# without a model backend carry ``executed``. Everything else (``skipped``,
+# ``failed``, ``blocked``, ``interrupted``, ``awaiting_human``) contributes
+# nothing to the ancestor injection supply.
+_COMPLETED_EMISSION_STATUSES = frozenset({"completed", "executed"})
+
+# Module-level counter event for the ancestor-assembly failure path. Written
+# through ``notify_refs_event`` (the refs telemetry channel) — NEVER into
+# ``outputs_json`` / ``node_telemetry_json`` (the Agent Return Contract
+# columns a failure marker would wedge (FAR-188 rule 2)).
+_ANCESTOR_REFS_ASSEMBLY_FAILED = "ancestor_refs_assembly_failed"
+
+
+def _fold_ancestor_emission_refs(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Fold per-node work-item ref emissions out of accumulated run artifacts.
+
+    ``state["artifacts"]`` holds ONE entry per completed attempt — a reject or
+    correction re-run appends another entry under the SAME node_id — so the
+    fold over the accumulated entries is a UNION per node (the per-node dedupe
+    then happens downstream in the collector's (kind, ref) identity map,
+    meaning retried ancestors add nothing duplicate). Only completion statuses
+    contribute; a skipped / not-executed node has no matching artifact entry
+    and is simply absent as a key. Fail-open: malformed entries are skipped
+    outright, never raised.
+    """
+    completed_node_outputs: dict[str, list[dict[str, Any]]] = {}
+    artifacts = state.get("artifacts")
+    if not isinstance(artifacts, list):
+        return completed_node_outputs
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        if artifact.get("status") not in _COMPLETED_EMISSION_STATUSES:
+            continue
+        output = artifact.get("output")
+        if not isinstance(output, dict):
+            continue
+        raw = output.get("work_item_refs")
+        if not isinstance(raw, list):
+            continue
+        emissions = completed_node_outputs.setdefault(str(artifact.get("node_id")), [])
+        for entry in raw:
+            try:
+                emissions.append(validate_ref_entry(entry))
+            except (ValueError, TypeError):
+                continue
+    return completed_node_outputs
+
+
+def _node_ancestor_injected_work_item_refs(
+    node_id: str,
+    run_context: dict[str, Any],
+    state: dict[str, Any],
+    dag_ancestor_ids: frozenset[str] | None,
+) -> list[dict[str, Any]]:
+    """Compute the FULL injected refs set for a declaring node (FAR-795).
+
+    Create-time refs (validated, uncapped) plus the refs emitted by the
+    node's DAG ancestors (folded from the accumulated artifacts), through the
+    pure ``collect_injected_refs`` collector — one unified cap over the union,
+    deduped by (kind, ref). FAIL-OPEN: any unexpected assembly failure
+    degrades to an EMPTY injection (the node declares the refs variable, so an
+    empty list is the safe bound) plus this counter event — the node itself
+    never fails because of the injection. The target node's own id is never
+    in its ancestor set, so its own emissions can never be re-injected.
+    """
+    try:
+        return collect_injected_refs(
+            run_create_time_refs=_validated_node_input_refs(node_id, run_context),
+            dag_ancestor_ids=set(dag_ancestor_ids or ()),
+            completed_node_outputs=_fold_ancestor_emission_refs(state),
+            cap=work_item_refs_cap(),
+        )
+    except Exception:
+        _log.exception(
+            "node_work_item_refs.ancestor_assembly_failed",
+            extra={"node_id": node_id},
+        )
+        notify_refs_event(_ANCESTOR_REFS_ASSEMBLY_FAILED, surface="node_input", node_id=node_id)
+        return []
+
+
+def _normalize_required_team_id(review_id: str, raw: Any) -> str | None:
+    """Validate a HITL gate's ``required_team_id`` and return a canonical UUID
+    string, or None when absent/invalid.
+
+    The executor parses the interrupt payload's ``required_team_id`` with
+    ``uuid.UUID(...)``; an unparseable value would raise there and fail the
+    run. The config normally arrives UUID-typed via ``HitlReviewConfig``
+    validation, but a corrupted snapshot / raw-DB gate config can carry an
+    arbitrary string — normalise here so the executor never sees an invalid
+    value. An invalid value is logged and treated as "no team restriction"
+    (the gate degrades to org-wide) rather than raising.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, uuid.UUID):
+        return str(raw)
+    try:
+        return str(uuid.UUID(str(raw)))
+    except (ValueError, TypeError, AttributeError):
+        _log.warning(
+            "hitl_review.invalid_required_team_id",
+            extra={"review_id": review_id, "required_team_id_raw": str(raw)},
+        )
+        return None
+
+
+class SupersededNodeError(Exception):
+    """The sandbox dispatch marker was denied (claim superseded / not running).
+
+    Raised when the DB-atomic dispatch marker UPDATE matched zero rows — a
+    successor rotated the run's claim token or the run is no longer running, so
+    a sandbox MUST NOT be created. The executor maps this to a terminal
+    ``superseded`` failure (a token-guarded no-op if a successor already owns
+    the run) — never a completed run with zero work.
+    """
+
+
+class ConnectorNodeFailedError(Exception):
+    """Raised after a connector action fails and its typed envelope is built.
+
+    The envelope remains attached to the exception so the executor can persist
+    the observed connector failure after the P5 retry/edge/compensation wrapper
+    has made its decision. ``cause`` preserves the original failure class for
+    retry classification.
+    """
+
+    def __init__(self, *, node_id: str, envelope: dict[str, Any], cause: BaseException) -> None:
+        self.node_id = node_id
+        self.envelope = envelope
+        self.cause = cause
+        super().__init__(str(cause))
+
+
+class ScriptModeError(Exception):
+    """Base for FAR-296 Phase 2 script-mode TERMINAL faults.
+
+    Script mode is exactly-once: once the script PROCESS has started (the
+    fencing lease is claimed), re-dispatching could double-execute a
+    side-effecting script, so every post-claim fault is TERMINAL — the executor
+    must never fenced-reset / retry these. ``SandboxNodeFailedError`` (the
+    retryable sandbox-infra failure) is deliberately NOT a parent — the two
+    retryability classes must be disjoint so the executor's retry machinery can
+    never confuse them.
+    """
+
+
+class ScriptSideEffectUnknownError(ScriptModeError):
+    """The script process was terminated mid-execution with exit undetermined.
+
+    Raised on a timeout / budget / watchdog kill while the process is alive or
+    its exit is undetermined — the side effect may or may not have happened, so
+    this maps to the never-retryable ``script.side_effect_unknown`` code and is
+    treated as needs-human.
+    """
+
+
+class ScriptFailedError(ScriptModeError):
+    """The script-mode sandbox failed after the process started (post-claim).
+
+    Raised for a non-zero exit / missing output AFTER the script process
+    started — maps to the never-retryable ``script.failed`` code. Re-dispatching
+    is forbidden (exactly-once).
+    """
+
+
+class ScriptInvalidOutputError(ScriptModeError):
+    """The script-mode output was invalid after the process started (post-claim).
+
+    Raised for invalid / oversized / unparseable output.json AFTER the script
+    process started — maps to the never-retryable ``script.invalid_output``
+    code. Re-dispatching is forbidden (exactly-once).
+    """
+
+
+class ScriptBudgetKilledError(ScriptModeError):
+    """The script's sandbox was killed by the platform-side resource-cap
+    killer (FAR-296 Phase 3b-3). Post-claim, TERMINAL (never retryable)."""
+
+
+class SandboxRateLimitedError(SandboxNodeFailedError):
+    """E2B rate-limited the sandbox creation (429 / concurrent-sandbox limit).
+
+    Raised for a SINGLE rate-limit event when the retry loop is NOT enabled
+    (the legacy path). Subclassing ``SandboxNodeFailedError`` maps it to the
+    retryable ``sandbox.no_output_json`` family by default; the executor's
+    LEGACY_ALIASES routes ``SandboxRateLimitedError`` to the dedicated
+    retryable ``sandbox.rate_limited`` code.
+    """
+
+
+class SandboxQueueTimeoutError(SandboxNodeFailedError):
+    """E2B rate-limit retry budget exhausted — sandbox queue timed out (FAR-296 Phase 4b).
+
+    Raised when ``AsyncSandbox.create`` exhausts the bounded retry/backoff loop
+    (FAR-296 Phase 4a). The sandbox was NEVER created and the script PROCESS was
+    NEVER started, so this is a PRE-CLAIM failure — retryable. Maps to the
+    distinct ``sandbox.queue_timeout`` code via the executor's LEGACY_ALIASES,
+    separate from the single-event ``sandbox.rate_limited`` code.
+    """
+
+
+class SandboxCapacityExceededError(SandboxNodeFailedError):
+    """Org sandbox concurrency cap reached — dispatch-time capacity gate (FAR-296 Phase 4b).
+
+    Raised BEFORE sandbox provisioning when the org's active sandbox lease
+    count equals or exceeds the configured cap. The sandbox was NEVER created
+    and the script PROCESS was NEVER started, so this is a PRE-CLAIM failure —
+    retryable. Maps to ``capacity.org`` via the executor's LEGACY_ALIASES.
+    """
+
+
+class SandboxBindingResolutionError(SandboxNodeFailedError):
+    """Provision-time per-agent runner-binding resolution failed (FAR-592 D6).
+
+    A bound model backend vanished, decrypted unsuccessfully, or no longer
+    carries the bound source field. RETRYABLE config error: the run fails with
+    the ``sandbox.binding_resolution`` code — the D6 rollback trigger reads
+    that code's rate — so a re-dispatch re-resolves the (possibly reconfigured)
+    binding. The sandbox was NEVER created and the script PROCESS was NEVER
+    started, so re-dispatch is safe.
+    """
+
+
+class DispatchWaitTimeoutError(Exception):
+    """A ``dispatch`` node's ``await_completion`` window expired (FAR-1141).
+
+    Raised when the node fired ``trigger_run`` ONCE and the customer's
+    substrate never reported a TERMINAL run status (``success`` / ``failure`` /
+    ``cancelled`` / ``timed_out``) within ``wait_timeout``. TERMINAL and never
+    retried by design: the external job already exists, so re-running the node
+    would fire a SECOND job on the customer's substrate. Maps to the
+    never-retryable ``dispatch.wait_timeout`` code via the executor's generic
+    catch (``type(exc).__name__``) -> ``LEGACY_ALIASES``.
+
+    Deliberately a plain ``Exception``: it must NOT be a
+    ``SandboxNodeFailedError`` / ``ScriptModeError`` subclass — those families
+    carry retry semantics the executor's transient-failure machinery would act
+    on, and the two retryability classes must stay disjoint.
+    """
+
+
+def _script_budget_killed_message(node_id: str) -> str:
+    """Message for a platform-side budget kill (ScriptBudgetKilledError).
+
+    Covers BOTH kill sources: the resource-cap killer (FAR-296 Phase 3b-3) and
+    the wall-clock spend budget killer (FAR-296 Phase 4a).
+    """
+    return (
+        f"Script-mode sandbox exceeded its budget (resource limits or wall-clock spend) "
+        f"for node '{node_id}' — killed by platform-side runtime killer"
+    )
+
+
+class OutputSchemaValidationError(ValueError):
+    """A node's output failed validation against its output_schema_json.
+
+    Raised by ``_validate_against_schema`` for manual-node resume output and
+    agent-node output. The executor maps this to the domain-specific
+    ``schema_validation_failure`` error code (§8.9 error table — "The output
+    did not match the expected format.") instead of a raw ``ValueError``.
+
+    FAR-902 (D3): the terminal-failure paths (strict repair exhausted / native
+    decode failure, and the lenient required-field violation) must still
+    produce an enforcement record BEFORE the node is terminalized.  The
+    terminal ``outcome`` and the failing ``validation_errors`` are carried on
+    the exception so a caller's ``except`` arm can build and persist that
+    record without changing the ``ValueError`` contract.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        outcome: str | None = None,
+        validation_errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = outcome
+        self.validation_errors = validation_errors or []
+        # Populated by the caller (``_finalize_node_result``) when it builds the
+        # FAR-902 enforcement record for this terminal failure; the persist site
+        # extracts it, writes it, then re-raises this exception unchanged.
+        self.enforcement_record: dict[str, Any] | None = None
+
+
+# Single source of truth for JMESPath guard truthiness — `bool(result)`.
+# Test-pinned in tests/unit/pipeline_engine/test_conditional_transitions.py.
+_is_truthy = bool
+
+# Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
+# while capturing realistic sessions (real runs stream 364KB+; the old 100KB
+# cap made every long run look cut mid-JSON). Consumers can tell stored
+# truncation from a genuine cut via the stdout_length/stderr_length fields.
+_MAX_ARTIFACT_LOG = 512000
+# FAR-792: default cap for a node that opts into ``stdout_retention_mode="full"``
+# without specifying ``stdout_max_bytes``. The "tail" default keeps
+# ``_MAX_ARTIFACT_LOG`` (512KB).
+_FULL_MODE_DEFAULT_MAX_BYTES = 5_000_000
+# FAR-811: org-level hard ceiling key in ``system_config``.  When set, no
+# node's effective stdout/stderr retention cap may exceed it.
+_ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES = "sandbox_stdout_retention_max_bytes"
+_MAX_OTEL_LOG_ATTR = 32768
+_MAX_ERROR_MSG = 500
+
+# FAR-197: bounds for the no-output.json diagnostic message. The raised
+# SandboxNodeFailedError message must survive the executor's terminal-fail
+# surface AFTER retries exhausted — `_sanitize_detail("Sandbox node failed
+# (transient) after retries exhausted: " + msg, limit=5000)` — and the
+# `runs.error_detail` Text column (widened from String(5000) by migration 0199), so every section stays small and
+# the COMBINED message (sections + headers + truncation markers) stays well
+# under 5000 chars. Sections are ordered by diagnostic value: the E2B log
+# tail (the only place the kill reason lives) FIRST, then the captured agent
+# stderr and stdout (agent errors typically sit at the END of stderr), and
+# any raw bytes read back from output.json (the invalid-JSON case) LAST.
+# Section caps are sized so the whole message stays under the sanitizer's
+# hard cap (5000 chars) AND the executor's terminal-fail write surface
+# (`_sanitize_detail(..., limit=5000)`) and the `runs.error_detail`
+# Text column (widened from String(5000) by migration 0199), so the diagnostic is never truncated away.
+_NO_OUTPUT_LOG_TAIL = 1024
+_NO_OUTPUT_STDERR_TAIL = 1536
+_NO_OUTPUT_STDOUT_TAIL = 1024
+_NO_OUTPUT_RAW_SNIPPET = 512
+
+_OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
+# FAR-487: the E2B sandbox LIFETIME must outlast the runner's command timeout.
+# Both used to be set from the same ``sandbox_timeout`` value, so the platform
+# killed the sandbox (``endAt``) at the same instant the runner's command
+# timeout fired. In that race the SDK's command event stream closes first and
+# ``handle.wait()`` resolves a zero-exit CommandResult (no exit event ever
+# arrives — the process died with the sandbox), so the runner took the
+# "completed, exit 0" path and then tried to read /home/user/output.json from
+# a DEAD sandbox: the read raised, ``output_json`` stayed None, and the node
+# failed as "Sandbox agent produced no parseable output.json (exit code 0)" —
+# 15+ production PR-Reviewer runs on 2026-08-29. The grace window makes the
+# runner's OWN timeout path (clean kill + correct stall/timeout
+# classification) win the race deterministically.
+# FAR-489: this MUST be an int. The E2B create API (Go) unmarshals
+# ``NewSandbox.timeout`` into an int32 — a float payload ("360.0") is
+# rejected with HTTP 400 and every sandbox create fails instantly. The
+# int() cast at the create call site is the load-bearing guard; keep both.
+_SANDBOX_LIFETIME_GRACE_S = 120
+_DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
+# FAR-188 (QA round 1): the raw-output retention DB write is bounded to fit
+# inside the node decorator's grace budget (_DECORATOR_GRACE = 5.0s) so a hung
+# DB fails open with a log BEFORE the safety-net timer can convert the
+# retryable SandboxNodeFailedError into a terminal node_timeout.
+_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT = 5.0
+# FAR-228: bounded fenced SELECT for the idempotency gate's guard-A marker read
+# (3s — fail-open to provision normally on a hung DB, never block dispatch).
+_IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
+# FAR-228: best-effort marker persist bounded inside a caught CancelledError
+# (5s — the node is being cancelled, the write must not delay the re-raise).
+_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
+#: FAR-1914 B2: bounded post-cancel grace before the final retention drain.
+#: A ``gh pr create`` line can be flushed by the sandbox process just AFTER the
+#: cancellation lands; one extra look at the log tail after this short wait is
+#: what lets the delivery evidence (``pr_url`` / sentinel) reach the marker.
+#: Deliberately tiny: the node is already cancelled, so this must not delay the
+#: re-raise beyond the existing bounded persist budget.
+_CANCEL_DELIVERY_GRACE_SECONDS = 0.5
+#: FAR-1914: the single log event for a post-cancel retention drain that failed
+#: (on the timeout boundary, while awaited, or after a timed-out wait). Defined
+#: once so the three emitters can never drift apart (SonarCloud S1192).
+_CANCEL_DRAIN_FAILED_EVENT = "sandbox_agent.cancel_retention_drain_failed"
+# FAR-458: the per-connector-per-write ``on_unknown`` modes and default live in
+# ONE place — ``modulo.connectors.base`` (a stdlib-only leaf imported by both
+# the pipeline engine's gate read and the REST connector's config validation)
+# so the mode set can never drift between the two. The default
+# ``DEFAULT_ON_UNKNOWN`` (``"fail_open"``) re-fires the write on ambiguity
+# (possible duplicate, usually recoverable); ``fail_closed`` SUPPRESSES it
+# (possible silent miss; the operator reconciles); ``off`` bypasses the gate
+# entirely. A CONFIRMED-delivered write (delivery_done + matching key) is
+# ALWAYS suppressed regardless of the mode (that is the point of dedup).
+_SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
+# Max seconds of agent OUTPUT silence before treating the command as stalled
+# (FAR-97). Raised 300 -> 600 by FAR-1088: the probe-success heartbeat touch
+# that used to refresh liveness every ~5s is now on its own `connection`
+# channel, so the bound is a genuine output-silence window; 600s sits at 2.2x
+# the measured max inter-output gap across Branch Fixer runs (268.8s). Must
+# stay comfortably below the node `timeout_seconds` cap (3300s).
+#
+# FAR-1088 scope: this window is a KILL bound only for STREAMING nodes
+# (``sandbox_mode != "script"``) — the 600s figure was measured on
+# LLM-agent runs, whose output is expected to stream. A script-mode node
+# keeps ``connection`` in ``last_activity()`` unconditionally (see
+# ``_StallDetector.expect_streaming``), so for a healthy-but-quiet script
+# (docker pull, pnpm/uv install, buffered builds/tests redirecting stdout to
+# agent.log) the effective bound is the node's own total ``timeout_seconds``;
+# this window applies to script mode only once the probes themselves die —
+# never as a false-stall kill of a legitimately silent buffered child.
+_SANDBOX_IDLE_TIMEOUT = 600.0
+_STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
+# FAR-97 pipe-buffer fix: the agent command's stdout/stderr are redirected to a
+# log file inside the sandbox so the process can never block on a full stdout
+# pipe (a long session emitting >64KB before completion would otherwise stall on
+# write). A periodic drain probe reads that file: GROWTH of the file feeds the
+# idle watchdog's output-liveness channel (the `output`/`heartbeat` channels),
+# while the probe's mere SUCCESS — a sandbox-CONNECTION signal, not agent
+# output — feeds only the separate `connection` channel (FAR-1088), so a
+# healthy connection can never mask output silence again.
+_SANDBOX_LOG_PATH = "/home/user/agent.log"
+
+
+def _wrap_sandbox_command_with_log_redirect(wrapped_cmd: str, log_path: str) -> str:
+    """Group the sandbox command in a subshell and redirect all output to log_path.
+
+    Newline-safe (FAR-651): the opening paren and closing paren each sit on
+    their OWN line. An inline wrap (`( {cmd} ) > log`) appends ` ) > log` to
+    the command's final line — which breaks any command whose final line must
+    stand alone, notably a heredoc terminator without a trailing newline
+    (`PYFAR647 ) > log` never matches the bare delimiter → unterminated
+    heredoc → bash exit 2 → the agent never runs). A command that already
+    ends with a newline just gains a harmless blank line before the paren.
+    """
+    return f"(\n{wrapped_cmd}\n) > {log_path} 2>&1"
+
+
+_SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
+_SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
+# FAR-296 Phase 3b-3: platform-side resource-cap killer cadence. The killer
+# polls sandbox.get_metrics() once every N _tick invocations; _tick runs every
+# _SANDBOX_TAIL_INTERVAL (5s), so 6 ticks = a 30s poll cadence.
+_SANDBOX_BUDGET_POLL_INTERVAL_TICKS = 6
+# Bounds for the killer's get_metrics / kill calls (never let the SDK hang a
+# tick forever; the shield keeps SDK internal tasks alive).
+_SANDBOX_METRICS_POLL_TIMEOUT = 10.0
+_SANDBOX_KILL_TIMEOUT = 15.0
+# FAR-212 PR B: per-host DNS resolution bound for the selected-mode egress
+# allowlist (the iptables rules bind concrete IPs, never DNS names).
+_SANDBOX_EGRESS_RESOLVE_TIMEOUT = 5.0
+
+# FAR-510: the summary stamped on the sandbox_agent synthetic failure
+# envelopes (the generic-exception path and the schema-validation path RETURN
+# a failed envelope instead of raising). Kept as the human-readable failure
+# detail — the executor's downgrade predicate keys on the machine marker
+# below, never on this text. Single source of truth so runner and executor
+# cannot drift.
+SANDBOX_AGENT_FAILED_SUMMARY = "Sandbox agent execution failed"
+
+# FAR-510: machine marker stamped on BOTH sandbox_agent synthetic failure
+# envelopes (generic-exception + schema-validation). The executor's
+# finalize-time downgrade predicate requires ``status == "failed"`` AND this
+# field True — marker-based, so an agent-authored failure shape (which never
+# carries the runner's internal marker) can never collide. Single source of
+# truth so runner and executor cannot drift.
+MODULO_SYNTHETIC_FAILURE_MARKER = "modulo_synthetic_failure"
+
+
+def _bridge_escalation_failure_detail(exit_code: int, stdout_raw: str) -> str | None:
+    """Failure detail for a loop stopped by an in-loop escalation (FAR-1694 S2).
+
+    The sandbox bridge client refuses an ``escalate``-verdict call, prints a
+    ``MODULO_BRIDGE_ESCALATED:<json>`` marker and exits with
+    ``BRIDGE_ESCALATED_EXIT_CODE``. Returns a summary-only descriptor of the
+    escalation (tool / guardrail / reason — never raw args), or ``None`` when
+    the run was not stopped by an escalation. The mid-loop suspension that turns
+    this into ``interrupt()``/``awaiting_human`` is a later FAR-1694 slice; here
+    it only explains the failure.
+
+    UNTRUSTED CHANNEL (FAR-1694 S2 security note): both *exit_code* and the
+    marker inside *stdout_raw* come from the wrapped agent's process, which can
+    forge them. This helper therefore produces a human-readable failure
+    EXPLANATION only — it must never gate a control decision. S3 must
+    authenticate the escalation channel (a host-recorded decision the agent
+    cannot write) before turning it into ``interrupt()``/``awaiting_human``.
+    """
+    if exit_code != BRIDGE_ESCALATED_EXIT_CODE:
+        return None
+    escalation = parse_bridge_escalation_marker(stdout_raw)
+    if escalation is None:
+        return None
+    return f"Agent loop escalation requested — human decision required ({escalation.describe()})"
+
+
+async def _resolve_egress_allowlist(
+    egress_allowlist: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Pre-resolve selected-mode egress allowlist hostnames to IPv4 addresses.
+
+    iptables rules can only match numeric addresses, not DNS names, so node_runner
+    resolves each allowlisted host before the policy step builds the rules. The
+    resolution is BEST-EFFORT and FAIL-CLOSED: a host that cannot be resolved is
+    simply left without a ``_resolved_ip`` key, and the resulting iptables rule
+    for it falls through to the raw hostname (which iptables cannot match, so the
+    host stays denied). Combined with the ``allow_internet_access=False`` sandbox
+    flag, an unresolved host is unreachable — never accidentally opened. Hosts
+    that are already numeric are passed through untouched. Entries carry the
+    resolved address under ``_resolved_ip`` (never a secret — just a public IP).
+    """
+    if not egress_allowlist:
+        return egress_allowlist
+
+    async def _resolve_one(entry: dict[str, Any]) -> dict[str, Any]:
+        host = entry.get("host")
+        if not isinstance(host, str) or not host:
+            return entry
+        if _re.match(r"^[\d.]+$", host) or ":" in host:
+            return entry
+        try:
+            infos = await asyncio.wait_for(
+                asyncio.to_thread(
+                    socket.getaddrinfo,
+                    host,
+                    None,
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                ),
+                timeout=_SANDBOX_EGRESS_RESOLVE_TIMEOUT,
+            )
+        except Exception:
+            # Unresolvable host -> no rule -> host stays denied (fail-closed).
+            return entry
+        if infos:
+            ip = infos[0][4][0]
+            return {**entry, "_resolved_ip": ip}
+        return entry
+
+    return [await _resolve_one(e) for e in egress_allowlist]
+
+
+# FAR-296 Phase 4a: E2B concurrent-sandbox rate-limit (429 / resource exhausted)
+# retry. ``AsyncSandbox.create`` can be rate-limited by the E2B provisioner; a
+# 429 is TRANSIENT. Retry with exponential backoff, bounded by the create-timeout
+# window and the node timeout. Exhausting the retries fails RETRYABLY
+# (sandbox.rate_limited) — never the permanent ``harness.unknown`` fallback.
+_SANDBOX_RATE_LIMIT_MAX_RETRIES = 3
+_SANDBOX_RATE_LIMIT_BASE_BACKOFF_S = 5
+
+# FAR-766 module-level fallbacks. The runtime values are read at call time from
+# settings so tests can patch them without a full settings round-trip; a settings
+# read/parse failure falls back to these defaults (fail-open in the FAILED-
+# direction of a too-tight bound, never an unbounded provisioning hang).
+_SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S = 90.0
+_SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S = 30.0
+
+
+def _sandbox_provisioning_timeout() -> float:
+    """FAR-766: the pre-sandbox-create provisioning watchdog bound (seconds).
+
+    Bound the phase from the ``dispatching`` dispatch marker to a created
+    sandbox so a stuck ``AsyncSandbox.create`` fails the node RETRYABLY within
+    this window instead of riding the 35-min ``dispatcher_reconcile`` nodeless
+    sweep. Read at call time (patchable); a settings error falls back to the
+    safe default.
+    """
+    try:
+        from farna.settings import get_settings
+
+        return float(get_settings().sandbox_provisioning_timeout_seconds)
+    except Exception:
+        return _SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S
+
+
+def _sandbox_binding_resolve_timeout() -> float:
+    """FAR-766: bound for ``resolve_agent_bindings`` at provision time (seconds).
+
+    Previously unbounded — a hard secrets-backend / DB stall also rode to the
+    node timeout. A timeout classifies as a retryable binding resolution
+    failure (never the terminal ``harness.unknown`` path).
+    """
+    try:
+        from farna.settings import get_settings
+
+        return float(get_settings().sandbox_binding_resolve_timeout_seconds)
+    except Exception:
+        return _SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S
+
+
+# The raw returned value is a non-metric Python number (int/float, not bool).
+def _is_real_number(value: Any) -> TypeGuard[int | float]:
+    """True when *value* is a usable numeric metric (int/float, never bool).
+
+    Guards the resource-cap killer against non-numeric / missing metric
+    fields (an SDK or mock that reports None or an absent attribute must not
+    be treated as an exceeded cap).
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+# D3 drain-probe bound: the E2B files API has NO offset/range read (only
+# path/format/user/timeout), so every drain re-transfers the whole log — O(n)
+# per tick, O(n^2) total on a long agent run. Bounding the retained/processed
+# window to the last _MAX_DRAIN_WINDOW bytes keeps per-tick memory + slicing
+# constant (and matches the artifact cap, so nothing is lost that would have
+# survived the artifact truncation anyway). Absolute file offsets (from
+# get_info size) drive the new-bytes slice, so window truncation can neither
+# lose nor double-emit — the emitted chunk is always a suffix of the file.
+_MAX_DRAIN_WINDOW = _MAX_ARTIFACT_LOG
+
+# The raw_reported display clamp for the node-output surface: the RAW value
+# rides for audit, the SEPARATE clamped display field is what the UI/money
+# formatter renders.
+_NODE_OUTPUT_DISPLAY_CLAMP = 1e6
+
+
+def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
+    """Return the shared fail-open attempt-key discriminator.
+
+    The DB-atomic dispatch path derives the attempt key from ``runs.claim_count``;
+    the fail-open path derives the discriminator from the claim token instead.
+    Keep this compatibility wrapper in the core layer while the canonical
+    derivation lives with the run-node-output persistence code.
+    """
+    from farna.db.crud.run_node_outputs import claim_token_attempt_suffix
+
+    return claim_token_attempt_suffix(claim_lease)
+
+
+def _effective_self_reported_cap() -> float:
+    """The per-node clamp ceiling (Settings knob, min-capped at the column cap).
+
+    The sandbox-agent cost reader uses the CONSTANTS default via this name;
+    the backend node_runner clamp is AUTHORITATIVE — the executor re-applies
+    the Settings-knob clamp (effective value min-capped at the column cap) when
+    it extracts ``model_cost_usd`` from the node output, so an upstream
+    default drift can never bypass the knob.
+    """
+    try:
+        from farna.settings import get_settings
+
+        return float(get_settings().effective_max_self_reported_usd)
+    except Exception:
+        _log.debug("sandbox_cost.self_reported_cap_lookup_failed; using default", exc_info=True)
+        from farna.core.cost_controller.breakdown.constants import MAX_SELF_REPORTED_USD
+
+        return float(MAX_SELF_REPORTED_USD)
+
+
+def _extract_reported_cost(
+    output_json: Any,
+    *,
+    max_reportable_usd_min: float | None = None,
+    max_reportable_band_usd: float | None = None,
+    per_node_cap: float | None = None,
+) -> tuple[float, float, bool, bool] | None:
+    """Tri-state + BAND extraction — the SINGLE extraction authority.
+
+    Returns ``(raw, clamped, was_clamped, out_of_band_high)`` for a POSITIVE
+    finite numeric ``model_cost_usd`` (> 0), OR — FAR-653 — for an EXACT ZERO
+    that the producer PROVES is a genuine zero. ``None`` for absent key,
+    non-dict, non-numeric, NaN/Inf, negative, or bool (bool rejected
+    explicitly). ``None`` => the key is NOT written.
+
+    GENUINE-ZERO RULE (FAR-653): an explicit ``model_cost_usd: 0`` is a REAL
+    report ONLY when the producer proves no token spend — the output's
+    ``token_usage`` dict must carry every mandatory key (``input`` / ``output``
+    / ``total``) present and zero, with every optional cache key, WHEN PRESENT,
+    also zero (``is_proven_zero_token_usage``). An unproven zero (zero cost
+    without the zero-token proof) is NOT a report — the keys stay absent and
+    the ``missing_self_report`` warning applies. A sub-floor NON-ZERO value
+    stays rejected.
+
+    The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
+    producer's pre-clamp value, written by the pipeline-side cost reader),
+    falling back to
+    ``model_cost_usd`` for legacy producers. The flags derive from the TRUE raw.
+
+    CLAMP ORDER (pinned): the value is clamped at the per-node cap
+    (``_effective_self_reported_cap()``, min-capped at the column cap) AND at
+    the BAND CEILING (``MAX_REPORTABLE_BAND_USD`` = 50.0). Because band <
+    per-node cap (50 < 10000), ``min(min(raw, cap), band) == min(min(raw,
+    band), cap)`` — the final value is IDENTICAL regardless of clamp order.
+    ``was_clamped = clamped != raw`` (ANY clamp — band OR per-node);
+    ``out_of_band_high = raw > band``.
+
+    SCHEMA-DRIFT FLAG READ AT THE TOP: the pipeline-emitted ``schema_drift``
+    producer-wire key (the FATAL minimal dict ``{"schema_drift": true}``
+    forwarded by write_output) returns ``None`` (no report) when truthy — a
+    drifted-schema node reports NO cost. The COUNTER INCREMENT does NOT happen
+    here (the provenance gate is evaluated in ``_enrich_union``, PR A2, where
+    the frozen node-type map is in scope).
+    """
+    val_f = _read_reported_cost_raw(output_json)
+    if val_f is None:
+        return None
+    if val_f == 0:
+        # FAR-653 GENUINE-ZERO: an explicit 0 is a REAL report ONLY when the
+        # producer proves no token spend (every mandatory ``token_usage`` key
+        # present and zero; optional cache keys, when present, also zero). An
+        # unproven zero is NOT a report — the keys stay absent and the
+        # missing-self-report warning applies.
+        if not is_proven_zero_token_usage(output_json.get("token_usage")):
+            return None
+        return 0.0, 0.0, False, False
+    floor = float(max_reportable_usd_min) if max_reportable_usd_min is not None else float(MAX_REPORTABLE_USD_MIN)
+    if val_f < floor:
+        return None
+    raw = val_f
+    band = float(max_reportable_band_usd) if max_reportable_band_usd is not None else float(MAX_REPORTABLE_BAND_USD)
+    clamped, out_of_band_high = _clamp_reported_cost(raw, per_node_cap, band)
+    was_clamped = clamped != raw
+    return raw, clamped, was_clamped, out_of_band_high
+
+
+def _read_reported_cost_raw(output_json: Any) -> float | None:
+    """Read the finite, non-negative numeric reported cost, or ``None``.
+
+    The dict / schema-drift / bool / NaN-Inf / negative rejections shared by
+    ``_extract_reported_cost``. The genuine-zero token proof stays in the
+    caller (it needs the whole output dict, not only the numeric value).
+    """
+    if not isinstance(output_json, dict):
+        return None
+    if output_json.get("schema_drift"):
+        return None
+    val = output_json.get("model_cost_raw_usd")
+    if val is None:
+        val = output_json.get("model_cost_usd")
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        val_f = float(val)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(val_f) or val_f < 0:
+        return None
+    return val_f
+
+
+def _clamp_reported_cost(raw: float, per_node_cap: float | None, band: float) -> tuple[float, bool]:
+    """Clamp *raw* at the per-node cap and the band ceiling.
+
+    Returns ``(clamped, out_of_band_high)``; a band-capped value records the
+    out-of-band metric and logs the warning exactly as before.
+    """
+    cap = per_node_cap if per_node_cap is not None else _effective_self_reported_cap()
+    clamped = min(raw, cap)
+    out_of_band_high = False
+    if clamped > band:
+        clamped = band
+        out_of_band_high = True
+        record_out_of_band("cost_out_of_band_high")
+        _log.warning(
+            "cost_components_out_of_band_high",
+            extra={"direction": "cost_out_of_band_high", "raw": raw, "clamped": clamped},
+        )
+    return clamped, out_of_band_high
+
+
+#: Producer output.json ``token_usage`` key -> node-output field. The producer
+#: contract (FAR-491) pins ``token_usage: {input, output, total, cache_read?,
+#: cache_write?}`` — producer semantics are ``total = input + output`` and the
+#: cache keys appear only when the sandbox's opencode.db exposes the columns.
+#: DERIVED from the shared ``REPORTED_TOKEN_CHAIN`` (FAR-532 wave-2) so the
+#: producer -> ``model_tokens_*`` -> ``reported_*`` -> counter chain cannot
+#: drift between layers; reading order is (src, dst) — SOURCE first,
+#: DESTINATION second — matching finalize's ``_REPORTED_TOKEN_FIELD_MAP``.
+_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
+    (binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN
+)
+
+
+def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
+    """Build the node-output agent-reported token-usage fields (FAR-491).
+
+    Reads ``token_usage`` from the sandbox agent's output.json (the same
+    ``cost_source`` the self-reported cost extraction reads) and extracts
+    ``model_tokens_input`` / ``model_tokens_output`` / ``model_tokens_total``
+    / ``model_tokens_cache_read`` / ``model_tokens_cache_write``. A truthy
+    producer ``schema_drift`` flag returns ``{}`` (no report) — a
+    drifted-schema node reports NO tokens, mirroring
+    ``_extract_reported_cost``. Tri-state per key via the SHARED
+    ``coerce_reported_token`` predicate (FAR-532 wave-2 — the same rule
+    finalize's fold and the telemetry accumulation apply): absent /
+    non-numeric / bool / negative / above the plausibility ceiling → the key
+    is OMITTED (never a ``0`` or ``null`` placeholder — mirrors
+    ``_build_model_cost_fields``); an INTEGRAL float (``1234.0``) is
+    tolerated and normalised to ``int`` (the cost extractor's finite-numeric
+    tolerance pattern), a non-integral float stays invalid. A valid ``0``
+    report is a real report and IS written. These fields are DISPLAY-ONLY:
+    they feed ``node_telemetry_json`` and the union's ``reported_*``
+    analytics fields, never an input to the system's built-in money math
+    (operator-defined formulas may reference them).
+    """
+    if not isinstance(output_json, dict):
+        return {}
+    if output_json.get("schema_drift"):
+        return {}
+    usage = output_json.get("token_usage")
+    if not isinstance(usage, dict):
+        return {}
+    fields: dict[str, Any] = {}
+    for usage_key, field_name in _TOKEN_USAGE_FIELD_MAP:
+        coerced = coerce_reported_token(usage.get(usage_key))
+        if coerced is None:
+            continue
+        fields[field_name] = coerced
+    return fields
+
+
+#: FAR-1994: provenance class of token counters recovered from a retained
+#: agent raw-output stream. The numbers are parsed from the AGENT'S OWN
+#: opencode event stream — agent-reported, never server-measured — so they
+#: ride the existing ``reported_*`` union family (FAR-491) and are never
+#: written into the canonical server-measured counters.
+RECOVERED_TOKEN_USAGE_PROVENANCE: str = PROVENANCE_REPORTED
+
+#: FAR-1994: attribute under which a raised ``SandboxNodeFailedError`` carries
+#: the recovered producer-shape ``token_usage``. ``sandbox_errors`` owns the
+#: exception type, so the attribute is attached at the raise site with
+#: ``setattr`` and read with ``getattr`` — the shared exception module is not
+#: modified.
+RECOVERED_TOKEN_USAGE_ATTR: str = "recovered_token_usage"
+
+
+def _recover_token_usage_from_raw_output(raw_output: str | None) -> dict[str, int]:
+    """Sum opencode ``step_finish`` token counters from a retained raw stream.
+
+    FAR-1994: a ``sandbox_agent`` node that produces no parseable ``output.json``
+    still burns tokens — the opencode CLI emits one JSONL ``step_finish`` event
+    per model step, each carrying a ``tokens`` object — but the node output that
+    normally carries ``token_usage`` never exists, so the run records zero.
+    The retained raw output (up to the node's retention cap) holds those events;
+    this recovers them.
+
+    FAR-1914 M2: the parse itself lives in the langgraph-free leaf
+    :func:`modulo.core.agent_event_evidence.parse_step_finish_evidence` — ONE
+    implementation shared with the cost finalizer (which is reachable from the
+    API and must not import this module). The shipped CLI nests both ``tokens``
+    and ``cost`` under ``part``; the leaf reads that shape only.
+
+    Returns the PRODUCER ``token_usage`` shape
+    ``{"input", "output", "total", "cache_read"?, "cache_write"?}`` — the same
+    shape ``_build_token_usage_fields`` extracts — with every key SUMMED across
+    every ``step_finish`` event present in the blob. ``cache_*`` keys appear
+    only when the event stream carried a ``tokens.cache`` object.
+
+    Agent-reported, not server-measured: callers route the result through the
+    ``reported_*`` family (see :func:`recovered_reported_token_usage`).
+
+    BOUNDED and fail-open: one linear pass, line by line; non-JSON lines, other
+    event types, and invalid counters are skipped; ANY failure degrades to
+    ``{}`` — this never raises and never changes the failure semantics of the
+    run. An EMPTY dict means "no step_finish event found", which is distinct
+    from a genuine zero report (a present event with zero counters).
+    """
+    tokens, _cost = parse_step_finish_evidence(raw_output)
+    return tokens
+
+
+def _attach_recovered_token_usage(exc: BaseException, raw_output: str | None) -> None:
+    """Attach any recovered ``token_usage`` to *exc* for the executor to fold.
+
+    Fail-open: no event (or a parse failure) attaches nothing, leaving the
+    exception exactly as it was raised.
+    """
+    recovered = _recover_token_usage_from_raw_output(raw_output)
+    if recovered:
+        setattr(exc, RECOVERED_TOKEN_USAGE_ATTR, recovered)
+
+
+def recovered_reported_token_usage(exc: BaseException) -> dict[str, int]:
+    """The AGENT-REPORTED union token keys recovered for *exc*, or ``{}``.
+
+    Maps the recovered producer shape onto the existing ``reported_*`` union
+    family via the shared ``REPORTED_TOKEN_CHAIN`` — the SAME chain the
+    producer -> ``model_tokens_*`` -> ``reported_*`` -> counter path uses — so
+    the recovered figures are marked as agent-reported by construction and can
+    never be mistaken for server-measured counters.
+
+    Returns ``{}`` for any exception that carries no recovered usage (the
+    common case) or an unusable one; never raises.
+    """
+    recovered = getattr(exc, RECOVERED_TOKEN_USAGE_ATTR, None)
+    if not isinstance(recovered, dict) or not recovered:
+        return {}
+    fields = _build_token_usage_fields({"token_usage": recovered})
+    return {
+        binding.union_key: fields[binding.node_field]
+        for binding in REPORTED_TOKEN_CHAIN
+        if binding.node_field in fields
+    }
+
+
+def merge_recovered_token_usage(node_token_usage: dict[str, Any] | None, exc: BaseException) -> dict[str, Any] | None:
+    """Fold *exc*'s recovered agent-reported tokens into a run accumulator.
+
+    Returns ``node_token_usage`` unchanged when nothing was recovered (or the
+    exception carries no node id), otherwise a NEW mapping whose entry for the
+    failed node carries the recovered ``reported_*`` keys. The caller passes the
+    result to ``finalize_cost``; the reported family is folded into the
+    canonical counters ONLY for a node the server never measured (FAR-1033).
+
+    Never raises.
+    """
+    reported = recovered_reported_token_usage(exc)
+    node_id = getattr(exc, "node_id", None)
+    if not reported or not isinstance(node_id, str) or not node_id:
+        return node_token_usage
+    merged = dict(node_token_usage or {})
+    entry = dict(merged.get(node_id) or {})
+    entry.update(reported)
+    merged[node_id] = entry
+    return merged
+
+
+def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
+    """Build the node-output model-cost fields (audit + display + flags).
+
+    Returns an EMPTY dict when the node carries no report (the keys are ABSENT
+    — an UNPROVEN ``0.0`` is never written as a report). When a report exists
+    the fields are: ``model_cost_usd`` (clamped), ``model_cost_raw_usd``
+    (pre-clamp, for audit), ``model_cost_display_usd`` (clamped-at-1e6 — the
+    UI/money formatter renders THIS field, so the raw value never reaches the
+    money path), ``model_cost_clamped`` and ``model_cost_out_of_band_high``
+    (BOTH written UNCONDITIONALLY — true/false explicitly, derived from the
+    TRUE raw so a legacy or hostile marker already on the node output can
+    never survive). FAR-653: a PROVEN genuine zero IS a report — the fields
+    are written with ``0.0`` / ``False`` values.
+    """
+    extracted = _extract_reported_cost(output_json)
+    if extracted is None:
+        return {}
+    raw, clamped, was_clamped, out_of_band_high = extracted
+    display = min(clamped, _NODE_OUTPUT_DISPLAY_CLAMP)
+    return {
+        "model_cost_usd": clamped,
+        "model_cost_raw_usd": raw,
+        "model_cost_display_usd": display,
+        "model_cost_clamped": was_clamped,
+        "model_cost_out_of_band_high": out_of_band_high,
+    }
+
+
+# Per-run agent runtime cost: E2B sandbox hourly rate (USD) used to estimate
+# sandbox_agent node cost from wall-clock time. E2B bills per-second sandbox
+# uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
+# Default reflects the dashboard-confirmed opencode template = 2 vCPU / 2 GiB
+# at E2B per-second rates (~$0.133/hr). Operators can override via
+# E2B_SANDBOX_USD_PER_HOUR. This fallback only applies when settings
+# cannot be imported; keep it in sync with settings.py's
+# `e2b_sandbox_usd_per_hour` default.
+_E2B_SANDBOX_USD_PER_HOUR = 0.13
+try:
+    from farna.settings import get_settings
+
+    _E2B_SANDBOX_USD_PER_HOUR = float(get_settings().e2b_sandbox_usd_per_hour)
+except Exception:
+    _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
+
+
+def _e2b_rate_runtime() -> float:
+    """The E2B hourly rate read at RUNTIME via ``get_settings()`` (§3.3).
+
+    Routing the rate through ``get_settings()`` at RUNTIME (instead of the
+    import-time read) is a REAL code change: an env override of
+    ``E2B_SANDBOX_USD_PER_HOUR`` must move the boundary everywhere — including
+    this legacy fallback path — without a process restart. Falls back to the
+    module default when Settings is unavailable (never raises).
+    """
+    try:
+        from farna.settings import get_settings
+
+        return float(get_settings().e2b_sandbox_usd_per_hour)
+    except Exception:
+        _log.debug("sandbox_cost.e2b_rate_runtime_lookup_failed; using default", exc_info=True)
+        return _E2B_SANDBOX_USD_PER_HOUR
+
+
+def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
+    """Estimate the USD cost of a sandbox_agent dispatch.
+
+    Combines Modulo's own sandbox uptime estimate (wall-clock seconds at the
+    RUNTIME Settings E2B hourly rate) with the agent's self-reported cost
+    estimate (``cost_estimate_usd`` in its structured output contract, written
+    by the agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
+    discarded. Returns a plain JSON-serialisable float.
+    """
+    rate = _e2b_rate_runtime()
+    sandbox_cost = round((elapsed_seconds / 3600.0) * rate, 6)
+    agent_reported_cost = 0.0
+    if isinstance(output_json, dict):
+        try:
+            agent_reported_cost = float(output_json.get("cost_estimate_usd") or 0)
+        except (TypeError, ValueError):
+            agent_reported_cost = 0.0
+        if not math.isfinite(agent_reported_cost):
+            agent_reported_cost = 0.0
+    total = sandbox_cost + agent_reported_cost
+    if not math.isfinite(total):
+        return 0.0
+    return round(total, 6)
+
+
+def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
+    """Build the E2B RuntimeProvider for the sandbox log probe (FAR-1050 R1).
+
+    A dedicated seam so unit tests can substitute a
+    ``FakeRuntimeProvider`` without touching the hub. Returns ``None`` when
+    the provider cannot be constructed (never raises) — the caller maps that
+    to an empty tail, matching the legacy probe's fail-open contract.
+    """
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
+
+    try:
+        provider_hub = RuntimeProviderHub()
+        provider_hub.initialise({"e2b": {"type": "e2b", "api_key": api_key}})
+    except Exception:
+        return None
+    return provider_hub.get("e2b")
+
+
+async def _read_log_tail_via_provider(
+    sandbox_id: str | None,
+    *,
+    max_bytes: int = 6000,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> str:
+    """Read the workspace log tail via the ``read_log_tail`` ABC primitive (FAR-1050 R1).
+
+    The only log-probe path since FAR-1050 R6 retired the legacy urllib
+    helper. Resolves the key through the runtime bridge /
+    ``MODULO_E2B_API_KEY``, then the legacy ``E2B_API_KEY`` env var; empty on
+    no key. Never raises — provider build failure, provider error and fetch
+    failure all yield ``""`` (``CancelledError`` propagates).
+
+    FAR-1051: ``provider_type`` (the run's bound profile's declared type)
+    selects a non-E2B provider through the hub, so a ``kubernetes`` dispatch
+    reads its pod log tail through the same probe; the never-raises contract
+    is unchanged on both arms (an unregistered provider degrades this
+    best-effort probe to ``""`` — the probe is diagnostics, never
+    enforcement).
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's own
+    already-resolved provider. When given (profile arm), it is reused and
+    NEVER closed here; when the seam builds one, it closes it in the
+    ``finally`` below so a probe can never leak a client. The legacy E2B
+    arm ignores it entirely (unchanged).
+    """
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        return ""
+    if not _is_legacy_e2b_route(provider_type):
+        profile_provider: RuntimeProvider | None = None
+        try:
+            profile_provider = (
+                borrowed_provider if borrowed_provider is not None else _build_profile_provider(str(provider_type))
+            )
+            profile_raw = await profile_provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return ""
+        finally:
+            if borrowed_provider is None:
+                await _close_seam_provider(profile_provider)
+        return bytes(profile_raw).decode("utf-8", errors="replace")
+    from farna.core.runtime_config.key_bridge import get_e2b_api_key
+
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+    if not api_key:
+        return ""
+    try:
+        provider = _build_log_tail_provider(api_key)
+        if provider is None:
+            return ""
+        raw = await provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _build_isolation_provider(api_key: str) -> "RuntimeProvider | None":
+    """FAR-1050 R3 isolation: build the E2B RuntimeProvider.
+
+    Sibling seam of :func:`_build_log_tail_provider` — delegates to it so
+    the hub-construction logic exists once, while giving the isolation path
+    its own test-substitutable injection point. Returns ``None`` when the
+    provider cannot be constructed — the caller fails CLOSED (isolation is
+    enforcement-critical), never open.
+    """
+    return _build_log_tail_provider(api_key)
+
+
+async def _apply_isolation_via_provider(
+    sandbox_id: str | None,
+    *,
+    org_id: str | None,
+    run_id: str | None,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+    allowed_hosts: dict[str, str] | None = None,
+    command_timeout: float = 60.0,
+    single_pr_per_run: bool = False,
+    guard_owner: str | None = None,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> str | None:
+    """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
+
+    FAR-1315: returns the one-PR guard's INSTALL STATUS as reported by the
+    provider (``installed``/``pre_planted``/``absent``/``failed``) or ``None``
+    when no guard was armed — the dispatch ``finally`` threads it into
+    ``settle_run_pr_guard`` so a receipt probe against a path no shim ever
+    wrote is UNKNOWN, never "confirmed no create".
+
+    The single enforcement path since FAR-1050 R6 retired the engine-side
+    ``apply_sandbox_policy(sandbox, ...)`` invocation.
+
+    FAR-1051 provider resolution: ``provider_type`` is the run's bound
+    environment profile's declared type. ``None``/``"e2b"`` is the legacy
+    profile-less route and resolves EXACTLY as before (key resolution
+    mirrors the enforcement gate: runtime bridge / ``MODULO_E2B_API_KEY``,
+    then the legacy ``E2B_API_KEY`` env var). Any other declared type
+    resolves through the hub, so a ``kubernetes`` profile reaches the
+    Kubernetes provider — and an unregistered one raises the typed
+    ``ProviderNotConfiguredError`` carrying its remediation env var, never
+    a fallback to E2B or local.
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's own
+    already-resolved provider. On the profile arm it is reused when given
+    (one provider per dispatch, closed by the dispatch's ``finally``); when
+    this seam builds its own, it closes that one in its own ``finally``
+    below — a built provider is never left to GC. The legacy arm ignores
+    the argument entirely (its historical behaviour is untouched).
+
+    Failure semantics at this invocation point:
+      - enforcement-critical step failures propagate UNCHANGED (the same
+        exception the legacy path raises at this spot — parity);
+      - a capability refusal (``ProviderCapabilityUnsupportedError`` — the
+        ABC default on a non-overriding provider) maps to
+        :class:`SandboxTierRefusedError`, carrying the existing TERMINAL
+        named code ``sandbox.tier_refused`` — a deterministic refusal must
+        never retry-loop (ADR 040);
+      - no key / provider build failure / missing sandbox id fail CLOSED as
+        the same tier refusal (isolation is enforcement-critical: never
+        silently skipped), while an unregistered profile provider fails
+        CLOSED as the typed :class:`ProviderNotConfiguredError`.
+
+    FAR-1273: ``single_pr_per_run`` (optional, default ``False`` — existing
+    callers unaffected) rides the TYPED ``IsolationPolicy`` to the E2B
+    provider's ``apply_isolation``, which threads it into
+    ``apply_sandbox_policy`` for the one-PR-per-run ``gh`` guard. The
+    ``IsolationPolicy`` is the SINGLE carrier: the pre-FAR-1273
+    ``workspace_metadata`` sentinel key is deleted, and ``spec`` here carries
+    workspace attribution only.
+
+    FAR-1315: ``guard_owner`` (optional, default ``None`` — the node id at the
+    call site) rides the same carrier into the run ledger, so a SECOND flagged
+    node of the same run is denied a fresh claimable marker and installs a
+    pre-planted refusal instead.
+    """
+    from farna.core.runtime_config.key_bridge import get_e2b_api_key
+    from farna.core.runtime_provider import (
+        IsolationPolicy,
+        ProviderCapabilityUnsupportedError,
+        WorkspaceSpec,
+    )
+
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        raise SandboxTierRefusedError("sandbox isolation requires the dispatch sandbox id")
+    # FAR-1051: tracks a provider THIS call built (profile arm, no borrowed
+    # handle) so its ``finally`` disposes it. ``None`` on the legacy arm and
+    # whenever the dispatch's own provider is borrowed — neither is ever
+    # closed here.
+    _seam_built_provider: RuntimeProvider | None = None
+    if _is_legacy_e2b_route(provider_type):
+        api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+        provider = _build_isolation_provider(api_key) if api_key else None
+        if provider is None:
+            raise SandboxTierRefusedError(
+                "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
+            )
+    elif borrowed_provider is not None:
+        # FAR-1051: reuse the dispatch's already-resolved provider — no hub
+        # build per policy step; the dispatch's finally closes it.
+        provider = borrowed_provider
+    else:
+        # FAR-1051: hub-resolved for the profile's own provider type. The
+        # typed ProviderNotConfiguredError from the hub propagates unchanged;
+        # the resolved provider (when the build succeeds) is closed below.
+        _seam_built_provider = _build_profile_provider(str(provider_type))
+        provider = _seam_built_provider
+    # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
+    # dispatch has no bound profile (unit tests / direct dispatch), so the
+    # missing ids fall back to the nil UUID. E2B's apply_isolation does not
+    # read spec (the controls and the guard flag ride in policy) — slice R4
+    # may tighten this once dispatch moves through create_workspace(spec).
+    spec = WorkspaceSpec(
+        environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
+        organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
+        run_id=_parse_uuid_opt(run_id),
+        egress_policy=egress_policy,
+    )
+    policy = IsolationPolicy(
+        read_only=read_only,
+        git_credentials=git_credentials,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
+        allowed_hosts=allowed_hosts,
+        command_timeout=command_timeout,
+        single_pr_per_run=single_pr_per_run,
+        guard_owner=guard_owner,
+    )
+    try:
+        return await provider.apply_isolation(sandbox_id, spec, policy)
+    except asyncio.CancelledError:
+        raise
+    except ProviderCapabilityUnsupportedError as exc:
+        raise SandboxTierRefusedError(
+            f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}"
+        ) from exc
+    finally:
+        if _seam_built_provider is not None:
+            # FAR-1051 client lifecycle: dispose the per-call provider on
+            # EVERY exit (success, mapped refusal, unexpected failure) —
+            # bounded and best-effort, never masking the result above.
+            await _close_seam_provider(_seam_built_provider)
+
+
+def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
+    """FAR-1050 R2b file I/O: build the E2B RuntimeProvider.
+
+    Sibling seam of :func:`_build_isolation_provider` — delegates to
+    :func:`_build_log_tail_provider` so the hub-construction logic exists
+    once while giving the file-I/O path its own test-substitutable
+    injection point (a test patches THIS name to substitute a fake
+    provider without disturbing the R1/R3 seams). Returns ``None`` when the
+    provider cannot be constructed (never raises) — the caller maps that to
+    a typed failure rather than silently degrading to ``sandbox.files``.
+    """
+    return _build_log_tail_provider(api_key)
+
+
+async def _file_io_provider_for(  # NOSONAR S7503 - async seam, see docstring
+    sandbox_id: str | None,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> "tuple[RuntimeProvider, str]":
+    """Resolve ``(provider, provider_ref)`` for a file call (FAR-1050 R2b).
+
+    Fails CLOSED: a missing/blank dispatch sandbox id, a missing E2B
+    credential, or a provider-construction failure raises
+    :class:`RuntimeProviderError` — there is no legacy ``sandbox.files``
+    handle to fall back to (FAR-1050 R6 deleted it). Key resolution mirrors
+    the R1/R3 helpers (runtime bridge / ``MODULO_E2B_API_KEY``, then the
+    legacy ``E2B_API_KEY`` env var).
+
+    FAR-1051: ``provider_type`` is the run's bound profile's declared type
+    (``None``/``"e2b"`` = the legacy route, unchanged above). Another
+    declared type resolves through the hub, so file I/O reaches that
+    provider; an unregistered one raises the typed
+    ``ProviderNotConfiguredError`` (its remediation env var) — never a
+    fallback to E2B or local.
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's OWN
+    already-resolved provider, threaded in by ``_sandbox_agent_impl`` so a
+    profile-typed file call reuses ONE provider for the whole dispatch
+    instead of building a hub per call. Only consulted on the profile arm
+    (the legacy E2B arm is byte-for-byte unchanged); ownership stays with
+    the caller — a borrowed provider is never closed here.
+
+    Kept ``async`` deliberately (Sonar S7503): it is a provider SEAM — every
+    caller awaits it and tests patch it with an async seam — so converting it
+    to a plain function would ripple through the dispatch/test contract for no
+    behavioural gain. The body itself performs no I/O.
+    """
+    from farna.core.runtime_config.key_bridge import get_e2b_api_key
+    from farna.core.runtime_provider import RuntimeProviderError
+
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        raise RuntimeProviderError("sandbox file I/O requires the dispatch sandbox id")
+    if not _is_legacy_e2b_route(provider_type):
+        if borrowed_provider is not None:
+            return borrowed_provider, sandbox_id
+        return _build_profile_provider(str(provider_type)), sandbox_id
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+    provider = _build_file_io_provider(api_key) if api_key else None
+    if provider is None:
+        raise RuntimeProviderError(
+            "sandbox file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
+        )
+    return provider, sandbox_id
+
+
+@asynccontextmanager
+async def _file_io_provider_session(
+    sandbox_id: str | None,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> AsyncIterator["tuple[RuntimeProvider, str]"]:
+    """Yield ``(provider, ref)`` for ONE file call, disposing what it built.
+
+    FAR-1051 client lifecycle: on a profile-declared route the session either
+    BORROWS the dispatch's already-resolved provider (no hub build; the
+    dispatch's ``finally`` closes it) or builds one per call — in which case
+    THIS scope owns it and closes it on exit, so a per-tick probe can never
+    leak a client. The legacy E2B arm never closes (historical behaviour,
+    unchanged): its per-call key-based provider is owned exactly as before.
+    """
+    provider, ref = await _file_io_provider_for(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    )
+    owns_provider = borrowed_provider is None and not _is_legacy_e2b_route(provider_type)
+    try:
+        yield provider, ref
+    finally:
+        if owns_provider:
+            await _close_seam_provider(provider)
+
+
+async def _write_file_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    content: str,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> None:
+    """ABC write prim (FAR-1050 R2b), replacing ``sandbox.files.write(path, content)``.
+
+    Text is UTF-8 encoded for the bytes-typed ABC primitive (same encoding
+    the SDK applies to the ``str`` the legacy arm passes). The caller keeps
+    its ``asyncio.wait_for`` bound, so the I/O timeout threading is
+    identical on both arms. ``provider_type`` (FAR-1051) selects the
+    profile's provider exactly as :func:`_file_io_provider_for` documents.
+    """
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        await provider.write_file(ref, path, content.encode("utf-8"))
+
+
+async def _read_file_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> str:
+    """ABC read prim (FAR-1050 R2b), replacing ``sandbox.files.read(path, format="text")``.
+
+    Decodes the primitive's bytes the way the SDK's text read does (UTF-8,
+    replacement on undecodable input) so both arms hand downstream code the
+    same ``str`` type and the same length semantics. ``provider_type``
+    (FAR-1051) selects the profile's provider.
+    """
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        data = await provider.read_file(ref, path)
+    return bytes(data).decode("utf-8", errors="replace")
+
+
+async def _get_info_via_provider(
+    sandbox_id: str | None,
+    path: str | None,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> "WorkspaceFileInfo":
+    """ABC stat prim (FAR-1050 R2b), replacing ``sandbox.files.get_info(path)``.
+
+    The returned :class:`WorkspaceFileInfo` carries ``.size``, which is the
+    only field the probe call sites read off the legacy SDK entry too.
+    ``path`` is typed ``str | None`` because the watch-log probe is
+    addressed by an optional node setting; a missing path fails the same
+    way the legacy SDK call would (the probe's ``except Exception`` turns
+    it into a quiet probe failure). ``provider_type`` (FAR-1051) selects
+    the profile's provider exactly as :func:`_file_io_provider_for` documents.
+    """
+    from farna.core.runtime_provider import RuntimeProviderError
+
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        if not isinstance(path, str) or not path:
+            raise RuntimeProviderError("sandbox file I/O stat requires a non-empty path")
+        return await provider.get_info(ref, path)
+
+
+async def _list_fs_entries_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    *,
+    watch_log_path: str | None,
+    watch_globs: list[str],
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> "list[WorkspaceFileInfo]":
+    """ABC list prim (FAR-1050 R2b), replacing the watchdog's ``sandbox.files.list`` probe.
+
+    ``list_files`` yields full child paths only, while the fs tracker reads
+    ``path`` + ``size`` off each row (its stat key is ``(mtime, size)``, and
+    neither the legacy SDK entry nor the ABC model exposes ``mtime`` — the
+    legacy key's mtime component is ``None`` too), so size is resolved per
+    entry through ``get_info``.
+
+    Only rows the tracker would keep are statted: the log-path exclusions
+    and the watch-glob filter run first, so a broad listing costs one stat
+    per *matching* entry instead of one per child. Rows the tracker
+    discards are simply absent from the returned list, which leaves
+    ``seen`` (and the prune that consumes it) identical to the legacy arm.
+    A listing or stat failure propagates to the caller's existing
+    probe-failure handling. ``provider_type`` (FAR-1051) selects the
+    profile's provider; ``borrowed_provider`` threads the dispatch's own
+    provider through the per-call session (see
+    :func:`_file_io_provider_session`).
+    """
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        paths = await provider.list_files(ref, path)
+        entries: list[WorkspaceFileInfo] = []
+        for raw_path in paths:
+            if not isinstance(raw_path, str):
+                continue
+            if raw_path == _SANDBOX_LOG_PATH or (watch_log_path and raw_path == watch_log_path):
+                continue
+            if not _path_matches_any_glob(raw_path, watch_globs):
+                continue
+            entries.append(await provider.get_info(ref, raw_path))
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# FAR-1050 R4 — the dispatch rewire (create / stream / kill)
+# ---------------------------------------------------------------------------
+#
+# The dispatch runs through the RuntimeProvider ABC unconditionally (FAR-1050
+# R6 retired ``MODULO_E2B_VIA_PROVIDER`` and the legacy direct path): create,
+# stream and kill remain ONE atomic sequence — the provider is resolved once,
+# before create, and disposed in the finally block — so a sandbox is never
+# provider-created but legacy-killed (or the reverse).
+
+
+def _is_legacy_e2b_route(provider_type: str | None) -> bool:
+    """True for the legacy / profile-less E2B dispatch route (FAR-1051).
+
+    Every provider seam in this module keeps its EXACT pre-FAR-1051
+    behaviour on this route (key-based E2B resolution, the same refusal
+    messages); only a profile that declares a different ``provider_type``
+    (``kubernetes`` today) takes the hub-resolved arm.
+    """
+    from farna.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+    return not provider_type or provider_type == RUNNER_PROVIDER_E2B
+
+
+@dataclass(frozen=True)
+class _ProfileTypeRef:
+    """Minimal profile view for :meth:`RuntimeProviderHub.resolve` (FAR-1051).
+
+    The hub's deterministic resolution reads only ``provider_hint`` and
+    ``provider_type`` off a profile (ADR 029), so a dispatch seam that knows
+    just the profile's DECLARED type — not the row — passes this instead of
+    re-loading it. Going through ``resolve`` (rather than ``get``) is what
+    keeps the no-silent-fallback guarantee intact: an unregistered known type
+    surfaces as the hub's own :class:`ProviderNotConfiguredError` carrying
+    the remediation env var, and an unrecognised type as
+    :class:`UnknownProviderTypeError`.
+    """
+
+    provider_type: str
+    provider_hint: str | None = None
+
+
+def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
+    """Resolve a profile-declared ``provider_type`` through the hub (FAR-1051).
+
+    No silent fallback: registration is decided by :func:`build_hub`'s
+    matrix, and an unregistered/unrecognised type raises the typed error
+    from :meth:`RuntimeProviderHub.resolve` — never another provider, never
+    ``local``. The hub is per-call (the same shape the Docker route and the
+    E2B arm use); its other registrations hold no external resources until
+    used, so the returned provider is the only handle the dispatch disposes.
+
+    Caller owns the result: every seam that builds through this helper either
+    hands the provider back to the dispatch (which closes it) or closes it
+    itself in a ``finally`` via :func:`_close_seam_provider` — a profile-typed
+    seam must never build a provider it does not dispose (FAR-1051 follow-up).
+    """
+    from farna.core.runtime_provider import build_hub
+
+    return build_hub().resolve(_ProfileTypeRef(provider_type))
+
+
+# Bound for a seam-built provider's close (FAR-1051 client lifecycle): the
+# dispose only releases the client the seam opened (no workspace teardown —
+# a seam-built provider never created one), so it must be quick AND bounded;
+# a hung backend cannot stall the caller's own result.
+_SEAM_PROVIDER_CLOSE_TIMEOUT = 30.0
+
+# Bound for disposing the ROUTE's hub in the dispatch finally (FAR-1051). The
+# hub's registrations beyond the dispatch provider hold no client until used,
+# so this is the ADR 029 bookkeeping pass — bounded + best-effort. Kept
+# distinct from ``_OUTPUT_READ_TIMEOUT`` (a sandbox-output read bound) so the
+# two unrelated concerns cannot drift (reviewer feedback on PR #1277).
+_ROUTE_HUB_CLOSE_TIMEOUT = 30.0
+
+
+async def _close_seam_provider(provider: "RuntimeProvider | None") -> None:
+    """Close a provider a seam built for its own single call (FAR-1051).
+
+    Best-effort per the ABC ``close()`` contract: a failure is logged and
+    never masks the operation whose ``finally`` is running, and a
+    ``CancelledError`` propagates (it is already unwinding). A borrowed
+    provider (the dispatch's own) is NEVER passed here — the dispatch's
+    finally disposes that one.
+    """
+    if provider is None:
+        return
+    try:
+        await asyncio.wait_for(provider.close(), timeout=_SEAM_PROVIDER_CLOSE_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.debug("sandbox_agent.seam_provider_close_failed", exc_info=True)
+
+
+async def _build_dispatch_provider(  # NOSONAR S7503 - async seam, see docstring
+    provider_type: str | None = None,
+) -> "RuntimeProvider | None":
+    """FAR-1050 R4 dispatch: resolve the run's RuntimeProvider.
+
+    Builds a PER-DISPATCH fresh hub through :func:`build_hub` — the same
+    shape the Docker route uses in ``resolve_sandbox_dispatch_route`` — and
+    returns the provider for the run's profile type. The legacy route
+    (``provider_type`` unset / ``"e2b"`` — the profile-less default) returns
+    the hub's registered ``e2b`` provider, or ``None`` when it is not
+    registered (no ``MODULO_E2B_API_KEY`` / runtime override) or the hub
+    cannot be constructed; the caller fails CLOSED with a typed error rather
+    than silently falling back to ``AsyncSandbox.create``.
+
+    FAR-1051: any OTHER declared type resolves through
+    :func:`_build_profile_provider`, which raises the typed
+    ``ProviderNotConfiguredError`` (with the env var that would register it)
+    instead of returning ``None`` — a ``kubernetes`` profile must never fall
+    back to E2B (or to local) when its provider is unregistered.
+
+    Test seam: unit tests substitute a ``FakeRuntimeProvider`` by patching
+    THIS name (the hub is never constructed in that case). The ephemeral
+    hub's other registrations hold no external resources until used, so the
+    returned provider is the only handle the dispatch needs to dispose.
+
+    Kept ``async`` deliberately (Sonar S7503): it is a dispatch SEAM — the
+    create/stream call sites await it and the test bridge patches it with an
+    async seam — so converting it to a plain function would ripple through the
+    dispatch/test contract for no behavioural gain. The body only builds a hub.
+    """
+    if not _is_legacy_e2b_route(provider_type):
+        return _build_profile_provider(str(provider_type))
+    from farna.core.runtime_provider import build_hub
+
+    try:
+        provider_hub = build_hub()
+    except Exception:
+        _log.warning("sandbox_agent.dispatch_hub_build_failed", exc_info=True)
+        return None
+    return provider_hub.get("e2b")
+
+
+def _require_dispatch_provider(provider: "RuntimeProvider | None") -> "RuntimeProvider":
+    """Narrow a resolved dispatch provider, failing CLOSED when it is missing.
+
+    The ``None`` case is already refused at resolution time; this helper keeps
+    that refusal typed AND gives the type-checker a non-Optional handle at the
+    create / stream call sites (a dispatch must never reach them with
+    no provider — there is no direct-path fallback (FAR-1050 R6 deleted it)).
+    """
+    from farna.core.runtime_provider import RuntimeProviderError
+
+    if provider is None:
+        raise RuntimeProviderError(
+            "FAR-1050 dispatch could not resolve the E2B runtime provider "
+            "(set MODULO_E2B_API_KEY and restart) — refusing to provision without a provider"
+        )
+    return provider
+
+
+def _require_dispatch_spec(spec: "WorkspaceSpec | None") -> "WorkspaceSpec":
+    """Narrow the dispatch create spec (built just above the create loop)."""
+    from farna.core.runtime_provider import RuntimeProviderError
+
+    if spec is None:
+        raise RuntimeProviderError("FAR-1050 dispatch create spec was not built before create")
+    return spec
+
+
+def _is_rate_limited_error(exc: BaseException) -> bool:
+    """True when *exc* is (or wraps) a rate-limit failure (FAR-1050 R4 T8).
+
+    The provider's typed :class:`RateLimitedError` matches directly. The E2B
+    provider's ``create_workspace`` wraps every SDK failure in a
+    ``RuntimeError(... from exc)``, so the original ``RateLimitException``
+    travels on ``__cause__`` — walked here so a REAL 429 still enters the
+    existing backoff loop on the dispatch path instead of degrading to a
+    terminal ``harness.unknown`` (retry classification does not move, ADR 040).
+    """
+    from farna.core.runtime_provider import RateLimitedError
+
+    if isinstance(exc, RateLimitedError):
+        return True
+    # Matched by class NAME rather than ``isinstance`` against the SDK type:
+    # node_runner is not a sanctioned ``e2b`` host (ADR 040 T2a conformance,
+    # activated by FAR-1050 R6), so the SDK exception must not be imported
+    # here. The E2B provider wraps every SDK failure in
+    # ``RuntimeError(... from exc)``, so a real 429 travels on ``__cause__``.
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if type(current).__name__ == "RateLimitException":
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
+def _translate_provider_dispatch_error(
+    exc: BaseException,
+) -> SandboxRateLimitedError | SandboxQueueTimeoutError | None:
+    """FAR-1050 R4 T8/T9: map typed provider failures onto the EXISTING taxonomy.
+
+    Additive translation ONLY — no re-parenting (ADR 040): the provider's
+    ``RateLimitedError`` / ``ProvisionTimeoutError`` are not made subclasses
+    of the sandbox taxonomy and the sandbox classes are not made subclasses of
+    the provider family. Instead the dispatch re-raises the pre-existing
+    retryable classes, so the executor's classifier publishes exactly the
+    codes it always did (``sandbox.rate_limited`` /
+    ``sandbox.queue_timeout``) and a rate limit can never surface as
+    ``harness.unknown``. Returns ``None`` when nothing translates, so the
+    caller only ever ``raise``\\ s a concrete sandbox-taxonomy class (never a
+    generic ``BaseException``).
+    """
+    from farna.core.runtime_provider import ProvisionTimeoutError, RateLimitedError
+
+    if isinstance(exc, RateLimitedError):
+        return SandboxRateLimitedError(str(exc)[:_MAX_ERROR_MSG])
+    if isinstance(exc, ProvisionTimeoutError):
+        return SandboxQueueTimeoutError(str(exc)[:_MAX_ERROR_MSG])
+    return None
+
+
+def _dispatch_marker_json(attempt_key: str, provider: str, *, via_provider: bool) -> str:
+    """Dispatch/lease marker JSON carrying the tier AND the provider-routing state.
+
+    The canonical :func:`runner_capacity.build_dispatch_marker` payload accepts
+    the routing state directly (R4 follow-up), so this stays a thin
+    pass-through: ``via_provider`` is stamped so a run can be attributed to
+    provider-mediated execution from the marker alone (ADR 040 "Flag and
+    revert observability"). Marker readers only ever read named keys
+    (``state`` / ``attempt_key`` / ``provider``), so the extra field is
+    tolerated on read — the ADR 040 marker-schema unknown-field rule.
+    """
+    from farna.core.runner_capacity import build_dispatch_marker
+
+    return build_dispatch_marker(attempt_key, provider, via_provider=bool(via_provider))
+
+
+class _ProviderCommands:
+    """``sandbox.commands`` stand-in on the FAR-1050 R4 dispatch path.
+
+    Exposes ONLY the collect-then-return ``run(script, timeout=...)`` shape the
+    duck-typed workspace-input helpers call (T10 ``provision_workspace_inputs_
+    in_sandbox`` and ``detect_workspace_input_drift``), routed through the ABC's
+    ``exec_command``. A non-zero exit RAISES, matching the E2B SDK behaviour
+    those helpers rely on (``commands.run`` raises ``CommandExitException``) —
+    the ABC returns an ``ExecResult`` instead, so without this the helper would
+    silently accept a failed clone.
+    """
+
+    def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
+        self._provider = provider
+        self._provider_ref = provider_ref
+
+    async def run(
+        self,
+        command: str,
+        *,
+        # mirrors the E2B SDK sandbox.commands.run signature the T10 helpers call;
+        # S7483 accepted - this duck-typed stand-in has no timeout context manager.
+        timeout: float | None = None,  # noqa: ASYNC109  # NOSONAR
+        background: bool = False,
+        **_kwargs: Any,
+    ) -> Any:
+        if background:
+            # The streaming start is dispatched through ``exec_command_stream``
+            # at the T3 gate; a background request on this handle is a bug, not
+            # a downgrade path.
+            raise RuntimeError("background command start is dispatched through exec_command_stream (FAR-1050 R4)")
+        result = await self._provider.exec_command(
+            self._provider_ref,
+            # FAR-1470: bash, not sh — ``sh`` on the sandbox image is dash
+            # (no ``pipefail``), which aborted every ``agent_commands`` script
+            # that started with ``set -euo pipefail``. bash is a superset of
+            # sh for the POSIX helper scripts routed through here.
+            ["bash", "-c", command],
+            cmd_timeout=int(timeout) if timeout else None,
+        )
+        if result.exit_code != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"command exited with code {result.exit_code}" + (f": {detail[:500]}" if detail else ""))
+        return result
+
+
+class _ProviderMediatedHandle:
+    """The ABC-mediated sandbox handle the FAR-1050 R4 dispatch holds.
+
+    Presents the subset of the legacy ``AsyncSandbox`` surface the dispatch
+    body and its duck-typed helpers consume, with every method routed through
+    the :class:`RuntimeProvider` ABC:
+
+    - ``sandbox_id`` — the provider ref returned by ``create_workspace``;
+    - ``kill(...)`` — ``destroy_workspace`` (T5 budget + stall kills);
+    - ``commands.run(script, timeout=...)`` — ``exec_command`` (T10 workspace
+      inputs + drift probe);
+    - ``get_metrics()`` — the ABC's ``get_metrics`` primitive (FAR-1050 R6,
+      the ADR 040 metrics-gap close): the resource-cap killer polls it, so
+      ``resource_limits`` are enforced on this path exactly as on the
+      legacy SDK handle when the provider implements the primitive. A
+      provider that does not implement it refuses with the typed
+      ``ProviderCapabilityUnsupportedError``, which the watchdog turns into
+      its explicit, once-per-dispatch
+      ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning —
+      fail open, never a crash.
+
+    Deliberately ABSENT: ``files`` (every file site is gated onto the ABC
+    primitives by FAR-1050 R2b). Touching ``files`` therefore means only
+    one thing: a call site that still expects the deleted legacy surface,
+    which must be loud, never a silent downgrade.
+    """
+
+    def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
+        self._provider = provider
+        self.sandbox_id = provider_ref
+        self.commands = _ProviderCommands(provider, provider_ref)
+
+    @property
+    def files(self) -> Any:
+        raise RuntimeError(
+            "FAR-1050 dispatch handle has no legacy files surface (a legacy-path call site survived R6?)"
+        )
+
+    async def kill(self, **_kwargs: Any) -> None:
+        """T5 kill site: ``destroy_workspace`` on the provider that created it."""
+        await self._provider.destroy_workspace(self.sandbox_id)
+
+    async def get_metrics(self) -> list[WorkspaceMetrics]:
+        """Resource-cap poll site: the ABC's ``get_metrics`` primitive (FAR-1050 R6).
+
+        Addressed by the provider ref this handle wraps — the same
+        ref-first convention as ``kill``/``commands``. Raises the typed
+        ``ProviderCapabilityUnsupportedError`` verbatim when the provider
+        does not implement the primitive (the watchdog fails open on it).
+        """
+        return await self._provider.get_metrics(self.sandbox_id)
+
+
+def _bounded_tail(text: str, limit: int) -> str:
+    """Return the last ``limit`` chars of *text* with a clear truncation marker.
+
+    Empty input yields "" (no marker); a short tail reads verbatim. When cut,
+    a marker line naming how many chars were dropped precedes the retained
+    suffix so consumers can tell truncation from a genuine short tail.
+    """
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"...[truncated {len(text) - limit} chars]...\n{text[-limit:]}"
+
+
+def _classify_no_output_cause(*, read_error: str, read_raw: str) -> str:
+    """Name WHY output.json was unparseable (FAR-487).
+
+    The runner reads AND parses output.json inside ONE try block, so a JSON
+    parse failure surfaces here as a ``JSONDecodeError`` read error with the
+    raw bytes still captured. Classification order: a parse failure of bytes
+    that were read (invalid JSON), a missing-file read error, any other read
+    failure (dead sandbox, network), a successful read whose bytes parse to
+    JSON null. The schema-rejection case is a DIFFERENT code path (validated
+    dicts) and is not classified here. Returns "" when the evidence cannot
+    classify.
+    """
+    if read_error:
+        if "JSONDecodeError" in read_error:
+            return "output.json was written but is NOT valid JSON"
+        if "NotFound" in read_error or "FileNotFound" in read_error:
+            return "output.json was MISSING (the agent never wrote it)"
+        return f"output.json could not be read ({read_error[:200]})"
+    if read_raw:
+        try:
+            parsed = json.loads(read_raw)
+        except (ValueError, TypeError):
+            return "output.json was written but is NOT valid JSON"
+        if parsed is None:
+            return "output.json was JSON null"
+    return ""
+
+
+def _build_no_output_message(
+    *,
+    exit_code: int,
+    stdout_raw: str,
+    stderr_raw: str,
+    sandbox_id: str | None,
+    read_raw: str = "",
+    read_error: str = "",
+    log_tail: str = "",
+) -> str:
+    """Compose the FAR-197 diagnostic for an unparseable/missing output.json.
+
+    A compact, bounded message: a prefix naming the exit code and sandbox id,
+    then a cause line naming WHY the output was unparseable (missing file /
+    unreadable / invalid JSON — FAR-487), then bounded tails ordered by
+    diagnostic value — the best-effort E2B log
+    tail FIRST (the only place the kill reason lives), then the captured agent
+    stderr and stdout (agent errors typically sit at the END of stderr), and
+    any raw bytes read back from output.json (the invalid-JSON case) LAST.
+    Section caps are sized so the whole message stays under the sanitizer's
+    hard cap (5000 chars) AND the executor's terminal-fail write surface
+    (`_sanitize_detail(..., limit=5000)`) and the `runs.error_detail`
+    String(5000) column, so the diagnostic is never truncated away.
+    Downstream error-detail sanitization (``sanitize_error_text``) strips control
+    chars and redacts secrets; this just keeps the WHY visible within the
+    sanitizer's hard cap.
+    """
+    stdout_raw = str(stdout_raw)
+    stderr_raw = str(stderr_raw)
+    read_raw = str(read_raw)
+    log_tail = str(log_tail)
+
+    parts = [f"Sandbox agent produced no parseable output.json (exit code {exit_code})"]
+    cause = _classify_no_output_cause(read_error=read_error, read_raw=read_raw)
+    if cause:
+        parts.append(cause)
+    if isinstance(sandbox_id, str) and sandbox_id:
+        parts.append(f"sandbox id: {sandbox_id}")
+    log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
+    if log_tail_cap:
+        parts.append("--- sandbox log tail ---")
+        parts.append(log_tail_cap)
+    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
+    if stderr_tail:
+        parts.append("--- stderr tail ---")
+        parts.append(stderr_tail)
+    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
+    if stdout_tail:
+        parts.append("--- stdout tail ---")
+        parts.append(stdout_tail)
+    read_snippet = _bounded_tail(read_raw, _NO_OUTPUT_RAW_SNIPPET)
+    if read_snippet:
+        parts.append(f"--- output.json read ({len(read_raw)} chars) ---")
+        parts.append(read_snippet)
+
+    return "\n".join(parts)
+
+
+def _build_schema_failure_message(
+    *,
+    schema_exc: str,
+    sandbox_id: str | None,
+    stdout_raw: str,
+    stderr_raw: str,
+    log_tail: str = "",
+) -> str:
+    """Compose the FAR-780 diagnostic for an output that failed schema validation.
+
+    Mirrors ``_build_no_output_message``'s bounded-tail shape so the raised
+    retryable ``SandboxNodeFailedError`` keeps the schema-rejection reason
+    (which names the rejected field — FAR-487) plus the captured agent
+    stdout/stderr and the E2B log tail visible in the executor's error-detail
+    surface (the message stays under the sanitizer's 5000-char hard cap).
+    """
+    schema_exc = str(schema_exc)
+    stdout_raw = str(stdout_raw)
+    stderr_raw = str(stderr_raw)
+    log_tail = str(log_tail)
+
+    parts = [f"Sandbox agent output failed declared output schema validation: {schema_exc}"]
+    if isinstance(sandbox_id, str) and sandbox_id:
+        parts.append(f"sandbox id: {sandbox_id}")
+    log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
+    if log_tail_cap:
+        parts.append("--- sandbox log tail ---")
+        parts.append(log_tail_cap)
+    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
+    if stderr_tail:
+        parts.append("--- stderr tail ---")
+        parts.append(stderr_tail)
+    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
+    if stdout_tail:
+        parts.append("--- stdout tail ---")
+        parts.append(stdout_tail)
+    return "\n".join(parts)
+
+
+# GitHub PR URL in raw sandbox output (FAR-188): the FIRST match becomes the
+# marker's canonical ``pr_url``. Case-SENSITIVE on purpose (FAR-1402) — the
+# flag-relevant literals (https/github/pull) are always lowercase in gh's own
+# echo, while a case-variant agent-prose mention must not win the first match
+# and be persisted as THE delivery URL. The FAR-1274 detector sweep in
+# ``db.crud.run`` scans agent text instead and deliberately carries
+# re.IGNORECASE there. Every copy of this pattern — pattern AND flags — is
+# pinned by ``tests/unit/db/test_pr_url_regex_pins.py``.
+_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
+
+# Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
+# commands run with OPENCODE_API_KEY and GITHUB_TOKEN (a PAT) injected, and
+# agent ``git push``/``git clone``/``gh`` output routinely embeds tokenized
+# URLs like ``https://x-access-token:<PAT>@github.com/...``. The stored
+# ``raw_output`` field is scrubbed BEFORE persistence so credentials never
+# enter it unmasked. ``_TOKENIZED_GIT_URL_PATTERN`` strips the userinfo from
+# any ``http(s)://...@host`` URL; ``_TOKEN_VALUE_PATTERN`` defensively masks
+# bare token values that follow known credential labels.
+_TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
+# Label-based masking (covers short tokens including github_pat_ <50 chars)
+# plus the canonical bare-value patterns for fine-grained GitHub PATs and AWS
+# access keys, shared from the sensitive_mask canonical list.
+_TOKEN_VALUE_PATTERN = _re.compile(
+    r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+"
+    r"|" + GITHUB_PAT_PATTERN.pattern + r"|" + AWS_ACCESS_KEY_PATTERN.pattern
+)
+
+
+def _extract_pr_url(raw_text: str) -> str:
+    """Best-effort GitHub PR URL extraction from raw sandbox output.
+
+    FAR-188: when ``output.json`` fails to parse, the run record retains the RAW
+    content so a ``pr_url`` the agent created inside the sandbox is never lost.
+    Classification (FAR-189) reads the marker directly instead of re-parsing.
+    """
+    if not raw_text:
+        return ""
+    match = _PR_URL_PATTERN.search(raw_text)
+    return match.group(0) if match else ""
+
+
+def _redact_raw_output(raw_text: str) -> str:
+    """Best-effort scrub of credentials from retained raw sandbox output.
+
+    FAR-188 (QA round 2): the stored ``raw_output`` marker field must never
+    contain live credentials. Both tokenized git URLs (scheme preserved, e.g.
+    ``https://x-access-token:<PAT>@github.com/...`` → ``https://<redacted>@github.com/...``)
+    and bare token values following known credential labels (``x-access-token:``,
+    ``ghp_``/``gho_``/``ghu_``/``ghs_``, ``github_pat_``, ``Bearer ``,
+    ``token=``) are masked. NEVER raises: a redaction failure returns the
+    original text so retention is never blocked (best-effort, fail open).
+    """
+    if not isinstance(raw_text, str) or not raw_text:
+        return raw_text
+    try:
+        scrubbed = _TOKENIZED_GIT_URL_PATTERN.sub(r"\1<redacted>@", raw_text)
+        return _TOKEN_VALUE_PATTERN.sub(r"\1<redacted>", scrubbed)
+    except (_re.error, TypeError, ValueError):
+        _log.warning("sandbox_agent.raw_output_redact_failed")
+        return raw_text
+
+
+def _normalize_marker_text(raw: Any) -> str:
+    """Normalize a raw-output source to text — bytes decoded exactly once."""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
+
+
+# FAR-228: the delivery sentinel must match as a FULL line, never a substring
+# (a mid-line occurrence in unrelated log prose must not fabricate a delivery).
+# ``^<sentinel>\r?$`` with MULTILINE + re.escape — the sentinel is a literal the
+# pipeline author chose, not a pattern. Compiled once at module load.
+def _compile_delivery_sentinel_pattern(sentinel: str | None) -> _re.Pattern[str] | None:
+    """Compile the full-line sentinel matcher for *sentinel* (or None)."""
+    if not sentinel or not isinstance(sentinel, str):
+        return None
+    try:
+        return _re.compile(rf"^{_re.escape(sentinel)}\r?$", _re.MULTILINE)
+    except (_re.error, TypeError):
+        _log.warning("sandbox_agent.delivery_sentinel_pattern_failed")
+        return None
+
+
+def _uncancel_current_task() -> None:
+    """Clear one pending cancellation on the CURRENT task (FAR-228).
+
+    ``uncancel()`` is a ``Task`` method, never a module-level function —
+    ``asyncio.uncancel()`` raises ``AttributeError``. Must be called from
+    within the task being uncancelled (the running task is the only one whose
+    pending-cancellation count we are permitted to mutate).
+    """
+    task = asyncio.current_task()
+    if task is not None:
+        task.uncancel()
+
+
+class _BoundedFinalDrain:
+    """Serialise the post-cancel final drains so a slow drain is never doubled.
+
+    FAR-1914 round-3 M3: the cancel path wraps a SHIELDED
+    ``drain_sandbox_log`` in ``wait_for(...)``. When the read is slow the outer
+    wait expires while the shielded drain keeps running; the post-cancel grace
+    look then started a SECOND drain over the same ``_drain_offset``, so the
+    same bytes — and their ``step_finish`` costs — were appended twice (once
+    per drain) before the offset advanced. This holder keeps the in-flight task
+    and, on the next look, awaits THAT task (bounded) instead of starting a
+    second one — so at most one drain is ever in flight. Once it has finished,
+    a later look starts a fresh drain (the grace second look still catches
+    content flushed after the cancellation).
+    """
+
+    def __init__(
+        self,
+        drain: Callable[[], Awaitable[None]],
+        *,
+        timeout: float,
+        log_context: dict[str, Any] | None = None,
+    ) -> None:
+        self._drain = drain
+        self._timeout = timeout
+        self._log_context = log_context or {}
+        self._inflight: asyncio.Future[None] | None = None
+        #: True only while ``run_once`` is awaiting the task, so a task failure
+        #: is logged exactly once (by the awaiter) and a LATE failure (after a
+        #: timed-out wait, when nothing is awaiting) is logged by the callback.
+        self._awaiting = False
+
+    async def run_once(self) -> None:
+        """Run (or join) the bounded final drain once."""
+        if self._inflight is None or self._inflight.done():
+            self._inflight = asyncio.ensure_future(self._drain())
+            # Retrieve a late failure even when no later look awaits the task:
+            # an unretrieved task exception logs a spurious traceback at GC.
+            self._inflight.add_done_callback(self._log_late_failure)
+        task = self._inflight
+        self._awaiting = True
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._timeout)
+        # Nested cancellation here is deliberate — idempotency-gate cleanup must
+        # not re-raise early or the delivery-done marker is skipped (FAR-228
+        # fix); the original cancellation re-raises.
+        except asyncio.CancelledError:  # NOSONAR
+            _uncancel_current_task()
+        except TimeoutError:
+            # Either the drain is still alive (shielded) — it will run to
+            # completion in the background and the next look joins it instead
+            # of duplicating the read — or it settled with an exception in the
+            # same loop iteration the timer fired. ``wait_for`` reports a
+            # timeout in BOTH cases (the timer cancels the shield's OUTER
+            # future; an INNER task that already completed keeps its
+            # exception), so the boundary failure must be surfaced here: the
+            # done callback stays silent (``_awaiting`` is still True) and
+            # nothing else observes it. A drain that fails AFTER this point is
+            # logged by ``_log_late_failure``; one that failed before the
+            # timeout propagates through the ``except Exception`` arm above.
+            if not self._log_boundary_failure(task):
+                _log.warning("sandbox_agent.cancel_retention_drain_timed_out", extra=self._log_context)
+        except Exception:
+            # The drain itself failed. Logged HERE (the callback stays silent
+            # while awaited) so the failure is never swallowed.
+            _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=True)
+        finally:
+            self._awaiting = False
+
+    def _log_boundary_failure(self, task: asyncio.Future[None]) -> bool:
+        """Log a drain that failed on the timeout boundary; return whether it did.
+
+        ``wait_for(asyncio.shield(task), ...)`` raises ``TimeoutError`` even
+        when the shielded task has ALREADY settled with an exception: the timer
+        cancels the shield's outer future, while the inner task completed with
+        the error in the same loop iteration. Without this arm the exception and
+        its traceback would be reported only as a timeout (the done callback
+        stays silent while ``_awaiting`` is True), losing the real failure.
+        """
+        if not task.done() or task.cancelled():
+            return False
+        exc = task.exception()
+        if exc is None:
+            return False
+        _log.error(_CANCEL_DRAIN_FAILED_EVENT, extra=self._log_context, exc_info=exc)
+        return True
+
+    def _log_late_failure(self, task: asyncio.Future[None]) -> None:
+        """Retrieve (and log) an in-flight drain's failure, never silently."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None and not self._awaiting:
+            _log.error(
+                _CANCEL_DRAIN_FAILED_EVENT,
+                extra=self._log_context,
+                exc_info=exc,
+            )
+
+
+def _source_contains_delivery_sentinel(text: Any, sentinel: str | None) -> bool:
+    """True when *text* contains *sentinel* as a FULL LINE (FAR-228).
+
+    Full-line match only — ``re.search(r'^<sentinel>\r?$', text, re.M)``. A
+    mid-line occurrence (e.g. the sentinel embedded inside a JSON summary or a
+    log line) never counts, so the gate cannot be tripped by incidental prose.
+    Never raises on non-str input (coerced via ``_normalize_marker_text``).
+    """
+    pattern = _compile_delivery_sentinel_pattern(sentinel)
+    if pattern is None:
+        return False
+    return pattern.search(_normalize_marker_text(text)) is not None
+
+
+def _marker_delivery_done_for_node(markers: Any, run_id: Any, node_id: str) -> bool:
+    """True when any raw-output marker for ``(run_id, node_id)`` carries
+    ``delivery_done is True`` (FAR-228 — shared by guard A in the node body and
+    guard B in the executor).
+
+    The attempt_key is ``run:{run_id}:node:{node_id}:{claim_count}``. Matching
+    uses the delimited fragments ``run:{run_id}:`` (the key PREFIX) and
+    ``:node:{node_id}:`` (mid-key, trailing ``:``) so ``run-1`` never matches
+    ``run-11`` and ``node-a`` never matches ``node-a11`` (delimiter trap).
+    Non-dict markers / non-dict ``markers`` are ignored.
+    """
+    if not isinstance(markers, dict):
+        return False
+    run_tag = f"run:{run_id}:"
+    node_tag = f":node:{node_id}:"
+    for marker in markers.values():
+        if not isinstance(marker, dict) or marker.get("delivery_done") is not True:
+            continue
+        key = marker.get("attempt_key")
+        if isinstance(key, str) and run_tag in key and node_tag in key:
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class _RawOutputMarkerRequest:
+    """Everything ``_retain_raw_output_marker`` needs to build + persist a marker.
+
+    Grouped so the retention helper takes a single immutable request rather than
+    a long parameter list (Sonar S107); the field set/order mirrors the marker
+    builder's inputs and the shared fields the persist leg consumes.
+    """
+
+    run_id: str
+    org_id_raw: Any
+    node_id: str
+    attempt_key: str | None
+    summary: str
+    source: Any
+    parse_error: str
+    exit_code: int
+    stdout_length: int
+    stderr_length: int
+    delivery_sentinel: str | None = None
+    status: str = "failed"
+    index: int | str | None = None
+    payload: str | bytes | None = None
+    max_artifact_bytes: int = _MAX_ARTIFACT_LOG
+    stdout_artifact: dict[str, Any] | None = None
+    stderr_artifact: dict[str, Any] | None = None
+
+
+async def _retain_raw_output_marker(
+    session_factory: Callable[..., Any] | None,
+    request: _RawOutputMarkerRequest,
+) -> None:
+    """Single builder + persist for a raw-output retention marker (FAR-188).
+
+    Both failure branches (no-parseable output.json and stall/timeout) funnel
+    through this ONE helper so the marker shape cannot drift between them.
+    *status* defaults to ``"failed"`` (the failure branches); the FAR-228
+    success path passes ``"completed"`` so a delivery_done marker written for a
+    successful run records its real status, never a misleading failure.
+
+    ``source`` is the FULL pre-truncation evidence: for the no-parseable branch
+    it is the union of the file content AND the captured stdout; for the
+    stall/timeout branch it is whatever raw source is available (the drained
+    tail, which the drain window bounds to the last ``_MAX_DRAIN_WINDOW``
+    (512KB) bytes — the retained ``raw_output`` therefore reflects that
+    bounded tail, never a multi-MB log). Bytes are decoded exactly once;
+    ``pr_url`` is extracted from the FULL UNREDACTED source, then the stored
+    ``raw_output`` copy is scrubbed of credentials (``_redact_raw_output``)
+    and ONLY THEN truncated to ``max_artifact_bytes`` for storage (the legacy
+    512KB ``_MAX_ARTIFACT_LOG``, or the node's FAR-792 full-retention cap when
+    the impl passes it).
+
+    FAR-228: when *delivery_sentinel* is non-empty AND the pre-truncation
+    ``source`` contains the sentinel as a FULL LINE, ``delivery_done: True`` is
+    stamped onto the marker — the run's side-effecting delivery (e.g. an email)
+    already happened even though the node is failing/retrying. The persist is
+    monotone at the same-key write (see ``_persist_raw_output_marker``): a
+    retry marker without the sentinel never unsets an existing
+    ``delivery_done``.
+
+    ``index`` / ``payload`` (FAR-438) are threaded through to the persisted
+    marker's ``idempotency_key`` derivation so a fan-out cardinality position
+    and a content-version payload are folded into the key — the SAME arguments
+    the executor's suppression read passes, so both sides compute the identical
+    key. The sandbox node body call sites pass ``None`` (a single node has no
+    separate fan-out item / content-edit payload here; the node_id already
+    encodes ``parent+index`` for fan-out children).
+    """
+    text = _normalize_marker_text(request.source)
+    marker: dict[str, Any] = {
+        "_modulo_marker": True,
+        "status": request.status,
+        "summary": request.summary,
+        "raw_output": _redact_raw_output(text)[: request.max_artifact_bytes],
+        "parse_error": request.parse_error,
+        "pr_url": _extract_pr_url(text),
+        "exit_code": request.exit_code,
+        "stdout_length": request.stdout_length,
+        "stderr_length": request.stderr_length,
+        "attempt_key": request.attempt_key,
+        "node_id": request.node_id,
+    }
+    if _source_contains_delivery_sentinel(text, request.delivery_sentinel):
+        marker["delivery_done"] = True
+    if request.stdout_artifact is not None:
+        marker["stdout_artifact"] = request.stdout_artifact
+    if request.stderr_artifact is not None:
+        marker["stderr_artifact"] = request.stderr_artifact
+    await _persist_raw_output_marker(
+        session_factory,
+        run_id=request.run_id,
+        org_id_raw=request.org_id_raw,
+        node_id=request.node_id,
+        attempt_key=request.attempt_key,
+        marker=marker,
+        index=request.index,
+        payload=request.payload,
+    )
+
+
+async def _persist_raw_output_marker(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+    promote_newest_key: bool = False,
+    preserve_delivery_done: bool = True,
+) -> bool:
+    """Best-effort persist of a raw-output retention marker
+    (a ``run_node_outputs`` marker ROW keyed by the original attempt_key —
+    the store leg since B2c; the legacy runs blob columns it used to share
+    the ``runs`` table with are dropped by migration 0215).
+
+    FAR-188 (QA round 1): the marker lives in a DEDICATED store keyed by
+    ``attempt_key`` — NEVER inside the outputs/telemetry dicts. This
+    keeps the Agent Return Contract clean: the node-output endpoint can
+    never serve raw stdout, ``recover_node``'s already-completed guard never
+    sees a fake completed node, and finalize's split-output machinery never
+    touches the marker.
+
+    Keyed by ``attempt_key`` (not ``node_id``) so a retry that re-executes the
+    same node does not clobber the previous attempt's evidence: if an existing
+    marker for the SAME attempt_key already carries a non-empty ``pr_url`` it is
+    preserved (a retry's empty pr_url never wipes attempt-1's evidence).
+
+    The whole session body is bounded by ``asyncio.wait_for(..., timeout=
+    _RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)``: a hung DB fails open with a log
+    BEFORE the node decorator grace budget is consumed, so the retryable
+    ``SandboxNodeFailedError`` survives instead of being replaced by a terminal
+    ``node_timeout``.
+
+    NEVER raises (except cancellation): a persistence failure must not block the
+    node's retryable raise — run terminalization depends on it.
+
+    DURABILITY GAP (known, documented, FAR-438): because the persist is
+    best-effort and swallows failures (a timeout or an exception is logged via
+    ``sandbox_agent.raw_output_marker_persist_timeout_or_error`` and the run
+    proceeds), the read-before-write dedupe's evidence (the ``delivery_done``
+    sentinel + the stamped ``idempotency_key``) can be LOST on a DB hiccup. If a
+    delivery genuinely happened but its marker was not persisted, the next
+    transient retry will NOT see ``delivery_done`` and will re-fire — a
+    potential double-write. This is a deliberate trade (failing open to preserve
+    the retryable raise beats blocking terminalization), but it means the
+    idempotency gate is best-effort, not exactly-once, under DB failure.
+    """
+    if session_factory is None:
+        _log.warning(
+            "sandbox_agent.raw_output_marker_skip_no_session",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return False
+    if not run_id:
+        _log.warning("sandbox_agent.raw_output_marker_skip_no_run_id", extra={"node_id": node_id})
+        return False
+    org_uuid: uuid.UUID | None = None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        _log.warning(
+            "sandbox_agent.raw_output_marker_skip_unparseable_org",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return False
+
+    try:
+        await asyncio.wait_for(
+            _write_raw_output_marker(
+                session_factory,
+                org_uuid=org_uuid,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                marker=marker,
+                index=index,
+                payload=payload,
+                promote_newest_key=promote_newest_key,
+                preserve_delivery_done=preserve_delivery_done,
+            ),
+            timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.raw_output_marker_persist_timeout_or_error",
+            extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
+        )
+        return False
+    return True
+
+
+# B2c (FAR-583): a marker-savepoint transaction-aborting failure loses the
+# persist for the attempt and is claimed loudly as
+# sandbox_agent.raw_output_marker_persist_uncommitted - there is no legacy
+# fallback leg any more (B2c readers are new-table-only; the columns died
+# with the drop migration 0215).
+
+
+async def _write_raw_output_marker(
+    session_factory: Callable[..., Any],
+    *,
+    org_uuid: uuid.UUID | None,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+    index: int | str | None = None,
+    payload: str | bytes | None = None,
+    promote_newest_key: bool = False,
+    preserve_delivery_done: bool = True,
+) -> None:
+    """Bounded persist of a single raw-output retention marker row.
+
+    Imports live INSIDE the try so a first-call import failure is
+    swallowed+logged like any other persist failure — it must never
+    propagate and convert the retryable raise into a generic failed node.
+    """
+    from sqlalchemy import select as _sql_select
+
+    from farna.db.crud.run_node_outputs import (
+        read_run_node_outputs_raw,
+        write_run_markers,
+    )
+    from farna.db.models.run import Run as _RunModel
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # Coerce the string run id to its UUID form for the row lookup:
+            # production callers always pass ``str(run.id)``, and a Uuid-typed
+            # column cannot bind a raw string on the generic (non-native-uuid)
+            # backends. A non-uuid run id (defensive) keeps the raw string.
+            run_id_filter: Any = run_id
+            with suppress(ValueError):
+                run_id_filter = uuid.UUID(run_id)
+            # FAR-1601 (verified — this is NOT an unbounded hot-`runs` wait):
+            # this row lock is bounded CLIENT-side. Its ONLY call site wraps
+            # the whole session body in ``asyncio.wait_for(...,
+            # _RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)`` (5 s), so a contended run
+            # row can stall this persist for at most 5 s — never silently past
+            # the Fly HAProxy 30-minute session window (FAR-1524 O11). A
+            # server-side ``SET LOCAL lock_timeout`` was deliberately NOT
+            # added: ``mutation_row_lock_timeout_ms`` (5000 ms) EQUALS that
+            # client bound and its timer starts later (after pool checkout and
+            # the two RLS ``set_config`` calls above), so it could never fire
+            # first — decorative dead code. On expiry the caller logs
+            # ``sandbox_agent.raw_output_marker_persist_timeout_or_error`` and
+            # the best-effort persist fails open (the documented FAR-438
+            # durability gap), which is the recovery this path already
+            # accepts.
+            run = (
+                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id_filter).with_for_update())
+            ).scalar_one_or_none()
+            if run is None:
+                _log.warning(
+                    "sandbox_agent.raw_output_marker_skip_row_not_found",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "hint": "row missing or RLS-hidden by another org",
+                    },
+                )
+                return
+            # B2c (FAR-583): the writers no longer touch the runs blob
+            # columns (dropped by migration 0215) - the markers
+            # merge reads the CURRENT new-table state
+            # (the run row is still locked FOR UPDATE, so the read-merge-write
+            # serialises exactly like the former ORM leg). One reassembly
+            # call, then the REPLACE write below.
+            markers = dict(
+                (await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=org_uuid)).markers or {}
+            )
+            key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
+            # FAR-438 read-before-write: stamp the derived per-node idempotency key
+            # (from the run's PERSISTED run-level key) so a re-run that reuses the
+            # same key can suppress a duplicate write. Fail-open — a missing or
+            # malformed persisted key simply stamps nothing. Monotone: setdefault
+            # never downgrades an already-applied marker's key. ``index`` and
+            # ``payload`` are threaded into the derivation so fan-out cardinality
+            # and content-version keys are computed consistently with the
+            # suppression read (executor ``_idempotency_gate_ok``) — the same
+            # node_id at a different `index`, or the same node_id with an edited
+            # `payload`, must derive a DIFFERENT key.
+            run_ref = run.idempotency_key if hasattr(run, "idempotency_key") else None
+            _stamp_marker_idempotency_key(
+                marker,
+                run_ref,
+                node_id=node_id,
+                index=index,
+                payload=payload,
+                promote_newest_key=promote_newest_key,
+            )
+            persisted_marker = _merge_existing_raw_output_marker(
+                marker,
+                markers.get(key),
+                promote_newest_key=promote_newest_key,
+                preserve_delivery_done=preserve_delivery_done,
+            )
+            markers[key] = persisted_marker
+            if org_uuid is None:
+                # qa rider e: an explicit guard instead of `assert` - asserts
+                # vanish under -O and the failure mode would be an opaque
+                # None-org write into the repo gate.
+                raise RuntimeError(
+                    "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
+                )
+            # FAR-583: post-merge marker REPLACE into run_node_outputs. The
+            # MERGED dict is stored (prior pr_url preserved, delivery_done
+            # monotone) - one row per attempt key, delete-absent. B2c: there
+            # is no legacy copy any more, so a savepoint-scoped failure loses
+            # the persist for this attempt and is claimed loudly (the next
+            # marker persist re-merges from the durable rows).
+            try:
+                async with session.begin_nested():
+                    await write_run_markers(
+                        session,
+                        run_id=run.id,
+                        organisation_id=org_uuid,
+                        markers=markers,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log_marker_uncommitted_failure(exc, run_id=run_id, node_id=node_id, key=key)
+            _log.info(
+                "sandbox_agent.raw_output_marker_persisted",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "attempt_key": key,
+                    "retained_bytes": len(persisted_marker.get("raw_output") or ""),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.raw_output_marker_persist_failed",
+            extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
+        )
+
+
+def _stamp_marker_idempotency_key(
+    marker: dict[str, Any],
+    run_ref: str | None,
+    *,
+    node_id: str,
+    index: int | str | None,
+    payload: str | bytes | None,
+    promote_newest_key: bool,
+) -> None:
+    """Stamp the derived per-node idempotency key onto *marker* (FAR-438).
+
+    Fail-open: a missing persisted ``run_ref`` stamps nothing, and a malformed
+    ref is swallowed. Monotone: ``setdefault`` never downgrades an applied key.
+    The CONNECTOR path (``promote_newest_key``) promotes the newest derived
+    key so a content-edit re-run's latest delivery is independently
+    suppressible while a superseded content-version is not (FAR-458).
+    """
+    if not run_ref:
+        return
+    with suppress(TypeError, ValueError):
+        derived = node_idempotency_key(run_ref, node_id, index=index, payload=payload)
+        if promote_newest_key:
+            marker["idempotency_key"] = derived
+        else:
+            marker.setdefault("idempotency_key", derived)
+
+
+def _log_marker_uncommitted_failure(exc: Exception, *, run_id: str, node_id: str, key: str) -> None:
+    """Loud claim when the savepoint-scoped marker write loses the persist.
+
+    ``sqlstate_of`` walks ``__context__``, so the savepoint's 25P02
+    rollback-wrapper failure does NOT mask the ORIGINAL transaction-aborting
+    state (40P01 etc.). A transaction-aborting failure poisons the whole
+    transaction; the outer handler still swallows (persist never-raise).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from farna.db.sqlstates import sqlstate_of
+
+    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+    _log.exception(
+        "sandbox_agent.raw_output_marker_persist_uncommitted run=%s node_id=%s attempt_key=%s sqlstate=%s",
+        run_id,
+        node_id,
+        key,
+        sqlstate,
+    )
+
+
+def _merge_existing_raw_output_marker(
+    marker: dict[str, Any], existing: Any, *, promote_newest_key: bool = False, preserve_delivery_done: bool = True
+) -> dict[str, Any]:
+    """Monotone preservation: a prior attempt's evidence is never wiped by a retry.
+
+    A prior marker's non-empty ``pr_url`` and an OR'd ``delivery_done`` are
+    retained; all other marker fields come from the new ``marker`` unchanged
+    (pr_url is preserved as-is so a retry's empty pr_url never wipes
+    attempt-1's evidence).
+
+    ``promote_newest_key`` (FAR-458 connector path) inverts the
+    ``idempotency_key`` handling: instead of pinning the marker to the first /
+    existing derived key, the NEWEST delivered content-version's key wins. This
+    is what lets a content-edit re-run promote a fresh key (so the edited
+    delivery is independently suppressible) rather than being pinned to a
+    superseded content-version's key (which would re-fire the edited payload as
+    an un-deduped double-submit).
+
+    ``preserve_delivery_done`` (FAR-531) — ``False`` for the connector INTENT
+    and definite-NO-DELIVERY writes: those markers describe a write that has
+    NOT (yet) been confirmed delivered, so inherited delivery evidence from a
+    SUPERSEDED key's marker must not bleed in. Without this, an intent marker
+    written for a NEW content-version (different derived key, same slot) would
+    merge with the previous key's ``delivery_done: True`` row and claim the NEW
+    key was already delivered BEFORE the write fired — a fail_closed-relevant
+    silent miss (the new write's crash would look like a confirmed delivery and
+    suppress its legitimate re-fire). The delivery stamp itself keeps the OR
+    (it only fires after a genuine delivery, where the new marker already
+    carries ``delivery_done: True`` itself).
+
+    QA Fix 2 (FAR-531): the drop is keyed on IDENTITY — delivery evidence is
+    dropped ONLY when the incoming marker carries a DIFFERENT derived key than
+    the existing marker (the superseded content-version case above). When the
+    keys MATCH, ``delivery_done`` is still OR'd even under
+    ``preserve_delivery_done=False``: a same-key intent / no-delivery persist
+    arriving AFTER a confirmed delivery stamp (concurrent-attempt window, or a
+    brownout re-run whose gate read timed out but whose persist succeeded) must
+    not WIPE the delivered evidence — wiping it let a later attempt re-fire a
+    write that had already delivered (a duplicate). Delivered evidence for the
+    same key is monotone: the gate suppresses on ``delivery_done`` + matching
+    key regardless of which kind of marker shares the slot.
+    """
+    if not isinstance(existing, dict):
+        return marker
+    preserved: dict[str, Any] = {}
+    if existing.get("pr_url"):
+        preserved["pr_url"] = existing["pr_url"]
+    marker_key = marker.get("idempotency_key")
+    same_derived_key = marker_key is not None and existing.get("idempotency_key") == marker_key
+    if (preserve_delivery_done or same_derived_key) and (existing.get("delivery_done") or marker.get("delivery_done")):
+        preserved["delivery_done"] = True
+    if promote_newest_key:
+        if marker.get("idempotency_key"):
+            preserved["idempotency_key"] = marker["idempotency_key"]
+    elif existing.get("idempotency_key"):
+        preserved["idempotency_key"] = existing["idempotency_key"]
+    merged = dict(marker)
+    merged.update(preserved)
+    return merged
+
+
+def _idempotency_gate_skipped_envelope(
+    node_id: str, *, gate_tag: str = "email_sent", delivered: bool = True
+) -> dict[str, Any]:
+    """FAR-228: the single artifact envelope produced by BOTH guards.
+
+    The ``output_json`` sub-key is REQUIRED so ``_split_sandbox_agent`` returns
+    a proper dict into ``outputs_json[node_id]`` (not None); the skip marker
+    makes ``_node_output_has_valid_artifact`` count it, so ``work_intact``
+    computes True for the single-node gated run; and ``idempotency_gate`` is
+    what suppresses agent_signal re-firing (NEVER ``status == "skipped"`` —
+    template-error skips fire today).
+
+    ``gate_tag`` (FAR-458) is the driver-readable reason recorded under
+    ``idempotency_gate`` — the sandbox path defaults to ``"email_sent"`` (the
+    FAR-228 delivery sentinel); a connector node that suppressed a duplicate
+    write passes ``"connector_write_suppressed"`` so observability shows the
+    real cause rather than a misleading email tag. Any non-empty tag works:
+    ``_node_output_has_idempotency_gate`` only checks truthiness.
+
+    ``delivered`` (FAR-531 AC4 — envelope honesty): ``True`` only when the
+    suppression reason is a CONFIRMED prior delivery (the sandbox sentinel and
+    the ``connector_write_suppressed`` dedup tag). The fail-closed AMBIGUOUS
+    suppression (``"connector_write_fail_closed"``) suppressed a write whose
+    delivery is UNKNOWN — claiming ``delivery_done: True`` there would
+    misreport a suppressed-never-fired write as delivered, so it passes
+    ``delivered=False``. Suppressed ≠ delivered.
+    """
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "skipped",
+                "output": {
+                    "output_json": {
+                        "status": "skipped",
+                        "delivery_done": delivered,
+                        "idempotency_gate": gate_tag,
+                    }
+                },
+            }
+        ]
+    }
+
+
+async def _read_run_raw_output_markers_for_gate(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    claim_lease: str | None,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """FAR-228 guard A: SINGLE fenced read of the run's raw-output markers.
+
+    Bounded by ``_IDEMPOTENCY_GATE_READ_TIMEOUT`` (3s); fail-open to ``None``
+    (provision normally) on any failure — the gate must never block dispatch.
+    Fenced on the claim token + ``status='running'`` exactly like the dispatch
+    marker (``_acquire_dispatch_marker``) so a superseded executor never reads
+    a successor's markers as its own. This is a SEPARATE read from the atomic
+    dispatch marker (A4) — do NOT fuse them.
+
+    FAR-583: the decision logic (the dict-or-None contract below) is
+    byte-for-byte unchanged — only the STORAGE SOURCE + STATEMENT SHAPE moved
+    (qa M4/M5): the old predicate SELECT + fat all-sides fallback reader (two
+    statements, a TOCTOU window vs terminalize, and every blob side fetched on
+    the per-node hot path) is replaced by the repo's SINGLE fenced
+    markers-scoped reader :func:`modulo.db.crud.run_node_outputs.read_run_markers_fenced`
+    — the fence predicates (id + org + claim_token + ``status='running'``)
+    moved INTO that one statement, which reassembles the markers
+    (new-table-only since B2c - the legacy fallback leg is removed) and
+    serves ``None`` on a fence miss
+    (byte-for-byte the same visibility the fenced single-column gate read
+    had). LOCK-FREE exactly as before (no FOR UPDATE on this read).
+    """
+    if session_factory is None or not claim_lease:
+        return None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return None
+    from farna.db.crud.run_node_outputs import read_run_markers_fenced
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+
+    async def _read() -> dict[str, Any] | None:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # Storage re-point (FAR-583 qa M4/M5): ONE fenced statement — the
+            # run-row predicate SELECT above is gone; the fence lives inside
+            # the repo reader.
+            return await read_run_markers_fenced(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=org_uuid,
+                claim_token=claim_lease,
+                for_update=False,
+            )
+
+    try:
+        return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.idempotency_gate_read_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
+        )
+        return None
+
+
+# FAR-458 connector-write idempotency: the connector node's write boundary is the
+# connector-specific UNKNOWN-recovery decision point. These helpers mirror the
+# sandbox marker machinery (`_retain_raw_output_marker` / `_persist_raw_output_marker`)
+# but read BOTH the run's persisted idempotency key AND its markers, and stamp a
+# `delivery_done` marker when a connector write genuinely succeeds — the evidence
+# the read-before-write suppression (`read_before_write_suppression`) requires.
+
+
+async def _read_connector_idempotency_gate_state(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read a rewrite-write run's ``(raw_output_markers, idempotency_key)``.
+
+    Bounded by ``_IDEMPOTENCY_GATE_READ_TIMEOUT`` (3s); fail-open to
+    ``(None, None)`` (the write proceeds, no suppression) on any failure — the
+    gate must never block a connector write. Reads the run row directly (no
+    claim-token fencing — a connector node has no dispatch lease), so only the
+    run id + org id are required; the fenced markers read passes
+    ``fence_status=False`` (qa Minor 4) because the old connector rewrite read
+    had NO status predicate either — a concurrently-cancelled run must still
+    serve its suppression evidence. Returns the parsed markers dict (or
+    ``None``) and the persisted ``idempotency_key`` (or ``None`` when the run
+    is missing or carries no persisted key).
+
+    FENCING (FAR-458 MAJOR 3): the marker read is taken under
+    ``SELECT ... FOR UPDATE`` so concurrent re-runs of the same UNKNOWN write
+    serialise on the run row rather than both observing "no delivery_done" and
+    both firing the write. The deletion sentinel / delivery evidence is only
+    ever committed under the same row lock (``_write_raw_output_marker`` also
+    takes ``with_for_update``), so a gate decision cannot read past an
+    in-progress concurrent terminalization/stamp.
+
+    REMAINING WINDOW (honest, documented): this fences + serialises the gate
+    READS against the row, and the marker WRITE side takes the same lock, but
+    the actual upstream connector write executes between the gate returning and
+    the later ``delivery_done`` stamp — so two concurrently-started re-runs can
+    both pass the (now serialised) gate and both send the write before either
+    stamps. Fully closing that residual double-write requires a
+    ``write_started`` lease stamped under FOR UPDATE and held across the write;
+    that is intentionally NOT added here because a stale lease from a dead
+    pre-UNKNOWN execution would fail-CLOSED and block legitimate recovery
+    (the write never deferred). The marker write lock is what the sandbox path
+    relies on; this connector read now matches it.
+    """
+    if session_factory is None or not run_id:
+        return None, None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return None, None
+    from sqlalchemy import text as _sql_text
+
+    from farna.db.crud.run_node_outputs import read_run_markers_fenced
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+
+    async def _read() -> tuple[dict[str, Any] | None, str | None]:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1601 (verified — this is NOT an unbounded hot-`runs` wait):
+            # bounded CLIENT-side by ``asyncio.wait_for(_read(),
+            # _IDEMPOTENCY_GATE_READ_TIMEOUT)`` (3 s) at the call below — a
+            # contended run-row lock waits at most 3 s, and any expiry fails
+            # open to ``(None, None)`` with the
+            # ``connector.idempotency_gate_read_failed`` WARNING (the
+            # documented gate contract: never block a connector write). A
+            # server-side ``SET LOCAL lock_timeout``
+            # (``mutation_row_lock_timeout_ms``, 5000 ms) would sit ABOVE
+            # that 3 s client bound and could therefore never fire —
+            # deliberately not added.
+            row = (
+                await session.execute(
+                    _sql_text("SELECT id, idempotency_key FROM runs WHERE id=:rid AND organisation_id=:oid FOR UPDATE"),
+                    {"rid": run_id, "oid": str(org_uuid)},
+                )
+            ).fetchone()
+            if row is None:
+                return None, None
+            # FAR-583 storage re-point (qa M5), semantics pinned precisely (qa
+            # Minor 4): what is PRESERVED from the old connector rewrite read
+            # is (a) the run-row lock (the raw SELECT ... FOR UPDATE above;
+            # for_update=True re-takes it inside the same transaction — a
+            # no-op same-transaction re-lock) and (b) the ABSENCE of a status
+            # predicate — the old read had none, so fence_status=False keeps
+            # it that way: during a concurrent cancel the read still serves
+            # the suppression evidence (delivery_done markers) instead of a
+            # fence-miss None (which would suppress nothing → duplicate
+            # connector write). What was NEVER here stays absent: no
+            # claim-token fence (a connector node has no dispatch lease).
+            # Marker VALUES reassemble via the repo's SINGLE fenced
+            # markers-scoped reader, on the SAME locked transaction so the
+            # gate decision cannot read past an in-progress concurrent stamp.
+            markers_dict = await read_run_markers_fenced(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=org_uuid,
+                claim_token=None,
+                for_update=True,
+                fence_status=False,
+            )
+            persisted_key = row[1]
+            return markers_dict, (str(persisted_key) if persisted_key else None)
+
+    try:
+        return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate_read_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
+        )
+        return None, None
+
+
+def _connector_write_payload_hash(resource: str, filters: dict[str, Any] | None, data: dict[str, Any]) -> str:
+    """Stable full-write-identity hash for a connector write's key derivation.
+
+    Folds the WHOLE write identity into the key — not just ``data`` — so a
+    re-run that changes the write TARGET (``resource``, or a write-relevant
+    ``provider_ref``) with byte-identical ``data`` derives a DIFFERENT key and
+    is not wrongly suppressed. ``resource`` is the ``ConnectorPayload.resource``
+    (the write's destination/verb); ``provider_ref`` (the shell connector's
+    execution target) may live in either ``filters`` or ``data``, so both are
+    consulted. ``data`` is the rendered write body (``ConnectorPayload.data``).
+
+    It is serialised deterministically (sorted keys) so an unchanged re-run
+    produces the identical payload component — and thus the identical
+    idempotency key — while a genuinely-edited content-version OR target
+    produces a different one. ``str`` coercion covers non-JSON values (dates,
+    Paths) without raising.
+    """
+    import json as _json
+
+    provider_ref = filters.get("provider_ref") if isinstance(filters, dict) else None
+    if provider_ref is None and isinstance(data, dict):
+        provider_ref = data.get("provider_ref")
+    identity: dict[str, Any] = {"resource": resource, "provider_ref": provider_ref, "data": data}
+    # ``json.dumps(..., default=str)`` would stringify set/frozenset members via
+    # ``str(set)``, whose ordering is PYTHONHASHSEED-dependent — so the gate and
+    # stamp sides could derive DIFFERENT keys across worker processes and the
+    # connector-write dedup would be silently defeated. Pre-canonicalise only the
+    # non-JSON-native set containers to sorted lists (everything else is passed
+    # through unchanged, so the primary ``default=str`` path keeps handling
+    # dates/Paths as before and existing non-set keys are unaffected). The
+    # ``default`` hook is :func:`_canonical_scalar` (NOT bare ``str``): an object
+    # with the default ``__str__``/``__repr__`` renders its MEMORY ADDRESS, which
+    # differs in every worker process — the same nondeterminism in another form.
+    identity = _canonicalize_sets(identity)
+    try:
+        return _json.dumps(identity, sort_keys=True, default=_canonical_scalar)
+    except (TypeError, ValueError):
+        # ``_canonical_scalar`` handles the common non-JSON scalars (dates, Paths),
+        # so this branch only triggers on a genuinely unserialisable structure.
+        # Fall back to a DETERMINISTIC coercion (every value stringified, keys
+        # sorted) rather than ``repr`` — ``repr`` is NOT canonical across
+        # processes, so two different invocations could derive DIFFERENT keys and
+        # silently defeat the dedup (gate vs stamp side disagree). See
+        # ``canonical_payload_hash`` in trigger_engine/pre_guardrail.py.
+        return _json.dumps(_canonical_coerce(identity), sort_keys=True)
+
+
+# The object-default ``__str__``/``__repr__`` method objects (captured once) —
+# their runtime identity marks a type whose stringification embeds the instance
+# memory address (see :func:`_canonical_scalar`).
+_OBJECT_DEFAULT_STR = object.__str__
+_OBJECT_DEFAULT_REPR = object.__repr__
+
+
+def _canonical_scalar(obj: Any) -> str:
+    """Deterministic string rendering for a non-JSON-native leaf value.
+
+    ``str()`` of an object that defines NEITHER ``__str__`` NOR ``__repr__``
+    falls back to ``object.__repr__``, which embeds the instance's memory
+    address (``<pkg.X object at 0x7f...>``) — a value that differs in every
+    worker process. A payload containing such an object would hash DIFFERENTLY
+    on the gate and stamp sides and silently defeat the connector-write dedup.
+    For those objects render a stable type-identity string instead; every type
+    with a custom ``__str__``/``__repr__`` (datetime, Path, UUID, Decimal, ...)
+    keeps its meaningful, process-independent ``str()``. Used as the
+    ``json.dumps`` ``default`` hook in :func:`_connector_write_payload_hash` and
+    as the leaf coercion in :func:`_canonical_coerce`.
+    """
+    obj_type = type(obj)
+    # Runtime identity check against the object defaults (getattr keeps the
+    # method objects as plain attributes, so the comparison is well-defined).
+    if (
+        getattr(obj_type, "__str__", None) is _OBJECT_DEFAULT_STR
+        and getattr(obj_type, "__repr__", None) is _OBJECT_DEFAULT_REPR
+    ):
+        return f"<{obj_type.__module__}.{obj_type.__qualname__}>"
+    return str(obj)
+
+
+def _canonicalize_sets(obj: Any) -> Any:
+    """Recursively convert set/frozenset containers to sorted lists.
+
+    ``json.dumps`` has no native encoding for sets and would otherwise fall back
+    to ``str(set)`` (via the default hook), whose member order depends on
+    ``PYTHONHASHSEED`` — producing different serialisations across worker
+    processes and silently defeating the connector-write dedup. Converting sets
+    to sorted lists (sorted by the canonical scalar rendering of the coerced
+    member, matching :func:`_canonical_coerce`) makes the output byte-identical
+    across processes. All other containers and scalars are passed through
+    unchanged so the primary ``json.dumps(..., default=_canonical_scalar)`` path
+    keeps handling dates/Paths as before.
+    """
+    if isinstance(obj, dict):
+        return {k: _canonicalize_sets(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_canonicalize_sets(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return sorted((_canonicalize_sets(v) for v in obj), key=_canonical_scalar)
+    return obj
+
+
+def _canonical_coerce(obj: Any) -> Any:
+    """Deterministically coerce *obj* into a JSON-serialisable structure.
+
+    Every scalar becomes ``str`` and every mapping/sequence is rebuilt with
+    sorted/stable ordering so the result is byte-identical across processes —
+    used as the safe fallback in :func:`_connector_write_payload_hash` when the
+    primary ``json.dumps(...)`` still raises. Leaves go through
+    :func:`_canonical_scalar` so an object with the default address-embedded
+    ``__str__``/``__repr__`` renders its type identity (never a memory address).
+    """
+    if isinstance(obj, dict):
+        return {str(k): _canonical_coerce(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(obj, (list, tuple)):
+        return [_canonical_coerce(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        # Set iteration order is nondeterministic across processes
+        # (PYTHONHASHSEED); sort the coerced members so the serialisation stays
+        # byte-identical between the gate and stamp sides — otherwise two
+        # invocations could derive DIFFERENT keys and silently defeat the dedup.
+        return sorted((_canonical_coerce(v) for v in obj), key=_canonical_scalar)
+    return _canonical_scalar(obj)
+
+
+def _connector_marker_attempt_key(run_id: str, node_id: str) -> str:
+    """Stable marker key for a connector node's delivery record.
+
+    Unlike the sandbox path (which keys by ``claim_count`` per attempt), the
+    connector node makes ONE logical write per invocation, so a stable
+    ``run:{run_id}:node:{node_id}`` key lets a retry's marker merge with (and
+    preserve) the prior attempt's ``delivery_done`` via
+    ``_merge_existing_raw_output_marker``.
+    """
+    return f"run:{run_id}:node:{node_id}:connector"
+
+
+def _connector_on_unknown(connector: Any, resource: str) -> str:
+    """Read the effective ``on_unknown`` mode for a connector write to *resource*.
+
+    FAR-458: decisions of fail-open vs fail-closed on the ambiguous
+    (couldn't-confirm-delivery) path belong to the ACTION's semantics, so each
+    connector-op declares its own mode (``ConnectorBase.on_unknown_for``; REST
+    reads a per-op config value defaulting to ``fail_open``). The lookup is
+    defensive: a connector that does not expose ``on_unknown_for`` (or a reader
+    that raises) falls back to the fail-open default, so the gate never blocks a
+    write on a missing/illegible policy. Any value outside the three valid modes
+    is also coerced to ``fail_open`` (an invalid value is a config error the
+    connector surfaces loudly at parse time; the gate stays fail-open).
+    """
+    reader = getattr(connector, "on_unknown_for", None)
+    if not callable(reader):
+        return DEFAULT_ON_UNKNOWN
+    try:
+        mode = reader(resource)
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate.on_unknown_read_failed",
+            extra={"resource": resource},
+            exc_info=True,
+        )
+        return DEFAULT_ON_UNKNOWN
+    return mode if mode in ON_UNKNOWN_MODES else DEFAULT_ON_UNKNOWN
+
+
+async def _resolve_connector_write_outcome(
+    session_factory: Callable[..., Any] | None,
+    *,
+    connector: Any,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    result: Any = None,
+    intent_active: bool,
+    exception: BaseException | None = None,
+) -> None:
+    """Post-write resolution for a connector write (FAR-458 + FAR-531 AC6).
+
+    The SINGLE authority deciding what the marker slot records after the
+    upstream write — every terminal transition flows through here:
+
+    - A RAISED error (``exception`` is not None, QA Fix 1) is classified
+      AMBIGUOUS and the in-flight intent marker is left AS-IS — no
+      ``no_delivery_confirmed`` is persisted. A raised error cannot tell the
+      engine WHETHER the write reached upstream: a read-timeout /
+      connection-reset AFTER dispatch may have landed it, so persisting
+      definite no-delivery evidence would be a lie (and fail_closed's
+      documented "possible silent miss" suppression would never engage). Under
+      ``fail_closed`` the in-flight intent suppresses the re-fire; under
+      ``fail_open`` it re-fires (unchanged). Note a deterministic PRE-dispatch
+      failure (e.g. payload validation raising) therefore also stays ambiguous
+      under fail_closed — that IS the contract: only the connector's OWN
+      reported-failure shape is trusted as definite.
+    - A reported failure (the connector's ``write_reported_failure`` hook,
+      default False — connectors whose results carry a failure shape OPT IN) is
+      a DEFINITE no-delivery: ``delivery_done`` is NEVER stamped (the
+      pre-FAR-458 silent-miss guard), and an in-flight intent marker resolves
+      to ``no_delivery_confirmed`` so a later attempt re-fires under BOTH
+      modes. Without intent markers this is exactly the pre-FAR-531 behaviour
+      (no stamp at all).
+    - Otherwise the write genuinely delivered: stamp ``delivery_done``
+      (promoting the intent marker in place).
+    """
+    if exception is not None:
+        # QA Fix 1: ambiguous — leave the in-flight intent AS-IS (if any).
+        if intent_active:
+            _log.warning(
+                "connector.idempotency_intent_left_in_flight_on_error",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "error_type": type(exception).__name__,
+                    "hint": "raised_connector_error_is_ambiguous_fail_closed_suppresses",
+                },
+            )
+        return
+    if _connector_write_reported_failure(connector, result):
+        if intent_active:
+            await _mark_connector_write_no_delivery(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=org_id_raw,
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+                reason="connector_reported_failure",
+            )
+        return
+    await _stamp_connector_write_delivered(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id_raw,
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        result=result,
+    )
+
+
+async def _stamp_connector_write_delivered(  # NOSONAR S1172 - result preserves connector hook contract
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    result: Any = None,
+) -> None:
+    """Best-effort persist of a ``delivery_done`` marker for a successful connector write.
+
+    FAR-458 MAJOR 1: the stamp fires only when the write GENUINELY succeeded —
+    the CALLER owns that decision (FAR-531 AC6: it consults the connector's
+    ``write_reported_failure`` hook, so connectors that report a failed write in
+    their return value without raising — e.g. ``ShellConnector.write`` for the
+    ``command`` resource returning ``{"exit_code": <non-zero>}`` — are routed to
+    :func:`_mark_connector_write_no_delivery` instead of here). Stamping
+    ``delivery_done`` on a failed result would suppress the operator's
+    recover-by-re-run of the SAME run (the exact "silent miss" the code warns
+    about).
+
+    Mirrors the sandbox marker persist (bounded, never raises) — the evidence
+    a connector write genuinely reached upstream. Fail-open: a persistence
+    failure is logged and ignored, so a DB hiccup cannot convert a successful
+    write into a failed node. When no run id / session factory is available the
+    marker is skipped (the write still succeeds).
+
+    ``resource`` / ``filters`` / ``data`` are the FULL write identity folded
+    into the marker's derived ``idempotency_key`` (via
+    :func:`_connector_write_payload_hash`) on BOTH the stamp and gate sides, so
+    a re-run that edits the content OR the target derives the matching key.
+
+    MAJOR 1 (FAR-458): the connector marker slot is keyed ONCE per
+    ``(run, node)``; a content-edit re-run must PROMOTE the newest delivered
+    key (``promote_newest_key=True``) rather than pin the slot to a superseded
+    key — otherwise a later re-run of the edited payload misfires (double
+    submit) while a re-run of the superseded original is wrongly suppressed.
+    FAR-531: the stamp UPDATES-IN-PLACE the slot an in-flight intent marker
+    (:func:`_persist_connector_write_intent`) already occupies — the merge
+    promotes ``delivery_done: True`` over the intent, never a duplicate row.
+
+    DURABILITY (FAR-458 MAJOR 4; mode-dependent per FAR-531 QA Fix 6):
+    persistence is best-effort, so a lost stamp's consequence depends on what
+    evidence survives. With an in-flight intent marker still in the slot
+    (killswitch on), a lost DELIVERY stamp leaves the write AMBIGUOUS:
+    ``fail_open`` re-fires the delivered write (potential double-submit) while
+    ``fail_closed`` SUPPRESSES the re-fire (possible silent miss — the operator
+    reconciles; NOT a double-submit). With no marker at all (killswitch off, or
+    the intent persist was lost too) the re-run re-fires in every mode
+    (potential double-submit). Emits the structured
+    ``connector.idempotency_marker_lost`` counter on any non-persisted marker
+    so the loss is observable in analytics/metrics; the underlying failure is
+    already logged by ``_persist_raw_output_marker``.
+
+    NEVER RAISES (QA Fix 5, FAR-531): the payload-hash computation and the
+    persist are bounded by this body — a hostile payload (``str(obj)`` raising
+    escapes the hash's ``except (TypeError, ValueError)``) or any persist
+    failure degrades to "no marker" with a log, never a node failure.
+    """
+    if session_factory is None or not run_id:
+        return
+    try:
+        payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+        attempt_key = _connector_marker_attempt_key(run_id, node_id)
+        marker: dict[str, Any] = {
+            "_modulo_marker": True,
+            "status": "completed",
+            "summary": "connector write delivered (delivery_done)",
+            "node_id": node_id,
+            "attempt_key": attempt_key,
+            "delivery_done": True,
+        }
+        persisted = await _persist_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id_raw,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            marker=marker,
+            index=None,
+            payload=payload,
+            promote_newest_key=True,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "connector.idempotency_stamp_failed",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return
+    if not persisted:
+        _log.warning(
+            "connector.idempotency_marker_lost",
+            extra={
+                "run_id": run_id,
+                "node_id": node_id,
+                "attempt_key": attempt_key,
+                "hint": "delivery_marker_not_persisted_fail_open_double_submit_or_fail_closed_suppressed",
+            },
+        )
+
+
+# ── FAR-531 intent markers (write-before / stamp-after) ──────────────────────
+# The FAR-458 gate's ``on_unknown: fail_closed`` could never engage in
+# production: ``read_before_write_ambiguous`` requires a marker carrying the
+# write's derived key WITHOUT ``delivery_done``, but the only production writer
+# (``_stamp_connector_write_delivered``) always stamps ``delivery_done: True``
+# — and a crash/timeout between write dispatch and stamp left NO marker at all.
+# The intent marker closes that gap: it is persisted AFTER the gate proceeds
+# and BEFORE the upstream write fires, in the SAME marker slot the delivery
+# stamp updates (update-in-place, no duplicate rows). State machine per
+# ``(run, node)`` slot + derived key:
+#
+#   (absent) --gate proceed--> INTENT (in-flight, ambiguous)
+#   INTENT --write succeeds--> DELIVERED (delivery_done: True; suppressed in
+#                              every mode except ``off``)
+#   INTENT --reported failure-> NO_DELIVERY (no_delivery_confirmed: True;
+#                              NOT ambiguous — re-fires under BOTH modes; the
+#                              connector's OWN result shape reported the
+#                              failure via ``write_reported_failure`` so the
+#                              no-delivery is DEFINITE)
+#   INTENT --write raises-----> stays INTENT (AMBIGUOUS — QA Fix 1: a raised
+#                              error cannot tell whether the write landed (a
+#                              read-timeout AFTER dispatch vs a pre-dispatch
+#                              validation failure look identical), so it is
+#                              NOT trusted as a definite no-delivery:
+#                              fail_closed suppresses ("possible silent
+#                              miss"), fail_open re-fires. A deterministic
+#                              pre-dispatch failure therefore also stays
+#                              ambiguous under fail_closed — that IS the
+#                              contract.)
+#   INTENT --crash/timeout----> stays INTENT (ambiguous: fail_closed
+#                              suppresses — the headline FAR-531 fix; fail_open
+#                              re-fires, unchanged)
+#
+# RESIDUAL (killswitch flip-OFF orphan, QA Fix 7): intent written →
+# crash/timeout → operator flips the killswitch OFF → a re-run bypasses the
+# gate ENTIRELY (the write re-fires un-deduped) and the slot still holds the
+# in-flight intent → if that re-run's write fails, no resolution is persisted
+# (the intent path is disabled with the killswitch) → the ORPHANED in-flight
+# intent survives. Re-enabling the killswitch with ``fail_closed`` then
+# suppresses a re-run of a write that may have DEFINITELY failed (the slot
+# looks ambiguous) until an operator reconciles/clears the orphaned slot.
+# Accepted within fail_closed's documented "possible silent miss" contract.
+
+_CONNECTOR_INTENT_MARKER_KIND = "connector_write_intent"
+_CONNECTOR_NO_DELIVERY_MARKER_KIND = "connector_write_no_delivery"
+
+
+def _connector_gate_enabled(on_unknown: str, *, node_id: str | None = None, run_id: str | None = None) -> bool:
+    """Whether the connector-write gate may act on this op's outcome (QA Fix 3).
+
+    The SINGLE authority for gate eligibility: the per-op ``on_unknown`` mode is
+    not ``off`` (the op bypasses the gate entirely) AND the opt-in killswitch
+    ``modulo_connector_write_gate_enabled`` is enabled. The killswitch read is
+    fail-open — an exception reads as disabled (the gate proceeds on the same
+    failure).
+
+    Consumed by BOTH ``_connector_write_gate`` (may I suppress?) and
+    ``_connector_intent_marker_enabled`` (should I persist an intent marker?),
+    so the feature's correctness invariant — an intent marker is written
+    if-and-only-if the gate could suppress on ambiguity — is enforced in ONE
+    place instead of parallel copies that can drift.
+    """
+    if on_unknown == "off":
+        return False
+    try:
+        from farna.settings import get_settings
+
+        return bool(getattr(get_settings(), "modulo_connector_write_gate_enabled", False))
+    except Exception:
+        # Killswitch read failure must not block a write — proceed (fail-open).
+        _log.warning(
+            "connector.idempotency_gate_killswitch_check_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
+        )
+        return False
+
+
+def _connector_intent_marker_enabled(on_unknown: str) -> bool:
+    """Whether an intent marker should be written for a connector write.
+
+    An intent marker only exists to be consumed by the read-before-write gate,
+    so it is written ONLY when the gate could actually suppress on ambiguity.
+    Delegates to :func:`_connector_gate_enabled` (QA Fix 3) — the same
+    killswitch + ``off``-bypass policy the gate itself evaluates, so the marker
+    write and the gate can never disagree. Deliberate scope note: the marker is
+    written for ``fail_open`` too, not only ``fail_closed`` — one uniform
+    marker state machine, and the evidence survives an operator later flipping
+    the mode to fail_closed (fail_open gate semantics are unchanged: the
+    ambiguous branch still never suppresses under fail_open).
+    """
+    return _connector_gate_enabled(on_unknown)
+
+
+def _connector_write_reported_failure(connector: Any, result: Any) -> bool:
+    """Defensively read the connector's ``write_reported_failure`` hook (AC6).
+
+    True ONLY when the connector exposes the hook, calling it does not raise,
+    and the hook reports a failure for this non-raising write result. Any
+    missing hook, read error, or non-bool answer is treated as "not a reported
+    failure" (the pre-FAR-531 default for connectors that raise on failure).
+    """
+    reader = getattr(connector, "write_reported_failure", None)
+    if not callable(reader):
+        return False
+    try:
+        return bool(reader(result))
+    except Exception:
+        _log.warning(
+            "connector.idempotency_gate.write_reported_failure_read_failed",
+            extra={"connector_type": str(getattr(connector, "connector_type", ""))},
+            exc_info=True,
+        )
+        return False
+
+
+async def _persist_connector_write_intent(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+) -> None:
+    """Persist the IN-FLIGHT intent marker BEFORE the upstream write fires.
+
+    FAR-531: called exactly between the gate returning "proceed" and the
+    connector write, carrying the SAME derived key the gate reads (identical
+    ``resource`` / ``filters`` / ``data`` identity and the run's persisted
+    idempotency key via ``_write_raw_output_marker``). A crash, timeout, or
+    worker kill between this persist and the delivery stamp leaves the marker
+    in-flight — the ambiguous state ``read_before_write_ambiguous`` reports, so
+    a later attempt's gate SUPPRESSES the re-fire under ``fail_closed`` (the
+    headline fix) and re-fires under ``fail_open`` (unchanged).
+
+    The marker occupies the SAME slot (``_connector_marker_attempt_key``) the
+    delivery stamp updates, so a successful write promotes it in place to
+    ``delivery_done: True`` (no duplicate rows). Best-effort and bounded
+    exactly like the delivery stamp — an intent-write failure must never fail
+    the node (fail-open, logged).
+
+    NEVER RAISES (QA Fix 5, FAR-531): the payload-hash computation and the
+    persist are bounded by this body — a hostile payload (``str(obj)`` raising
+    escapes the hash's ``except (TypeError, ValueError)``) or any persist
+    failure degrades to "no marker" with a log. The node therefore always
+    proceeds to the write; the pre-write intent persist can never fail it.
+    """
+    if session_factory is None or not run_id:
+        return
+    try:
+        payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+        attempt_key = _connector_marker_attempt_key(run_id, node_id)
+        marker: dict[str, Any] = {
+            "_modulo_marker": True,
+            "status": "running",
+            "summary": "connector write intent (in-flight, delivery unconfirmed)",
+            "node_id": node_id,
+            "attempt_key": attempt_key,
+            "marker_kind": _CONNECTOR_INTENT_MARKER_KIND,
+        }
+        await _persist_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id_raw,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            marker=marker,
+            index=None,
+            payload=payload,
+            promote_newest_key=True,
+            # The intent describes a write that has NOT happened yet — it must
+            # never inherit ``delivery_done: True`` from a SUPERSEDED key's
+            # delivered marker sharing the slot (that would claim the new key
+            # was already delivered before the write fired). A SAME-KEY
+            # delivered marker's evidence IS inherited (QA Fix 2): a
+            # concurrent-attempt intent persist must not wipe delivered
+            # evidence for the identical write.
+            preserve_delivery_done=False,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "connector.idempotency_intent_persist_failed",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+
+
+async def _mark_connector_write_no_delivery(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    reason: str,
+) -> None:
+    """Resolve the in-flight intent marker to a DEFINITE no-delivery state.
+
+    FAR-531: fired when the write DEFINITELY did not reach upstream — ONLY the
+    non-raising path where the connector's OWN result shape reported the
+    failure (``reason="connector_reported_failure"`` via the
+    ``write_reported_failure`` hook, AC6). A RAISED connector error is NOT
+    routed here (QA Fix 1): a raise cannot tell whether the write reached
+    upstream, so it is classified AMBIGUOUS and the in-flight intent is left
+    as-is (fail_closed suppresses, fail_open re-fires). The marker flips to
+    ``no_delivery_confirmed: True`` in the SAME slot, so a later attempt's gate
+    treats the key as NOT ambiguous (``read_before_write_ambiguous`` excludes
+    it) and RE-FIRES the write under BOTH modes — honouring FAR-458's "never
+    suppress a definite failure".
+
+    RESIDUAL (documented, within fail_closed's contract): the resolve is
+    best-effort. A crash between the failure being detected and this persist
+    leaves the in-flight intent marker → ambiguous → fail_closed suppresses a
+    definitely-failed write ONCE ("possible silent miss"; the operator
+    reconciles). Best-effort + bounded exactly like the delivery stamp.
+
+    NEVER RAISES (QA Fix 5, FAR-531): the payload-hash computation and the
+    persist are bounded by this body — a hostile payload (``str(obj)`` raising
+    escapes the hash's ``except (TypeError, ValueError)``) or any persist
+    failure degrades to "no marker" with a log; the connector's original error
+    or result is never masked by a persist failure.
+    """
+    if session_factory is None or not run_id:
+        return
+    try:
+        payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+        attempt_key = _connector_marker_attempt_key(run_id, node_id)
+        marker: dict[str, Any] = {
+            "_modulo_marker": True,
+            "status": "failed",
+            "summary": f"connector write did not reach upstream ({reason})",
+            "node_id": node_id,
+            "attempt_key": attempt_key,
+            "marker_kind": _CONNECTOR_NO_DELIVERY_MARKER_KIND,
+            "no_delivery_confirmed": True,
+        }
+        await _persist_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id_raw,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            marker=marker,
+            index=None,
+            payload=payload,
+            promote_newest_key=True,
+            # Same reasoning as the intent marker: a definite no-delivery for
+            # the newest key must not inherit a SUPERSEDED key's delivery
+            # evidence — but a SAME-KEY delivered marker's evidence IS
+            # inherited (QA Fix 2): the delivery genuinely happened for this
+            # key, and wiping it would re-fire a delivered write.
+            preserve_delivery_done=False,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "connector.idempotency_no_delivery_persist_failed",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+
+
+async def _connector_write_gate(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any] | None,
+    data: dict[str, Any],
+    on_unknown: str = "fail_open",
+) -> dict[str, Any] | None:
+    """FAR-458 read-before-write gate for a connector write.
+
+    Suppresses (returns a skipped envelope) in EXACTLY two situations:
+
+    1. **CONFIRMED delivery** (the dedup's whole point, mode-INDEPENDENT): the
+       run's persisted idempotency key derives a per-node key that a recorded
+       marker carries WITH ``delivery_done is True`` — a genuine prior upstream
+       delivery. Always suppressed, regardless of ``on_unknown``.
+    2. **AMBIGUOUS delivery** (governed by ``on_unknown``): a recorded marker
+       carries the SAME derived key but WITHOUT ``delivery_done is True`` AND
+       WITHOUT ``no_delivery_confirmed is True`` — a prior attempt touched this
+       exact write but its delivery could not be confirmed. With the FAR-531
+       intent markers this is the IN-FLIGHT intent marker left by a
+       crash/timeout between the intent persist and the delivery stamp.
+       ``on_unknown="fail_closed"`` suppresses (possible silent miss; the
+       operator reconciles); ``on_unknown="fail_open"`` (default) does NOT
+       suppress (the write fires, possible duplicate — usually recoverable).
+
+    A first-time write (no marker), a changed-payload/target re-run (a
+    DIFFERENT derived key), and a DEFINITE-failure re-run (the intent marker
+    was resolved to ``no_delivery_confirmed: True`` — the connector's result
+    reported failure; a connector that RAISED is ambiguous instead and its
+    intent marker stays in-flight) are NEVER suppressed — the definite failure
+    re-fires under BOTH modes (FAR-458: never suppress a definite failure).
+    ``on_unknown="off"`` bypasses the gate entirely — the write always fires,
+    never deduped.
+
+    The fail-closed suppression envelope records ``delivery_done: False``
+    (FAR-531 AC4): the suppressed write was NOT confirmed delivered — claiming
+    otherwise would misreport a suppressed-never-fired write as delivered.
+    (Suppressed ≠ delivered.)
+
+    ``on_unknown`` (FAR-458) is the per-connector-per-write idempotency mode read
+    from the connector's write op config (see ``ConnectorBase.on_unknown_for`` /
+    ``_connector_on_unknown``). The default ``fail_open`` preserves the
+    pre-existing fail-open gate contract: an ambiguous-but-unconfirmed delivery is
+    re-attempted rather than silently dropped. A CONFIRMED-delivered write is
+    still suppressed in every mode except ``off``.
+
+    ``resource`` / ``filters`` / ``data`` (MAJOR 2) are the FULL write identity
+    folded into the derived key (via :func:`_connector_write_payload_hash`) on
+    BOTH this gate side and the marker-stamp side, so a re-run that edits the
+    content OR the write target (resource / ``provider_ref``) derives a
+    DIFFERENT key and is NOT suppressed (the edit or new target is never
+    silently deduped), while an unchanged re-run reuses the same key and IS
+    suppressed. Threads the write-content ``payload`` into the key derivation.
+
+    Fail-open in every direction (missing run id / session factory / persisted
+    key, killswitch off, DB error, malformed key) returns ``None`` — the write
+    proceeds, never blocked. The killswitch
+    ``modulo_connector_write_gate_enabled`` is GENUINELY OPT-IN: it defaults to
+    ``False`` (set in ``modulo.settings``), so a deploy never silently suppresses
+    byte-identical re-executed connector writes — a behavioural change vs. the
+    pre-FAR-458 contract where every visit fired. Operators enable it explicitly.
+    """
+    if session_factory is None or not run_id:
+        return None
+    # QA Fix 3: the per-op ``off`` bypass + the opt-in killswitch live in ONE
+    # shared eligibility helper (also consumed by the intent-marker writer), so
+    # "gate can act" and "intent marker written" can never drift apart. The
+    # ``off`` check short-circuits before the killswitch and the marker read
+    # (the gate is bypassed entirely for that op).
+    if not _connector_gate_enabled(on_unknown, node_id=node_id, run_id=run_id):
+        return None
+    payload = _connector_write_payload_hash(resource=resource, filters=filters, data=data)
+    markers, persisted_key = await _read_connector_idempotency_gate_state(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id_raw,
+        node_id=node_id,
+    )
+    if not persisted_key:
+        return None
+    try:
+        suppressed = read_before_write_suppression(
+            markers,
+            run_ref=persisted_key,
+            node_ref=node_id,
+            index=None,
+            payload=payload,
+        )
+    except ValueError:
+        return None
+    if suppressed:
+        _log.info(
+            "connector.idempotency_gate.suppressed_write",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_suppressed")
+    if on_unknown == "fail_closed":
+        try:
+            ambiguous = read_before_write_ambiguous(
+                markers,
+                run_ref=persisted_key,
+                node_ref=node_id,
+                index=None,
+                payload=payload,
+            )
+        except ValueError:
+            ambiguous = False
+        if ambiguous:
+            _log.info(
+                "connector.idempotency_gate.fail_closed_suppressed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+            # FAR-531 AC4: the suppressed write is NOT confirmed delivered — the
+            # envelope must not claim ``delivery_done: True`` for it.
+            return _idempotency_gate_skipped_envelope(node_id, gate_tag="connector_write_fail_closed", delivered=False)
+    return None
+
+
+def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
+    """Evaluate an eval-reference condition using the given operator.
+
+    Returns True when the condition is satisfied (meaning the gate should fire/interrupt).
+    Returns False when the condition is not satisfied (gate should be skipped).
+    """
+    match operator:
+        case "lt":
+            return score < threshold
+        case "gt":
+            return score > threshold
+        case "lte":
+            return score <= threshold
+        case "gte":
+            return score >= threshold
+        case "eq":
+            return score == threshold
+        case "neq":
+            return score != threshold
+        case _:
+            _log.warning(
+                "hitl_review.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
+            )
+            return False
+
+
+# FAR-215 mid-run conformance re-check context. Set per-run by the executor
+# (before graph streaming) so the node builders — created at graph-compile time
+# via build_graph_from_json — can perform the capability re-check at NODE RUN
+# TIME against the live manifest without threading the session factory / org /
+# environment profile through every node builder signature.
+#
+# The tuple also carries the executor's HOISTED claim discovery: the claimed
+# guardrail DTOs for the pipeline (one query per run) and a fail-closed marker
+# for a run-start load failure. ``_run_conformance_gate`` forwards these to
+# ``check_node_start`` so the per-node path pays zero guardrail-load queries.
+_conformance_ctx_cv: ContextVar[tuple[Any, ...] | None] = ContextVar("_conformance_ctx", default=None)
+
+
+def set_conformance_ctx(
+    session_factory: Any,
+    org_id: Any,
+    environment_profile_id: Any,
+    pipeline_id: Any,
+    claimed_guardrails: list[Any] | None = None,
+    claims_load_failed: bool = False,
+) -> None:
+    """Set the run-scoped conformance context (executor calls before streaming).
+
+    *claimed_guardrails* is the hoisted per-run list of claimed guardrail DTOs
+    (computed once by the executor); ``claims_load_failed`` marks a run-start
+    load failure so the node gate fails CLOSED rather than skipping claims.
+    """
+    _conformance_ctx_cv.set(
+        (session_factory, org_id, environment_profile_id, pipeline_id, claimed_guardrails, claims_load_failed)
+    )
+
+
+def get_conformance_ctx() -> tuple[Any, ...] | None:
+    return _conformance_ctx_cv.get()
+
+
+def _parse_uuid_opt(value: Any) -> uuid.UUID | None:
+    """Parse a UUID (or str) to a UUID, or None when absent/unparseable."""
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+# FIX E: mode-resolution helper — single source of truth, replaces 3 copy-pasted blocks
+_SCHEMA_MODE_CACHE: dict[str, str] = {}  # last-known-good cache per org
+# FAR-899: bound the mode-resolution DB read (3s — a hung DB must fail open to
+# the last-known-good cache / env / default, never hang the node hot path).
+_SCHEMA_MODE_RESOLVE_TIMEOUT = 3.0
+
+
+async def _resolve_schema_validator_mode(
+    state: dict[str, Any],
+    *,
+    session_factory: Any | None = None,
+    node_id: str = "",
+) -> str:
+    """Resolve schema_validator_mode from the effective-setting store.
+
+    Resolution order: DB effective-setting store → last-known-good cache →
+    env var → "lenient". On resolver failure, emits ERROR-level log and a
+    distinguishable telemetry marker, then falls through to cache/env/default.
+
+    Returns:
+        "lenient" or "strict".
+    """
+    # Fast path: no session factory → env/default
+    if session_factory is None:
+        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+
+    _org_raw = state.get("_org_id")
+    _org_uuid = _parse_uuid_opt(_org_raw)
+    if _org_uuid is None:
+        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+
+    from farna.db.settings_resolver import resolve_schema_validator_mode
+
+    try:
+        async with session_factory() as _sess, _sess.begin():
+            mode = await asyncio.wait_for(
+                resolve_schema_validator_mode(_sess, _org_uuid),
+                timeout=_SCHEMA_MODE_RESOLVE_TIMEOUT,
+            )
+    except Exception:
+        _org_key = str(_org_uuid)
+        cached = _SCHEMA_MODE_CACHE.get(_org_key)
+        _log.exception(
+            "schema_validator_mode.resolve_failed",
+            extra={
+                "node_id": node_id,
+                "org_id": _org_key,
+                "last_known_good": cached,
+                "fallback": "lenient",
+            },
+        )
+        # Return cached value if available, else env/default
+        return cached or os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+    else:
+        # Cache the resolved value as last-known-good
+        _SCHEMA_MODE_CACHE[str(_org_uuid)] = mode
+        return mode
+
+
+async def _run_conformance_gate(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    connector_instance_ids: list[uuid.UUID] | None = None,
+    agent_id: uuid.UUID | None = None,
+    node_def: dict[str, Any] | None = None,
+) -> bool:
+    """FAR-215 mid-run capability re-check at node start (block -> HITL).
+
+    On a conformance block this raises a LangGraph ``interrupt()`` (after
+    stamping the per-node ``_conformance_blocked_node`` marker and writing the
+    audit) — the node body must NOT return a special awaiting_human envelope
+    afterwards: the interrupt routes the run to ``awaiting_human`` itself, and
+    control never returns to the node. Returns False when the node should
+    proceed with normal execution (fast path, resume-approve override, warn/
+    observe advisory, or present). ``return True`` is retained only as a
+    defensive tail for direct callers/tests where ``interrupt`` is mocked; in
+    production the interrupt raises first.
+
+    Reads the run-scoped conformance context (session_factory, org_id,
+    environment_profile_id, pipeline_id, hoisted claimed guardrails, run-start
+    load-failed marker) set by the executor; the node's bound connector
+    instance ids and agent id come from the node definition. *node_def*, when
+    provided, is forwarded to the live-manifest reader so a ``sandbox_agent``
+    node's mechanically-derived sandbox capability surface (egress certification;
+    write/git-credential unknown until PR B — FAR-212 PR A) is included in the
+    conformance manifest.
+
+    Behaviour:
+      - On resume of THIS node's conformance block (``state`` carries the
+        ``_conformance_blocked_node`` marker set before the interrupt) the
+        human decision is routed — and only when the decision is STAMPED for
+        this block (FAR-541: its ``review_id`` matches the blocked node id or
+        the block's guardrail gate id; ``_hitl_decision`` alone is NEVER
+        trusted to skip the check): ``approved`` (or ``deliver_manual``) is
+        the documented human override -> the markers are cleared and the node
+        continues; ``rejected`` -> the node is DENIED and the run FAILS CLOSED
+        (raises ``GuardrailBlockedError`` -> terminal ``eval_failed``), never a
+        fail-open continuation. A foreign/mismatched decision leaves the block
+        standing and re-interrupts. ``_hitl_decision`` persists in state for
+        the whole run after ANY HITL resume, so a foreign decision must not
+        disable this safety gate.
+      - No bound guardrail with a conformance claim -> fast path (no DB).
+      - ``absent``/``unknown`` on a ``block``-action guardrail -> raise a HITL
+        interrupt (the run transitions to ``awaiting_human`` with a
+        machine-readable reason), never silent abort, never fail open.
+      - ``absent``/``unknown`` on warn/observe -> log + audit warning, continue.
+      - ``present`` -> continue.
+
+    An audit event is appended for the block before the interrupt. The audit
+    write is best-effort (failure-isolated) and never carries raw payloads.
+    """
+    ctx = get_conformance_ctx()
+    if ctx is None:
+        return False
+    session_factory, org_id_raw, environment_profile_id, pipeline_id_raw, *rest = ctx
+    claimed_guardrails: list[Any] | None = rest[0] if rest else None
+    claims_load_failed: bool = bool(rest[1]) if len(rest) > 1 else False
+    if session_factory is None or not pipeline_id_raw:
+        return False
+    if state.get("_conformance_blocked_node") == node_id:
+        return _handle_conformance_resume(state, node_id)
+
+    org_uuid = _parse_uuid_opt(org_id_raw)
+    if org_uuid is None:
+        return False
+    pipeline_uuid = _parse_uuid_opt(pipeline_id_raw)
+    if pipeline_uuid is None:
+        return False
+    env_profile_uuid = _parse_uuid_opt(environment_profile_id)
+
+    from farna.core.guardrails.conformance import check_node_start
+
+    result = await check_node_start(
+        session_factory,
+        org_id=org_uuid,
+        pipeline_id=pipeline_uuid,
+        node_id=node_id,
+        connector_instance_ids=list(connector_instance_ids or []),
+        environment_profile_id=env_profile_uuid,
+        agent_id=agent_id,
+        node_def=node_def,
+        claimed_guardrails=claimed_guardrails,
+        claims_load_failed=claims_load_failed,
+    )
+    if result.blocked:
+        return await _handle_conformance_block(session_factory, state, node_id, org_uuid, result)
+    if result.warned:
+        # Advisory (warn/observe) guardrails never block — log + audit only.
+        await _append_conformance_audit(
+            session_factory,
+            org_id=org_uuid,
+            run_id=state.get("_run_id"),
+            node_id=node_id,
+            detail=result.detail,
+            state=result.state,
+            event_type="guardrail.conformance_warned_midrun",
+        )
+    return False
+
+
+def _handle_conformance_resume(state: dict[str, Any], node_id: str) -> bool:
+    """Route a human's decision after a conformance block (True: fail closed).
+
+    FAR-541: ``_hitl_decision`` alone is NEVER trusted — the decision must be
+    STAMPED for THIS block (its ``review_id`` matches the blocked node id or the
+    block's own guardrail gate id, stamped in state as
+    ``_conformance_blocked_gate``). ``_hitl_decision`` persists in state for
+    the whole run after ANY HITL resume, so a decision made at an earlier gate
+    must not clear (or reject on) this safety gate: a mismatched or missing
+    stamp leaves the block standing and re-interrupts — the run keeps waiting
+    for a decision that resolves THIS block (``conformance.foreign_decision_ignored``
+    warning; gate ids only, never payload content). When the re-interrupt's
+    resume value replays in the same execution pass (the human has since
+    decided), that value is re-checked instead of falling through — see
+    :func:`_recheck_after_conformance_interrupt` (FAR-541 iteration 4, F-6).
+
+    On a STAMPED ``rejected`` the run FAILS CLOSED: the capability the block
+    protected is still unavailable, so the node must NOT execute.
+    ``GuardrailBlockedError`` is mapped by the executor to terminal
+    ``eval_failed``/``eval_blocked`` (never a resume).
+
+    The override action is restricted to a recognized allowlist (FAR-541
+    iteration 3, fail-closed on garbage):
+
+    * ``approved`` / ``deliver_manual`` — the documented human override (the
+      HITL API writers); the markers are cleared (so a later foreign resume
+      replay of this node re-runs the real check) and normal execution
+      continues.
+    * ``skip`` / ``replay`` — the operator break-glass stamped by the
+      recover-node route (routes/runs.py): the pre-FAR-541 semantics kept — a
+      stamped skip/replay clears the block so the node re-runs.
+    * Anything else (a missing action, ``manual_output``, garbage) does NOT
+      clear the block — warn + re-interrupt (``conformance.unknown_override_ignored``).
+    """
+    decision = state.get("_hitl_decision")
+    action = decision.get("action") if isinstance(decision, dict) else None
+    stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
+    blocked_gate = str(state.get("_conformance_blocked_gate") or "")
+    accepted_stamps = {node_id, blocked_gate} - {""}
+    if stamped_gate is None or str(stamped_gate) not in accepted_stamps:
+        _log.warning(
+            "conformance.foreign_decision_ignored",
+            extra={"node_id": node_id, "decision_review_id": stamped_gate},
+        )
+        # Fail closed: the block STANDS — re-interrupt so the run keeps waiting
+        # for a decision stamped for THIS block (a foreign decision never
+        # clears a guardrail block).
+        replay = interrupt(
+            {
+                "review_id": blocked_gate or node_id,
+                "node_id": node_id,
+                "conformance_blocked": True,
+                "reason": "awaiting a human decision for this conformance block",
+            }
+        )
+        return _recheck_after_conformance_interrupt(state, node_id, replay)
+    if action == "rejected":
+        from farna.core.guardrails import GuardrailBlockedError
+
+        raise GuardrailBlockedError(
+            f"conformance_gate_{node_id}",
+            "capability conformance gate was rejected by the human reviewer; the run fails closed",
+        )
+    if action not in ("approved", "deliver_manual", "skip", "replay"):
+        # FAR-541 iteration 3: only recognized override actions clear the
+        # block. Anything else (including a ``manual_output`` decision meant
+        # for a manual node, or garbage) fails closed — warn + re-interrupt.
+        _log.warning(
+            "conformance.unknown_override_ignored",
+            extra={"node_id": node_id, "decision_review_id": stamped_gate, "action": action},
+        )
+        replay = interrupt(
+            {
+                "review_id": blocked_gate or node_id,
+                "node_id": node_id,
+                "conformance_blocked": True,
+                "reason": "awaiting a recognized override decision for this conformance block",
+            }
+        )
+        return _recheck_after_conformance_interrupt(state, node_id, replay)
+    state["_conformance_blocked_node"] = None
+    state["_conformance_blocked_gate"] = None
+    return False
+
+
+def _recheck_after_conformance_interrupt(state: dict[str, Any], node_id: str, replay: Any) -> bool:
+    """Re-check a REPLAYED conformance resume (mirrors the gate node's pattern).
+
+    When ``interrupt()`` RETURNS a value (rather than pausing the graph), the
+    graph resumed within this execution pass and the value is the human's
+    decision — falling through to ``True`` here would terminalize the run
+    (``GuardrailBlockedError``) while the block is still standing, silently
+    discarding the decision the human just committed (FAR-541 iteration 4,
+    F-6). Mirror the gate node's recursive re-entry
+    (``return await _hitl_review({**state, "_hitl_decision": decision})``): feed
+    the replayed value back through :func:`_handle_conformance_resume` — the
+    LIVE state dict is updated in place so the marker-clearing mutations land
+    on the state the caller observes. A second foreign replay re-interrupts
+    (the run keeps waiting) — the recursion advances one human decision per
+    pass, exactly like the gate. A non-dict replay is not a decision; keep
+    the block standing.
+    """
+    if isinstance(replay, dict):
+        state["_hitl_decision"] = replay
+        return _handle_conformance_resume(state, node_id)
+    return True
+
+
+async def _handle_conformance_block(
+    session_factory: Callable[..., Any],
+    state: dict[str, Any],
+    node_id: str,
+    org_uuid: uuid.UUID,
+    result: Any,
+) -> bool:
+    """Audit + stamp the per-node block marker, then raise the HITL interrupt."""
+    await _append_conformance_audit(
+        session_factory,
+        org_id=org_uuid,
+        run_id=state.get("_run_id"),
+        node_id=node_id,
+        detail=result.detail,
+        state=result.state,
+        event_type="guardrail.conformance_blocked_midrun",
+    )
+    # Stamp the per-node marker so the resume path can tell THIS node's
+    # conformance block apart from any other gate's resume decision
+    # (``_hitl_decision`` persists in state for the rest of the run).
+    # FAR-541: the block's own gate id is stamped alongside so the resume
+    # path can verify the decision was made for THIS block (the HITL API
+    # stamps the decision with the claim row's gate id — the guardrail gate
+    # id the interrupt was created with).
+    # Mutations before ``interrupt()`` are persisted by the checkpointer
+    # (same pattern as ``_hitl_review`` / ``_manual_node``).
+    state["_conformance_blocked_node"] = node_id
+    state["_conformance_blocked_gate"] = str(result.review_id)
+    interrupt(
+        {
+            "review_id": result.review_id,
+            "reason": result.detail,
+            "node_id": node_id,
+            "conformance_state": result.state,
+            "conformance_blocked": True,
+        }
+    )
+    return True
+
+
+async def _append_conformance_audit(
+    session_factory: Callable[..., Any],
+    *,
+    org_id: uuid.UUID,
+    run_id: Any,
+    node_id: str,
+    detail: str,
+    state: str,
+    event_type: str,
+) -> None:
+    """Best-effort audit event for a mid-run conformance outcome (never raises)."""
+    try:
+        async with session_factory() as session, session.begin():
+            from farna.db.rls import set_rls_execution_context, set_rls_org
+
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            from farna.core.audit_logger import append_audit_event
+            from farna.core.audit_logger.labels import SYSTEM_ACTOR
+
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                resource_type="run",
+                resource_id=uuid.UUID(str(run_id)) if run_id else None,
+                payload_json={
+                    "node_id": node_id,
+                    "conformance_state": state,
+                    "detail": detail[:5000],
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Guardrail conformance {state} on node "{node_id}"',
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "guardrail.conformance_audit_failed",
+            extra={"org_id": str(org_id), "node_id": node_id},
+        )
+
+
+def _resolve_node_run_overrides(
+    run_context: dict[str, Any],
+    agent_id: uuid.UUID | None,
+    *,
+    model_backend_id_str: str | None,
+    prompt_template: str,
+) -> tuple[str | None, str]:
+    """Apply the run's frozen variant overrides on top of the snapshot-embedded node_def.
+
+    FAR-332/342: ``_run_overrides`` (seeded by the executor from the run's
+    frozen variant config) may override the model backend id and the per-agent
+    prompt version. The override is namespaced under the reserved TOP-LEVEL
+    ``_run_overrides`` key — never read from ``run_context["input"]``. Returns
+    ``(model_backend_id_str, prompt_template)`` unchanged when no override
+    applies.
+    """
+    _run_overrides = run_context.get("_run_overrides")
+    if isinstance(_run_overrides, dict):
+        if _run_overrides.get("model_backend_id"):
+            model_backend_id_str = str(_run_overrides["model_backend_id"])
+        prompt_templates = _run_overrides.get("prompt_templates")
+        if isinstance(prompt_templates, dict) and agent_id is not None:
+            per_agent_prompt = prompt_templates.get(str(agent_id))
+            if isinstance(per_agent_prompt, str) and per_agent_prompt:
+                prompt_template = per_agent_prompt
+    return model_backend_id_str, prompt_template
+
+
+def _render_agent_prompt(
+    *,
+    state: dict[str, Any],
+    run_context: dict[str, Any],
+    raw_input: Any,
+    prompt_template: str,
+    node_def: dict[str, Any],
+    work_item_refs: list[dict[str, Any]] | None = None,
+) -> tuple[str, str | None]:
+    """Render the node's prompt template (FAR-332/342 overrides applied inbound).
+
+    Injects the state, run_context, input, and any resolved parameters into a
+    sandboxed Jinja environment, then appends the LLM-routing prompt when the
+    node is an ``llm`` routing node. When *work_item_refs* is not ``None`` (the
+    node declared the ``work_item_refs`` input property — FAR-794 slice 2b),
+    the run's create-time refs are additionally exposed to the template as a
+    ``work_item_refs`` top-level variable (read-only data; the template CAN
+    bind ``{{ work_item_refs }}`` but nothing here lets a caller-governed
+    ``run_context["input"]`` write a run_context key with that name).
+    Returns ``(rendered_prompt, routing_mode)``.
+    """
+    env = SandboxedEnvironment()
+    template = env.from_string(prompt_template)
+    # FAR-418 / FAR-436: context_scope — the agent's run_context VIEW (the keys
+    # fed to the prompt template) is allowlist-gated to the node's need-to-know
+    # set. Internal control keys are always preserved by filter_run_context_scope
+    # (_CONTEXT_ALWAYS_KEPT). Absent scope = legacy (full run_context view).
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+    template_vars: dict[str, Any] = {
+        "state": state,
+        "run_context": scoped_run_context,
+        "input": raw_input,
+    }
+    if work_item_refs is not None:
+        template_vars[_WORK_ITEM_REFS_INPUT_PROP] = [dict(entry) for entry in work_item_refs]
+    resolved = node_def.get("_resolved_parameters")
+    if isinstance(resolved, dict):
+        template_vars["parameter"] = resolved
+    rendered_prompt = template.render(**template_vars)
+
+    routing_mode: str | None = node_def.get("routing_mode")
+    if routing_mode == "llm":
+        routing_prompt: str = node_def.get("routing_prompt", "")
+        if routing_prompt:
+            rendered_prompt = rendered_prompt + "\n\n" + routing_prompt
+    return rendered_prompt, routing_mode
+
+
+# ---------------------------------------------------------------------------
+# FIX 6 (FAR-898): defensive schema bounds — reject schemas that are
+# likely to 400 or hang the provider before they reach the model.
+# ---------------------------------------------------------------------------
+
+_MAX_SCHEMA_BYTES = 100_000  # 100 KB — prevents oversized payloads
+_MAX_SCHEMA_DEPTH = 10  # prevents pathological nesting
+
+
+def _is_safe_schema(schema: dict[str, Any]) -> tuple[bool, str]:
+    """Return ``(True, "")`` when *schema* is within provider-safe bounds.
+
+    Rejects schemas that are not a dict, are not JSON-serialisable, exceed
+    a max serialised size, exceed a max nesting depth, or contain an
+    external ``$ref`` (a ``$ref`` whose value is not a local ``#...``
+    pointer).  On rejection the caller falls back to no native structured
+    output — the schema is NOT sent to the provider.
+    """
+    if not isinstance(schema, dict):
+        return False, "schema is not a dict"
+
+    try:
+        serialised = json.dumps(schema)
+    except (TypeError, ValueError):
+        # Defensive: output_schema_json is sourced from node_def JSON and is
+        # therefore serialisable today, but a TypeError (non-serialisable
+        # value) or ValueError (e.g. a circular reference) must fall back to
+        # no native structured output rather than raise before dispatch.
+        return False, "schema is not JSON-serialisable"
+    if len(serialised) > _MAX_SCHEMA_BYTES:
+        return False, f"schema serialises to {len(serialised)} bytes (max {_MAX_SCHEMA_BYTES})"
+
+    depth = _schema_depth(schema)
+    if depth > _MAX_SCHEMA_DEPTH:
+        return False, f"schema nesting depth {depth} exceeds max {_MAX_SCHEMA_DEPTH}"
+
+    if _schema_has_external_ref(schema):
+        return False, "schema contains external $ref (not a local # pointer)"
+
+    return True, ""
+
+
+def _schema_depth(obj: Any, current: int = 0) -> int:
+    """Recursive nesting depth of a JSON-like object, capped at the limit."""
+    if current > _MAX_SCHEMA_DEPTH:
+        return current
+    if isinstance(obj, dict):
+        return max((_schema_depth(v, current + 1) for v in obj.values()), default=current)
+    if isinstance(obj, list):
+        return max((_schema_depth(v, current + 1) for v in obj), default=current)
+    return current
+
+
+def _schema_has_external_ref(obj: Any) -> bool:
+    """True when *obj* contains a ``$ref`` that is not a local ``#`` pointer."""
+    if isinstance(obj, dict):
+        if "$ref" in obj:
+            ref = obj["$ref"]
+            if isinstance(ref, str) and not ref.startswith("#"):
+                return True
+        return any(_schema_has_external_ref(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_schema_has_external_ref(v) for v in obj)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# FAR-900: schema profile resolution + provider extraction
+# ---------------------------------------------------------------------------
+
+# FIX 4: canonical value set derived from SchemaProfile — single source of truth.
+_VALID_SCHEMA_PROFILES = frozenset(typing.get_args(SchemaProfile))
+
+
+def _extract_provider_id(backend: Any) -> str | None:
+    """Extract the provider identifier from a backend's ``backend_id``.
+
+    Backend IDs follow the pattern ``"<provider>/<model_id>"`` (e.g.
+    ``"openai/gpt-4"``, ``"anthropic/claude-sonnet-4-6"``).  Returns the
+    lowercased provider prefix, or ``None`` when the ID does not match
+    the expected pattern.
+    """
+    backend_id = getattr(backend, "backend_id", None)
+    if not isinstance(backend_id, str) or "/" not in backend_id:
+        return None
+    return backend_id.split("/", 1)[0].lower()
+
+
+async def _resolve_provider_id_from_agent(
+    session_factory: Any,
+    agent_id: uuid.UUID | None,
+) -> str | None:
+    """Resolve the provider identifier from an agent's model backend.
+
+    Reads the Agent row, then the ModelBackend row, and extracts the
+    provider prefix from the backend's ``provider`` field.  Returns
+    ``None`` when the session factory or agent id is absent, or on any
+    failure (DB error, missing rows) — never raises.
+    """
+    if session_factory is None or agent_id is None:
+        return None
+    try:
+        from sqlalchemy import select
+
+        from farna.db.models.agent import Agent
+        from farna.db.models.model_backend import ModelBackend
+
+        async with session_factory() as session, session.begin():
+            agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+            if agent is None:
+                return None
+            mb_id = getattr(agent, "model_backend_id", None)
+            if mb_id is None:
+                return None
+            mb = (await session.execute(select(ModelBackend).where(ModelBackend.id == mb_id))).scalar_one_or_none()
+            if mb is None:
+                return None
+            provider = getattr(mb, "provider", None)
+            if isinstance(provider, str) and provider:
+                return provider.lower()
+    except Exception:
+        _log.debug("contract.provider_resolve_failed", extra={"agent_id": str(agent_id)}, exc_info=True)
+    return None
+
+
+def _resolve_schema_profile(node_def: dict[str, Any]) -> "SchemaProfile | None":
+    """Resolve the effective ``schema_profile`` for a node.
+
+    Resolution order (FAR-900):
+    1. **Node-level** ``schema_profile`` — embedded in the snapshot
+       ``graph_json`` node dict (e.g. set by composite-engine expansion or
+       a per-node override).
+    2. **Agent-level default** — ``Agent.schema_profile`` embedded into the
+       snapshot node dict by ``_apply_agent_fields`` (pipeline_snapshot.py).
+       The node dict carries both values; node-level is already present via
+       ``setdefault`` so it is never overwritten.
+    3. ``None`` → the caller treats it as ``"verbatim"`` (identity).
+
+    Returns ``None`` when no override is set (caller defaults to verbatim).
+    """
+    profile = node_def.get("schema_profile")
+    if profile in _VALID_SCHEMA_PROFILES:
+        return profile  # validated against _VALID_SCHEMA_PROFILES
+    return None
+
+
+async def _invoke_node_model(
+    rendered_prompt: str,
+    model_backend_id_str: str,
+    node_id: str,
+    output_schema_json: dict[str, Any] | None = None,
+    schema_profile: SchemaProfile | None = None,
+    _native_output_flag: list[bool] | None = None,
+) -> Any:
+    """Invoke the configured model backend and return its parsed output.
+
+    Resolves the ModelBackendHub (ContextVar), builds a HumanMessage from the
+    rendered prompt, invokes the backend, and best-effort JSON-parses a
+    string response. Raises when the hub is unavailable.
+
+    When *output_schema_json* is truthy and the backend declares
+    ``supports_native_structured_output``, the schema is rendered for the
+    target profile (FAR-900) and the RENDERED schema is forwarded to the
+    provider's native structured-output decoding path (so translation actually
+    takes effect).  An empty dict ``{}`` is treated as "no schema" (truthiness
+    guard).  Before dispatch the rendered schema is bounds-checked (size,
+    depth, external ``$ref``); if it fails (e.g. ``$ref`` inlining amplified
+    it past a limit) the raw schema is sent when IT passes bounds, otherwise
+    no native structured output is requested.
+
+    Best-effort: if rendering fails, falls back to the raw schema and
+    continues — the node must never fail because of translation.
+    """
+    from farna.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    if hub is None:
+        raise RuntimeError(f"ModelBackendHub not available for node {node_id!r}")
+
+    backend_id = uuid.UUID(model_backend_id_str)
+    backend = await hub.get(backend_id)
+
+    messages = [HumanMessage(content=rendered_prompt)]
+    invoke_kwargs: dict[str, Any] = {}
+    # FIX 2 (FAR-898): truthiness guard — an empty dict {} is treated as "no
+    # schema", matching the prior None guard behaviour while also catching
+    # the degenerate empty-schema case.
+    # FAR-900: render the schema for the target provider before dispatch.
+    # The effective profile defaults to "verbatim" when None (no override).
+    if output_schema_json and backend.supports_native_structured_output:
+        invoke_kwargs = _prepare_native_output_schema(
+            output_schema_json,
+            backend,
+            schema_profile=schema_profile,
+            node_id=node_id,
+            native_output_flag=_native_output_flag,
+        )
+    response = await backend.invoke(messages, **invoke_kwargs)
+
+    content = response.content if hasattr(response, "content") else str(response)
+    output_data: Any = content
+    if isinstance(content, str):
+        with suppress(json.JSONDecodeError, ValueError):
+            output_data = json.loads(content)
+    return output_data
+
+
+def _prepare_native_output_schema(
+    output_schema_json: dict[str, Any],
+    backend: Any,
+    *,
+    schema_profile: SchemaProfile | None,
+    node_id: str,
+    native_output_flag: list[bool] | None,
+) -> dict[str, Any]:
+    """Build the ``invoke_kwargs`` for native structured output (FAR-898 / FAR-900).
+
+    Renders the schema for the target provider profile, bounds-checks the
+    RENDERED copy (inlining can amplify a schema past the size/depth limits),
+    then falls back to the RAW schema when it passes bounds (the provider
+    resolves ``$ref`` itself), and finally to no native schema at all.
+    Best-effort: a rendering failure never blocks the node.
+    """
+    invoke_kwargs: dict[str, Any] = {}
+    effective_profile: SchemaProfile = schema_profile or "verbatim"
+    provider_id = _extract_provider_id(backend)
+    # Bounds-check the RAW schema as the fallback: rendering inlines
+    # ``$ref``s and can amplify a schema past the limits, in which case we
+    # send the raw schema (which the provider resolves itself) rather than
+    # silently dropping native structured output.
+    raw_ok, _raw_reason = _is_safe_schema(output_schema_json)
+    try:
+        rendered = render_for_profile(output_schema_json, effective_profile, provider_id)
+        schema_to_check = rendered.schema
+        if rendered.skipped:
+            _log.info(
+                "node_model.schema_render_skipped",
+                extra={
+                    "node_id": node_id,
+                    "profile": effective_profile,
+                    "reason": rendered.skip_reason,
+                },
+            )
+    except Exception:
+        # Best-effort: rendering failure must never block the node.
+        _log.warning(
+            "node_model.schema_render_failed; falling back to verbatim",
+            extra={"node_id": node_id, "profile": effective_profile},
+            exc_info=True,
+        )
+        schema_to_check = output_schema_json
+    rendered_ok, rendered_reason = _is_safe_schema(schema_to_check)
+    if rendered_ok:
+        invoke_kwargs["output_schema"] = schema_to_check
+        if native_output_flag is not None:
+            native_output_flag[0] = True
+    elif raw_ok:
+        invoke_kwargs["output_schema"] = output_schema_json
+        if native_output_flag is not None:
+            native_output_flag[0] = True
+    else:
+        _log.warning(
+            "node_model.schema_bounds_rejected",
+            extra={"node_id": node_id, "reason": rendered_reason},
+        )
+    return invoke_kwargs
+
+
+def _build_error_enforcement_record(
+    exc: BaseException,
+    *,
+    resolved_profile: str | None,
+    native_output: bool,
+    repair_info: dict[str, int] | None = None,
+) -> dict[str, Any] | None:
+    """FAR-902 (D3): build the enforcement record for a terminal validation error.
+
+    ``_validate_against_schema`` raises ``OutputSchemaValidationError`` on the
+    strict-terminal (repair exhausted / native decode failure) and lenient
+    required-field-violation paths.  The raised exception carries the terminal
+    ``outcome`` and the failing ``validation_errors`` so the record can still
+    be built and persisted BEFORE the node is terminalized.
+
+    Returns ``None`` when *exc* carries no outcome (e.g. an unrelated
+    ``ValueError``), so callers can persist unconditionally.
+    """
+    outcome = getattr(exc, "outcome", None)
+    if outcome is None:
+        return None
+    from farna.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+    _info = repair_info or {}
+    return build_enforcement_record(
+        outcome=outcome,
+        resolved_profile=resolved_profile,
+        native_output=native_output,
+        repair_attempts=_info.get("repair_attempts", 0),
+        wasted_attempts=_info.get("wasted_attempts", 0),
+        validation_errors=getattr(exc, "validation_errors", None),
+    )
+
+
+async def _persist_enforcement_record_best_effort(
+    enforcement_record: dict[str, Any] | None,
+    *,
+    session_factory: Any,
+    run_id: Any,
+    org_id: Any,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """FAR-902 (D3): persist a schema enforcement record, never failing the node.
+
+    Shared by the standard agent path and the sandbox path, on BOTH the
+    success and the terminal-validation-failure arms, so the record is written
+    before terminalization regardless of outcome.  Persistence is best-effort:
+    any error is logged and swallowed (``CancelledError`` is re-raised so
+    cancellation semantics are preserved).
+    """
+    if enforcement_record is None or not attempt_key or session_factory is None or run_id is None or org_id is None:
+        return
+    try:
+        from farna.db.crud.run_node_outputs import persist_schema_enforcement_record
+
+        async with session_factory() as _ef_session, _ef_session.begin():
+            await set_rls_org(_ef_session, uuid.UUID(str(org_id)))
+            await persist_schema_enforcement_record(
+                _ef_session,
+                run_id=uuid.UUID(str(run_id)),
+                organisation_id=uuid.UUID(str(org_id)),
+                node_id=node_id,
+                attempt_key=attempt_key,
+                enforcement_record=enforcement_record,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "schema_enforcement.persist_failed",
+            extra={"node_id": node_id},
+        )
+
+
+def _finalize_node_result(
+    node_id: str,
+    output_data: Any,
+    output_schema_json: dict[str, Any] | None,
+    routing_mode: str | None,
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    _repair_invoke_fn: Any | None = None,
+    resolved_profile: str | None = None,
+    native_output: bool = False,
+) -> dict[str, Any]:
+    """Validate schema, build the node artifact result, and surface a routed hop."""
+    # FAR-902: accumulated enforcement payload for the caller to persist.
+    _result_enforcement: dict[str, Any] | None = None
+    if isinstance(output_schema_json, dict) and output_schema_json:
+        # FAR-902: collect repair stats for the enforcement record.
+        _repair_info: dict[str, int] = {}
+        try:
+            outcome, errors, effective_output = _validate_against_schema(
+                output_data,
+                output_schema_json,
+                mode=mode,
+                schema_id=schema_id,
+                schema_version=schema_version,
+                _repair_invoke_fn=_repair_invoke_fn,
+                _repair_info=_repair_info,
+            )
+        except OutputSchemaValidationError as _schema_exc:
+            # FAR-902 (D3): a terminal validation failure must STILL produce an
+            # enforcement record — the most severe outcomes (repair_exhausted /
+            # native_decode_failed / native_decode_not_json / lenient required
+            # violation) would otherwise never reach schema_enforcement_json.
+            # The record rides on the exception for the caller to persist
+            # before terminalization; the exception is re-raised unchanged.
+            _schema_exc.enforcement_record = _build_error_enforcement_record(
+                _schema_exc,
+                resolved_profile=resolved_profile,
+                native_output=native_output,
+                repair_info=_repair_info,
+            )
+            raise
+        # A successful strict-mode repair replaces the schema-invalid payload;
+        # otherwise effective_output IS output_data. Never emit a payload that
+        # failed the declared contract after repair reported success.
+        output_data = effective_output
+        # FAR-902: build the enforcement record for the caller to persist.
+        # The record is attached to the result dict under a reserved key so
+        # the caller (``_node``) can extract and persist it to
+        # ``run_node_outputs`` BEFORE terminalization (D3 ordering).
+        from farna.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+        _enforcement_payload = build_enforcement_record(
+            outcome=outcome,
+            resolved_profile=resolved_profile,
+            native_output=native_output,
+            repair_attempts=_repair_info.get("repair_attempts", 0),
+            wasted_attempts=_repair_info.get("wasted_attempts", 0),
+            validation_errors=errors,
+        )
+        # ``build_enforcement_record`` returns None only for NO_SCHEMA, which
+        # cannot occur here (the block is guarded by a non-empty schema), but
+        # assigning directly is equivalent and keeps the None-safe contract.
+        _result_enforcement = _enforcement_payload
+        # Log outcome for observability
+        if errors:
+            _log.info(
+                "schema_validation.outcome",
+                extra={"node_id": node_id, "outcome": outcome, "error_count": len(errors)},
+            )
+
+    result: dict[str, Any] = {
+        "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
+        "output": output_data,
+    }
+
+    # FAR-902: carry the enforcement record for the caller to persist.
+    if _result_enforcement is not None:
+        result["_schema_enforcement_record"] = _result_enforcement
+
+    # Extract _next_node from LLM routing output for the router.
+    if routing_mode == "llm" and isinstance(output_data, dict):
+        next_node = output_data.pop("_next_node", None)
+        if next_node is not None:
+            result["_llm_next_node"] = next_node
+
+    return result
+
+
+def _community_gated_stub(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """FAR-764 community-execution gate (ADR 032 D2): the block stub.
+
+    Community-sourced agents that have not been granted by the operator are
+    restricted to read-only / no-tool scope. The gated agent set is seeded
+    into state by the executor at run start. A gated node returns a stub
+    artifact instead of invoking the model - the agent cannot execute until
+    the operator grants access. Returns ``None`` when no gate applies.
+    """
+    gated = state.get("_community_gated_agents") or set()
+    # Compare the canonicalised UUID form, not the raw snapshot string - a
+    # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+    # id would otherwise slip past the gate and fail it open.
+    if agent_id is not None and str(agent_id) in gated:
+        return {
+            "artifacts": [
+                {
+                    "node_id": node_id,
+                    "status": "blocked",
+                    "reason": "community_sourced_not_granted",
+                }
+            ]
+        }
+    return None
+
+
+def _missing_backend_stub(*, node_id: str, agent_id: uuid.UUID | None) -> dict[str, Any]:
+    """FAR-1115: no ``model_backend_id`` - raise (agent node) or stub (plain).
+
+    An agent node (model-backed by intent) whose agent resolves to no
+    model_backend_id is a misconfiguration - not a legitimate stub. Surface a
+    clear, actionable error naming both the node and the agent so the
+    operator can fix the config immediately. Connector-binding / manual nodes
+    without agent_id keep the original stub behavior (byte-identical).
+    """
+    if agent_id is not None:
+        raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
+    return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+
+
+async def _dispatch_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+    max_input_length: int | None,
+) -> tuple[dict[str, Any] | None, str, str, Any]:
+    """Node-start gates and stub dispatch (FAR-215 / FAR-764 / FAR-1115).
+
+    Runs the mid-run conformance gate, the community-execution gate and the
+    missing-model-backend branch, resolving the FAR-332/342 run overrides on
+    the way.  Returns ``(stub, model_backend_id_str, prompt_template,
+    raw_input)``:
+
+    - *stub* is not ``None`` -> return it from the node without invoking the
+      model (community-gate block, or the connector/manual stub for a node
+      with no backend); the other elements are placeholders.
+    - *stub* is ``None`` -> the agent path proceeds with the resolved backend
+      id, prompt template, and the PRE-truncation ``raw_input`` (the same
+      value the original inline body captured before truncating).
+
+    Raises :class:`NodeMissingModelBackendError` when an agent node's agent
+    resolves to no model backend (FAR-1115) - a misconfiguration, never a
+    silent stub.
+    """
+    # FAR-215: mid-run capability re-check at node start. If a bound
+    # block-action guardrail's conformance claim is absent/unknown against
+    # the live manifest, the node is blocked and routed to HITL - the gate
+    # raises a LangGraph interrupt, so control never reaches the node body.
+    await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
+
+    # FAR-764: community execution gate (ADR 032 D2) - one-line stub branch.
+    gated_stub = _community_gated_stub(state, node_id=node_id, agent_id=agent_id)
+    if gated_stub is not None:
+        return gated_stub, "", "", ""
+
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    raw_input = run_context.get("input", {})
+
+    # Truncate input if max_input_length is configured for this agent.
+    # ORDER IS LOAD-BEARING: the truncation happens BEFORE the stub branch
+    # below, so even a node that never reaches the model leaves the
+    # truncated input in state (pinned by
+    # test_node_runner_truncates_input_in_state).
+    if max_input_length is not None and isinstance(raw_input, str):
+        run_context["input"] = truncate_input(raw_input, max_input_length)
+
+    # Get agent data from node_def (embedded at snapshot creation).
+    prompt_template = node_def.get("prompt_template") or ""
+    model_backend_id_str = node_def.get("model_backend_id")
+
+    # FAR-332: a model_backend_id run_context override (fired by the variant
+    # comparison / A/B test views) takes precedence over the snapshot-embedded
+    # node_def backend, so every variant can run on a different model backend.
+    # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
+    # key, seeded by the executor from the run's frozen variant config - never
+    # read from ``run_context["input"]``, where a bare top-level
+    # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
+    # input is DATA and could silently reroute model routing.
+    #
+    # FAR-342: a prompt_templates override (resolved from the variant's
+    # prompt_version picker at run creation) likewise takes precedence over
+    # the snapshot-embedded node_def prompt, so every variant renders with
+    # its own prompt version. The override is a PER-AGENT map, so each node
+    # reads ONLY the template for its own agent - one agent's template never
+    # clobbers another's in a multi-agent snapshot. When the node's agent is
+    # absent from the map, fall back to the node_def prompt. Because the
+    # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
+    # run that carries ``_run_overrides`` as caller input never reaches this
+    # boundary (FAR-342 injection surface closed).
+    model_backend_id_str, prompt_template = _resolve_node_run_overrides(
+        run_context,
+        agent_id,
+        model_backend_id_str=model_backend_id_str,
+        prompt_template=prompt_template,
+    )
+
+    # If no model_backend_id, fall back to stub behavior
+    # (connector_binding nodes, manual nodes routed through wrong path, etc.).
+    # FAR-1115 lives in ``_missing_backend_stub``: raise for a misconfigured
+    # agent node, byte-identical stub otherwise.
+    if not model_backend_id_str:
+        return _missing_backend_stub(node_id=node_id, agent_id=agent_id), "", "", ""
+    return None, model_backend_id_str, prompt_template, raw_input
+
+
+def _build_repair_invoke(model_backend_id_str: str) -> Any:
+    """Build the strict-mode repair re-invoke callable for an agent node.
+
+    FIX B (FAR-899): the standard agent path has access to the
+    ModelBackendHub and can re-invoke the same backend with the repair
+    prompt. ``run_repair_loop`` calls this SYNCHRONOUSLY while the node
+    coroutine is already on the event loop, so bridge to the async backend
+    with ``run_coroutine_sync`` (the same worker-loop bridge the model-judge
+    callable uses, bounded per FAR-1652). An async repair fn here would hand
+    ``json.loads`` an un-awaited coroutine and crash the node instead of
+    repairing it.
+
+    The backend id is parsed safely - non-UUID backend ids (mock/stub/aliased
+    backends, common in unit tests and some real graphs) must not crash the
+    node: when the id cannot be resolved to a UUID this returns ``None``,
+    skipping the repair invoke entirely so the node takes the existing
+    documented hard-fail path (strict-mode validation failures are terminal).
+    """
+    from farna.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    backend_id = _parse_uuid_opt(model_backend_id_str)
+    if backend_id is None:
+        return None
+
+    def _std_repair_invoke(prompt: str) -> str:
+        """Re-invoke the same model backend with the repair prompt."""
+        if hub is None:
+            raise RuntimeError("ModelBackendHub not available for repair invoke")
+        resp = run_coroutine_sync(invoke_backend(hub, backend_id, [HumanMessage(content=prompt)]))
+        return resp.content if hasattr(resp, "content") else str(resp)
+
+    return _std_repair_invoke
+
+
+async def _stamp_schema_enforcement(
+    record: Any,
+    *,
+    node_id: str,
+    state: dict[str, Any],
+) -> None:
+    """Persist a FAR-902 schema-enforcement record before terminalization.
+
+    D3 ordering: the record rides on the result (success arm) or on the
+    ``OutputSchemaValidationError`` (terminal-failure arm) and is written
+    UNCHANGED to ``run_node_outputs`` via the conformance-context session
+    factory BEFORE the node result returns / the exception propagates.
+    Persistence is best-effort - any error is logged and swallowed by
+    ``_persist_enforcement_record_best_effort`` (``CancelledError`` still
+    propagates). A ``None`` record is a no-op inside that helper.
+    """
+    ctx = get_conformance_ctx()
+    session_factory = ctx[0] if ctx is not None else None
+    org_id = ctx[1] if ctx is not None else None
+    run_id = state.get("_run_id")
+    await _persist_enforcement_record_best_effort(
+        record,
+        session_factory=session_factory,
+        run_id=run_id,
+        org_id=org_id,
+        node_id=node_id,
+        attempt_key=(f"run:{run_id}:node:{node_id}:agent" if run_id is not None else None),
+    )
+
+
+async def _run_agent_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    model_backend_id_str: str,
+    prompt_template: str,
+    raw_input: Any,
+    dag_ancestor_ids: frozenset[str] | None,
+) -> dict[str, Any]:
+    """Render, invoke, validate and finalize an agent (model-backed) node.
+
+    The agent path after ``_dispatch_node`` handed over a resolved backend:
+    scope the run_context view (FAR-418), inject declared work-item refs
+    (FAR-794/795), render the prompt (FAR-332/342), invoke the model backend
+    (FAR-898/899/900), validate the output, and carry the FAR-902
+    schema-enforcement record off to retention BEFORE the node result is
+    returned (D3 ordering) - the record never leaks into node telemetry.
+    """
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    output_schema_json = node_def.get("output_schema_json")
+
+    # FAR-418: context_scope - the agent's run_context VIEW (the keys fed to
+    # the prompt template) is allowlist-gated to the node's need-to-know set.
+    # The machinery reads (run_overrides, autonomy) still use the full
+    # run_context so internal control keys are never starved.
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+    # FAR-418 (MAJOR-3 fix): the need-to-know boundary must also bind the
+    # ``state.run_context`` view. ``state`` otherwise carries the full,
+    # unscoped run_context, so a template could read gated keys via
+    # ``{{ state.run_context.<key> }}`` and defeat the boundary. Pass a
+    # shallow copy with the scoped run_context in place - the live state dict
+    # is never mutated.
+    scoped_state = dict(state)
+    scoped_state["run_context"] = scoped_run_context
+    # FAR-794 slice 2b: declare-and-inject the run's refs when
+    # THIS node's input schema declares ``work_item_refs`` - read-only at
+    # node start, never failing the node (a read failure yields [], not a
+    # raise), and capped deterministically by the unified refs cap.
+    # FAR-795: the injection is now the FULL set - create-time refs plus
+    # the refs emitted by this node's DAG ancestors (folded from the
+    # accumulated artifacts; skipped/failed attempts contribute per
+    # status), deduped and capped over the union by the pure collector.
+    # ``dag_ancestor_ids`` is frozen at compile time from graph_json
+    # (graph_cache); a None (unthreaded caller) degrades to create-time
+    # refs only, never to a raise.
+    node_work_item_refs = (
+        _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
+        if _node_declares_work_item_refs(node_def)
+        else None
+    )
+    rendered_prompt, routing_mode = _render_agent_prompt(
+        state=scoped_state,
+        run_context=scoped_run_context,
+        raw_input=raw_input,
+        prompt_template=prompt_template,
+        node_def=node_def,
+        work_item_refs=node_work_item_refs,
+    )
+
+    # FAR-900: resolve the schema_profile for rendering before dispatch.
+    _node_schema_profile = _resolve_schema_profile(node_def)
+    # FAR-902: track whether the provider actually used native structured output.
+    _native_output_flag: list[bool] = [False]
+    output_data = await _invoke_node_model(
+        rendered_prompt,
+        model_backend_id_str,
+        node_id,
+        output_schema_json=output_schema_json,
+        schema_profile=_node_schema_profile,
+        _native_output_flag=_native_output_flag,
+    )
+
+    # FAR-899: schema validator mode - resolved from the effective-setting
+    # store (org.settings_json -> system_config -> env var -> "lenient").
+    # FIX E: single helper replaces 3 copy-pasted blocks.
+    _ctx = get_conformance_ctx()
+    _sf = _ctx[0] if _ctx is not None else None
+    _schema_validator_mode = await _resolve_schema_validator_mode(
+        state,
+        session_factory=_sf,
+        node_id=node_id,
+    )
+
+    # FIX B: create a repair invoke callable so the repair loop is reachable
+    # (rationale lives in ``_build_repair_invoke``).
+    _repair_fn = _build_repair_invoke(model_backend_id_str)
+
+    try:
+        _node_result = _finalize_node_result(
+            node_id,
+            output_data,
+            output_schema_json,
+            routing_mode,
+            mode=_schema_validator_mode,
+            schema_id=node_def.get("output_schema_id", "unknown"),
+            schema_version=node_def.get("output_schema_version", 0),
+            _repair_invoke_fn=_repair_fn,
+            resolved_profile=_node_schema_profile or "verbatim",
+            native_output=_native_output_flag[0],
+        )
+    except OutputSchemaValidationError as _schema_exc:
+        # FAR-902 (D3): persist the terminal-failure enforcement record
+        # BEFORE the node is terminalized, then re-raise unchanged.
+        await _stamp_schema_enforcement(
+            getattr(_schema_exc, "enforcement_record", None),
+            node_id=node_id,
+            state=state,
+        )
+        raise
+
+    # FAR-902: persist the enforcement record BEFORE terminalization.
+    # The record was built by _finalize_node_result and carried on the
+    # result dict under ``_schema_enforcement_record``.  Persist it via
+    # the conformance-context session_factory and remove it from the
+    # result so it never leaks into node telemetry (D3 ordering).
+    _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
+    if _enforcement_rec is not None:
+        await _stamp_schema_enforcement(_enforcement_rec, node_id=node_id, state=state)
+
+    return _node_result
+
+
+def make_node_fn(
+    node_def: dict[str, Any],
+    *,
+    role: str | None = None,
+    timeout: float | None = None,
+    max_input_length: int | None = None,
+    token_budget: int | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); budget enforced at executor level
+    dag_ancestor_ids: frozenset[str] | None = None,
+) -> Any:
+    """Return a decorated async node function for use in a StateGraph.
+
+    Renders the agent's prompt template against state via SandboxedEnvironment,
+    invokes the configured model backend via ModelBackendHub, validates the
+    output against the output schema (if defined), and returns the result
+    in state["artifacts"] and state["output"].
+
+    Nodes without a ``model_backend_id`` (connector-bindings, etc.) return a
+    stub artifact without invoking a model.
+
+    When *max_input_length* is set, input text from ``run_context["input"]`` is
+    truncated before being passed to the LLM.
+
+    When *token_budget* is set, per-node token budget is enforced at the
+    executor level via ``node_token_budgets`` during ``_stream_graph()``.
+    The closure is a thin orchestrator: ``_dispatch_node`` runs the node-start
+    gates and stub branches (FAR-215/764/1115, truncation, FAR-332/342
+    overrides), while ``_run_agent_node`` scopes, renders, invokes,
+    validates and carries the FAR-902 enforcement record to retention.
+    """
+    node_id: str = str(node_def["id"])
+
+    @cancellable_node(timeout=timeout, role=role)
+    async def _node(state: dict[str, Any]) -> dict[str, Any]:
+        # Thin orchestrator (S3776 structural split): the node-start gates,
+        # stub branches, truncation and run overrides live in
+        # ``_dispatch_node``; the agent path (scope, render, invoke,
+        # validate, FAR-902 enforcement carry) lives in ``_run_agent_node``.
+        agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+        stub, model_backend_id_str, prompt_template, raw_input = await _dispatch_node(
+            node_def,
+            state,
+            node_id=node_id,
+            agent_id=agent_id,
+            max_input_length=max_input_length,
+        )
+        if stub is not None:
+            return stub
+        return await _run_agent_node(
+            node_def,
+            state,
+            node_id=node_id,
+            model_backend_id_str=model_backend_id_str,
+            prompt_template=prompt_template,
+            raw_input=raw_input,
+            dag_ancestor_ids=dag_ancestor_ids,
+        )
+
+    _node.__name__ = f"node_{node_id}"
+    return _node
+
+
+def _parse_router_rules(
+    rules: list[dict[str, Any]],
+) -> tuple[list[tuple[str | None, str | None]], str | None]:
+    """Split Router rules into ``(rule_targets, default_target)``.
+
+    ``rule_targets`` holds ``(guard_expr, target)`` for every non-default rule;
+    the first ``default`` rule's target becomes ``default_target``. The guards
+    are evaluated through the shared JMESPath evaluator so Router and the
+    conditional-edge compile path share ONE truthiness rule.
+    """
+    rule_targets: list[tuple[str | None, str | None]] = []
+    default_target: str | None = None
+    for rule in rules:
+        target = rule.get("target") or rule.get("target_port")
+        if rule.get("default"):
+            default_target = target
+            continue
+        rule_targets.append((rule.get("guard"), target))
+    return rule_targets, default_target
+
+
+def _first_matching_rule_target(
+    state: dict[str, Any],
+    rule_targets: list[tuple[str | None, str | None]],
+) -> str | None:
+    """First rule whose guard matches *state* (first-match-wins), or ``None``.
+
+    A rule with no target is skipped — its guard is not even evaluated (the
+    ``and`` short-circuits), matching the original inline loop.
+    """
+    for guard, target in rule_targets:
+        if target is not None and evaluate_jmespath_condition(state, guard):
+            return target
+    return None
+
+
+def _classifier_rule_target(state: dict[str, Any], rules: list[dict[str, Any]]) -> str | None:
+    """Target of the rule whose ``label`` matches the LLM routing decision.
+
+    LLM routing mode (``mode == "classifier"``) matches the ``_llm_next_node``
+    state value against each rule's ``label``. Returns ``None`` when the state
+    carries no decision or no rule label matches (the caller falls back to the
+    default rule).
+    """
+    label = state.get("_llm_next_node")
+    if label is None:
+        return None
+    for rule in rules:
+        if rule.get("label") == label:
+            matched: str | None = rule.get("target") or rule.get("target_port")
+            if matched is not None:
+                return matched
+    return None
+
+
+def make_router_node_fn(
+    router_config: dict[str, Any],
+    *,
+    node_id: str | None = None,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a LangGraph *routing* function for a Router node (FAR-402 P1 / F2-A).
+
+    Evaluates ordered ``rules`` ``{guard (JMESPath), target}`` against state,
+    first-match-wins. An explicit ``default`` rule maps to its target. LLM
+    routing mode (``mode == "classifier"``) matches the ``_llm_next_node`` state
+    value against each rule's ``label`` (falling back to the default rule).
+
+    The function reuses the shared JMESPath evaluator
+    (:func:`evaluate_jmespath_condition`) — the same engine the existing
+    conditional-edge compile path uses — so Router lowers onto that machinery.
+    Every other branching primitive shares one truthiness rule.
+
+    When no rule matches and there is no ``default`` rule, raises
+    :class:`RouterNoMatchError` so the executor terminalizes the run with the
+    ``router_no_match`` status (a terminal, non-failure outcome). Compile-time
+    default-rule enforcement (see :func:`_validate_router_config`) is the
+    primary guard; this runtime raise is the backstop for a mis-configured
+    graph that slipped past validation.
+    """
+    rules: list[dict[str, Any]] = list(router_config.get("rules", []))
+    classifier_mode: bool = router_config.get("mode") == "classifier"
+    rule_targets, default_target = _parse_router_rules(rules)
+
+    def _router(state: dict[str, Any]) -> str:
+        first = _first_matching_rule_target(state, rule_targets)
+        if first is not None:
+            return first
+        if classifier_mode:
+            matched = _classifier_rule_target(state, rules)
+            if matched is not None:
+                return matched
+        if default_target:
+            return default_target
+        raise RouterNoMatchError(node_id=node_id)
+
+    _router.__name__ = f"router_{node_id}" if node_id else "router"
+    return _router
+
+
+def _resolve_gate_eval_envelope(
+    state: dict[str, Any],
+    node_id: str,
+) -> dict[str, Any]:
+    """Build the gate-eval envelope from the source node's artifact (FAR-311)."""
+    artifacts = state.get("artifacts")
+    matching = (
+        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
+        if isinstance(artifacts, list)
+        else []
+    )
+    envelope: dict[str, Any] = {}
+    if matching:
+        # The source node's most recent artifact (a reject/correction re-run
+        # appends another entry under the same node_id). Its ``output`` is the
+        # source's OWN output — for an ``agent`` source the contract return is
+        # ``envelope["output"]``, so it must come from the matched artifact
+        # (``state["output"]`` is last-write-wins across a fan-out and can
+        # belong to a sibling).
+        matched = matching[-1]
+        envelope["artifacts"] = [matched]
+        if "output" in matched:
+            envelope["output"] = matched["output"]
+        elif "output" in state:
+            envelope["output"] = state["output"]
+    elif "output" in state:
+        envelope["output"] = state["output"]
+    return envelope
+
+
+def _resolve_gate_eval_target(
+    state: dict[str, Any],
+    node_id: str | None,
+    node_type_map: dict[str, str] | None,
+) -> Any:
+    """Resolve the output a HITL gate's eval should validate (FAR-311).
+
+    Gate evals are node-scoped to the edge's SOURCE node, but LangGraph merges
+    each node's envelope into the state at its TOP-LEVEL keys — the node id is
+    not a state key — so ``state["output"]`` holds the outer ``output``
+    envelope (telemetry for a sandbox_agent: status/summary/cost, no pr_url /
+    changed_files) and ``state["artifacts"]`` accumulates every completed
+    node's artifact. The source node's own artifact is located by its
+    ``node_id`` (not position — parallel fan-out concatenates artifacts in
+    completion order, so the last artifact may belong to a sibling). That
+    artifact's ``output.output_json`` is the sandbox agent's CONTRACT return;
+    re-assembling the envelope and running it through ``split_node_output``
+    yields the SAME contract output the standalone ``_run_post_node_evals``
+    path validates (FAR-311).
+
+    Falls back to the whole *state* when the shape cannot be resolved (no type
+    map, unknown node type, or a state with no envelope keys) so legacy
+    non-graph states keep their historical behaviour.
+    """
+    if not isinstance(state, dict) or not node_id or not node_type_map:
+        return state
+    node_type = node_type_map.get(node_id) or DEFAULT_NODE_TYPE
+    if node_type not in SPLITTABLE_NODE_TYPES:
+        return state
+    artifacts = state.get("artifacts")
+    matching = (
+        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
+        if isinstance(artifacts, list)
+        else []
+    )
+    if not matching and "output" not in state:
+        return state
+    envelope = _resolve_gate_eval_envelope(state, node_id)
+    found, contract_output = resolve_node_contract_output(envelope, node_type)
+    if found:
+        return contract_output
+    _log.debug(
+        "hitl_review.eval.missing_contract_output",
+        extra={"node_id": str(node_id), "node_type": node_type},
+    )
+    return state
+
+
+def _build_hitl_review_artifact(review_id: str, status: str, **extra: Any) -> dict[str, Any]:
+    """Build the standard HITL gate artifact envelope."""
+    return {"artifacts": [{"node_id": review_id, "status": status, **extra}]}
+
+
+async def _dispatch_reject_correction_inner(
+    session_factory: Any,
+    org_id: Any,
+    run_id_for_correction: Any,
+    correction_target: Any,
+    node_output: dict[str, Any],
+    decision: Any,
+    review_id: str,
+) -> None:
+    """Dispatch a single-node correction for a rejected HITL gate (best-effort)."""
+    from farna.core.feedback_manager import dispatch_reject_correction
+
+    try:
+        await dispatch_reject_correction(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id_for_correction,
+            node_id=str(correction_target),
+            node_input=node_output,
+            rejection_reason=(
+                (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
+            ),
+            review_id=review_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl_review.reject_correction_dispatch_failed",
+            extra={"review_id": review_id, "node_id": str(correction_target)},
+        )
+
+
+async def _dispatch_reject_correction_best_effort(
+    state: dict[str, Any],
+    decision: Any,
+    review_id: str,
+    hitl_review_config: dict[str, Any],
+    session_factory: Any,
+    org_id: Any,
+) -> None:
+    # FAR-210 follow-up: the reject→correction edge. When this gate declares
+    # a ``correction_target`` and the human REJECTED it, dispatch the
+    # single-node correction for the blocked node (the AUTOMATED path) instead
+    # of only kicking back to the plain ``reject_target``. Best-effort and
+    # fully failure-isolated — a correction dispatch failure must never crash
+    # the reject path.
+    action = decision.get("action") if isinstance(decision, dict) else None
+    is_rejected = action == "rejected"
+    if is_rejected and session_factory is not None and org_id is not None:
+        correction_target = hitl_review_config.get("correction_target")
+        run_id_for_correction = state.get("_run_id")
+        node_output = state.get("output")
+        if correction_target and run_id_for_correction and isinstance(node_output, dict):
+            await _dispatch_reject_correction_inner(
+                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, review_id
+            )
+
+
+#: FAR-2489 / FAR-2490: the state key carrying the PROVENANCE MARKER for the
+#: value a gate wrote into ``output`` — set whenever a HUMAN supplied that value
+#: (``deliver_manual``, or approve-with-modification).
+#:
+#: Stable and derived from the gate id, exactly like
+#: :data:`HITL_REVIEW_ANSWER_STATE_KEY_PREFIX`, so a pipeline author can read it
+#: from a prompt template / JMESPath condition as
+#: ``state.hitl_review_output_provenance_<review_id>``.
+#:
+#: WHAT THE MARKER DESCRIBES — AND WHAT IT DOES NOT
+#: ------------------------------------------------
+#: ``output`` is ONE SHARED "current node output" slot: every node returns a
+#: value for it and the state reducer replaces it wholesale
+#: (:func:`modulo.core.pipeline_engine.graph_cache._pipeline_state_reducer`).
+#: The moment the next node runs, ``state["output"]`` holds THAT node's value
+#: while this per-gate key survives in state and in the checkpoint. So the
+#: marker does **not** describe whatever ``state["output"]`` happens to hold
+#: when you read it — it describes EXACTLY the value the gate wrote at decision
+#: time, and it carries that value's SHA-256 so a consumer can prove the pairing
+#: instead of assuming it.
+#:
+#: Read it from the state update the gate node RETURNS (the dict ``await
+#: make_hitl_review_fn(...)(state)`` yields on a resume) — the only moment the
+#: marker and the value it describes are guaranteed to travel together. Verify
+#: with :func:`hitl_output_provenance_marker`: a marker is valid for a value
+#: ``v`` only when it equals ``hitl_output_provenance_marker(review_id, v)``.
+#:
+#: VALUE SHAPE — a dict, never a bare string::
+#:
+#:     {
+#:         PROVENANCE_KEY: PROVENANCE_ATTESTED,   # -> "provenance": "attested"
+#:         "review_id": <the gate's review id>,
+#:         "output_sha256": <sha256 hex of the canonical serialisation of the
+#:                           value the gate wrote to "output">,
+#:     }
+#:
+#: ``attested`` is the governed-run provenance class of a human statement
+#: (:data:`modulo.core.provenance.PROVENANCE_ATTESTED` — "governance events
+#: Modulo records natively: approvals, guardrail verdicts, HITL decisions").
+#: Per ADR-042 an ``attested`` datum is a natively-recorded human/governance
+#: statement, NOT a computed measurement and NOT an agent report — and agent
+#: output carries no provenance class at all, so the marker is unambiguous.
+#:
+#: A ``None`` under this key is an explicit TOMBSTONE: it means "this gate's
+#: most recent decision supplied no human-authored output", and it exists so a
+#: marker from an EARLIER decision on the same re-entered gate can never outlive
+#: the decision that superseded it. Consumers must treat ``None`` (and an
+#: absent key) as "no human attestation".
+HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX = "hitl_review_output_provenance_"
+
+
+def _canonical_output_serialisation(value: Any) -> str:
+    """The canonical text the marker's ``output_sha256`` digest is taken over.
+
+    Key-sorted and separator-stable so the digest depends on the VALUE, not on
+    dict insertion order — a consumer holding the same value can reproduce it.
+    ``default=str`` keeps the stamp TOTAL: the digest must never raise on an
+    exotic payload (a raising stamp would break the resume path), and a payload
+    that is not plain-JSON would already fail the run's own checkpoint
+    serialisation.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def hitl_output_provenance_marker(review_id: str, value: Any) -> dict[str, Any]:
+    """Build the provenance marker describing *value* as HUMAN-authored.
+
+    This is the verification primitive as well as the writer: a marker read from
+    run state is valid for *value* only when it EQUALS
+    ``hitl_output_provenance_marker(review_id, value)``. Anything else — a
+    marker left by an earlier decision, a marker whose gate differed, or a value
+    the next node has since overwritten under ``state["output"]`` — compares
+    unequal, so a consumer labels output human-attested only when it really is.
+
+    ``value`` is never mutated and never copied into the marker: only its digest
+    is stored, so the marker stays small and cannot leak payload content.
+    """
+    return {
+        PROVENANCE_KEY: PROVENANCE_ATTESTED,
+        "review_id": review_id,
+        "output_sha256": hashlib.sha256(_canonical_output_serialisation(value).encode("utf-8")).hexdigest(),
+    }
+
+
+def _stamp_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
+    """Mark a gate result's ``output`` as HUMAN-authored, ADDITIVELY.
+
+    Mutates *gate_result* in place (the caller owns the dict).
+
+    The provenance override rule (adopted 2026-11-09) requires a human override
+    of a computed result to be a distinct, additive fact — never a write over
+    the computed value — and to be labelled wherever it is read. The human's
+    payload therefore stays byte-identical under ``output`` (pipelines read that
+    key directly, and it IS the human's value), while the marker rides in a
+    sibling state key. The value the human overrode is untouched and stays
+    readable on the source node's own output.
+    """
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = hitl_output_provenance_marker(
+        review_id, gate_result["output"]
+    )
+
+
+def _clear_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
+    """Retire whatever marker this gate left on a PREVIOUS decision.
+
+    Mutates *gate_result* in place (the caller owns the dict).
+
+    A gate can be re-entered (a loop back onto the same edge) and decided again.
+    A decision that supplies NO human-authored output must not leave the earlier
+    decision's marker standing, or a stale human attestation would outlive the
+    decision that superseded it. The reducer cannot delete a key, so the marker
+    is retired with an explicit ``None`` tombstone — documented on
+    :data:`HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX` and the shape a
+    consumer must treat as "no human attestation".
+
+    Note this does NOT write, replace or clear the computed ``output`` itself:
+    the gate simply wrote no output on this decision, so the upstream value
+    survives untouched.
+    """
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = None
+
+
+def _hitl_review_deliver_manual_result(
+    review_id: str,
+    decision: Any,
+) -> tuple[bool, dict[str, Any]]:
+    """Build the gate result for a manual-delivery resume decision.
+
+    ``decision["output"]`` is stored byte-identical under ``output`` (the object
+    is never mutated or copied into the marker) and the sibling provenance key
+    carries a marker that describes EXACTLY that value — see
+    :data:`HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX` for the shape and for
+    why the marker must not be read against a later ``state["output"]``.
+    """
+    manual_output = decision.get("output", {})
+    gate_result: dict[str, Any] = {
+        "artifacts": [
+            {
+                "node_id": review_id,
+                "status": "interrupted",
+                "result": "delivered_manual",
+                "human_data": decision,
+                "manual_output": manual_output,
+            }
+        ],
+        "output": manual_output,
+    }
+    # FAR-2490: the human supplied this value directly — stamp its provenance so
+    # a downstream consumer can never mistake it for agent-generated output.
+    _stamp_human_output_provenance(review_id, gate_result)
+    return (True, gate_result)
+
+
+# FAR-860: the state key prefix for the human's choice answer. Downstream
+# conditional edges branch on ``hitl_answer_<review_id>`` to read the chosen
+# option id. The key is stable (derived from the gate id) and documented so
+# pipeline authors know the exact state path to reference in JMESPath
+# conditions.
+HITL_REVIEW_ANSWER_STATE_KEY_PREFIX = "hitl_review_answer_"
+
+
+def _inject_answer_state(
+    review_id: str,
+    decision: dict[str, Any] | Any,
+    gate_result: dict[str, Any],
+) -> None:
+    """Inject the human's choice answer into the gate result as state.
+
+    FAR-860: when a ``kind: choice`` gate's decision carries an ``answer``
+    dict (``{"kind": "choice", "option_id": "<id>"}``), the chosen option id
+    is placed in state as ``hitl_answer_<review_id>`` so downstream conditional
+    edges can branch on it via JMESPath.
+
+    The injection reuses the existing gate-result-as-state-seam: the gate
+    node's return dict IS the state update merged by LangGraph. No new
+    routing primitive is needed — existing conditional edges read this key
+    with ``state["hitl_answer_<review_id>"]``.
+
+    ``gate_result`` is mutated in place (the caller owns the dict).
+
+    Security (MAJOR-2): only ``kind: choice`` answers inject state.
+    Approval answers must NOT inject ``option_id`` into state — doing so
+    would let a downstream conditional edge branch on an attacker-controlled
+    value. The ``kind == "choice"`` check is defence-in-depth; validation
+    already rejects ``option_id`` on non-choice answers.
+    """
+    if not isinstance(decision, dict):
+        return
+    answer = decision.get("answer")
+    if not isinstance(answer, dict):
+        return
+    # MAJOR-2: only inject for kind=choice — approval answers inject nothing.
+    if answer.get("kind") != "choice":
+        return
+    option_id = answer.get("option_id")
+    if isinstance(option_id, str) and option_id:
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{review_id}"
+        gate_result[state_key] = option_id
+        # Transition shim (FAR-1104): also write under the old key prefix
+        # so in-flight runs checkpointed before the vocab rename can still
+        # read the answer state via the old JMESPath key.
+        old_prefix = "hitl_answer_"
+        old_key = f"{old_prefix}{review_id}"
+        if old_key != state_key:
+            gate_result[old_key] = option_id
+
+
+def _hitl_review_approve_reject_result(
+    review_id: str,
+    decision: Any,
+    is_rejected: bool,
+    reject_disposition: str | None = None,
+) -> dict[str, Any]:
+    """Build the gate result for an approve/reject resume decision.
+
+    FAR-1487: a REJECTED artifact carries the gate's compile-time
+    ``reject_disposition`` (``route`` / ``terminate`` / ``proceed``) so the
+    executor finalize can tell a gate whose router ENDED the run (``terminate``)
+    from one that diverted or continued - it must only downgrade the former to
+    ``rejected``.
+
+    FAR-2489: EVERY resume outcome through this builder leaves the sibling
+    provenance key in a state consistent with what it wrote — the human marker
+    when ``modified_output`` replaced ``output``, an explicit ``None`` tombstone
+    otherwise (see :func:`_clear_human_output_provenance`). No decision can
+    therefore leave a marker behind that describes a value it did not write.
+    """
+    result_status = "rejected" if is_rejected else "approved"
+    artifact: dict[str, Any] = {
+        "node_id": review_id,
+        "status": "interrupted",
+        "result": result_status,
+        "human_data": decision,
+    }
+    if is_rejected and reject_disposition:
+        artifact["reject_disposition"] = reject_disposition
+    gate_result: dict[str, Any] = {"artifacts": [artifact]}
+    # If the human provided modified output, write it into state so
+    # downstream nodes receive the human's version instead of the
+    # original agent output.
+    if isinstance(decision, dict) and "modified_output" in decision:
+        gate_result["output"] = decision["modified_output"]
+        # FAR-2489: this replacement value is HUMAN-authored — stamp it exactly
+        # as ``deliver_manual`` does so a downstream consumer can tell the two
+        # apart from agent output (the artifact's ``result`` says the gate was
+        # approved; this says who wrote the payload).
+        _stamp_human_output_provenance(review_id, gate_result)
+    else:
+        # FAR-2489 re-entry hole: this decision supplies NO human-authored
+        # output (plain approve, or reject). Retire any marker an EARLIER
+        # decision on this same, re-entered gate left behind, so a stale human
+        # attestation can never outlive the decision that superseded it.
+        _clear_human_output_provenance(review_id, gate_result)
+    return gate_result
+
+
+#: The closed human-decision vocabulary the resume path resolves (FAR-541).
+#: Defined ABOVE its first consumer (``_hitl_review_resume_result``) so the
+#: vocabulary has exactly one home — the resume path checks membership here
+#: instead of inlining the set.
+_HUMAN_DECISION_ACTIONS = ("approved", "rejected", "deliver_manual")
+
+
+async def _hitl_review_resume_result(
+    decision: Any,
+    review_id: str,
+    state: dict[str, Any],
+    hitl_review_config: dict[str, Any],
+    session_factory: Any,
+    org_id: Any,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Handle a resume where ``state`` carries ``_hitl_decision``.
+
+    Returns ``(True, gate_result)`` when the human's decision resolves the
+    gate, or ``(False, None)`` on first invocation so the caller proceeds to
+    the condition/eval/autonomy checks.
+
+    Two fail-closed checks apply (FAR-541), and BOTH must pass:
+
+    1. Gate identity: the decision must be STAMPED with THIS gate's id
+       (``decision["review_id"] == review_id``). Decisions are per-RUN but
+       consumers are per-gate, and ``_hitl_decision`` persists in state for
+       the whole run (it is never cleared after consumption), so a decision
+       made at an earlier gate would otherwise resolve this one with zero
+       human action. A mismatched or missing stamp is ignored with a
+       ``hitl_review.foreign_decision_ignored`` warning (the gate id and the
+       decision's stamped gate id only — never payload content) and the gate
+       falls through to re-interrupt under human_only.
+    2. Action vocabulary: only recognized actions resume — ``approved`` (the
+       approve-with-modification API submits ``approved`` plus a
+       ``modified_output`` member, so it is covered by ``approved``),
+       ``rejected``, and ``deliver_manual``. Anything else — a missing action,
+       an empty ``{}``, an unknown action value — FAILS CLOSED. (A non-dict
+       decision fails the identity check first: it carries no stamp.)
+
+    Belt-and-braces against stale/foreign/empty-decision resumes (FAR-541):
+    the dispatcher-reconcile F6a gate-scoping guard is the first line of
+    defense, this is the second.
+    """
+    if decision is None:
+        return (False, None)
+    action = decision.get("action") if isinstance(decision, dict) else None
+    stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
+    if stamped_gate != review_id:
+        _log.warning(
+            "hitl_review.foreign_decision_ignored",
+            extra={"review_id": review_id, "decision_review_id": stamped_gate},
+        )
+        return (False, None)
+    # FAR-541 / M6: the closed vocabulary lives in exactly ONE place
+    # (``_HUMAN_DECISION_ACTIONS``) so this path and the Evidence grounding
+    # path can never drift apart. Anything outside it fails closed here —
+    # a missing action, an empty ``{}``, an unknown action value.
+    if action not in _HUMAN_DECISION_ACTIONS:
+        _log.warning(
+            "hitl_review.malformed_decision_ignored",
+            extra={"review_id": review_id, "decision_type": type(decision).__name__, "action": action},
+        )
+        return (False, None)
+    if action == "deliver_manual":
+        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
+        _inject_answer_state(review_id, decision, gate_result[1])
+        return gate_result
+    is_rejected = action == "rejected"
+    await _dispatch_reject_correction_best_effort(
+        state, decision, review_id, hitl_review_config, session_factory, org_id
+    )
+    ar_result = _hitl_review_approve_reject_result(
+        review_id, decision, is_rejected, hitl_review_config.get("reject_disposition")
+    )
+    _inject_answer_state(review_id, decision, ar_result)
+    return (True, ar_result)
+
+
+def _human_gated_dtos(eval_definitions: Sequence[EvalDefDTO]) -> list[EvalDefDTO]:
+    """The HUMAN-governed, gate-owned DTOs baked into this gate.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged.
+    """
+    return [
+        dto
+        for dto in eval_definitions
+        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
+    ]
+
+
+def _build_human_gate_decision(action: Any, decision: Any) -> Any:
+    """Construct the resolver's ``HumanDecision`` from the resume payload.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. The lazy import
+    runs at call time so this MUST be called inside the fail-open guard
+    (criterion 12): the resume path only resolves the three recognised
+    actions (anything else fails closed before this call) and the cast
+    carries a stray value through to the resolver's fail-closed branch.
+    """
+    from farna.core.eval_engine.policy_gate import HumanDecision
+
+    return HumanDecision(
+        action=cast("Any", action),
+        decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
+        reason=decision.get("reason") if isinstance(decision, dict) else None,
+    )
+
+
+def _ground_one_human_gate_evidence(
+    session: Any,
+    dto: EvalDefDTO,
+    *,
+    human_decision: Any,
+    gate_actions_in_set: set[Any],
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Resolve and ground ONE human-gated DTO on an Evidence row.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Called with the
+    session already open, inside the fail-open guard (criterion 12). The
+    lazy imports run at call time and therefore stay inside that guard.
+    """
+    from farna.core.eval_engine.evidence_layer import append_evidence
+    from farna.core.eval_engine.policy_gate import (
+        HumanGateView,
+        resolve_human_evaluation,
+    )
+
+    # Re-checked here so mypy narrows policy_gate_id (the list comprehension
+    # filter in ``_human_gated_dtos`` does not narrow the element type).
+    if dto.policy_gate_id is None:
+        return
+    if dto.failure_behaviour not in gate_actions_in_set:
+        # Loud, but deliberately NOT a skip: the live row's CHECK admits
+        # ``escalate`` (FAR-1694/0305) while the Outcome contract does not,
+        # so the resolver fail-closes the out-of-set action to ``block`` (M3)
+        # and the decision is still grounded (criterion 9).
+        _log.warning(
+            "hitl_review.human_gate_action_out_of_set",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "action": dto.failure_behaviour,
+            },
+        )
+    outcome = resolve_human_evaluation(
+        HumanGateView(
+            policy_gate_id=dto.policy_gate_id,
+            eval_id=dto.id,
+            # Live rows carry a plain `str` action (the CHECK
+            # admits escalate); the resolver narrows it.
+            action=cast("Any", dto.failure_behaviour),
+            version=dto.policy_gate_version or 1,
+        ),
+        human_decision,
+    )
+    if not isinstance(outcome.result, bool):
+        # result=None (unrecognised action) is not a decision —
+        # nothing to ground.
+        _log.warning(
+            "hitl_review.human_gate_evidence_unresolved_decision",
+            extra={
+                "review_id": review_id,
+                "policy_gate_id": str(dto.policy_gate_id),
+                "human_action": action,
+            },
+        )
+        return
+    append_evidence(
+        session,
+        organisation_id=org_id,
+        key=f"gate_decision_{dto.policy_gate_id}",
+        subject_type="run",
+        subject_id=str(run_id),
+        value=outcome.result,
+        producer_type="policy_gate",
+        producer_id=dto.policy_gate_id,
+    )
+
+
+async def _ground_human_gate_evidence_body(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO],
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+    action: Any,
+) -> None:
+    """Post-decision grounding body, executed INSIDE the fail-open guard.
+
+    Extracted from :func:`_ground_human_gate_evidence` for the
+    cognitive-complexity budget (S3776); behaviour unchanged. Every line
+    that can raise after the human's decision committed runs here — the DTO
+    scan, the missing-context bail, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence writes (criterion 12).
+    """
+    human_dtos = _human_gated_dtos(eval_definitions)
+    if not human_dtos:
+        return
+
+    if session_factory is None or org_id is None or run_id is None:
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_skipped",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "human_action": action,
+                "reason": "missing_session_org_or_run",
+            },
+        )
+        return
+
+    from farna.core.eval_engine.policy_gate import HumanGateAction
+
+    human_decision = _build_human_gate_decision(action, decision)
+
+    # M6: the gate-action vocabulary is DERIVED from the policy_gate
+    # module's HumanGateAction literal — never restated here, so the
+    # two cannot drift.
+    gate_actions_in_set = set(get_args(HumanGateAction))
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        for dto in human_dtos:
+            _ground_one_human_gate_evidence(
+                session,
+                dto,
+                human_decision=human_decision,
+                gate_actions_in_set=gate_actions_in_set,
+                org_id=org_id,
+                run_id=run_id,
+                review_id=review_id,
+                action=action,
+            )
+
+
+async def _ground_human_gate_evidence(
+    decision: Any,
+    eval_definitions: Sequence[EvalDefDTO] | None,
+    *,
+    session_factory: Any,
+    org_id: Any,
+    run_id: Any,
+    review_id: str,
+) -> None:
+    """Ground a human gate decision on Evidence rows (FAR-939 chunk 12 §3.4).
+
+    For EACH human-governed eval DTO baked into this gate, append ONE
+    Evidence row through the store's single write path
+    (``append_evidence`` → ``assert_write_authorisation``, which fails
+    CLOSED on an unowned key):
+
+    * ``key`` = ``gate_decision_<policy_gate_id>``
+    * ``subject_type`` / ``subject_id`` = ``run`` / ``<run_id>``
+    * ``value`` = the gate's boolean evaluation result — ``true`` for
+      ``approved`` / ``deliver_manual``, ``false`` for ``rejected``
+      (resolved through ``resolve_human_evaluation``; the configured
+      enforcement ``warn``/``block`` is NOT duplicated into ``value``)
+    * ``producer_type`` / ``producer_id`` = ``policy_gate`` /
+      ``<policy_gate_id>``
+
+    The human's decision has ALREADY committed in the route transaction
+    before resume runs, so the grounding write is **fail-open with a
+    structured log** — it must never retro-fail an already-committed
+    decision (mirrors chunk 4's fail-open decision-record philosophy).
+    The guard covers the WHOLE post-decision body — the extracted
+    :func:`_ground_human_gate_evidence_body` runs entirely inside this
+    ``try``, so the DTO scan, the lazy imports, the ``HumanDecision``
+    construction, the session and the Evidence write are all inside it
+    (criterion 12 / §3.4). ``CancelledError`` propagates.
+
+    Called from the gate node's RESUME path only — the write happens after
+    the human's decision exists, never before. No ``PolicyGateDecision``
+    row is written here (chunk 12 §3.5 — the reconciler's NULL
+    ``eval_result_id`` invariant stays absolute).
+    """
+    if not eval_definitions:
+        return
+    action = decision.get("action") if isinstance(decision, dict) else None
+    # M8 (criterion 12): EVERYTHING that can raise after the human's
+    # decision committed lives INSIDE this fail-open guard — including the
+    # lazy imports and the HumanDecision construction (which the body
+    # performs), which previously sat above the ``try`` and could escape
+    # ``resume`` with the decision already durable.
+    try:
+        await _ground_human_gate_evidence_body(
+            decision,
+            eval_definitions,
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id,
+            review_id=review_id,
+            action=action,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Fail-OPEN: the human's decision already committed in the route
+        # transaction — a grounding failure must never retro-fail it.
+        _log.warning(
+            "hitl_review.human_gate_evidence_grounding_failed",
+            extra={
+                "review_id": review_id,
+                "run_id": str(run_id),
+                "organisation_id": str(org_id),
+                "human_action": action,
+            },
+            exc_info=True,
+        )
+
+
+#: Deterministic cap for each serialised ``condition_result`` member carried
+#: in the interrupt payload (FAR-688). The matched value is derived from run
+#: STATE (node outputs — redacted, then bounded); the expression is
+#: user-authored but can exceed the REST save contract's 500-char cap on an
+#: MCP-authored graph (which bypasses the Pydantic contract), so BOTH members
+#: are bounded before they can reach persistence (the checkpointer persists
+#: interrupt payloads) or the briefing. A sliced member carries the shared
+#: truncation marker (WITHIN the cap).
+_CONDITION_RESULT_FIELD_MAX_CHARS = 2000
+
+
+def _serialize_condition_value(value: Any) -> str:
+    """Serialise a matched condition value deterministically, redacted + bounded.
+
+    FAR-688: the value the JMESPath condition matched is derived from run
+    state (node outputs — agent/connector content), so it runs through the
+    shared redaction primitive BEFORE truncation (FAR-163: a secret
+    straddling the cut point must still be removed) and is then bounded,
+    marked when sliced. Serialisation reuses the briefing's deterministic
+    serializer (:func:`modulo.core.pipeline_engine.hitl_context.serialize_value`)
+    instead of re-implementing it; the slice carries the marker WITHIN the cap.
+    """
+    return slice_with_marker(sanitize_error_text(serialize_value(value)), _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _bound_condition_expression(expression: str) -> str:
+    """The payload's ``condition_result.expression``, bounded with the marker.
+
+    User-authored (save-time) text, so redaction does not apply — but the cap
+    does: an MCP-authored graph bypasses the REST 500-char condition cap and
+    the expression rides into checkpointer-persisted payloads. The marker is
+    carved out of the slice (WITHIN the cap).
+    """
+    return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _hitl_review_condition_evaluate(
+    review_id: str, condition_expr: str | None, state: dict[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """Evaluate the conditional-gate JMESPath expression (FAR-688).
+
+    Returns ``(skip_artifact, condition_result)``:
+
+    * No condition → ``(None, None)`` — the gate fires unconditionally.
+    * Falsy result → ``(condition_skipped artifact, None)`` — the gate is
+      skipped entirely (no interrupt); the raw result stays in the artifact
+      (mirrors the pre-refactor behaviour).
+    * Truthy result → ``(None, payload)`` — the gate proceeds and the payload
+      rides in the interrupt payload (``{"expression", "value"}``): the
+      MATCHED value + the expression that produced it, so the fire-time
+      briefing records what actually made the condition true instead of
+      re-guessing it from the expression string (FAR-613's regex heuristic
+      extracts zero node ids for conditions authored against merged-state
+      keys like ``output.score > 0.5``).
+    """
+    if not condition_expr:
+        return None, None
+    try:
+        compiled = compile_jmespath(condition_expr)
+    except ValueError:
+        _log.exception("hitl_review.invalid_condition", extra={"condition": condition_expr})
+        raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
+    result = compiled.search(state)
+    if not bool(result):
+        # Condition falsy — skip the gate entirely. Preserve the raw result
+        # in the artifact (mirrors the pre-refactor behaviour).
+        return (
+            _build_hitl_review_artifact(
+                review_id,
+                "condition_skipped",
+                condition=condition_expr,
+                condition_result=result,
+            ),
+            None,
+        )
+    return None, {
+        "expression": _bound_condition_expression(condition_expr),
+        "value": _serialize_condition_value(result),
+    }
+
+
+async def _run_gate_evals(
+    state: dict[str, Any],
+    eval_definitions: Sequence[EvalDefDTO] | None,
+    node_type_map: dict[str, str] | None,
+    review_id: str,
+    session_factory: Any,
+    org_id: Any,
+) -> dict[str, EvalResult]:
+    """Run the gate's node-scoped evals (eval-before-interrupt) and persist results.
+
+    Per-eval compute→persist→decide (persist-before-decide, FAR-971 chunk 2).
+    Each ``EvalResult`` is committed in its own transaction *before* the
+    block/warn decision is taken, so a ``block`` eval's result is always
+    durable when ``EvalBlockedError`` propagates.
+    """
+    if not eval_definitions:
+        return {}
+    _run_id = state.get("_run_id")
+
+    def _resolve_eval_target_for_gate(eval_def: EvalDefDTO) -> Any:
+        """Per-eval target resolution (Defect 4 fix)."""
+        return _resolve_gate_eval_target(state, eval_def.node_id, node_type_map)
+
+    def _on_gate_eval_result(eval_def: EvalDefDTO, result: EvalResult) -> None:
+        """Per-eval structured log (Defect 3 fix — restores dropped log)."""
+        _log.info(
+            "hitl_review.eval_result",
+            extra={
+                "review_id": review_id,
+                "eval_name": eval_def.name,
+                "eval_id": str(eval_def.id),
+                "passed": result.passed,
+                "score": result.score,
+                "detail": result.detail,
+            },
+        )
+
+    return await run_evals_persist_before_decide(
+        eval_defs=eval_definitions,
+        resolve_eval_target=_resolve_eval_target_for_gate,
+        run_id=_run_id,  # None ⇒ no persistence (Defect 2 fix: no uuid4)
+        org_id=org_id,
+        session_factory=session_factory,
+        node_id=review_id,
+        resolve_model_judge=resolve_model_judge_callable,
+        on_eval_result=_on_gate_eval_result,
+    )
+
+
+def _hitl_review_eval_condition_skip(
+    review_id: str,
+    eval_condition_raw: Any,
+    eval_results_by_name: dict[str, EvalResult],
+) -> dict[str, Any] | None:
+    """Evaluate the eval-reference condition against captured eval results."""
+    if eval_condition_raw is not None and eval_results_by_name:
+        eval_name: str = eval_condition_raw.get("eval_name", "")
+        threshold: float = eval_condition_raw.get("threshold", 0.0)
+        operator: str = eval_condition_raw.get("operator", "lt")
+        matched_result = eval_results_by_name.get(eval_name)
+        if matched_result is not None:
+            score: float = matched_result.score or 0.0
+            condition_true: bool = _evaluate_eval_condition(score, threshold, operator)
+            _log.info(
+                "hitl_review.eval_condition",
+                extra={
+                    "review_id": review_id,
+                    "eval_name": eval_name,
+                    "score": score,
+                    "threshold": threshold,
+                    "operator": operator,
+                    "condition_true": condition_true,
+                },
+            )
+            if not condition_true:
+                return _build_hitl_review_artifact(
+                    review_id,
+                    "condition_skipped",
+                    condition=eval_condition_raw,
+                    condition_result=False,
+                )
+    return None
+
+
+def _hitl_review_autonomy_result(
+    review_id: str,
+    state: dict[str, Any],
+    human_only: bool,
+    *,
+    earned_live: str | None = None,
+    gating_enabled: bool = False,
+) -> tuple[AutonomyResolution, dict[str, Any] | None]:
+    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any.
+
+    ``earned_live`` / ``gating_enabled`` (FAR-1175) are read by the async gate
+    caller (the pipeline's live earned level + the org's ``autonomy_gating``
+    flag) and forwarded to :func:`resolve_autonomy`, which combines the live
+    earned level with the run's pinned-at-start level. Defaults reproduce the
+    S0 signature exactly so existing callers/tests are unaffected.
+    """
+    # Determine effective autonomy level from run_context (FAR-1163: a
+    # context-setter's recommendation is clamped to the pipeline's
+    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``;
+    # FAR-1175 S1: with gating on, the base is the earned level — read live
+    # and combined with the run's pinned-at-start value inside resolve_autonomy).
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
+    resolution = resolve_autonomy(
+        pipeline_default,
+        run_context,
+        earned_live=earned_live,
+        gating_enabled=gating_enabled,
+    )
+    autonomy = resolution.effective
+    human_only_effective: bool = human_only
+
+    # human_only overrides everything — always interrupt.
+    if not human_only_effective and should_skip_hitl_review(autonomy):
+        # fully_autonomous: silently skip the gate.
+        return (resolution, _build_hitl_review_artifact(review_id, "skipped", autonomy=autonomy.value))
+    if not human_only_effective and should_notify_on_complete(autonomy):
+        # notify_on_complete: auto-approve, record notification artifact.
+        return (
+            resolution,
+            _build_hitl_review_artifact(review_id, "auto_approved", autonomy=autonomy.value),
+        )
+    return (resolution, None)
+
+
+def _resolve_subject_parent_and_key(
+    subject_path: str,
+    state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the parent container and leaf key for a JMESPath subject_path.
+
+    Walks the path prefix (everything before the last ``.key`` segment) to
+    find the dict that holds the subject value, and returns that dict plus
+    the leaf key.  Used by FAR-862 so the frontend can reconstruct a
+    shape-preserving ``modified_output``.
+
+    Failure-isolated by contract: any resolution error returns ``(None, None)``
+    — the frontend then hides the editor (fail-safe).
+    """
+    # Find the last `.` that separates a parent expression from a leaf key.
+    # The leaf must be a simple identifier after the last dot.  Expressions
+    # like `a.b["key"]` or filter syntax are treated as unresolvable.
+    last_dot = subject_path.rfind(".")
+    if last_dot <= 0:
+        return None, None
+    prefix = subject_path[:last_dot]
+    leaf_key = subject_path[last_dot + 1 :]
+    if not leaf_key or not leaf_key.isidentifier():
+        return None, None
+    try:
+        compiled_prefix = compile_jmespath(prefix)
+        parent = compiled_prefix.search(state)
+        if isinstance(parent, dict) and leaf_key in parent:
+            return parent, leaf_key
+    except Exception:
+        _log.debug(
+            "hitl_review.subject_parent_resolution_failed",
+            extra={"subject_path": subject_path, "prefix": prefix, "leaf_key": leaf_key},
+            exc_info=True,
+        )
+    return None, None
+
+
+async def _resolve_live_autonomy(
+    *,
+    org_id: uuid.UUID | None,
+    session_factory: Callable[..., Any] | None,
+    pipeline_id: Any,
+) -> tuple[bool, str | None]:
+    """Resolve the org ``autonomy_gating`` flag and, when on, the live earned level.
+
+    The flag is resolved FIRST (fail-open, default OFF); the live earned level
+    is read only when the flag is ON, so the default gate path costs no extra
+    per-gate SELECT.
+    """
+    gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
+    if not gating_enabled:
+        return False, None
+    earned_live = await read_live_earned_autonomy(session_factory, org_id=org_id, pipeline_id=pipeline_id)
+    return True, earned_live
+
+
+async def _emit_autonomy_clamp_event(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    run_id: Any,
+    pipeline_id: Any,
+    review_id: str,
+    resolution: AutonomyResolution,
+) -> None:
+    """Record a ceiling clamp (requested/effective/ceiling) when one occurred (FAR-1163 S0)."""
+    if not (resolution.clamped and resolution.requested is not None):
+        return
+    await emit_autonomy_clamp_telemetry(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        requested=resolution.requested.value,
+        effective=resolution.effective.value,
+        ceiling=resolution.ceiling.value,
+        # FAR-1163: carry the pipeline id (seeded into state by the executor
+        # alongside _run_id/_org_id) — without it every production clamp event
+        # had pipeline_id: null while the unit test passed it explicitly.
+        pipeline_id=pipeline_id,
+    )
+
+
+async def _emit_autonomy_level_applied(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    run_id: Any,
+    pipeline_id: Any,
+    review_id: str,
+    autonomy_level: str,
+    gate_outcome: str,
+    human_only: bool,
+) -> None:
+    """Record the effective autonomy granted on a gate (skip / auto-approve / fired)."""
+    await emit_autonomy_telemetry(
+        session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        review_id=review_id,
+        autonomy_level=autonomy_level,
+        gate_outcome=gate_outcome,
+        human_only=human_only,
+        # FAR-1163: carry the pipeline id so the level-applied event is joinable.
+        pipeline_id=pipeline_id,
+    )
+
+
+def _resolve_hitl_subject(
+    subject_path: str | None, state: dict[str, Any], review_id: str
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Resolve ``subject_path`` against ``state`` (failure-isolated) — FAR-859 / FAR-862.
+
+    Returns ``(resolved_subject, subject_parent, subject_leaf_key)``; a bad path
+    or an unresolvable value yields ``(None, None, None)``. The parent container
+    and leaf key let the frontend reconstruct a shape-preserving
+    ``modified_output``.
+    """
+    if not subject_path:
+        return None, None, None
+    resolved_subject: str | None = None
+    resolved_subject_parent: dict[str, Any] | None = None
+    resolved_subject_leaf_key: str | None = None
+    try:
+        compiled_subject = compile_jmespath(subject_path)
+        subject_value = compiled_subject.search(state)
+        if subject_value is not None:
+            resolved_subject = serialize_value(subject_value)
+            resolved_subject_parent, resolved_subject_leaf_key = _resolve_subject_parent_and_key(subject_path, state)
+    except Exception:
+        _log.debug(
+            "hitl_review.subject_path_resolution_failed",
+            extra={"review_id": review_id, "subject_path": subject_path},
+            exc_info=True,
+        )
+    return resolved_subject, resolved_subject_parent, resolved_subject_leaf_key
+
+
+def make_hitl_review_fn(
+    hitl_review_config: dict[str, Any],
+    *,
+    eval_definitions: Sequence[EvalDefDTO] | None = None,
+    session_factory: Callable[..., Any] | None = None,
+    org_id: uuid.UUID | None = None,
+    node_type_map: dict[str, str] | None = None,
+) -> Any:
+    """Return a node function that raises a HITL interrupt.
+
+    The node checks the effective autonomy level from ``run_context`` at
+    runtime.  If the gate should be bypassed (autonomous mode) or
+    auto-approved (notify mode), no interrupt is raised.
+
+    Conditional gating:
+      If ``hitl_review_config`` contains a ``condition`` JMESPath expression,
+      it is evaluated against the current state.  If the result is falsy
+      the gate is skipped entirely (no autonomy or decision checks).
+
+    Eval-before-interrupt:
+      If ``eval_definitions`` is provided, each definition is evaluated
+      against the current state *after* the condition check but *before*
+      the interrupt.  Any eval with ``failure_behaviour='block'`` that
+      fails raises ``EvalBlockedError``, preventing the interrupt.
+
+      Evals target the SOURCE node's CONTRACT output (the agent's actual
+      return) when ``node_type_map`` is provided — the same target the
+      standalone ``_run_post_node_evals`` path validates — rather than the
+      whole merged state (whose ``output`` key holds the outer envelope /
+      telemetry for a sandbox_agent).  Without a type map the whole state is
+      used as before.
+
+      If ``session_factory`` is provided, eval results are persisted to
+      the ``eval_results`` table.
+
+    On resume (via ``aupdate_state`` + ``astream_events(None, config)``),
+    the node is re-invoked with ``state["_hitl_decision"]`` populated.
+    It then returns artifacts reflecting the human's decision.
+    """
+    review_id: str = hitl_review_config.get("review_id", "gate")
+    # FAR-609: the human_only default lives in the shared resolver module — a
+    # gate config that omits the flag is human-only (every HITL gate defaults
+    # to human_only: true; opting out requires an explicit false).
+    human_only: bool = human_only_effective(hitl_review_config)
+    condition_expr: str | None = hitl_review_config.get("condition")
+    eval_condition_raw: dict[str, Any] | None = hitl_review_config.get("eval_condition")
+    required_team_id: str | None = _normalize_required_team_id(review_id, hitl_review_config.get("required_team_id"))
+    subject_path: str | None = hitl_review_config.get("subject_path")
+
+    async def _hitl_review(state: dict[str, Any]) -> dict[str, Any]:
+        # --- Resume check — always first so condition/evals aren't re-evaluated. ---
+        resumed, resume_result = await _hitl_review_resume_result(
+            state.get("_hitl_decision"),
+            review_id,
+            state,
+            hitl_review_config,
+            session_factory,
+            org_id,
+        )
+        if resumed:
+            # FAR-939 chunk 12 §3.4: ground each human-governed gate's
+            # decision on an Evidence row (fail-open, after the human's
+            # decision has committed). Ordinary automatic-mode gates have no
+            # human-governed DTOs and pay only the list scan.
+            await _ground_human_gate_evidence(
+                state.get("_hitl_decision"),
+                eval_definitions,
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                review_id=review_id,
+            )
+            return resume_result  # type: ignore[return-value]
+
+        # --- Conditional gate (Section 8.17) — evaluate condition against state. ---
+        # FAR-688: on the fire (truthy) path the MATCHED value rides in the
+        # interrupt payload as ``condition_result`` so the executor's briefing
+        # capture records what made the condition true. The FAR-604 coalescing
+        # hash is over ``Run.input_hash``, never this payload — adding a
+        # member cannot change coalescing outcomes.
+        condition_skip, condition_result = _hitl_review_condition_evaluate(review_id, condition_expr, state)
+        if condition_skip is not None:
+            return condition_skip
+
+        # --- Eval-before-interrupt (Section 8.17) — run node-scoped evals. ---
+        eval_results_by_name = await _run_gate_evals(
+            state,
+            eval_definitions,
+            node_type_map,
+            review_id,
+            session_factory,
+            org_id,
+        )
+
+        # --- Eval-reference condition check (Section 8.17 v1). ---
+        eval_condition_skip = _hitl_review_eval_condition_skip(review_id, eval_condition_raw, eval_results_by_name)
+        if eval_condition_skip is not None:
+            return eval_condition_skip
+
+        # --- Autonomy skip/approve. ---
+        # FAR-1175 S1: the org's ``autonomy_gating`` flag is resolved FIRST
+        # (fail-open, default OFF). Only when the flag is ON do we read the
+        # pipeline's live earned level — with the flag off (the default) the
+        # gate path costs NO extra per-gate SELECT and is byte-identical to S0.
+        # The live earned level is combined with the run's pinned-at-start value
+        # INSIDE resolve_autonomy so a demotion bites this in-flight run while a
+        # promotion does not.
+        gating_enabled, earned_live = await _resolve_live_autonomy(
+            org_id=org_id,
+            session_factory=session_factory,
+            pipeline_id=state.get("_pipeline_id"),
+        )
+        resolution, autonomy_result = _hitl_review_autonomy_result(
+            review_id,
+            state,
+            human_only,
+            earned_live=earned_live,
+            gating_enabled=gating_enabled,
+        )
+        autonomy = resolution.effective
+        # FAR-1163 S0: when the recommendation was clamped to the ceiling,
+        # record the clamp (requested/effective/ceiling) IN ADDITION to the
+        # normal level-applied event — on both the skip/auto-approve and the
+        # fired path. Fail-open like the sibling telemetry.
+        await _emit_autonomy_clamp_event(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=state.get("_run_id"),
+            pipeline_id=state.get("_pipeline_id"),
+            review_id=review_id,
+            resolution=resolution,
+        )
+        if autonomy_result is not None:
+            # skipped (fully_autonomous) or auto_approved (notify_on_complete):
+            # record the effective autonomy granted as evidence (fail-open).
+            outcome = autonomy_result["artifacts"][0]["status"]
+            await _emit_autonomy_level_applied(
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=state.get("_run_id"),
+                pipeline_id=state.get("_pipeline_id"),
+                review_id=review_id,
+                autonomy_level=autonomy.value,
+                gate_outcome=outcome,
+                human_only=human_only,
+            )
+            return autonomy_result
+
+        # --- First invocation — store config and interrupt. ---
+        # Gate fired (human path): record the effective autonomy + fired outcome.
+        await _emit_autonomy_level_applied(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=state.get("_run_id"),
+            pipeline_id=state.get("_pipeline_id"),
+            review_id=review_id,
+            autonomy_level=autonomy.value,
+            gate_outcome="fired",
+            human_only=human_only,
+        )
+        hitl_reviews: list[dict[str, Any]] = list(state.get("_hitl_reviews") or [])
+        hitl_reviews.append(hitl_review_config)
+        state["_hitl_reviews"] = hitl_reviews
+
+        # FAR-859: resolve subject_path against the SAME state root the
+        # condition evaluates against (failure-isolated — a bad path or
+        # unresolvable value yields None).
+        resolved_subject, resolved_subject_parent, resolved_subject_leaf_key = _resolve_hitl_subject(
+            subject_path, state, review_id
+        )
+
+        # State mutations before the interrupt are persisted by the checkpointer.
+        decision = interrupt(
+            {
+                "review_id": review_id,
+                "autonomy_level": autonomy.value,
+                "human_only": human_only,
+                "overdue_threshold_minutes": hitl_review_config.get("overdue_threshold_minutes"),
+                "required_team_id": required_team_id,
+                # FAR-688: the matched condition value ({"expression", "value"},
+                # redacted + bounded) or None when the gate has no condition.
+                "condition_result": condition_result,
+                # FAR-859: the resolved subject under review, bounded +
+                # redacted by the builder. None when subject_path is absent
+                # or unresolvable.
+                "subject": resolved_subject,
+                # FAR-862: the parent container holding the subject + the leaf
+                # key, so the frontend can reconstruct a shape-preserving
+                # modified_output (replacing only the subject, never dropping
+                # sibling keys). None when the parent is unresolvable — the
+                # frontend hides the editor in that case (fail-safe).
+                "subject_parent": resolved_subject_parent,
+                "subject_leaf_key": resolved_subject_leaf_key,
+            }
+        )
+        return await _hitl_review({**state, "_hitl_decision": decision})
+
+    _hitl_review.__name__ = f"hitl_review_{review_id}"
+    return _hitl_review
+
+
+def _manual_resume_output(
+    decision: dict[str, Any],
+    output_schema_json: dict[str, Any] | None,
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    _repair_invoke_fn: Any | None = None,
+) -> dict[str, Any] | None:
+    """Manual output carried by a decision stamped for THIS node, schema-validated.
+
+    A decision's ``output`` that is not a dict resumes with ``None`` (the node
+    completes with no human payload). When the node declares an
+    ``output_schema_json`` and an output IS present, it is validated before
+    the node continues.
+    """
+    resume_data = decision.get("output")
+    manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
+    if output_schema_json and manual_output is not None:
+        _validate_against_schema(
+            manual_output,
+            output_schema_json,
+            mode=mode,
+            schema_id=schema_id,
+            schema_version=schema_version,
+            _repair_invoke_fn=_repair_invoke_fn,
+        )
+    return manual_output
+
+
+def _manual_completion_artifact(node_id: str, manual_output: dict[str, Any] | None) -> dict[str, Any]:
+    """State envelope for a completed manual node."""
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "completed",
+                "human_output": manual_output,
+            }
+        ],
+        "manual_output": manual_output,
+    }
+
+
+def make_manual_node_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,  # NOSONAR S1172 - API kwarg (graph_cache); manual nodes never time out
+) -> Any:
+    """Return a node function for a manual-input node.
+
+    The node immediately interrupts and waits for human output. On resume the
+    output is validated against output_schema_id (if defined) before continuing.
+    """
+    node_id: str = str(node_def["id"])
+    output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
+    manual_prompt: str = node_def.get("manual_prompt", "")
+
+    async def _manual_node(state: dict[str, Any]) -> dict[str, Any]:
+        # Check if this is a resume with human output.
+        # FAR-541: the decision must be STAMPED with THIS node's id —
+        # ``_hitl_decision`` persists in state for the whole run, so a decision
+        # made at an earlier gate must never complete this node (historically
+        # with ``manual_output=None``). A mismatched/missing stamp fails
+        # closed: the node re-interrupts and keeps waiting for its own input.
+        decision = state.get("_hitl_decision")
+        stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
+        if isinstance(decision, dict) and stamped_gate == node_id:
+            # FAR-899: schema validator mode — resolved from the effective-
+            # setting store (org.settings_json → system_config → env var →
+            # "lenient").  FIX E: single helper replaces 3 copy-pasted blocks.
+            _mctx = get_conformance_ctx()
+            _msf = _mctx[0] if _mctx is not None else None
+            _schema_validator_mode = await _resolve_schema_validator_mode(
+                state,
+                session_factory=_msf,
+                node_id=node_id,
+            )
+
+            # FIX B: manual path has no model backend — repair invoke is
+            # explicitly None. Strict-mode validation failures are terminal
+            # with no auto-repair (the human provides the output, not a model).
+            manual_output = _manual_resume_output(
+                decision,
+                output_schema_json,
+                mode=_schema_validator_mode,
+                schema_id=node_def.get("output_schema_id", "unknown"),
+                schema_version=node_def.get("output_schema_version", 0),
+                _repair_invoke_fn=None,  # FIX B: no model backend for manual nodes
+            )
+
+            _log.info(
+                "manual_node.completed",
+                extra={
+                    "node_id": node_id,
+                    "has_output_schema": output_schema_json is not None,
+                },
+            )
+
+            return _manual_completion_artifact(node_id, manual_output)
+        if decision is not None:
+            _log.warning(
+                "manual_node.foreign_decision_ignored",
+                extra={"node_id": node_id, "decision_review_id": stamped_gate},
+            )
+
+        # First invocation —  record pending artifact and interrupt.
+        artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
+        artifacts.append({"node_id": node_id, "status": "awaiting_human"})
+        state["artifacts"] = artifacts
+
+        _log.info(
+            "manual_node.awaiting_human",
+            extra={
+                "node_id": node_id,
+                "prompt": manual_prompt or "",
+            },
+        )
+
+        decision = interrupt(
+            {
+                "manual": True,
+                # FAR-541 (iteration 3): the interrupt payload carries its own
+                # identity stamp. ``_handle_graph_interrupt`` keys the pending
+                # claim row on ``review_id`` VERBATIM — without this member the
+                # manual node's claim row was keyed "" (invisible to the
+                # recover-node 422 guard, unclaimable through the HITL API).
+                # The stamp equals the node id, matching the consumer's check.
+                "review_id": node_id,
+                "node_id": node_id,
+                "prompt": manual_prompt,
+                "output_schema_id": node_def.get("output_schema_id"),
+            }
+        )
+        return await _manual_node({**state, "_hitl_decision": decision})
+
+    _manual_node.__name__ = f"manual_{node_id}"
+    return _manual_node
+
+
+def _resolve_binding_connector(
+    binding: dict[str, Any],
+    node_id: str,
+    *,
+    allowed_connectors: list[str] | None = None,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Resolve a bound connector instance for *node_id*.
+
+    Returns ``(connector, None)`` on success, or ``(None, error_artifact)``
+    when the hub is unavailable, the instance id is missing, the connector
+    is outside the node's ``capability_scope.allowed_connectors``, or the
+    connector cannot be resolved — the error artifact is already enveloped.
+
+    FAR-418: when *allowed_connectors* is set, a bound connector excluded by
+    the scope fails FAST with a typed, logged, metric-emitting
+    ``ScopeViolationError`` (never silently). Absent = unrestricted.
+    """
+    from farna.core.capability_scope import (
+        ScopeViolationError,
+        is_connector_allowed,
+        record_scope_violation,
+    )
+    from farna.core.pipeline_engine.decorator import get_connector_hub
+
+    hub = get_connector_hub()
+    if hub is None:
+        return (
+            None,
+            {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]},
+        )
+
+    instance_id_str = binding.get("instance_id")
+    if not instance_id_str:
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": "no connector instance_id"}]}
+
+    import uuid as _uuid
+
+    instance_uuid = _uuid.UUID(str(instance_id_str))
+
+    # FAR-418: deny-by-default within the node's connector scope.
+    connector_type: str = binding.get("type", "")
+    if not is_connector_allowed(
+        connector_instance_id=instance_uuid,
+        connector_type=connector_type,
+        allowed_connectors=allowed_connectors,
+    ):
+        target = connector_type or str(instance_uuid)
+        scope_err = ScopeViolationError(node_id=node_id, target=target, kind="connector")
+        record_scope_violation(node_id=node_id, target=target, kind="connector")
+        _log.error("scope.violation node=%s connector=%s", node_id, target)
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
+
+    try:
+        connector = hub.get(instance_uuid)
+    except Exception as _conn_exc:
+        return None, {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
+    return connector, None
+
+
+def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Merge run input into the connector filters/data and return (resource, filters, data).
+
+    Run input keys slot into ``filters`` by default and into ``data`` only
+    when the binding already carries them; a shell connector without a
+    ``provider_ref`` defaults to ``"/"``.
+
+    An explicit ``null`` is treated exactly like an absent key. A stored graph
+    can carry ``"resource": null`` / ``"filters": null`` (a binding written
+    before the model defaulted them, or a hand-written/legacy graph), and
+    ``dict(None)`` raises ``TypeError`` on the only run path — so every read is
+    coerced with ``or`` rather than a ``.get(key, default)`` that only covers an
+    ABSENT key. One consequence worth knowing: the same ``or`` guard also
+    treats an explicitly EMPTY ``resource`` string as unset and falls back to
+    ``"command"``, which differs from the pre-FAR-2089 behaviour that preserved
+    ``""``.
+    """
+    run_context = state.get("run_context") or {}
+    raw_input = run_context.get("input", {})
+    # FAR-2089: a persisted ``None`` (older graph writes emitted explicit nulls
+    # for the optional inputs) must fall back to the documented defaults rather
+    # than reaching the connector as ``None`` — ``dict(None)`` raises TypeError
+    # and ``resource=None`` bypasses the "command" default.
+    resource: str = binding.get("resource") or "command"
+    filters = dict(binding.get("filters") or {})
+    data = dict(binding.get("data") or {})
+    if isinstance(raw_input, dict):
+        filters.update({k: v for k, v in raw_input.items() if k not in data})
+        data.update({k: v for k, v in raw_input.items() if k not in filters})
+
+    # Ensure provider_ref for shell connectors
+    if "provider_ref" not in filters and "provider_ref" not in data:
+        filters["provider_ref"] = "/"
+    return resource, filters, data
+
+
+def _enforce_connector_scope(
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+) -> dict[str, Any] | None:
+    """FAR-418 deny-by-default scope gate for a connector node.
+
+    Fires BEFORE the connector is resolved from the hub, so a node that targets
+    a connector excluded by its ``capability_scope`` never decrypts or touches
+    the connection (fail-fast with a typed, logged, metric-emitting
+    ``ScopeViolationError``). The hub is only consulted for in-scope connectors.
+    Returns a failed-artifact dict on violation, else ``None``.
+    """
+    from farna.core.capability_scope import (
+        ScopeViolationError,
+        is_connector_allowed,
+        record_scope_violation,
+    )
+
+    instance_id_str = binding.get("instance_id")
+    if not instance_id_str:
+        return None
+    import uuid as _uuid
+
+    instance_uuid = _uuid.UUID(str(instance_id_str))
+    if is_connector_allowed(
+        connector_instance_id=instance_uuid,
+        connector_type=connector_type,
+        allowed_connectors=allowed_connectors,
+    ):
+        return None
+    target = connector_type or str(instance_uuid)
+    scope_err = ScopeViolationError(node_id=node_id, target=target, kind="connector")
+    record_scope_violation(node_id=node_id, target=target, kind="connector")
+    _log.error("scope.violation node=%s connector=%s", node_id, target)
+    return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
+
+
+#: FAR-1141: the CI-runner methods a ``dispatch`` connector operation may route
+#: to (the ``CIRunnerBase`` capability contract). An unknown selector RAISES —
+#: it must never fall through to ``query``.
+_DISPATCH_ACTIONS: frozenset[str] = frozenset(
+    {
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    },
+)
+
+
+def _dispatch_arg(
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    key: str,
+    default: Any = None,
+) -> Any:
+    """Resolve a dispatch argument from the binding input (FAR-1141).
+
+    ``data`` wins over ``filters`` (the binding's explicit payload slots first,
+    the run-input-merged filters second); an absent/None key yields *default*.
+    """
+    if data.get(key) is not None:
+        return data[key]
+    if filters.get(key) is not None:
+        return filters[key]
+    return default
+
+
+def _dispatch_result_to_state(value: Any) -> Any:
+    """Convert a CI dispatch result into plain, JSON-safe state values (FAR-1141).
+
+    ``dataclasses.asdict`` recurses ``CIRun`` / ``CIRunLog`` into dicts but
+    leaves the ``CIRunStatus`` StrEnum member in place (verified: asdict yields
+    the enum member, which is a str SUBCLASS); normalise enum members to plain
+    ``str`` so run state carries a plain string. Never raises.
+    """
+    if _dc_is_dataclass(value) and not isinstance(value, type):
+        return _dispatch_result_to_state(_dc_asdict(value))
+    if isinstance(value, list):
+        return [_dispatch_result_to_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _dispatch_result_to_state(item) for key, item in value.items()}
+    if isinstance(value, StrEnum):
+        return str(value)
+    return value
+
+
+# --- FAR-1141 slice 2: dispatch await-completion (wait) semantics -----------
+
+#: Internal poll interval for a ``dispatch`` node's ``await_completion`` loop.
+#: Module-level (never inlined) so tests patch it to a sub-millisecond value
+#: instead of sleeping in wall-clock time. This bounds the SLEEP between two
+#: polls — never the status call itself (see
+#: :data:`_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS`).
+_DISPATCH_WAIT_POLL_INTERVAL_SECONDS = 2.0
+
+#: Per-CALL budget for ONE ``get_run_status`` poll inside the wait loop.
+#:
+#: Deliberately separate from :data:`_DISPATCH_WAIT_POLL_INTERVAL_SECONDS`:
+#: the interval is how long the loop SLEEPS between polls, while this caps how
+#: long a single status call may run. The value is the HTTP client timeout the
+#: CI connectors themselves configure (``httpx`` ``timeout=30`` in
+#: ``connectors/ci_runner/github_actions.py`` et al.), so a status call that is
+#: slow but within its own client's contract is given its full budget instead
+#: of being cancelled at ~2 s. Capping the call at the poll interval made every
+#: slower call time out, each cancellation counted as a consecutive poll error,
+#: and the wait failed after N attempts while the external job was still
+#: running. Clamped by the remaining window at the call site, so the deadline
+#: still wins every race.
+_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS = 30.0
+
+#: ``wait_timeout`` used when ``await_completion`` is set and the node declares
+#: none. Documented default: 300 s.
+_DISPATCH_WAIT_TIMEOUT_DEFAULT_SECONDS = 300.0
+
+#: Hard maximum for ``wait_timeout`` — one hour. Larger values are rejected at
+#: save time (``api/routes/pipelines.py``) AND at graph build below, so a
+#: hand-written graph can never park a run slot for longer than an hour.
+_DISPATCH_WAIT_TIMEOUT_MAX_SECONDS = 3600.0
+
+#: Head-room kept between the effective wait and the node's own
+#: ``timeout_seconds``. ``cancellable_node`` wraps the node in
+#: ``asyncio.wait_for``; without this margin the node deadline would win the
+#: race and surface a generic ``TimeoutError`` (``node.timeout``) instead of the
+#: typed ``dispatch.wait_timeout``.
+_DISPATCH_WAIT_NODE_MARGIN_SECONDS = 1.0
+
+#: FAR-1141 (MAJOR 5): the FLOOR of consecutive ``get_run_status`` failures
+#: tolerated inside one wait window before the LAST error is re-raised. A single
+#: transient poll failure (429 / 5xx / network blip) used to abort the whole
+#: wait through the generic connector-failure path, leaving the already-fired
+#: external job running while the run reported a misleading failure — so a poll
+#: error is now retried inside the window with a bounded backoff. Only faults
+#: classified transient by :func:`_is_transient_dispatch_poll_error` ever reach
+#: this counter; a permanent one (ACL denial / contract ``ValueError`` / 4xx)
+#: propagates immediately instead.
+#:
+#: It is a FLOOR, not the whole budget: :func:`_dispatch_poll_error_budget`
+#: scales the tolerance with the window still remaining (FAR-1141 FIX 4), so a
+#: short window behaves exactly as before and a 1-hour wait survives a 60 s
+#: rate-limit window. The scaled cap keeps a genuinely dead / permanently-broken
+#: status endpoint from spinning for the whole window: past it the fault
+#: surfaces AS ITSELF (a loud connector failure), not as a wait timeout that
+#: would blame the substrate.
+_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS = 8
+
+#: FAR-1141 FIX 4: seconds of remaining wait window that buy ONE extra
+#: tolerated consecutive poll failure on top of
+#: :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS`. Chosen so a 60 s
+#: rate-limit window (~30 polls at the 2 s interval) fits comfortably inside a
+#: long wait's budget, while the budget at the 3600 s maximum (68 failures)
+#: still keeps a fast-failing dead endpoint surfacing as itself in ~2 minutes
+#: and a slow-failing one well before the window closes.
+_DISPATCH_POLL_ERROR_BUDGET_SECONDS = 60.0
+
+#: FAR-1141 FIX 4: upper clamp on a provider's ``Retry-After``. Honouring the
+#: header is what makes the loop back off instead of hammering a rate limiter;
+#: the clamp keeps a broken/hostile header from parking a run slot for longer
+#: than five minutes. The remaining window always clamps it further.
+_DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS = 300.0
+
+#: FAR-1141 / ADR-042 mapping-table artefact: substrate ``CIRunStatus`` code ->
+#: dispatch-node outcome.
+#:
+#: Keys are the substrate codes VERBATIM, exactly as published by
+#: ``modulo.connectors.base.CIRunStatus`` (``pending``, ``queued``,
+#: ``in_progress``, ``success``, ``failure``, ``cancelled``, ``timed_out``,
+#: ``unknown``). Values:
+#:
+#: * ``"poll"``      - NOT terminal: keep polling until the window expires.
+#: * ``"completed"`` - terminal success: the node completes and the code is
+#:   preserved verbatim in the output as ``substrate_status``.
+#: * ``"failed"``    - terminal failure: the node returns a FAILED artifact
+#:   envelope whose ``error`` is the code VERBATIM (``"failure"`` /
+#:   ``"cancelled"`` / ``"timed_out"``) and whose output carries
+#:   ``substrate_status``. Returned, never raised, so the graph's own error
+#:   routing applies - consistent with every other connector-node failure
+#:   envelope.
+#:
+#: A status absent from this table is a connector contract breach -> RAISE
+#: (loud), never a silent "keep polling" default.
+DISPATCH_STATUS_OUTCOME_MAP: dict[str, str] = {
+    "pending": "poll",
+    "queued": "poll",
+    "in_progress": "poll",
+    "unknown": "poll",
+    "success": "completed",
+    "failure": "failed",
+    "cancelled": "failed",
+    "timed_out": "failed",
+}
+
+
+def _is_transient_dispatch_poll_error(exc: BaseException) -> bool:
+    """FAR-1141 iteration 2: is this ``get_run_status`` fault worth RETRYING?
+
+    Minimal transient-vs-permanent split for the await-completion poll loop:
+
+    * **Transient** (retry inside the window): a timeout — the loop's own
+      per-call cap or the connector's — an HTTP **429 / 5xx**, or a
+      transport/connection failure. These are the faults a second poll can
+      plausibly survive, and the external job is already fired, so abandoning
+      the observation would misreport a run that is still going.
+    * **Permanent** (propagate immediately, as itself): everything else — the
+      ACL's :class:`~modulo.connectors.base.ConnectorPermissionError`, a
+      connector's fail-loud ``ValueError`` (including Jenkins' intentional
+      queue-404), an HTTP **4xx**, and any error we cannot classify. Retrying
+      these cannot succeed, and the old blanket ``except Exception`` not only
+      retried them N times, it then re-raised the wait window's
+      ``dispatch.wait_timeout`` over the top — an ACL denial or a contract
+      breach reported as a substrate-side timeout.
+
+    HTTP faults are frequently WRAPPED by the connectors (``raise ValueError(...)
+    from httpx.HTTPStatusError``), so the ``__cause__`` / ``__context__`` chain
+    is walked: the first member of the chain that this function can classify
+    decides, and an unclassifiable member (``ValueError``, ``RuntimeError``, ...)
+    never makes a fault transient. ``asyncio.CancelledError`` is a
+    ``BaseException`` and never reaches here (it propagates untouched).
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):
+            # asyncio.wait_for's own cancellation (3.11+: asyncio.TimeoutError
+            # IS the builtin) and any connector-side timeout.
+            return True
+        if isinstance(current, httpx.HTTPStatusError):
+            status = current.response.status_code
+            return status == 429 or status >= 500
+        if isinstance(current, httpx.TransportError | ConnectionError):
+            # connect/read/write/pool timeouts, DNS and socket failures.
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _dispatch_poll_error_budget(remaining: float) -> int:
+    """Consecutive transient poll failures tolerated for *remaining* seconds.
+
+    FAR-1141 iteration 2 (FIX 4): the tolerance used to be a fixed COUNT, so a
+    ~8-attempt cap was ~16 s of slack whether ``wait_timeout`` was the 300 s
+    default or the 3600 s maximum. A single 60 s rate-limit window (a 429 with
+    ``Retry-After``) on a long wait therefore aborted a run whose external job
+    was still going.
+
+    The budget is now time-scaled: a documented FLOOR (the original count, so a
+    short window behaves exactly as before) plus one further tolerated failure
+    per :data:`_DISPATCH_POLL_ERROR_BUDGET_SECONDS` of window left. The bound
+    stays relative to ``remaining``, so the cap cannot be outlived: even at the
+    3600 s maximum the budget is 68 failures, and a permanently-dead endpoint
+    that fails FAST still surfaces as itself after ~2 minutes of a 1-hour window
+    rather than spinning it, while one that fails SLOW (the 30 s per-call cap)
+    still surfaces as itself well before the window closes.
+    """
+    if remaining <= 0:
+        return _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS
+    return _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS + int(
+        remaining // _DISPATCH_POLL_ERROR_BUDGET_SECONDS,
+    )
+
+
+def _transient_poll_retry_after(exc: BaseException) -> float | None:
+    """Seconds a transient HTTP fault's ``Retry-After`` header asks us to wait.
+
+    FAR-1141 iteration 2 (FIX 4): the poll loop slept a flat
+    :data:`_DISPATCH_WAIT_POLL_INTERVAL_SECONDS` between retries, so it hammered
+    a rate limiter that had just said "back off" — burning the consecutive-error
+    budget in seconds and turning a polite 60 s window into an aborted wait.
+
+    Walks the same ``__cause__`` / ``__context__`` chain the transient classifier
+    walks (connectors wrap HTTP faults in ``ValueError``). Only the delta-seconds
+    form is honoured — an HTTP-date form is undecidable without a clock
+    comparison and returns ``None`` (the flat interval then applies, which is
+    the pre-fix behaviour). The value is clamped to
+    :data:`_DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS` so a hostile or broken header
+    cannot park a run slot; the caller additionally clamps to the remaining
+    window.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            raw = current.response.headers.get("Retry-After")
+            if not raw:
+                return None
+            try:
+                seconds = float(raw)
+            except ValueError:
+                return None  # HTTP-date form: not honoured, documented above.
+            if seconds <= 0:
+                return None
+            return min(seconds, _DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS)
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _resolve_dispatch_wait_timeout(
+    configured: Any,
+    node_timeout: float | None,
+    node_id: str,
+) -> float:
+    """Effective ``await_completion`` window for one dispatch node (FAR-1141).
+
+    Validates the configured value (a number ``> 0`` and ``<=`` the documented
+    3600 s maximum) — a hand-written graph that bypasses the API validator fails
+    LOUD at graph build, never silently at run time. ``None`` resolves to the
+    documented 300 s default. The result is then capped just below the node's
+    own ``timeout_seconds`` so the typed ``dispatch.wait_timeout`` (not the
+    generic node deadline) is what fires.
+    """
+    if configured is None:
+        wait = _DISPATCH_WAIT_TIMEOUT_DEFAULT_SECONDS
+    else:
+        if isinstance(configured, bool) or not isinstance(configured, int | float):
+            raise ValueError(f"dispatch node {node_id}: wait_timeout must be a number, got {configured!r}")
+        wait = float(configured)
+        if not 0 < wait <= _DISPATCH_WAIT_TIMEOUT_MAX_SECONDS:
+            raise ValueError(
+                f"dispatch node {node_id}: wait_timeout must be > 0 and <= "
+                f"{_DISPATCH_WAIT_TIMEOUT_MAX_SECONDS:.0f} seconds, got {wait!r}"
+            )
+    if node_timeout is not None and (node_timeout - _DISPATCH_WAIT_NODE_MARGIN_SECONDS) > 0:
+        wait = min(wait, node_timeout - _DISPATCH_WAIT_NODE_MARGIN_SECONDS)
+    return wait
+
+
+async def _await_dispatch_terminal(
+    connector: Any,
+    job_ref: Any,
+    *,
+    wait_timeout: float,
+) -> dict[str, Any]:
+    """Poll ``get_run_status`` until the substrate reports a TERMINAL status.
+
+    FAR-1141: the job is fired EXACTLY ONCE by the caller — this loop only
+    OBSERVES it. Bounded by *wait_timeout* on a monotonic clock, and the window
+    is enforced on THREE sides so the typed :class:`DispatchWaitTimeoutError`
+    always wins the race against the node's own ``asyncio.wait_for``:
+
+    * the deadline is checked BEFORE every poll (checking only after a poll let
+      the loop fire one extra poll past the window);
+    * each poll call is bounded by ``min(_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS,
+      remaining)`` — its own ~30 s budget (the connectors' HTTP client timeout),
+      NOT the poll interval: the interval only bounds the inter-poll SLEEP, so
+      a status call slower than ~2 s is no longer cancelled on every attempt
+      and counted as a consecutive failure while the job runs;
+    * the inter-poll sleep is bounded by the remaining time too.
+
+    Faults are classified (:func:`_is_transient_dispatch_poll_error`), never
+    blanket-retried:
+
+    * a **transient** fault (timeout / 429 / 5xx / transport) is RETRIED inside
+      the window with a bounded backoff — at most
+      :func:`_dispatch_poll_error_budget` consecutive failures, a cap that
+      SCALES with the window still remaining rather than a fixed count, so a
+      60 s rate-limit window cannot abort a 1-hour wait — instead of aborting
+      the wait through the generic connector-failure path (which left the
+      already-fired external job running while the run reported a misleading
+      failure). A provider's ``Retry-After`` (delta-seconds form) is honoured
+      as the backoff, so the loop backs off instead of hammering a rate
+      limiter. A persistent transient fault surfaces AS ITSELF once the cap is
+      hit — with a non-empty message, even when the fault is a bare
+      ``asyncio.TimeoutError`` (whose ``str()`` is ``""``) — never disguised as
+      a wait timeout.
+    * a **permanent** fault (ACL denial, contract ``ValueError``, HTTP 4xx)
+      propagates IMMEDIATELY as itself: not retried, and never relabelled
+      ``dispatch.wait_timeout``, because the window ending is not what broke
+      the poll.
+
+    ``asyncio.CancelledError`` is a ``BaseException`` and is deliberately NOT
+    caught: a run cancel or the node's own deadline stops the wait immediately.
+    """
+    run_id = str(job_ref.get("id") or "") if isinstance(job_ref, dict) else ""
+    if not run_id:
+        raise ValueError("dispatch await_completion requires a run id in the trigger_run result")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_timeout
+    consecutive_errors = 0
+    last_status = "unknown"
+
+    def _timeout_error() -> DispatchWaitTimeoutError:
+        return DispatchWaitTimeoutError(
+            f"dispatch run {run_id} did not reach a terminal status within {wait_timeout:g}s "
+            f"(last status {last_status!r}) — terminal, never retried: a retry would fire a "
+            "second external job",
+        )
+
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _timeout_error()
+        try:
+            polled = await asyncio.wait_for(
+                connector.get_run_status(run_id=run_id),
+                timeout=min(_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS, remaining),
+            )
+        except Exception as exc:
+            consecutive_errors += 1
+            sleep_for = _await_dispatch_poll_error(
+                exc,
+                run_id=run_id,
+                consecutive_errors=consecutive_errors,
+                deadline=deadline,
+                loop=loop,
+                timeout_error=_timeout_error,
+            )
+            await asyncio.sleep(sleep_for)
+            continue
+        consecutive_errors = 0
+        state = _dispatch_result_to_state(polled)
+        last_status, outcome = _dispatch_status_outcome(state, run_id)
+        if outcome != "poll":
+            # ``_dispatch_status_outcome`` already proved ``state`` is a dict.
+            return cast(dict[str, Any], state)
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _timeout_error()
+        await asyncio.sleep(min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, remaining))
+
+
+def _await_dispatch_poll_error(
+    exc: Exception,
+    *,
+    run_id: str,
+    consecutive_errors: int,
+    deadline: float,
+    loop: asyncio.AbstractEventLoop,
+    timeout_error: Callable[[], DispatchWaitTimeoutError],
+) -> float:
+    """Classify a poll fault (FAR-1141): raise, or return the bounded retry sleep.
+
+    A PERMANENT fault (ACL denial, contract breach, 4xx) surfaces as itself
+    immediately. A transient fault inside the window retries with a time-scaled
+    consecutive-error budget and honours the provider's ``Retry-After``; once
+    the budget is exceeded (or the window closed) it raises.
+    """
+    if not _is_transient_dispatch_poll_error(exc):
+        # Permanent: an ACL denial, a contract breach or a 4xx. It cannot
+        # succeed on a retry and the wait window is not what broke — surface
+        # it AS ITSELF, now, never as wait_timeout.
+        raise exc
+    if loop.time() >= deadline:
+        # The window closed on a transient fault: the typed wait timeout is
+        # what actually ended the wait (cause chained).
+        raise timeout_error() from exc
+    # FAR-1141 FIX 4: the tolerance is time-scaled to the window that is
+    # actually left, not a fixed count — recomputed on every failure so it
+    # shrinks with the deadline instead of outliving it.
+    poll_error_budget = _dispatch_poll_error_budget(deadline - loop.time())
+    if consecutive_errors > poll_error_budget:
+        if not str(exc):
+            # A bare asyncio.TimeoutError renders as "" — an empty error tells
+            # an operator nothing about which run failed or why, so the cap
+            # never lets one escape unwrapped.
+            raise TimeoutError(
+                f"dispatch get_run_status(run_id={run_id!r}) timed out on "
+                f"{consecutive_errors} consecutive polls "
+                f"(budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; "
+                f"per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
+            ) from exc
+        raise exc
+    _log.warning(
+        "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
+        run_id,
+        consecutive_errors,
+        poll_error_budget,
+        exc,
+    )
+    # FAR-1141 FIX 4: honour the provider's Retry-After rather than hammering a
+    # rate limiter at the flat poll interval (which burned the budget in
+    # seconds and turned a 60 s window into an aborted wait). Bounded by the
+    # remaining window as every other sleep is.
+    retry_after = _transient_poll_retry_after(exc)
+    sleep_for = max(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, retry_after or 0.0)
+    return min(sleep_for, max(deadline - loop.time(), 0.0))
+
+
+def _dispatch_status_outcome(state: Any, run_id: str) -> tuple[str, str]:
+    """Validate a polled status and map it to a poll/terminal outcome (FAR-1141).
+
+    A non-dict result or an unknown substrate status fails loud — never read a
+    status off a contract breach.
+    """
+    if not isinstance(state, dict):
+        # A CI runner's get_run_status contract is a CIRun (-> dict). Fail loud
+        # on a contract breach — never read a status off a non-dict.
+        raise ValueError(
+            f"dispatch get_run_status returned a non-dict result for run {run_id!r}: {type(state).__name__}",
+        )
+    last_status = str(state.get("status") or "")
+    outcome = DISPATCH_STATUS_OUTCOME_MAP.get(last_status)
+    if outcome is None:
+        raise ValueError(
+            f"Unknown substrate status {last_status!r} — expected one of {sorted(DISPATCH_STATUS_OUTCOME_MAP)}",
+        )
+    return last_status, outcome
+
+
+def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
+    """Stamp FAR-1141 / FAR-1693 provenance onto a dispatch node's output.
+
+    A dispatch node WITNESSES state on the customer's own substrate — it never
+    executed anything — so its output carries, all ENGINE-ASSIGNED:
+
+    * ``provenance``             the unified taxonomy class ``reported`` — the
+      substrate's datum arrived from an external surface (FAR-1693). NEVER
+      ``attested``: that would imply the substrate's data is true, which the
+      contract forecloses.
+    * ``witnessed_via``          the connector instance id it read through —
+      the CHANNEL STAMP of the ``reported`` class, not a class of its own.
+    * ``execution_identity``     ``"customer_substrate"`` (never ``modulo``)
+    * ``declared_external_cost`` ``None`` — Modulo declares NO cost for work it
+      did not run
+    * ``substrate_status``       the substrate's own status code, verbatim
+
+    EVERY result shape is stamped (FAR-1141 MAJOR 6): a dict is stamped in
+    place; anything else — ``list_runs`` returns a list — is wrapped in a typed
+    ``{"result": ...}`` envelope carrying the same keys. A bare list used to
+    pass through unstamped, so a witnessed run list read as an array Modulo
+    produced. The key set is the one
+    :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` lifts back
+    out on the failed-artifact path, so the two cannot drift.
+
+    Each provenance key is OVERWRITTEN, never merged — a hostile or
+    prompt-injected substrate result cannot assert its own class or channel
+    (ADR-034's engine-assignment rule). Never raises.
+    """
+    if isinstance(result, dict):
+        stamped = dict(result)
+        stamped[PROVENANCE_KEY] = DISPATCH_DATUM_PROVENANCE
+        stamped[WITNESSED_VIA_KEY] = instance_id
+        stamped["execution_identity"] = "customer_substrate"
+        stamped["declared_external_cost"] = None
+        if "status" in stamped:
+            stamped["substrate_status"] = str(stamped["status"])
+        return stamped
+    return {
+        "result": result,
+        PROVENANCE_KEY: DISPATCH_DATUM_PROVENANCE,
+        WITNESSED_VIA_KEY: instance_id,
+        "execution_identity": "customer_substrate",
+        "declared_external_cost": None,
+    }
+
+
+def _dispatch_trigger_failure_envelope(node_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
+    """FAILED artifact envelope when *result* carries a terminal-failure status.
+
+    FAR-1141 mapping table (``failure`` / ``cancelled`` / ``timed_out``): the
+    artifact's ``error`` is the substrate's terminal code VERBATIM (e.g. the
+    literal ``"failure"``) and the stamped output — which carries the witness
+    provenance — is preserved as ``output``. Every
+    :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` key is ALSO
+    lifted to the envelope top level because the failed-connector branch of
+    ``node_output_split._split_connector`` drops ``output``; without the lift the
+    provenance would never reach run state from this path.
+
+    Returns ``None`` for any other status. Returned, never raised, so the
+    graph's own error routing applies — consistent with every other
+    connector-node failure envelope.
+    """
+    status = str(result.get("status") or "")
+    if DISPATCH_STATUS_OUTCOME_MAP.get(status) != "failed":
+        return None
+    envelope: dict[str, Any] = {
+        "artifacts": [{"node_id": node_id, "status": "failed", "error": status}],
+        "output": result,
+    }
+    # FAR-1141 (MAJOR 6): lift EVERY provenance key to the envelope top level,
+    # not just ``substrate_status`` — the failed-connector branch of
+    # ``node_output_split._split_connector`` drops ``output``, so a failure that
+    # carried only the one hand-duplicated key would reach failure inspection
+    # with no witness provenance at all. Key set shared with the splitter, so
+    # the two can never drift.
+    for key in DISPATCH_PROVENANCE_FIELDS:
+        if key in result and key not in envelope:
+            envelope[key] = result[key]
+    return envelope
+
+
+async def _run_connector_dispatch(
+    connector: Any,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    dispatch_action: str,
+) -> Any:
+    """FAR-1141: route a ``dispatch`` operation to the named CI-runner method.
+
+    ``pipeline_id`` resolves from the binding input (``data`` then ``filters``)
+    and falls back to *resource*. An unknown ``dispatch_action`` raises a clear
+    ``ValueError`` — a dispatch never silently falls through to ``query``.
+    Results (``CIRun`` / ``CIRunLog`` / ``list[CIRun]``) are converted to plain
+    dicts for state.
+    """
+    if dispatch_action == "trigger_run":
+        result = await _dispatch_trigger_run(connector, resource, filters, data)
+    elif dispatch_action == "get_run_status":
+        result = await _dispatch_get_run_status(connector, filters, data)
+    elif dispatch_action == "get_run_logs":
+        result = await _dispatch_get_run_logs(connector, filters, data)
+    elif dispatch_action == "list_runs":
+        result = await _dispatch_list_runs(connector, filters, data)
+    else:
+        raise ValueError(
+            f"Unknown dispatch_action {dispatch_action!r} — expected one of {sorted(_DISPATCH_ACTIONS)}",
+        )
+    return _dispatch_result_to_state(result)
+
+
+async def _dispatch_trigger_run(connector: Any, resource: str, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``trigger_run``; a malformed ``variables`` input fails loud."""
+    pipeline_id = str(_dispatch_arg(filters, data, "pipeline_id", resource))
+    branch = str(_dispatch_arg(filters, data, "branch", "") or "")
+    raw_variables = _dispatch_arg(filters, data, "variables")
+    variables: dict[str, Any] | None
+    if raw_variables is None:
+        variables = None
+    elif isinstance(raw_variables, dict):
+        variables = dict(raw_variables)
+    else:
+        # Fire-once doctrine: a malformed dispatch input must fail loud,
+        # never fire the external job with silently dropped variables.
+        raise ValueError("dispatch trigger_run 'variables' must be an object")
+    return await connector.trigger_run(pipeline_id=pipeline_id, branch=branch, variables=variables)
+
+
+async def _dispatch_get_run_status(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``get_run_status``; a missing ``run_id`` fails loud."""
+    run_id = _dispatch_arg(filters, data, "run_id")
+    if not run_id:
+        raise ValueError("dispatch get_run_status requires a 'run_id' input")
+    return await connector.get_run_status(run_id=str(run_id))
+
+
+async def _dispatch_get_run_logs(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``get_run_logs``; a missing ``run_id`` fails loud."""
+    run_id = _dispatch_arg(filters, data, "run_id")
+    if not run_id:
+        raise ValueError("dispatch get_run_logs requires a 'run_id' input")
+    raw_cursor = _dispatch_arg(filters, data, "cursor")
+    return await connector.get_run_logs(run_id=str(run_id), cursor=str(raw_cursor) if raw_cursor else None)
+
+
+async def _dispatch_list_runs(connector: Any, filters: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Dispatch ``list_runs`` with an optional status filter and limit."""
+    from farna.connectors.base import CIRunStatus
+
+    raw_pipeline_id = _dispatch_arg(filters, data, "pipeline_id")
+    raw_status = _dispatch_arg(filters, data, "status")
+    status: CIRunStatus | None = None
+    if raw_status is not None and raw_status != "":
+        status = raw_status if isinstance(raw_status, CIRunStatus) else CIRunStatus(str(raw_status))
+    limit = int(_dispatch_arg(filters, data, "limit", 20))
+    return await connector.list_runs(
+        pipeline_id=str(raw_pipeline_id) if raw_pipeline_id else None,
+        status=status,
+        limit=limit,
+    )
+
+
+async def _run_connector_action(
+    connector: Any,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    dispatch_action: str = "trigger_run",
+) -> Any:
+    """Execute a connector ``write``/``query``/``dispatch`` action and return its result.
+
+    FAR-1141: ``op == "dispatch"`` routes to the CI-runner method named by
+    *dispatch_action* (guarded — an unknown selector raises ``ValueError``,
+    never a silent fall-through to ``query``). ``write``/``query`` behaviour is
+    unchanged.
+    """
+    from farna.connectors.base import ConnectorPayload, ConnectorQuery
+
+    if op == "dispatch":
+        return await _run_connector_dispatch(connector, resource, filters, data, dispatch_action)
+    if op == "write":
+        payload = ConnectorPayload(resource=resource, data=data)
+        return await connector.write(payload)
+    query = ConnectorQuery(resource=resource, filters=filters)
+    return await connector.query(query)
+
+
+def _guard_connector_secret_output(result: Any, node_id: str) -> dict[str, Any] | None:
+    """FAR-418 secret hygiene: connector/secret OBJECTS are never valid port
+    payload types — only opaque connector IDs may enter state.
+
+    Guards the output before it is written into the run's state/ports. Returns
+    a failed-artifact dict on violation, else ``None``.
+    """
+    from farna.core.capability_scope import (
+        ScopeViolationError,
+        assert_no_secret_objects,
+        record_scope_violation,
+    )
+
+    try:
+        assert_no_secret_objects(result, node_id=node_id)
+    except ScopeViolationError as scope_err:
+        record_scope_violation(node_id=node_id, target=scope_err.target, kind="secret")
+        _log.exception("scope.violation node=%s secret=%s", node_id, scope_err.target)
+        return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
+    return None
+
+
+def _state_run_id(state: dict[str, Any]) -> str:
+    """The run id carried in state, as a string ("" when absent)."""
+    return str(state.get("_run_id", "") or "")
+
+
+def _conformance_instance_ids(instance_id: uuid.UUID | None) -> list[uuid.UUID]:
+    """Singleton list for the conformance gate, or an empty list."""
+    return [instance_id] if instance_id is not None else []
+
+
+async def _connector_write_gate_phase(
+    state: dict[str, Any],
+    session_factory: Callable[..., Any] | None,
+    node_id: str,
+    connector: Any,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    """FAR-458 / FAR-531 pre-write phase for a connector WRITE.
+
+    Only a WRITE is side-effecting; a query never double-submits. The gate
+    reads the run's persisted idempotency key + markers, and suppresses a
+    CONFIRMED-delivered duplicate (matching key + ``delivery_done``) in EVERY
+    mode, and additionally suppresses an AMBIGUOUS (matching key, no
+    ``delivery_done``, no ``no_delivery_confirmed``) write when the
+    connector's ``on_unknown`` policy is ``fail_closed``. Fail-open in every
+    direction — no run id / session factory / persisted key, the killswitch,
+    a DB error, or ``on_unknown="off"`` all proceed to send the write
+    normally; default ``fail_open`` lets an unconfirmed write fire.
+
+    FAR-531 intent marker (write-before / stamp-after): persisted AFTER the
+    gate proceeds and BEFORE the upstream write fires, in the SAME slot the
+    delivery stamp updates. A crash/timeout between here and the stamp leaves
+    the marker in-flight — the ambiguous state fail_closed suppresses on a
+    later attempt (the headline fix; fail_open re-fires, unchanged). Guarded
+    by the killswitch + ``on_unknown != off`` — pointless when the gate can
+    never suppress. Best-effort: an intent-write failure never fails the node.
+
+    Returns ``(suppression_envelope, intent_active)``; a non-None envelope
+    means the write must NOT fire (duplicate suppressed) and is returned from
+    the node directly.
+    """
+    run_id = _state_run_id(state)
+    on_unknown_mode = _connector_on_unknown(connector, resource)
+    gate_result = await _connector_write_gate(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        on_unknown=on_unknown_mode,
+    )
+    if gate_result is not None:
+        return gate_result, False
+    intent_active = _connector_intent_marker_enabled(on_unknown_mode)
+    if intent_active:
+        # QA Fix 5: the intent persist (incl. its payload-hash computation)
+        # must never fail the node BEFORE the write — any failure degrades to
+        # "no marker" and the write still fires.
+        try:
+            await _persist_connector_write_intent(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=state.get("_org_id"),
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "connector.connector_write_intent_persist_failed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+    return None, intent_active
+
+
+async def _connector_write_outcome_for_state(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    result: Any = None,
+    intent_active: bool = False,
+    exception: BaseException | None = None,
+) -> None:
+    """Resolve the connector-write marker for THIS node's run context (FAR-458)."""
+    await _resolve_connector_write_outcome(
+        session_factory,
+        connector=connector,
+        run_id=_state_run_id(state),
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        result=result,
+        intent_active=intent_active,
+        exception=exception,
+    )
+
+
+async def _connector_action_failure(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    exc: Exception,
+) -> NoReturn:
+    """Classify a RAISED connector error and return a failure envelope.
+
+    The raised connector error is classified by the SINGLE authority
+    (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
+    whether the write landed (read-timeout after dispatch vs pre-dispatch
+    validation failure), so the in-flight intent marker is left AS-IS:
+    fail_closed suppresses the re-fire ("possible silent miss"), fail_open
+    re-fires (unchanged). No no-delivery evidence is persisted for a raise.
+
+    The envelope is attached to a raised ``ConnectorNodeFailedError`` rather
+    than returned. This preserves the P5 retry/edge/compensation wrapper and
+    lets the executor recover the typed envelope at finalization (FAR-2090).
+    """
+    await _connector_write_outcome_for_state(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        resource,
+        filters,
+        data,
+        result=None,
+        intent_active=intent_active,
+        exception=exc,
+    )
+    error_code = _CODE_CONNECTOR_FAILED if op not in {"write", "dispatch"} else _CODE_CONNECTOR_UNKNOWN
+    envelope = {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_code": error_code,
+                "output": None,
+            }
+        ],
+        "connector_failure": True,
+        "error_code": error_code,
+    }
+    raise ConnectorNodeFailedError(node_id=node_id, envelope=envelope, cause=exc) from exc
+
+
+async def _connector_success_phase(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    result: Any,
+) -> dict[str, Any] | None:
+    """FAR-458 / FAR-531 AC6 post-action phase: stamp a confirmed write, guard output.
+
+    A successful connector WRITE genuinely reached upstream — stamp the
+    delivery marker (bounded, fail-open) so a re-run reusing the SAME
+    persisted key suppresses the duplicate. The full write identity
+    (resource + filters + data) is folded into the derived key on BOTH the
+    gate and the stamp so a target/content edit derives a fresh key. Whether a
+    non-raising result actually delivered is the connector's call
+    (``write_reported_failure`` hook) — a reported failure is a DEFINITE
+    no-delivery (the intent marker resolves to ``no_delivery_confirmed``),
+    never a delivery stamp.
+
+    Then enforces the FAR-418 secret-output hygiene guard. Returns the block
+    envelope on violation, else ``None``.
+    """
+    if op == "write":
+        reported_failure = _connector_write_reported_failure(connector, result)
+        await _connector_write_outcome_for_state(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            resource,
+            filters,
+            data,
+            result=result,
+            intent_active=intent_active,
+        )
+        if reported_failure:
+            guard_block = _guard_connector_secret_output(result, node_id)
+            failure_reason = "Connector reported operation failure"
+            guarded_output = result
+            if guard_block is not None:
+                failure_reason = str(guard_block["artifacts"][0]["error"])
+                guarded_output = None
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "failed",
+                        "error": failure_reason,
+                        "error_code": _CODE_CONNECTOR_FAILED,
+                        "output": guarded_output,
+                    }
+                ],
+                "connector_failure": True,
+                "error_code": _CODE_CONNECTOR_FAILED,
+            }
+    return _guard_connector_secret_output(result, node_id)
+
+
+def _validate_connector_dispatch_config(
+    node_def: dict[str, Any],
+    *,
+    node_id: str,
+    op: str,
+    node_type: str,
+    dispatch_action: str,
+    timeout: float | None,
+) -> tuple[bool, float | None]:
+    """Validate a connector node's dispatch/wait config at graph-build time.
+
+    Returns ``(await_completion, dispatch_wait_seconds)``. Every malformed
+    combination fails loud here so a hand-written graph never silently no-ops.
+    """
+    if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
+        # Fail loud at graph-build time — never a silent fall-through to query.
+        raise ValueError(
+            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — "
+            f"expected one of {sorted(_DISPATCH_ACTIONS)}",
+        )
+    # FAR-1141 slice 2: node-level wait config, read from node_def (the API /
+    # CLI models persist these fields — they are NOT dropped at the boundary).
+    raw_await_completion: Any = node_def.get("await_completion", False)
+    if not isinstance(raw_await_completion, bool):
+        raise ValueError(f"await_completion must be a bool for node {node_id!r}, got {raw_await_completion!r}")
+    await_completion: bool = raw_await_completion
+    raw_wait_timeout: Any = node_def.get("wait_timeout")
+    dispatch_wait_seconds: float | None = None
+    if op == "dispatch":
+        dispatch_wait_seconds = _resolve_dispatch_wait_timeout(raw_wait_timeout, timeout, node_id)
+    if op != "dispatch" and (await_completion or raw_wait_timeout is not None):
+        # Mirror of the API's dispatch-only field rule: a declared-but-unread
+        # wait config would be a silent no-op.
+        raise ValueError(
+            f"await_completion / wait_timeout are only read by a dispatch node's dispatch "
+            f"operation (node {node_id!r} uses op={op!r})",
+        )
+    if node_type == "dispatch" and op != "dispatch":
+        # FAR-1141 (MAJOR 3): a dispatch node that does not route the dispatch
+        # verb would silently run a QUERY — no job ever fired. The API model
+        # rejects that at save time; a hand-written / legacy graph fails LOUD
+        # here instead of silently doing nothing.
+        raise ValueError(
+            f"dispatch node {node_id!r} must route connector_binding.operation='dispatch' (got {op!r})",
+        )
+    if await_completion and dispatch_action != "trigger_run":
+        # FAR-1141 (MAJOR 4): the wait loop only ever runs for trigger_run, so
+        # await_completion on any other action is declared-but-unread.
+        raise ValueError(
+            f"await_completion=True requires dispatch_action='trigger_run' (node {node_id!r} uses {dispatch_action!r})",
+        )
+    if raw_wait_timeout is not None and not await_completion:
+        # FAR-1141 (MAJOR 4): the wait window is only read when await_completion
+        # is true — a wait_timeout with await_completion=false is never used.
+        raise ValueError(
+            f"wait_timeout requires await_completion=True for node {node_id!r}",
+        )
+    return await_completion, dispatch_wait_seconds
+
+
+def _connector_resolve_or_error(
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Enforce the connector scope, then resolve the binding connector.
+
+    Returns ``(connector, None)`` on success, or ``(None, block)`` where
+    *block* is the failure artifact to return from the node.
+    """
+    scope_block = _enforce_connector_scope(binding, node_id, connector_type, allowed_connectors)
+    if scope_block is not None:
+        return None, scope_block
+    connector, error_artifact = _resolve_binding_connector(
+        binding,
+        node_id,
+        allowed_connectors=allowed_connectors,
+    )
+    return connector, error_artifact
+
+
+async def _connector_invoke_phase(
+    connector: Any,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    dispatch_action: str,
+    await_completion: bool,
+    dispatch_wait_seconds: float | None,
+    session_factory: Callable[..., Any] | None,
+    state: dict[str, Any],
+    node_id: str,
+    intent_active: bool,
+) -> tuple[bool, Any]:
+    """Run the connector action (+ optional dispatch wait).
+
+    Returns ``(True, result)`` on success. A raised connector action is
+    re-raised after its typed envelope is attached, so the P5 wrapper can apply
+    retry, edge-retry, or compensation semantics.
+    """
+
+    try:
+        result = await _run_connector_action(connector, op, resource, filters, data, dispatch_action=dispatch_action)
+        if op == "dispatch" and dispatch_action == "trigger_run" and await_completion:
+            # FAR-1141: trigger_run fired EXACTLY ONCE above; this loop only
+            # observes the substrate until it settles or the window expires.
+            result = await _await_dispatch_terminal(
+                connector,
+                result,
+                wait_timeout=dispatch_wait_seconds or _DISPATCH_WAIT_TIMEOUT_DEFAULT_SECONDS,
+            )
+        return True, result
+    except DispatchWaitTimeoutError:
+        raise
+    except Exception as exc:
+        await _connector_action_failure(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            op,
+            resource,
+            filters,
+            data,
+            intent_active,
+            exc,
+        )
+        raise AssertionError("_connector_action_failure must raise") from exc  # pragma: no cover
+
+
+async def _run_connector_node(
+    state: dict[str, Any],
+    *,
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+    op: str,
+    dispatch_action: str,
+    await_completion: bool,
+    dispatch_wait_seconds: float | None,
+    session_factory: Callable[..., Any] | None,
+) -> dict[str, Any]:
+    instance_id = _parse_uuid_opt(binding.get("instance_id"))
+    await _run_conformance_gate(
+        state,
+        node_id=node_id,
+        connector_instance_ids=_conformance_instance_ids(instance_id),
+    )
+
+    connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
+    if error_artifact is not None:
+        return error_artifact
+
+    resource, filters, data = _connector_inputs(binding, state)
+    suppress_envelope: dict[str, Any] | None = None
+    intent_active = False
+    if op == "write":
+        suppress_envelope, intent_active = await _connector_write_gate_phase(
+            state, session_factory, node_id, connector, resource, filters, data
+        )
+    if suppress_envelope is not None:
+        return suppress_envelope
+
+    ok, result = await _connector_invoke_phase(
+        connector,
+        op,
+        resource,
+        filters,
+        data,
+        dispatch_action=dispatch_action,
+        await_completion=await_completion,
+        dispatch_wait_seconds=dispatch_wait_seconds,
+        session_factory=session_factory,
+        state=state,
+        node_id=node_id,
+        intent_active=intent_active,
+    )
+    if not ok:
+        return cast(dict[str, Any], result)
+
+    if op == "dispatch":
+        result = _stamp_dispatch_provenance(result, str(instance_id) if instance_id is not None else "")
+
+    success_block = await _connector_success_phase(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        op,
+        resource,
+        filters,
+        data,
+        intent_active,
+        result,
+    )
+    if success_block is not None:
+        return success_block
+
+    if op == "dispatch" and dispatch_action == "trigger_run":
+        failed_envelope = _dispatch_trigger_failure_envelope(node_id, result)
+        if failed_envelope is not None:
+            return failed_envelope
+
+    return {
+        "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
+        "output": result,
+    }
+
+
+def make_connector_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+    session_factory: Callable[..., Any] | None = None,
+) -> Any:
+    """Return a decorated async node function that resolves a connector
+    from the ConnectorHub and executes a connector action (query/write/dispatch).
+
+    The node_def must have a 'connector_binding' dict with:
+      - instance_id: uuid of the ConnectorInstance
+      - type: connector type (e.g. 'shell')
+      - operation: 'query', 'write' or 'dispatch' (optional; defaults to
+        'query', or to 'dispatch' when node_type == 'dispatch')
+      - dispatch_action: for operation 'dispatch', the CI-runner method to
+        call (default 'trigger_run')
+      - input: dict of input parameters (optional)
+
+    FAR-1141: ``operation == "dispatch"`` routes to the CI-runner method named
+    by ``dispatch_action`` (``trigger_run`` / ``get_run_status`` /
+    ``get_run_logs`` / ``list_runs``). An unknown ``dispatch_action`` raises
+    ``ValueError`` at construction — a misconfigured dispatch node never
+    compiles into a query. A dispatch is NOT a write for FAR-458 idempotency
+    purposes: it never enters the write gate / intent-marker / delivery-stamp
+    path below (only ``op == "write"`` does).
+
+    FAR-1141 slice 2 (wait semantics): two node-level fields are read from
+    ``node_def`` — ``await_completion`` (bool, default false) and
+    ``wait_timeout`` (seconds, default 300, max 3600). With
+    ``await_completion`` true on a ``trigger_run`` dispatch the node fires the
+    job ONCE and then polls ``get_run_status`` until the substrate reports a
+    terminal status (the ADR-042 mapping table
+    :data:`DISPATCH_STATUS_OUTCOME_MAP`) or the window expires — a expiry raises
+    the terminal :class:`DispatchWaitTimeoutError` (``dispatch.wait_timeout``,
+    never retried). Every successful dispatch output is stamped with witness
+    provenance (``witnessed_via`` / ``execution_identity`` /
+    ``declared_external_cost`` / ``substrate_status``) so it can never read as a
+    node Modulo executed. The fields are rejected on any non-dispatch
+    operation, and are validated at graph build (bool / range) so a hand-written
+    graph fails loud here rather than silently no-opping at run time.
+
+    ``session_factory`` (FAR-458) enables the connector-write UNKNOWN-recovery
+    read-before-write dedupe: for a ``write`` operation the node loads the run's
+    persisted idempotency key + markers and, when ``read_before_write_suppression``
+    reports the write was already delivered on the SAME derived key, returns a
+    skipped envelope WITHOUT re-sending the duplicate upstream write. On a
+    successful write it stamps a ``delivery_done`` marker (the evidence the
+    suppression consumes). Both paths are STRICTLY fail-open: a missing run id /
+    session factory / persisted key, or a DB error, proceeds exactly as before
+    (write sent, no suppression), so the gate can never block or change a
+    connector write that has no idempotency context.
+
+    FAR-458 refinement: the AMBIGUOUS (couldn't-confirm-delivery) decision is
+    per-connector-per-write via the connector's ``on_unknown`` mode
+    (``ConnectorBase.on_unknown_for`` / ``_connector_on_unknown``). The default
+    ``fail_open`` keeps the gate fail-open on ambiguity (possible duplicate);
+    ``fail_closed`` suppresses an ambiguous write (possible silent miss);
+    ``off`` bypasses the gate entirely. The CONFIRMED-delivered suppression is
+    mode-independent.
+
+    FAR-531 intent markers: after the gate proceeds and BEFORE the upstream
+    write fires, an IN-FLIGHT intent marker (same derived key, same marker
+    slot) is persisted when the shared gate-eligibility policy says the gate
+    could suppress (killswitch enabled, mode not ``off``). Success promotes it
+    in place to ``delivery_done: True``; a reported failure (the connector's
+    result shape reports failure via the ``write_reported_failure`` hook)
+    resolves it to ``no_delivery_confirmed: True`` so a later attempt re-fires
+    under BOTH modes. A RAISED connector error is AMBIGUOUS (QA Fix 1) — the
+    intent stays in-flight: fail_closed suppresses, fail_open re-fires. A
+    crash/timeout between the intent persist and the resolution leaves it
+    in-flight — the ambiguous state fail_closed suppresses (the previously
+    unreachable protection) and fail_open re-fires (unchanged).
+    """
+    node_id: str = str(node_def["id"])
+    binding = node_def.get("connector_binding") or {}
+    node_type: str = str(node_def.get("node_type") or "agent")
+    # FAR-1141: the verb comes from the ONE shared resolver
+    # (``graph_validator.connector_binding_operation``) — the engine's route,
+    # the run's ``execution_origin`` classification and the executor's
+    # non-idempotency gate all ask it the same question, so they cannot drift
+    # (an explicit binding operation wins; a ``dispatch``-typed node with none
+    # falls back to the dispatch verb, everything else queries).
+    op: str = connector_binding_operation(node_def)
+    dispatch_action: str = str(binding.get("dispatch_action") or "trigger_run")
+    await_completion, dispatch_wait_seconds = _validate_connector_dispatch_config(
+        node_def,
+        node_id=node_id,
+        op=op,
+        node_type=node_type,
+        dispatch_action=dispatch_action,
+        timeout=timeout,
+    )
+    # FAR-418: node-level capability_scope. ``allowed_connectors`` narrows (never
+    # widens) which connectors this node may resolve — deny-by-default within the
+    # scope. Absent/empty (the UNRESTRICTED default) preserves the pre-scope
+    # behaviour: the node may use anything the hub fetched.
+    scope = node_def.get("capability_scope") or {}
+    allowed_connectors: list[str] | None = scope.get("allowed_connectors")
+    connector_type: str = binding.get("type", "")
+
+    @cancellable_node(timeout=timeout)
+    async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
+        return await _run_connector_node(
+            state,
+            binding=binding,
+            node_id=node_id,
+            connector_type=connector_type,
+            allowed_connectors=allowed_connectors,
+            op=op,
+            dispatch_action=dispatch_action,
+            await_completion=await_completion,
+            dispatch_wait_seconds=dispatch_wait_seconds,
+            session_factory=session_factory,
+        )
+
+    _connector_node.__name__ = f"connector_{node_id}"
+    return _connector_node
+
+
+_secret_ref_re = _re.compile(r"^\{\{\s*secrets\.(\w+)\s*\}\}$")
+
+
+async def resolve_env_var_refs(
+    env_vars: dict[str, Any],
+    resolver: Callable[[str], Awaitable[str | None]],
+) -> dict[str, str]:
+    """Resolve ``{{ secrets.KEY }}`` references in env var values.
+
+    Non-reference values pass through unchanged. ``{{ secrets.KEY }}`` values
+    are resolved via *resolver*; an UNRESOLVED reference (resolver returns
+    None) is OMITTED from the returned dict with a warning naming the key
+    (FAR-480). It is never resolved to an empty string: an empty value would
+    still reach the sandbox envs dict and CLOBBER the system-injected default
+    (e.g. the host GITHUB_TOKEN), silently breaking the sandbox credential.
+    Never raises.
+    """
+    resolved: dict[str, str] = {}
+    for key, value in env_vars.items():
+        m = _secret_ref_re.fullmatch(str(value))
+        if m:
+            secret_key = m.group(1)
+            resolved_value = await resolver(secret_key)
+            if resolved_value is None:
+                _log.warning(
+                    "env_var.secret_ref_not_found: env var %s references secret %r "
+                    "which could not be resolved — key omitted from sandbox envs",
+                    key,
+                    secret_key,
+                )
+                continue
+            resolved[key] = resolved_value
+        else:
+            resolved[key] = value
+    return resolved
+
+
+@dataclass
+class _ExecStreamOutcome:
+    """What the stream wait returns on a healthy (or failed) stream end.
+
+    Mirrors the shape the dispatch reads off the legacy command result
+    (``exit_code`` / ``stdout`` / ``stderr``) plus the one thing the legacy
+    handle could not express: ``stream_error``, set only when the ABC stream
+    itself dropped (engine/proxy). ``exit_code`` is NEVER a fabricated zero on
+    that path — it is ``-1`` (ADR 040 "Streaming parity").
+    """
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    stream_error: str | None = None
+
+
+async def _wait_command_with_exec_process(
+    process: Any,
+    *,
+    total_timeout: float,
+    idle_timeout: float,
+    last_activity: Callable[[], float],
+    on_tick: Callable[[], Awaitable[None]] | None = None,
+    tick_interval: float | None = None,
+    on_stdout: Callable[[str], Awaitable[None] | None] | None = None,
+    on_stderr: Callable[[str], Awaitable[None] | None] | None = None,
+) -> tuple[Any, str | None]:
+    """FAR-1050 R4: the idle watchdog re-expressed over ``ExecProcess``.
+
+    The dispatch's idle watchdog over the ABC ``ExecProcess``: total-timeout
+    raise, idle-window kill + ``stall_reason``, per-tick ``on_tick``, with the
+    E2B ``handle.wait()`` / ``handle.kill()`` pair replaced by
+    ``ExecProcess.done`` / ``ExecProcess.kill`` and the SDK's ``on_stdout`` /
+    ``on_stderr`` callbacks replaced by an explicit pump over
+    ``ExecProcess.chunks``.
+
+    Invariants carried over from the legacy helper:
+
+    - **Slice timeouts never cancel the underlying wait.** Each poll slice is
+      ``asyncio.wait({done_waiter}, timeout=...)`` over ONE persistent waiter
+      task; ``asyncio.wait`` neither cancels its futures on timeout nor on
+      cancellation of the caller, so a slice timeout leaves the waiter (and
+      the current task's ``cancelling()`` counter) untouched — the FAR-97/98
+      ``cancelling()==0`` invariant the legacy shield exists to protect.
+    - **Chunk order is preserved.** The pump awaits the watchdog callback for
+      chunk *n* before asking the stream for chunk *n+1*, so activity
+      tracking, the live-stream broker and the artifact writer see the same
+      sequence the legacy callback stream delivered.
+    - **No fabricated zero exit.** A stream ERROR (engine/proxy drop) or an
+      end with no exit code returns ``exit_code = -1`` with ``stream_error``
+      set; only a healthy stream end carries the real exit code.
+
+    Returns ``(outcome, None)`` on a stream end, ``(None, stall_reason)``
+    when the idle watchdog fired.
+    """
+    if tick_interval is None:
+        tick_interval = _SANDBOX_TAIL_INTERVAL
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    # nosemgrep: create-task-without-guard — this helper is an async def, so a
+    # running event loop always exists (same exclusion as the other in-module
+    # task creations).
+    pump = asyncio.ensure_future(
+        _pump_exec_chunks(process, stdout_parts, stderr_parts, on_stdout=on_stdout, on_stderr=on_stderr)
+    )  # nosemgrep: create-task-without-guard
+    # One persistent waiter for ``done``: reused across slices so a slice
+    # timeout cancels nothing (see the invariant above).
+    done_waiter = asyncio.ensure_future(process.done.wait())  # nosemgrep: create-task-without-guard
+    deadline = time.monotonic() + total_timeout
+    reached_done = False
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
+            if on_tick is not None:
+                await on_tick()
+            _, pending = await asyncio.wait({done_waiter}, timeout=min(tick_interval, remaining))
+            if not pending:
+                reached_done = True
+                break
+            if time.monotonic() - last_activity() >= idle_timeout:
+                # Kill the command so the still-running agent cannot write a
+                # fabricated /home/user/output.json, then fail fast.
+                await _kill_exec_process(process)
+                return None, f"agent produced no output for {idle_timeout:.0f}s"
+    finally:
+        await _finalize_exec_wait(done_waiter, pump, reached_done=reached_done)
+
+    return _exec_stream_outcome(process, "".join(stdout_parts), "".join(stderr_parts))
+
+
+async def _invoke_stream_callback(callback: Callable[[str], Awaitable[None] | None], data: str) -> None:
+    """Invoke a stream callback that may be sync or coroutine-returning."""
+    # The callback contract accepts EITHER a coroutine-returning (``async def``)
+    # callback or a plain synchronous one; only await when the call actually
+    # returned an awaitable (the watchdog's stream callbacks are synchronous).
+    result = callback(data)
+    if result is not None:
+        await result
+
+
+async def _pump_exec_chunks(
+    process: Any,
+    stdout_parts: list[str],
+    stderr_parts: list[str],
+    *,
+    on_stdout: Callable[[str], Awaitable[None] | None] | None,
+    on_stderr: Callable[[str], Awaitable[None] | None] | None,
+) -> None:
+    """Pump ``ExecProcess.chunks`` into the buffers and the watchdog callbacks."""
+    async for chunk in process.chunks:
+        data = getattr(chunk, "data", "")
+        if getattr(chunk, "stream", "stdout") == "stderr":
+            stderr_parts.append(data)
+            if on_stderr is not None:
+                await _invoke_stream_callback(on_stderr, data)
+        else:
+            stdout_parts.append(data)
+            if on_stdout is not None:
+                await _invoke_stream_callback(on_stdout, data)
+
+
+async def _kill_exec_process(process: Any) -> None:
+    """Best-effort bounded kill of the still-running exec process."""
+    try:
+        await asyncio.wait_for(process.kill(), timeout=10.0)
+    except Exception:
+        _log.exception("sandbox_agent.idle_watchdog_kill_failed")
+
+
+async def _finalize_exec_wait(done_waiter: Any, pump: Any, *, reached_done: bool) -> None:
+    """Cancel the waiter and (when the stream ended) join the pump, bounded."""
+    if not done_waiter.done():
+        done_waiter.cancel()
+    if reached_done:
+        # ``done`` fires from the chunk generator's finally, one hop after the
+        # LAST chunk has been fed to the watchdog callbacks — join the pump
+        # (bounded) so no callback is still pending when we return.
+        try:
+            await asyncio.wait_for(pump, timeout=_SANDBOX_TAIL_READ_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.debug("sandbox_agent.stream_pump_failed", exc_info=True)
+    if not pump.done():
+        pump.cancel()
+
+
+def _exec_stream_outcome(process: Any, stdout: str, stderr: str) -> tuple[Any, str | None]:
+    """Map the exec process's terminal state to ``(outcome, None)``.
+
+    A stream ERROR or an end with no exit code returns ``exit_code = -1`` plus
+    ``stream_error``; a healthy end carries the real exit code.
+    """
+    error = getattr(process, "error", None)
+    exit_code = getattr(process, "exit_code", None)
+    if error is not None or exit_code is None:
+        stream_error = str(error) if error else "stream ended without an exit code"
+        _log.warning(
+            "sandbox_agent.stream_error",
+            extra={"stream_error": stream_error[:_MAX_ERROR_MSG]},
+        )
+        return (
+            _ExecStreamOutcome(exit_code=-1, stdout=stdout, stderr=stderr, stream_error=stream_error),
+            None,
+        )
+    return (
+        _ExecStreamOutcome(exit_code=int(exit_code), stdout=stdout, stderr=stderr),
+        None,
+    )
+
+
+class _StallDetector:
+    """Per-channel liveness tracking for the sandbox_agent idle watchdog (FAR-306).
+
+    Stall detection is OPT-IN tooling layered on top of the default heartbeat
+    (real-output) channels. Each *channel* (heartbeat, connection, log-growth,
+    stdout-delta, filesystem) tracks its own last-activity timestamp. The
+    watchdog fires only when ALL *enabled* channels have been silent for
+    ``stall_timeout_seconds``.
+
+    ``last_activity()`` returns the most recent activity across all enabled
+    channels, which is what the idle watchdog compares against the stall
+    window — with ONE mode switch (FAR-1088), scoped to STREAMING nodes
+    (``expect_streaming=True``, the ``sandbox_mode != "script"`` default —
+    see :func:`_configure_stall_detector` for the discriminator):
+
+    - **Connection fallback (no output seen yet):** while the run has never
+      produced real output, the probe-success ``connection`` channel
+      participates. A node whose ``agent.log`` never grows (a silent command,
+      or nothing writing the log at all) is therefore NOT stalled
+      unconditionally — a healthy connection keeps it alive up to the node's
+      own total ``timeout_seconds``, and only a DEAD connection (probes
+      failing) lets the silence window trip. Per-node
+      ``stall_timeout_seconds`` keeps its semantics: it still bounds
+      connection-death silence exactly as it bounded the pre-FAR-1088
+      heartbeat.
+    - **Output-exclusivity (output seen, STREAMING nodes only):** the first
+      recorded touch of any non-``connection`` channel flips the mode. From
+      then on ``connection`` is EXCLUDED from ``last_activity()``, so a
+      successful probe can no longer mask genuine output silence — the
+      FAR-1088 stall-detector kill. This is the behaviour the 600s window was
+      measured for (LLM-agent runs whose output is EXPECTED to stream).
+
+    **Script mode (``expect_streaming=False``) keeps the connection channel
+    unconditionally**, before AND after first output (FAR-1088 scope fix): a
+    script-mode command redirects its stdout to ``agent.log``, so only log
+    growth refreshes output-liveness and a block-buffered child
+    (``docker pull``, ``pnpm``/``uv install``, a buffered test run) can be
+    silent far longer than any output window. For those workloads the
+    pre-FAR-1088 rule stands — connection liveness participates in
+    ``last_activity()`` at all times, so a healthy-but-quiet script node is
+    bounded by its node's own total ``timeout_seconds``, never by the silence
+    window (the 600s window only bites once probes themselves die).
+
+    **Never-output streaming node (F5, intended):** a streaming node that
+    NEVER emits a single output event is held alive by the ``connection``
+    fallback for its whole life — the silence window cannot fire while
+    probes succeed. Its ONLY bound is the node's total ``timeout_seconds``
+    (the wall-clock/total-timeout raise in the wait loop), not
+    ``stall_timeout_seconds``. That is deliberate: "output never started" is
+    indistinguishable from "slow start", and killing it early would be a
+    false stall; the node deadline is the honest backstop.
+
+    With ``enable_heartbeat=False`` (strict) the ``connection`` channel is
+    never enabled, so behaviour is exactly the pre-FAR-1088 strict contract:
+    log-growth/output silence alone governs (a probe touch was already a
+    no-op on the disabled channel).
+
+    Channels are registered explicitly via ``enable(channel)`` so that a channel
+    the user has not opted into never counts as a silent channel (which would
+    otherwise break the all-channels-silent rule for a default run).
+    """
+
+    def __init__(self, now: Callable[[], float] | None = None, *, expect_streaming: bool = True) -> None:
+        self._now: Callable[[], float] = now or time.monotonic
+        self._activity: dict[str, float] = {}
+        self._enabled: set[str] = set()
+        self._output_seen = False
+        # FAR-1088 scope: only a STREAMING workload (``sandbox_mode !=
+        # "script"``) drops ``connection`` after first output; a quiet
+        # script-mode workload keeps connection liveness permanently.
+        self._expect_streaming = expect_streaming
+
+    def enable(self, channel: str) -> None:
+        """Mark a channel as active. Enabling seeds its baseline so a brand-new
+        channel does not look "already stalled" the instant the run starts."""
+        self._enabled.add(channel)
+        self._activity.setdefault(channel, self._now())
+
+    def disable(self, channel: str) -> None:
+        """Remove a channel from the active set (e.g. heartbeat opt-out)."""
+        self._enabled.discard(channel)
+
+    @property
+    def enabled(self) -> set[str]:
+        return set(self._enabled)
+
+    def touch(self, channel: str) -> None:
+        """Record activity on a channel. Ignored for a channel that is not
+        enabled (so a stray probe never resurrects a disabled channel)."""
+        if channel in self._enabled:
+            self._activity[channel] = self._now()
+            if channel != "connection":
+                # FAR-1088: the first REAL output event (log growth, stream
+                # chunk, opt-in detector) ends the connection-fallback mode —
+                # for STREAMING nodes only; the flag is consulted only when
+                # ``expect_streaming`` (see last_activity()).
+                self._output_seen = True
+
+    def last_activity(self) -> float:
+        """Most recent activity across all enabled channels (FAR-1088 modes).
+
+        Before the run's first real output the ``connection`` channel counts
+        (see the class docstring — a never-output node must not be stalled
+        unconditionally). Once output has been seen on a STREAMING node
+        (``expect_streaming=True``), ``connection`` is excluded:
+        output-liveness governs exclusively. Script mode
+        (``expect_streaming=False``) never excludes it — a quiet, block-buffered
+        script stays alive on connection liveness alone, pre-FAR-1088 style.
+
+        With no enabled channels there is nothing to stall on — return ``now``
+        so the watchdog never fires (belt-and-braces against a misconfigured
+        node with every detector disabled).
+        """
+        if not self._enabled:
+            return self._now()
+        if self._expect_streaming and self._output_seen:
+            return max(self._activity[channel] for channel in self._enabled if channel != "connection")
+        return max(self._activity[channel] for channel in self._enabled)
+
+
+def _delta_ratio(prev: str, new: str) -> float:
+    """Fraction of ``new`` that differs from ``prev`` (0.0..1.0).
+
+    Absolute-growth semantics for the stdout-delta detector: a chunk counts as
+    meaningful activity when it is substantially different from the previous
+    chunk (spinner noise like a repeating cursor or progress bar is near-zero).
+    The first chunk always counts as activity (caller handles the None case).
+    """
+    if prev == new:
+        return 0.0
+    if not new:
+        return 0.0
+    if not prev:
+        return 1.0
+    return 1.0 - difflib.SequenceMatcher(None, prev, new).ratio()
+
+
+def _path_matches_any_glob(path: str, globs: list[str]) -> bool:
+    """True when *path* matches any of the filesystem-detector globs.
+
+    Supports ``*`` (any run of chars) and ``?`` (single char) via fnmatch,
+    matched against the basename, the bare path, and a leading-slash form so
+    user globs like ``*.log``, ``/home/user/out/*`` and ``output.json`` all
+    behave intuitively.
+    """
+    import fnmatch
+
+    candidates = (path, path.lstrip("/"))
+    base = path.rsplit("/", 1)[-1]
+    for glob in globs:
+        glob_str = str(glob)
+        if fnmatch.fnmatch(path, glob_str) or fnmatch.fnmatch(path.lstrip("/"), glob_str):
+            return True
+        if fnmatch.fnmatch(base, glob_str):
+            return True
+        for candidate in candidates:
+            if glob_str.endswith("/") and fnmatch.fnmatch(candidate, glob_str + "*"):
+                return True
+    return False
+
+
+# FAR-227: the E2B sandbox wrapper's fallback echo written to /home/user/output.json
+# when the opencode session dies without producing output. It is a PLACEHOLDER,
+# NOT an agent verdict — the agent never spoke; the session was interrupted. When
+# this echo is detected, the node must NOT be classified as ``agent.failed``
+# (a genuine self-declared verdict, non-retryable) — the session death is a
+# transient sandbox infra failure, routed to the retryable ``sandbox.no_output_json``.
+_SANDBOX_SESSION_LOST_SUMMARY = "No output from agent - session interrupted"
+
+
+def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
+    """True when output.json is the E2B wrapper's fallback echo for a dead session.
+
+    Matched on the wrapper's exact placeholder summary (and the ``error`` field
+    as a secondary surface), AND on ``status == "failed"`` — the wrapper always
+    writes ``"status":"failed"`` on the echo. Requiring the failed status is the
+    anti-false-positive guard: a genuine agent verdict that merely MENTIONS
+    session interruption (e.g. "the session was interrupted, here is what I
+    completed") carries a ``summary`` without the dead-session signature, and a
+    non-failed status can never be the wrapper's dead-session echo. Non-dict /
+    non-matching output is never misread.
+    """
+    if not isinstance(output_json, dict):
+        return False
+    if output_json.get("status") != "failed":
+        return False
+    summary = output_json.get("summary")
+    error = output_json.get("error")
+    haystack = [s for s in (summary, error) if isinstance(s, str)]
+    return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
+
+
+async def _read_org_vault_secret(
+    session_factory: Callable[..., Any],
+    org_uuid: uuid.UUID,
+    secret_key: str,
+) -> str | None:
+    """Read one secret from the org vault under the org's RLS context.
+
+    Returns ``None`` when the key is not in the vault or the read fails (the
+    failure is logged, never raised) — the ref is then omitted from the
+    sandbox env rather than failing the node.
+    """
+    from farna.core.secrets_backend import create_secrets_backend
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+    from farna.settings import get_settings
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
+            return await backend.get_secret(secret_key)
+    except KeyError:
+        return None  # not in vault -> return None
+    except Exception:
+        _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+        return None
+
+
+async def _sandbox_resolve_secret_ref(
+    secret_key: str,
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: str,
+) -> str | None:
+    """Resolve a ``{{ secrets.KEY }}`` reference to a string value.
+
+    The org vault (per-org encrypted secrets table) is consulted first
+    so pipelines resolve against the tenant's stored secrets and honour
+    rotation on every run. Returns None if the key is not in the vault
+    (does NOT fall back to the process environment to prevent secret
+    exfiltration via pipeline references).
+
+    FAR-480: the unresolvable-context paths (no session_factory, missing or
+    invalid org_id) log a warning naming the secret key — they used to be
+    silent, which made an unresolved ``{{ secrets.X }}`` env ref invisible in
+    production until the sandbox failed on the missing credential.
+    """
+    if session_factory is None:
+        _log.warning(
+            "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the "
+            "org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
+            secret_key,
+        )
+        return None
+    org_uuid = _parse_uuid_opt(org_id)
+    if org_uuid is None:
+        _log.warning(
+            "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
+            "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
+            secret_key,
+        )
+        return None
+    return await _read_org_vault_secret(session_factory, org_uuid, secret_key)
+
+
+async def _sandbox_acquire_dispatch_marker(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    provider: str,
+    via_provider: bool = False,
+) -> str | None:
+    """D8 atomic dispatch gate + marker (FAR-594): check capacity and claim the
+    dispatch slot in ONE transaction, immediately before provisioning.
+
+    Delegates to ``runner_capacity.acquire_runner_dispatch_slot`` — own-row
+    claim-token-fenced lock FIRST, per-org advisory lock (reserved namespace,
+    flag-on), lock-free count over the narrowed running-only population, then
+    the fenced marker UPDATE commits the reservation. Applied to EVERY
+    sandbox_agent dispatch regardless of sandbox_mode and provider tier; the
+    marker carries ``provider``/``written_at``.
+
+    ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
+    explicitly so the type-checker enforces correct attribution.
+    ``via_provider`` (FAR-1050) is threaded to EVERY node-runner-owned marker
+    write — the primary capacity-gate acquire below (R4 follow-up: the gate
+    builds its own marker inside ``runner_capacity.build_dispatch_marker``,
+    which now accepts the routing state), the best-effort fail-open write
+    (pre-D8 marker shape), and the post-create
+    ``_sandbox_store_dispatch_marker_sandbox`` rewrite — so the routing state
+    is on the marker from the first durable write onward, not only after the
+    create succeeds. The ``MODULO_E2B_VIA_PROVIDER`` flag this field once
+    reported was RETIRED by FAR-1050 R6 (PR #1033): the provider path is
+    unconditional, so ``via_provider`` now survives as a historical
+    attribution field only.
+
+    Returns the attempt key on success, ``None`` when fenced (claim superseded
+    or run not running — the caller MUST NOT create a sandbox). Raises
+    :class:`SandboxCapacityExceededError` (retryable, ``capacity.org``) when
+    the org is at capacity or the advisory lock degraded (55P03). Fail-open
+    on any other gate error: the legacy best-effort marker write below runs
+    in its OWN transaction so a fail-open dispatch stays counted wherever the
+    marker write can commit (and markerless fail-open when even that write
+    fails — qa F11).
+    """
+    from farna.core.runner_capacity import (
+        RunnerCapacityDeniedError,
+        acquire_runner_dispatch_slot,
+    )
+
+    if session_factory is None or not claim_lease:
+        # Fail-open: no DB fence — derive a per-claim attempt key from the
+        # (rotating) claim token so node output still distinguishes attempts.
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    try:
+        slot = await acquire_runner_dispatch_slot(
+            session_factory,
+            org_id=org_uuid,
+            run_id=run_id,
+            claim_token=claim_lease,
+            node_id=node_id,
+            provider=provider,
+            via_provider=via_provider,
+        )
+    except RunnerCapacityDeniedError as exc:
+        raise SandboxCapacityExceededError(str(exc)) from exc
+    if slot.status == "acquired":
+        return slot.attempt_key
+    if slot.status == "fenced":
+        return None
+    # fail_open — the gate degraded on a DB error; still write the marker
+    # best-effort in its own transaction (a fail-open dispatch must never go
+    # markerless: uncounted, unfenced, invisible to the rollback detector).
+    return await _sandbox_acquire_dispatch_marker_best_effort(
+        session_factory=session_factory,
+        claim_lease=claim_lease,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        provider=provider,
+        via_provider=via_provider,
+    )
+
+
+async def _sandbox_acquire_dispatch_marker_best_effort(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    provider: str,
+    via_provider: bool = False,
+) -> str | None:
+    """The legacy best-effort dispatch-marker write (pre-D8 shape, provider-aware).
+
+    One transaction reads ``runs.claim_count`` (fenced on the claim token +
+    status), then writes the dispatch marker. ``UPDATE runs SET
+    sandbox_dispatch_state=:marker WHERE id=:rid AND organisation_id=:oid AND
+    claim_token=:tok AND status='running'`` — rowcount 0 means the claim is
+    superseded or the run is not running (returns ``None``). Used ONLY as the
+    D8 gate's fail-open fallback and by the flag-off flows that bypass the
+    gate; the SELECT and UPDATE share one transaction and the UPDATE
+    re-checks the same fenced WHERE, so a concurrent claim rotation between
+    them makes the UPDATE match zero rows and the attempt key is never
+    persisted for a superseded claim.
+
+    ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
+    explicitly so the type-checker enforces correct attribution.
+
+    Fail-open contract (qa F11): a DB error here must never fail the
+    dispatch — the marker write is best-effort BY DESIGN. Any exception
+    (never a cancellation) logs ``sandbox_agent.best_effort_marker_failed``
+    and returns the claim-token-derived attempt key so the dispatch proceeds
+    MARKERLESS fail-open. Rollback-detector implication (noted on the log
+    event): with no marker row, a script anomaly on this attempt cannot be
+    attributed by ``rollback_thresholds._count_claim_without_marker`` until
+    the sweep/heartbeat path heals the row — accepted, because failing the
+    dispatch over a marker write would turn a DB hiccup into a dispatch
+    outage.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this is a writer on
+    the hot ``runs`` row with NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout``
+    (``db.crud.row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock — a contended row
+    lock waits at most that long, never the unbounded, >=30-minute silent
+    wait HAProxy culls mid-operation (FAR-1524 O11). Because this write is
+    best-effort, the bounded wait expiring (SQLSTATE 55P03) is handled
+    NON-silently and without changing the outcome: a distinct
+    ``sandbox_agent.best_effort_marker_lock_timeout`` WARNING carries the
+    SQLSTATE + the (markerless) recovery, and the SAME claim-token-derived
+    fallback key is returned — exactly the fail-open the generic handler
+    already gives, just no longer indistinguishable from a real DB fault. The
+    marker sweep / rollback-detector healing is the designed backstop.
+    """
+    if session_factory is None or not claim_lease:
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    from sqlalchemy import text as _sql_text
+
+    from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+    from farna.db.sqlstates import is_row_lock_timeout
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
+                        "AND claim_token=:tok AND status='running'"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+            result = await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
+                    "RETURNING id"
+                ),
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "sid": None,
+                    "marker": _dispatch_marker_json(key, provider, via_provider=via_provider),
+                },
+            )
+            if result.fetchone() is None:
+                return None
+            return key
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # a different outcome — the write is best-effort BY DESIGN, so the
+            # transaction rolled back whole and the dispatch proceeds
+            # MARKERLESS exactly as the generic fail-open below; the distinct
+            # event keeps this from being confused with an unexpected DB fault.
+            _log.warning(
+                "sandbox_agent.best_effort_marker_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "node_id": node_id,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT written (transaction "
+                        "rolled back), dispatch proceeds markerless (fail-open) and the marker "
+                        "sweep / rollback-detector heals the row"
+                    ),
+                },
+                exc_info=True,
+            )
+            return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+        _log.warning(
+            "sandbox_agent.best_effort_marker_failed",
+            extra={
+                "run_id": run_id,
+                "org_id": str(org_uuid),
+                "node_id": node_id,
+                "note": (
+                    "dispatch proceeds markerless (fail-open); the rollback detector cannot "
+                    "attribute a script anomaly to this attempt until the row is healed"
+                ),
+            },
+            exc_info=True,
+        )
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+
+
+async def _sandbox_store_dispatch_marker_sandbox(
+    sandbox_id_value: str | None,
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    attempt_key: str | None,
+    provider: str,
+    via_provider: bool = False,
+) -> None:
+    """Persist the real sandbox id onto the runs row after a successful create.
+
+    ``provider`` re-stamps the D8 tier attribution on the rewritten marker.
+    Required (FAR-995) — every call site must pass its value explicitly.
+    ``via_provider`` (FAR-1050) stamps the provider-routing state onto the
+    SAME marker, so a run is attributable to provider-mediated execution
+    from the persisted dispatch marker alone (ADR 040 revert observability).
+
+    FAR-1611 — deliberately NOT given the FAR-1601 lock bound. Audited, not
+    skipped. This write persists ``runs.sandbox_id``, the ONLY durable record
+    the heartbeat-lost kill path reads (``pipeline_execution.
+    _kill_sandbox_best_effort`` -> ``SELECT sandbox_id FROM runs``): the
+    in-process teardown handles the normal path, but when the worker is culled
+    the heartbeat-lost kill is the sole reaper, and there is no Modulo-side
+    sweep that re-creates a lost ``sandbox_id`` (the sandbox lingers until the
+    provider's own timeout). A bounded wait expiring here would therefore
+    permanently drop that record on a transient row-lock contention — state
+    loss with no recovery — while the caller has NO dedicated 55P03 contract:
+    the exception surfaces in the dispatch's generic ``except Exception`` as
+    ``sandbox_agent.command_failed``, not as a recoverable marker fault. Until
+    that caller is given a fail-open contract that keeps the sandbox
+    reclaimable, bounding this write is unsafe; the unbounded wait is the
+    lesser hazard and is recorded as the remaining FAR-1611 gap.
+    """
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        await set_rls_execution_context(session)
+        await session.execute(
+            _sql_text(
+                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+            ),
+            {
+                "rid": run_id,
+                "oid": str(org_uuid),
+                "tok": claim_lease,
+                "sid": sandbox_id_value,
+                "marker": _dispatch_marker_json(attempt_key or "", provider, via_provider=via_provider),
+            },
+        )
+
+
+async def _sandbox_store_script_lease(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    attempt_key: str | None,
+    provider: str,
+    via_provider: bool = False,
+) -> None:
+    """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
+
+    Reuses the EXISTING ``runs.sandbox_dispatch_state`` machinery — no
+    parallel lease store. Persists ``{"state": "script_executing",
+    "attempt_key": ...}`` IMMEDIATELY BEFORE ``sandbox.commands.run``, so
+    the durable marker proves "the script PROCESS started (execution
+    claimed, completion marker pending)". Fenced on the claim token +
+    status so a superseded original cannot stamp a lease on a successor's
+    row. Fail-open (no session factory / claim lease / org) — the lease
+    is a safety backstop, never a correctness dependency. ``provider``
+    re-stamps the D8 tier attribution.  Required (FAR-995) — every call
+    site must pass its value explicitly. ``via_provider`` carries the
+    FAR-1050 provider-routing state alongside it.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this writer on the
+    hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so its
+    transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. A bounded wait
+    expiring (SQLSTATE 55P03) is NOT fail-open here, and MUST NOT be: the
+    lease is the exactly-once fence, so proceeding to ``sandbox.commands.run``
+    without a persisted claim would silently degrade the node to at-least-once
+    (a later fault would be re-dispatchable and the script could double-run).
+    The expiry is therefore claimed NON-silently under the distinct
+    ``sandbox_agent.script_lease_lock_timeout`` WARNING and RE-RAISED: the
+    caller never sets ``_script_lease_claimed``, the script process never
+    starts, and the run stays pre-claim (safe to re-dispatch / sweep). The
+    marker sweep's fence rules own any partially-written lease state.
+    """
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from farna.core.runner_capacity import (
+        MARKER_STATE_SCRIPT_EXECUTING,
+    )
+    from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+    from farna.db.sqlstates import is_row_lock_timeout
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            result = await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=:marker "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+                ),
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "marker": json.dumps(
+                        {
+                            "state": MARKER_STATE_SCRIPT_EXECUTING,
+                            "attempt_key": attempt_key or "",
+                            "provider": provider,
+                            "via_provider": bool(via_provider),
+                            "written_at": datetime.now(UTC).isoformat(),
+                        }
+                    ),
+                },
+            )
+            if result.rowcount == 0:
+                # The UPDATE was fenced on claim_token + status but matched
+                # zero rows — the claim was superseded (token rotated by a
+                # successor) or the run is no longer running. The lease was
+                # NEVER acquired, so a subsequent fault must NOT be treated as
+                # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
+                # so the caller never marks the lease claimed.
+                raise SupersededNodeError("script lease denied — run superseded or not running")
+    except asyncio.CancelledError:
+        raise
+    except SupersededNodeError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Claim it LOUDLY and
+            # re-raise — the caller must NOT mark the lease claimed and the
+            # script must NOT start (see the docstring): the run stays
+            # pre-claim, so a re-dispatch is exactly-once-safe and the sweep
+            # owns any partially-written lease state.
+            _log.warning(
+                "sandbox_agent.script_lease_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "attempt_key": attempt_key,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); lease NOT acquired (transaction "
+                        "rolled back), script NOT started, run stays pre-claim (re-dispatchable)"
+                    ),
+                },
+                exc_info=True,
+            )
+        raise
+
+
+async def _sandbox_issue_run_credential_for_sandbox(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    sandbox_timeout: int,
+) -> IssuedRunCredential | None:
+    """Issue a run-scoped Modulo credential for this sandbox (FAR-1690 slice A1).
+
+    EVERY sandbox dispatch — script AND llm mode — issues a short-TTL,
+    run-scoped runner-role API key through the :class:`CredentialIssuer` seam
+    (``core.credential_issuer``). The default Modulo-minted provider computes
+    the TTL as ``max(15 min, node_timeout + 5 min)`` capped by the org max
+    (default 1 hour), links the key to the run (``OrgApiKey.run_id``), and
+    stamps the issuance provenance ``modulo_minted`` (attested — NEVER
+    ``observed``).
+
+    Fail-open: a mint failure returns ``None`` — the sandbox runs without the
+    key rather than failing the dispatch. The raw secret rides on the returned
+    handle only; it is NEVER logged, checkpointed, or placed in LangGraph state.
+    """
+    issuer = default_credential_issuer()
+    issued = await issuer.issue_for_run(
+        session_factory=session_factory,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        sandbox_timeout=sandbox_timeout,
+    )
+    if issued is not None:
+        # Provenance is stamped on the run's telemetry (attested evidence), in
+        # addition to the ``MODULO_CREDENTIAL_PROVENANCE`` env stamp applied by
+        # the dispatch site.
+        _emit_script_span_event(
+            "credential.issued",
+            {"run_id": run_id, "node_id": node_id, **issuer.describe()},
+        )
+    return issued
+
+
+async def _sandbox_clear_dispatch_marker(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+) -> None:
+    """Fenced marker clear — only when the claim token still matches.
+
+    A superseded original (token rotated by a successor) must not clear
+    the successor's dispatch marker / sandbox id.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this teardown writer
+    on the hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. The clear is
+    BEST-EFFORT (the dispatch marker is a capacity signal, not a correctness
+    dependency), so a bounded wait expiring (SQLSTATE 55P03) is claimed
+    NON-silently under the distinct ``sandbox_agent.
+    dispatch_marker_clear_lock_timeout`` WARNING and then swallowed: the
+    transaction rolled back whole, the marker SURVIVES (the run is past its
+    teardown and no longer holds capacity), and the marker sweep clears it
+    under its own stale-marker rules. Any OTHER failure still propagates to
+    the caller's existing ``sandbox_agent.dispatch_marker_clear_failed``
+    handler, so the two remain distinguishable.
+    """
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+    from farna.db.sqlstates import is_row_lock_timeout
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
+                ),
+                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # raised — the clear is best-effort and the marker sweep owns the
+            # surviving stale marker (transaction rolled back whole).
+            _log.warning(
+                "sandbox_agent.dispatch_marker_clear_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT cleared (transaction "
+                        "rolled back), marker SURVIVES teardown and the marker sweep clears it"
+                    ),
+                },
+                exc_info=True,
+            )
+            return
+        raise
+
+
+def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
+    """Emit an OTel span event for script-mode milestones (FAR-296 Phase 5a)."""
+    try:
+        from opentelemetry import trace as _otel_trace
+
+        _span = _otel_trace.get_current_span()
+        if _span.is_recording():
+            _span.add_event(name, {k: str(v)[:_MAX_OTEL_LOG_ATTR] for k, v in attrs.items()})
+    except Exception:  # noqa: S110  # nosec B110 -- never fail on observability
+        pass
+
+
+@dataclass(frozen=True)
+class _WatchdogWallClock:
+    """Wall-clock spend budget + node-start monotonic time (FAR-296 Phase 4a).
+
+    Bundled so ``_SandboxWatchdog.__init__`` does not take a separate parameter
+    for each loosely-related timing input.
+    """
+
+    budget_seconds: int | None
+    start_time: float
+
+
+@dataclass(frozen=True)
+class _WatchdogWatchConfig:
+    """Opt-in stall-detector watch inputs (FAR-306).
+
+    Bundled so ``_SandboxWatchdog.__init__`` takes ONE parameter for the
+    loosely-related watch inputs (log path / globs / stdout-delta ratio) rather
+    than three.
+    """
+
+    log_path: str | None
+    globs: list[str]
+    percentage_delta: float | None
+
+
+class _SandboxWatchdog:
+    """Per-run sandbox watchdog + live-streaming state (FAR-310 chunk 2b-2)."""
+
+    def __init__(
+        self,
+        *,
+        sandbox: "_ProviderMediatedHandle | None",
+        stall: _StallDetector,
+        node_id: str,
+        run_id: str,
+        watch: _WatchdogWatchConfig,
+        resource_limits: dict[str, Any] | None,
+        sandbox_mode: str,
+        stream_broker: RunEventBroker | None,
+        drained_chunks: list[str],
+        wall_clock: _WatchdogWallClock,
+        drain_window_bytes: int | None = None,
+        provider_type: str | None = None,
+    ) -> None:
+        if sandbox is None:
+            raise RuntimeError("Sandbox was not created before use")
+        self._sandbox = sandbox
+        # FAR-1050 R2b: provider ref for the ABC file-I/O probes — the
+        # ABC addresses a workspace by dispatch sandbox id, not by SDK handle.
+        self._sandbox_ref: str | None = getattr(sandbox, "sandbox_id", None) or None
+        # FAR-1051: the run's bound profile provider type, threaded into every
+        # ABC probe below so a Kubernetes dispatch probes ITS provider (the
+        # probes fail open and would otherwise always resolve the legacy E2B
+        # route, leaving a kubernetes dispatch with a permanently failing
+        # connection-liveness probe — i.e. a healthy node read as stalled).
+        self._provider_type = provider_type
+        # FAR-1051 follow-up: the dispatch's OWN already-resolved provider,
+        # assigned post-construction by ``_sandbox_agent_impl`` (same pattern
+        # as ``_artifact_writer`` — keeps __init__ param count stable). When
+        # set, every probe below borrows it instead of building a fresh
+        # hub+provider per tick (a per-tick build leaked a client per probe;
+        # a borrowed handle is closed once, by the dispatch's finally). When
+        # ``None`` (direct construction / legacy route) the probe builds its
+        # own and closes it, exactly as the seam documents.
+        self._dispatch_provider: "RuntimeProvider | None" = None  # noqa: UP037 - quotes needed: no `from __future__`
+        self._stall = stall
+        self._node_id = node_id
+        self._run_id = run_id
+        self._watch_log_path = watch.log_path
+        self._watch_globs = watch.globs
+        self._resource_limits = resource_limits
+        self._sandbox_mode = sandbox_mode
+        self._stdout_ratio = watch.percentage_delta
+        self._stream_broker = stream_broker
+        self._stream_enabled = isinstance(stream_broker, RunEventBroker)
+        self._drained_chunks = drained_chunks
+        self._activity: dict[str, Any] = {"last": time.monotonic()}
+        self._stdout_prev: str | None = None
+        self._drain_offset = 0
+        self._drained_len = 0
+        self._watch_log_prev_size: int | None = None
+        self._fs_state: dict[str, tuple[Any, int]] = {}
+        self._fs_last_stat = 0.0
+        self._fs_min_stat_interval = 2.0
+        self._budget_killed = False
+        self._budget_check_ticks = 0
+        # FAR-1050 R4 follow-up: one-shot latch for the "caps not enforced"
+        # warning (ADR 040 metrics gap) — logged once per watchdog (i.e. once
+        # per node dispatch), not once per budget poll tick.
+        self._resource_gap_logged = False
+        # FAR-296 Phase 4a: wall-clock spend budget. The watchdog's tick checks
+        # the elapsed wall-clock against this budget and kills the sandbox when
+        # exceeded (script mode only). ``start_time`` is the monotonic clock at
+        # node start so the elapsed measurement survives the provisioning phase.
+        self._wallclock_budget_seconds = wall_clock.budget_seconds
+        self._start_time = wall_clock.start_time
+        # FAR-792: the drain window scales with the per-node retention cap in
+        # full mode so the retained tail can actually reach the configured
+        # ``stdout_max_bytes`` (a 512KB drain window would starve a 5MB cap).
+        # Defaults to the legacy ``_MAX_DRAIN_WINDOW`` (512KB) bound.
+        self._drain_window = drain_window_bytes or _MAX_DRAIN_WINDOW
+        # FAR-582: optional artifact writer for full stdout/stderr side-car files.
+        # Assigned post-construction to keep __init__ param count under 13 (S107).
+        self._artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037
+        # FAR-844: optional streaming artifact writer for incremental stdout
+        # capture during drain. Assigned post-construction like _artifact_writer.
+        self._streaming_writer: "StreamingArtifactWriter | None" = None  # noqa: UP037
+
+    @property
+    def budget_killed(self) -> bool:
+        return self._budget_killed
+
+    def stream_chunk(self, chunk: str, stream: str) -> None:
+        broker = self._stream_broker
+        if not self._stream_enabled or not isinstance(broker, RunEventBroker):
+            return
+        now = time.monotonic()
+        buf_key = f"{stream}_buf"
+        buf = self._activity.setdefault(buf_key, [])
+        if chunk:
+            buf.append(chunk)
+        if not buf:
+            return
+        if now - self._activity.get("last_stream_ts", 0.0) < _STREAM_FLUSH_INTERVAL:
+            return
+        payload: dict[str, Any] = {
+            "node_id": self._node_id,
+            "chunk": _redact_raw_output("".join(buf)),
+            "ts": int(now * 1000),
+        }
+        buf.clear()
+        self._activity["last_stream_ts"] = now
+        try:
+            event = broker.publish(
+                "node.stdout_chunk" if stream == "stdout" else "node.stderr_chunk",
+                payload,
+            )
+            payload["seq"] = event.seq
+        except RuntimeError:
+            # Broker already closed (run finalised) — stop streaming.
+            return
+        except Exception:
+            _log.exception(
+                "sandbox_agent.stream_publish_failed",
+                extra={"node_id": self._node_id, "run_id": self._run_id},
+            )
+
+    def touch_stdout(self, chunk: str) -> None:
+        if self._stdout_ratio is None:
+            return
+        prev = self._stdout_prev
+        self._stdout_prev = chunk
+        if prev is None or _delta_ratio(prev, chunk) > self._stdout_ratio:
+            self._stall.touch("stdout")
+
+    def on_stdout(self, chunk: str) -> None:
+        self._stall.touch("heartbeat")
+        self.touch_stdout(chunk)
+        self.stream_chunk(chunk, "stdout")
+        # FAR-582: append to the side-car artifact writer (uncapped).
+        if self._artifact_writer is not None:
+            self._artifact_writer.append(chunk, "stdout")
+
+    def on_stderr(self, chunk: str) -> None:
+        self._stall.touch("heartbeat")
+        self.stream_chunk(chunk, "stderr")
+        # FAR-582: append to the side-car artifact writer (uncapped).
+        if self._artifact_writer is not None:
+            self._artifact_writer.append(chunk, "stderr")
+
+    async def drain_sandbox_log(self) -> None:
+        # Probe failed (log file not created yet, sandbox connection
+        # unresponsive). Do NOT refresh liveness — the idle watchdog
+        # treats a prolonged probe failure as a genuine stall.
+        try:
+            info = await asyncio.wait_for(
+                _get_info_via_provider(
+                    self._sandbox_ref,
+                    _SANDBOX_LOG_PATH,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+            # FAR-1088: a successful get_info proves only that the sandbox
+            # CONNECTION is responsive — it is NOT agent output. Record it on
+            # the dedicated `connection` channel: while the node has not yet
+            # produced any real output this is the liveness fallback (so a
+            # node whose log never grows is not stalled unconditionally), and
+            # once output has been seen the channel drops out of
+            # `last_activity()` entirely — a healthy connection can no longer
+            # mask output silence (the FAR-1088 stall-detector kill). With
+            # enable_heartbeat=False (strict) the channel is not enabled, so
+            # this touch remains the FAR-306 no-op it always was.
+            self._stall.touch("connection")
+            size = int(getattr(info, "size", 0) or 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.log_drain_probe_failed",
+                extra={"node_id": self._node_id},
+                exc_info=True,
+            )
+            return
+        if size <= self._drain_offset:
+            return
+        try:
+            content = await asyncio.wait_for(
+                _read_file_via_provider(
+                    self._sandbox_ref,
+                    _SANDBOX_LOG_PATH,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "sandbox_agent.log_drain_failed",
+                extra={"node_id": self._node_id},
+            )
+            return
+        text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
+        # Capture the pre-truncation content length BEFORE the window
+        # bound below: ``full_len`` is the authoritative absolute end
+        # of the file as READ this tick. The probe ``size`` (get_info)
+        # is taken before the read and can lag it when the agent
+        # appends between probe and read.
+        full_len = len(text)
+        # D3 trailing-window bound: the E2B files API has no range
+        # read, so the full log was transferred again above. Only the
+        # last ``self._drain_window`` bytes are retained/processed —
+        # bounded per-tick memory and slicing on a multi-MB log.
+        # ``full_len`` (what the read actually returned) is the
+        # authoritative absolute file length; ``window_start`` is the
+        # absolute offset the retained slice begins at, and the
+        # new-bytes slice is computed against it, so truncation never
+        # loses or double-emits (the emitted chunk is always a
+        # suffix). Deriving ``window_start`` from the STALE probe
+        # ``size`` instead of ``full_len`` shifts the retained slice
+        # left and permanently drops the first (full_len - size)
+        # bytes of new in-window content.
+        window = self._drain_window
+        if len(text) > window:
+            text = text[-window:]
+        window_start = max(full_len - len(text), 0)
+        emit_start = max(self._drain_offset, window_start)
+        new = text[emit_start - window_start :] if emit_start < full_len else ""
+        if new:
+            self._drained_chunks.append(new)
+            self._drained_len += len(new)
+            # FAR-844: feed new bytes to the streaming writer for incremental
+            # artifact capture. The writer enforces the byte cap and computes
+            # SHA256 incrementally — no full-string assembly needed.
+            if self._streaming_writer is not None:
+                try:
+                    self._streaming_writer.write(new)
+                except Exception:
+                    _log.debug(
+                        "sandbox_agent.streaming_writer_write_failed",
+                        extra={"node_id": self._node_id},
+                    )
+            self.stream_chunk(new, "stdout")
+            # Actual agent-log growth is real progress: refresh the
+            # output channel (always active, the strict-mode signal),
+            # the heartbeat (when enabled), and feed the stdout-delta
+            # detector (FAR-306).
+            self._stall.touch("output")
+            self._stall.touch("heartbeat")
+            self.touch_stdout(new)
+            self._trim_drained_chunks()
+        # Self-correcting drain offset: ``full_len`` (what this tick's
+        # read returned) can exceed the STALE probe ``size`` when the
+        # agent appends between probe and read. Advancing to the max
+        # keeps the no-double-emit invariant — the next tick starts
+        # where THIS tick's emitted bytes actually ended, not where
+        # the probe saw the file.
+        self._drain_offset = max(self._drain_offset, full_len)
+
+    def _trim_drained_chunks(self) -> None:
+        """Bound retained memory to the drain window.
+
+        Drops the oldest chunks once the accumulated log exceeds the window,
+        then clamps the head chunk to the window so the in-memory total can
+        never grow past ``self._drain_window``.
+        """
+        while self._drained_len > self._drain_window and len(self._drained_chunks) > 1:
+            dropped = self._drained_chunks.pop(0)
+            self._drained_len -= len(dropped)
+        if self._drained_len > self._drain_window and self._drained_chunks:
+            self._drained_chunks[0] = self._drained_chunks[0][-self._drain_window :]
+            self._drained_len = len(self._drained_chunks[0])
+
+    async def probe_log_growth(self) -> None:
+        try:
+            info = await asyncio.wait_for(
+                _get_info_via_provider(
+                    self._sandbox_ref,
+                    self._watch_log_path,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+            size = int(getattr(info, "size", 0) or 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.watch_log_probe_failed",
+                extra={"node_id": self._node_id, "path": self._watch_log_path},
+                exc_info=True,
+            )
+            return
+        if self._watch_log_prev_size is not None and size > self._watch_log_prev_size:
+            self._stall.touch("log_growth")
+        self._watch_log_prev_size = size
+
+    async def probe_filesystem(self) -> None:
+        now = time.monotonic()
+        if now - self._fs_last_stat < self._fs_min_stat_interval:
+            return
+        self._fs_last_stat = now
+        matches: Any
+        try:
+            matches = await asyncio.wait_for(
+                _list_fs_entries_via_provider(
+                    self._sandbox_ref,
+                    "/",
+                    watch_log_path=self._watch_log_path,
+                    watch_globs=self._watch_globs,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.watch_fs_probe_failed",
+                extra={"node_id": self._node_id},
+                exc_info=True,
+            )
+            return
+        try:
+            entries = matches if isinstance(matches, list) else list(getattr(matches, "files", []) or [])
+        except Exception:
+            _log.info("sandbox_agent.watch_fs_list_invalid", extra={"node_id": self._node_id})
+            return
+        changed = False
+        seen: set[str] = set()
+        for entry in entries:
+            if self._track_fs_entry(entry, seen):
+                changed = True
+        if self._prune_missing_paths(seen):
+            changed = True
+        if changed:
+            self._stall.touch("filesystem")
+
+    def _track_fs_entry(self, entry: Any, seen: set[str]) -> bool:
+        """Track one watch-glob fs entry; True when its stat changed or it is new."""
+        path = getattr(entry, "path", None) or getattr(entry, "name", None)
+        if not isinstance(path, str):
+            return False
+        if path == _SANDBOX_LOG_PATH or (self._watch_log_path and path == self._watch_log_path):
+            return False
+        if _path_matches_any_glob(path, self._watch_globs):
+            seen.add(path)
+            key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
+            if path in self._fs_state and self._fs_state[path] != key:
+                return True
+            self._fs_state[path] = key
+        return False
+
+    def _prune_missing_paths(self, seen: set[str]) -> bool:
+        """Drop previously-seen paths that no longer match; True when any were pruned."""
+        missing = set(self._fs_state) - seen
+        for prev_path in missing:
+            del self._fs_state[prev_path]
+        return bool(missing)
+
+    def _log_resource_caps_gap_once(self, reason: str) -> None:
+        """Explicit, once-per-dispatch warning that resource caps are NOT enforced.
+
+        Shared by both gap shapes — a handle with no ``get_metrics``
+        surface at all, and a provider whose ABC default refused the
+        primitive — so an operator sees ONE clear warning naming the gap
+        per node dispatch, never the generic "metrics unavailable"
+        traceback (which reads as a transient SDK hiccup) and never once
+        per poll tick.
+        """
+        if self._resource_gap_logged:
+            return
+        self._resource_gap_logged = True
+        _log.warning(
+            "sandbox_agent.resource_caps_not_enforced_via_provider",
+            extra={
+                "node_id": self._node_id,
+                "run_id": self._run_id,
+                "reason": reason,
+            },
+        )
+
+    async def enforce_resource_limits(self) -> bool:
+        """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
+
+        Polls self._sandbox.get_metrics() (bounded wait_for), compares the
+        observable caps, and kills the self._sandbox when a cap is exceeded.
+        Returns True when the self._sandbox was killed (the caller maps the
+        outcome to ``script.budget_killed``).
+
+        Observable caps:
+          - ``cpu_usage_pct`` (0-100 PERCENTAGE) vs ``cpu_used_pct``
+          - ``memory_mb`` vs ``mem_used`` bytes
+          - ``disk_mb`` vs ``disk_used`` bytes
+
+        ``cpu_count`` is a CORE COUNT, NOT a percentage — it is
+        informational/metadata-only and is NOT enforced here (same as
+        ``max_processes`` / ``max_fds`` / ``max_sockets``, which the
+        SDK exposes no observable metric for). Treating a core count
+        as a percentage threshold would kill a 2-core self._sandbox at >2%
+        CPU usage.
+
+        FAR-1050 R6 (ADR 040 metrics gap, now CLOSED): on the provider
+        path ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``
+        and polls the ABC's ``get_metrics`` primitive, so ``resource_limits``
+        ARE enforced there whenever the provider implements it (E2B does).
+
+        Three fail-open shapes remain, all explicit and none fatal to the
+        run — resource-cap enforcement is best-effort monitoring:
+          1. a handle with no ``get_metrics`` surface at all, or
+          2. a provider that does not implement the primitive (its ABC
+             default refuses with ``ProviderCapabilityUnsupportedError``)
+             -> the ONE-PER-DISPATCH
+             ``sandbox_agent.resource_caps_not_enforced_via_provider``
+             warning naming the gap, then fail open;
+          3. a metrics poll/compare failure (SDK unreachable, bad sample)
+             -> ``sandbox_agent.resource_metrics_unavailable`` /
+             ``..._compare_failed``, then fail open. Never kill on a
+             measurement failure.
+        """
+        if not self._resource_limits or self._sandbox_mode != "script" or self._sandbox is None:
+            return False
+        get_metrics = getattr(self._sandbox, "get_metrics", None)
+        if not callable(get_metrics):
+            # Shape 1: no primitive on the handle at all — explicit,
+            # observable fail-open (ADR 040 metrics gap).
+            self._log_resource_caps_gap_once(
+                "the sandbox handle exposes no get_metrics primitive, so the configured "
+                "resource_limits are NOT enforced for this workspace; fail open by design "
+                "(ADR 040 metrics gap)"
+            )
+            return False
+        try:
+            # get_metrics is a fresh coroutine per call, so wait_for is
+            # safe to cancel; shield for consistency with the SDK-task
+            # lesson (never cancel long-lived SDK internal tasks).
+            metrics_raw = await asyncio.wait_for(
+                asyncio.shield(get_metrics()),
+                timeout=_SANDBOX_METRICS_POLL_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except ProviderCapabilityUnsupportedError as exc:
+            # Shape 2: the provider genuinely cannot report metrics — the
+            # ABC default's typed refusal. Same EXPLICIT, once-per-dispatch
+            # warning as a missing primitive (never the generic transient
+            # "metrics unavailable" traceback an operator would read as an
+            # SDK hiccup), then fail open: never crash the run.
+            self._log_resource_caps_gap_once(
+                f"{exc} - the configured resource_limits are NOT enforced for this "
+                "workspace; fail open by design (ADR 040 metrics gap)"
+            )
+            return False
+        except Exception:
+            # Shape 3 - Fail-open: metrics unavailable (SDK too old / self._sandbox
+            # unreachable) — never kill on a measurement failure.
+            _log.warning(
+                "sandbox_agent.resource_metrics_unavailable",
+                extra={"node_id": self._node_id, "run_id": self._run_id},
+                exc_info=True,
+            )
+            return False
+        # get_metrics returns a LIST of samples (SandboxMetrics on the legacy
+        # handle, WorkspaceMetrics through the ABC) — compare against the
+        # latest (most recent instantaneous sample).
+        metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
+        if metrics is None:
+            return False
+        try:
+            # Observable caps only. cpu_count / max_processes /
+            # max_fds / max_sockets are NOT enforceable via the SDK
+            # (no matching observable metric) — they stay
+            # metadata-only (template-side enforcement).
+            killed = self._budget_exceeded(metrics)
+        except Exception:
+            _log.exception(
+                "sandbox_agent.resource_metrics_compare_failed",
+                extra={"node_id": self._node_id},
+            )
+            return False
+        if not killed:
+            return False
+        await self.kill_sandbox_for_budget(self._node_id, reason="resource_limits_exceeded")
+        return True
+
+    def _budget_exceeded(self, metrics: Any) -> bool:
+        """True when any observable resource cap is exceeded (best-effort).
+
+        Memory/disk thresholds are MB values compared against byte metrics;
+        the first exceeded cap short-circuits the rest.
+        """
+        if not self._resource_limits:
+            return False
+        cpu_cap = self._resource_limits.get("cpu_usage_pct")
+        if cpu_cap is not None:
+            cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
+            if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
+                return True
+        mem_cap = self._resource_limits.get("memory_mb")
+        if mem_cap is not None:
+            mem_used = getattr(metrics, "mem_used", None)
+            if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
+                return True
+        disk_cap = self._resource_limits.get("disk_mb")
+        if disk_cap is not None:
+            # Disk is only enforced when the SDK reports disk
+            # fields (older envd/API versions may omit them).
+            disk_used = getattr(metrics, "disk_used", None)
+            if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
+                return True
+        return False
+
+    async def kill_sandbox_for_budget(self, node_id: str, reason: str) -> None:
+        """Kill the sandbox for a budget overrun (resource caps or wall-clock spend).
+
+        Shared kill semantics for BOTH budget killers (FAR-296 Phase 3b-3
+        resource caps + Phase 4a wall-clock spend): set ``self._budget_killed``,
+        kill the sandbox (bounded + shielded), and log on failure that the
+        sandbox MAY REMAIN ALIVE (the node's finally-block teardown is the
+        second kill attempt).
+        """
+        self._budget_killed = True
+        _log.warning(
+            "sandbox_agent.budget_killed",
+            extra={"node_id": node_id, "run_id": self._run_id, "reason": reason},
+        )
+        _emit_script_span_event(
+            "script.budget_killed",
+            {
+                "run_id": self._run_id,
+                "node_id": node_id,
+                "reason": reason,
+                "elapsed_seconds": round(time.monotonic() - self._start_time, 1),
+            },
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._sandbox.kill(request_timeout=10)),
+                timeout=_SANDBOX_KILL_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Best-effort kill. The failure is logged but the budget was
+            # genuinely exceeded — the sandbox MAY REMAIN ALIVE after this
+            # (the kill timed out / the SDK errored), so the budget flag still
+            # propagates as a terminal outcome and the sandbox teardown in the
+            # node's finally block is the second kill attempt.
+            _log.exception(
+                "sandbox_agent.resource_kill_failed",
+                extra={
+                    "node_id": node_id,
+                    "run_id": self._run_id,
+                    "budget_killed": True,
+                    "reason": reason,
+                },
+            )
+            _log.warning(
+                "sandbox_agent.budget_killed_sandbox_may_remain_alive",
+                extra={"node_id": node_id, "run_id": self._run_id},
+            )
+
+    async def tick(self) -> None:
+        await self.drain_sandbox_log()
+        if self._watch_log_path is not None:
+            await self.probe_log_growth()
+        if self._watch_globs:
+            await self.probe_filesystem()
+        self._budget_check_ticks += 1
+        if self._budget_check_ticks % _SANDBOX_BUDGET_POLL_INTERVAL_TICKS == 0:
+            await self.enforce_resource_limits()
+        # FAR-296 Phase 4a: wall-clock spend budget. Pure monotonic comparison —
+        # no SDK poll needed. When the elapsed time exceeds the budget and the
+        # sandbox has not already been budget-killed, kill it. The guard
+        # ``and not self._budget_killed`` prevents a second kill if the
+        # resource-cap killer already fired. Gated to script mode only —
+        # LLM-mode nodes do not take a wall-clock budget; raising
+        # ScriptBudgetKilledError (script-specific, terminal) for an LLM-mode
+        # node would be a misclassification.
+        if (
+            _sandbox_wallclock_budget_exceeded(
+                sandbox_mode=self._sandbox_mode,
+                wallclock_budget_seconds=self._wallclock_budget_seconds,
+                start_time=self._start_time,
+            )
+            and not self._budget_killed
+        ):
+            _elapsed = time.monotonic() - self._start_time
+            _log.warning(
+                "sandbox_agent.wallclock_budget_overrun",
+                extra={
+                    "run_id": self._run_id,
+                    "node_id": self._node_id,
+                    "budget_seconds": self._wallclock_budget_seconds,
+                    "elapsed_seconds": round(_elapsed, 1),
+                },
+            )
+            await self.kill_sandbox_for_budget(self._node_id, reason="wallclock_budget_exceeded")
+
+
+@dataclass(frozen=True)
+class _SandboxNodeConfig:
+    """Immutable per-node configuration for a sandbox-agent dispatch.
+
+    Groups the node_def-derived parameters that previously flowed into
+    ``_sandbox_agent_impl`` as ~20 separate keyword arguments. Building this
+    once at node-construction time (``make_sandbox_agent_fn``) gives the
+    dispatch path a single cohesive config object and removes the excess
+    argument surface. ``frozen=True`` keeps the config read-only for the
+    duration of a dispatch — a node must never mutate its own configuration.
+    """
+
+    node_id: str
+    node_def: dict[str, Any]
+    sandbox_mode: str
+    agent_command: str
+    agent_prompt_template: str
+    template_id: str
+    egress_policy: str | None
+    egress_allowlist: list[dict[str, Any]] | None
+    resource_limits: dict[str, Any] | None
+    read_only: bool
+    git_credentials: str | None
+    wallclock_budget_seconds: int | None
+    output_schema_json: dict[str, Any] | None
+    input_schema_json: dict[str, Any] | None
+    sandbox_timeout: int
+    stall_timeout_override: Any
+    context_files: dict[str, str]
+    enable_heartbeat: bool
+    watch_log_path: str | None
+    stdout_percentage_delta: float | None
+    watch_globs: list[str]
+    stdout_retention_mode: str
+    stdout_max_bytes: int | None
+    # FAR-811: pipeline-level default for sandbox stdout retention, threaded
+    # from the pipeline model through graph compilation.  When the node did not
+    # explicitly set stdout_retention_mode (raw key absent from node_def), the
+    # pipeline default's mode/max_bytes are inherited before the org ceiling
+    # clamp.  Node-explicit settings always win.
+    pipeline_stdout_retention_config: dict[str, Any] | None
+    delivery_sentinel: str | None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run gh guard.
+    # Distinct from delivery_sentinel (FAR-228 idempotency only) — the guard
+    # arms on THIS flag and nothing else.
+    single_pr_per_run: bool
+    loop_intercept_config: LoopInterceptConfig | None
+    session_factory: Callable[..., Any] | None
+    single_sandbox_node: bool
+    # FAR-800: managed workspace inputs.  List of input dicts from the node
+    # definition (url, dest, ref, connector_instance_id).  Resolved host-side
+    # before sandbox creation, provisioned inside the sandbox.
+    workspace_inputs: list[dict[str, Any]]
+    # FAR-899: schema validator mode for output validation.
+    # Resolved at runtime from the effective-setting store via
+    # resolve_schema_validator_mode(); the env var MODULO_SCHEMA_VALIDATOR_MODE
+    # is a first-boot seed only.  Default: "lenient".
+    schema_validator_mode: str = "lenient"
+    # FAR-899: schema identifier and version for logging/repair.
+    schema_id: str = "unknown"
+    schema_version: int = 0
+
+
+def _check_wallclock_budget_pre_run(
+    *,
+    sandbox_mode: str,
+    wallclock_budget_seconds: int | None,
+    start_time: float,
+    watchdog: _SandboxWatchdog,
+    run_id: str,
+    node_id: str,
+) -> None:
+    """Raise ``ScriptBudgetKilledError`` when the wall-clock budget is already spent.
+
+    FAR-296 Phase 4a non-tick path: a slow provisioning / bridge / env-setup
+    sequence may already have consumed the wall-clock spend budget before the
+    script process starts. Script mode only — LLM-mode nodes take no wall-clock
+    budget, and raising the script-specific terminal error for an LLM-mode node
+    would be a misclassification. ``watchdog.budget_killed`` may already be set
+    by an earlier check, so it guards against a double kill/raise.
+    """
+    if (
+        not _sandbox_wallclock_budget_exceeded(
+            sandbox_mode=sandbox_mode,
+            wallclock_budget_seconds=wallclock_budget_seconds,
+            start_time=start_time,
+        )
+        or watchdog.budget_killed
+    ):
+        return
+    _log.warning(
+        "sandbox_agent.wallclock_budget_overrun_pre_run",
+        extra={
+            "run_id": run_id,
+            "node_id": node_id,
+            "budget_seconds": wallclock_budget_seconds,
+            "elapsed_seconds": round(time.monotonic() - start_time, 1),
+        },
+    )
+    watchdog._budget_killed = True
+    raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+
+
+_UNSET = object()
+
+
+class _SandboxNodeOutput(NamedTuple):
+    """Grouped output fields for a sandbox_agent node envelope.
+
+    The sandbox_agent dispatch builds its ``{artifacts, output}`` envelope in
+    three places (success, schema-failed, generic-exception) with subtly
+    different key sets. Grouping the fields into this NamedTuple and routing
+    them through ``_build_sandbox_node_envelope`` removes the triplicated dict
+    construction while keeping each path's exact key presence (sentinel
+    ``_UNSET`` = key omitted).
+    """
+
+    status: str
+    summary: str
+    exit_code: int
+    wall_clock_time_ms: int
+    cost_estimate_usd: float
+    cost_source: Any = None
+    output_json: Any = _UNSET
+    agent_stdout: str = ""
+    agent_stderr: str = ""
+    stdout_length: int = 0
+    stderr_length: int = 0
+    # FAR-792: True when the captured stdout exceeded the node's effective
+    # retention cap (512KB "tail" default, or stdout_max_bytes in "full"
+    # mode) and the stored agent_stdout/agent_stderr were truncated. Default
+    # False so honest envelopes carry no key at all (backwards-compatible).
+    stdout_truncated: bool = False
+    # FAR-811: when the redacted stdout exceeds the retention cap, a pointer to
+    # the FULL redacted transcript in the artifact store is surfaced here
+    # ({rel_path, size_bytes, sha256, stream, compression, truncated: False,
+    # redacted: True}). Absent (default) = today's inline-only behaviour.
+    stdout_artifact: Any = _UNSET
+    # FAR-879: stdout parity — when the redacted stderr exceeds the retention
+    # cap, a pointer to the FULL redacted stderr transcript in the artifact
+    # store is surfaced here. Absent (default) = no stderr artifact.
+    stderr_artifact: Any = _UNSET
+    attempt_key: str | None = None
+    changed_files: Any = _UNSET
+    pr_url: Any = _UNSET
+    agent_status: Any = _UNSET
+    agent_outcome: Any = _UNSET
+    stall_reason: Any = _UNSET
+    sandbox_session_lost: Any = _UNSET
+    error_type: Any = _UNSET
+    error_message: Any = _UNSET
+    sandbox_id: Any = _UNSET
+    sandbox_log_tail: Any = _UNSET
+    # FAR-800: workspace input drift detection results.  List of per-input
+    # drift dicts (dest, expected_sha, final_sha, drift_detected).  Default
+    # empty list; populated only when workspace inputs are configured.
+    workspace_drift: Any = _UNSET
+    # FAR-800: first-class run flag — True when ANY workspace input drifted.
+    workspace_drift_detected: Any = _UNSET
+    # FAR-510: True ONLY on the runner's synthetic failure envelopes (the
+    # executor's downgrade predicate keys on this marker, never on summary
+    # text). Default False so honest envelopes carry no marker key at all.
+    modulo_synthetic_failure: bool = False
+
+
+def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | None = None) -> str:
+    """Compose a run-output-safe error message, optionally enriching a typed error.
+
+    FAR-511: a bare ``str(exc)`` may carry the HTTP status (e.g. ``400: Timeout
+    cannot be greater than 1 hours``) while the provider's response body carries
+    extra detail. When ``provider_exc_type`` is supplied and matches the
+    exception, append the response body so ``get_run_output`` reveals the full
+    provisioning failure rather than a masked "Sandbox agent execution failed".
+
+    FAR-1050 R6: the sandbox dispatch no longer holds an e2b SDK exception —
+    node_runner's direct path, and its ``SandboxException`` import, were deleted
+    — so the dispatch call site passes no ``provider_exc_type``. The enrichment
+    hook remains as the generic typed-provider seam (exercised by unit tests)
+    rather than being removed.
+    """
+    msg = str(exc)[:_MAX_ERROR_MSG]
+    if provider_exc_type is not None and isinstance(exc, provider_exc_type):
+        response = getattr(exc, "response", None)
+        if response is not None:
+            body = getattr(response, "text", None)
+            if not body and isinstance(response, (dict, list)):
+                try:
+                    body = json.dumps(response)
+                except (TypeError, ValueError):
+                    body = None
+            if body:
+                msg = f"{msg} — {body}"[:_MAX_ERROR_MSG]
+    return msg
+
+
+def _set_envelope_sentinels(inner: dict[str, Any], output: _SandboxNodeOutput, attrs: tuple[str, ...]) -> None:
+    """Copy sentinel-gated optional fields onto the envelope inner dict.
+
+    Each named ``output`` attribute is set under its own name ONLY when it was
+    left at the ``_UNSET`` sentinel; the insertion order follows *attrs* so the
+    emitted key set — and its order — is identical to the per-field ``if``
+    form it replaces.
+    """
+    for attr in attrs:
+        value = getattr(output, attr)
+        if value is not _UNSET:
+            inner[attr] = value
+
+
+#: FAR-1780: the sandbox envelope cost/token datum fields whose values are
+#: extracted from the producer's ``output.json``. DERIVED from the extraction
+#: vocabularies above (the token destinations + the agent's declared cost
+#: fields ``model_cost_usd`` / ``model_cost_raw_usd``) so the reported-datum
+#: stamp list cannot drift from what those helpers actually emit — a key
+#: lands here only if an extraction helper can emit it FROM THE REPORT.
+#:
+#: ``model_cost_display_usd`` / ``model_cost_clamped`` /
+#: ``model_cost_out_of_band_high`` are deliberately EXCLUDED: they are
+#: ENGINE-COMPUTED, never agent claims. ``_build_model_cost_fields`` writes
+#: them UNCONDITIONALLY per report (the display clamp value and the explicit
+#: clamp / out-of-band flags derived from the TRUE raw), so per-key presence
+#: identifies nothing about the producer — stamping them would over-attest
+#: engine derivations as producer claims (matching finalize.py's
+#: ``_UNION_PROVENANCE_DATUM_KEYS``, which excludes exactly those three).
+_SANDBOX_AGENT_COST_DATUM_FIELDS: frozenset[str] = frozenset(dst for _, dst in _TOKEN_USAGE_FIELD_MAP) | frozenset(
+    {
+        "model_cost_usd",
+        "model_cost_raw_usd",
+    }
+)
+
+#: FAR-1780: the extraction datums lifted verbatim from a parsed producer
+#: ``output.json`` (the main extraction branch). For EACH datum the map
+#: ``_EXTRACTED_DATUM_SOURCE_KEYS`` below names the report key it is lifted
+#: from — these carry the agent's OWN report ONLY when that branch ran (llm
+#: mode): script mode never extracts (its summary is engine-generated), and
+#: when output.json fails to parse the builder's ``changed_files``/``pr_url``
+#: are empty placeholders, not an agent report. The datum tuple is kept as
+#: the declarative vocabulary (test suites and future union propagation read
+#: it); the stamp loop walks the key map, which cannot name a key outside it.
+_EXTRACTED_DATUM_SOURCE_KEYS: dict[str, str] = {
+    "summary": "summary",
+    "changed_files": "changed_files",
+    "pr_url": "pr_url",
+    "agent_status": "status",
+    "agent_outcome": "outcome",
+}
+_SANDBOX_AGENT_EXTRACTION_DATUM_FIELDS: tuple[str, ...] = tuple(
+    _EXTRACTED_DATUM_SOURCE_KEYS,
+)
+
+
+def _sandbox_summary_is_reported(output: _SandboxNodeOutput, report: dict[str, Any]) -> bool:
+    """True when the envelope summary IS the producer's reported summary.
+
+    The engine rewrites ``summary`` for a failed command or a generic
+    exception, and an extraction over an empty / missing report summary is
+    engine-authored — neither is an agent claim.
+    """
+    producer_summary = report.get("summary", "")
+    return bool(producer_summary) and output.summary == producer_summary
+
+
+def _sandbox_extracted_datum_is_reported(output: _SandboxNodeOutput, key: str) -> bool:
+    """True when an extracted datum reflects the producer's absorbed report.
+
+    ``agent_status`` / ``agent_outcome`` are stamped only when the extraction
+    actually absorbed a string (a non-string report value, or a session-lost
+    echo, leaves the engine-authored ``None``). The other extraction datums
+    have no engine placeholder that can masquerade as a claim once their
+    source key is present.
+    """
+    if key not in {"agent_status", "agent_outcome"}:
+        return True
+    return isinstance(getattr(output, key), str)
+
+
+def _sandbox_reported_extraction_datums(output: _SandboxNodeOutput, report: dict[str, Any]) -> dict[str, Any]:
+    """The extraction datums the producer's ``output.json`` actually supplied."""
+    reported: dict[str, Any] = {}
+    for key, source_key in _EXTRACTED_DATUM_SOURCE_KEYS.items():
+        if key == "summary":
+            if _sandbox_summary_is_reported(output, report):
+                reported[key] = PROVENANCE_REPORTED
+        elif source_key in report and _sandbox_extracted_datum_is_reported(output, key):
+            reported[key] = PROVENANCE_REPORTED
+    return reported
+
+
+def _sandbox_reported_datum_provenance(
+    inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str
+) -> dict[str, Any]:
+    """The per-datum ``provenance`` map for a sandbox_agent envelope (FAR-1780).
+
+    A sandbox envelope MIXES agent-claimed and engine-observed facts, so the
+    whole-dict stamp the dispatch arm applies would over-claim
+    ``exit_code`` / ``wall_clock_time_ms``. Instead the envelope types its
+    agent-claimed datums ``reported`` under the ONE envelope ``provenance``
+    key as a per-datum map — ``{datum_name: PROVENANCE_REPORTED}`` — leaving
+    every engine-observed datum unstamped.
+
+    Classifying *which* keys are agent-reported:
+
+    - ``output_json`` IS the verbatim producer surface — always reported when
+      present, in every sandbox mode (script mode's parsed output included:
+      it is still the substrate's own report).
+    - the extraction keys are reported ONLY in llm mode (``sandbox_mode ==
+      "llm"`` — the validated LLM-mode value; legacy builders passing no mode
+      keep their unstamped key set) AND the producer's report actually wrote
+      each datum's SOURCE key (the ``_EXTRACTED_DATUM_SOURCE_KEYS`` map —
+      e.g. ``agent_status`` is lifted from the report's ``status`` key, so a
+      literal ``"agent_status"`` report key stamps nothing under it) —
+      ``changed_files``/``pr_url`` defaults for an omitted key (``[]`` /
+      ``""``) and the absorbed status keys' engine-None (a non-string report
+      value, or a session-lost echo the extraction refuses to absorb) are
+      engine placeholders, not agent claims. ``summary`` additionally ONLY
+      when the envelope's summary value IS the one extracted from the
+      producer's ``output.json``. Two substitutions produce an engine value:
+      the failed-node substitution replaces an empty extracted summary with
+      ``command_error`` / "Sandbox agent command failed", and the generic
+      exception envelope stamps the ``SANDBOX_AGENT_FAILED_SUMMARY``
+      constant — in both the envelope value differs from (or the extraction
+      found nothing in) ``output.json``, so neither is agent-reported.
+    - the cost/token fields are reported per-key presence: those extraction
+      helpers emit a key only for a real producer report (an unproven zero is
+      never written), so presence alone identifies an agent claim. The three
+      ENGINE-COMPUTED cost annotations (``model_cost_display_usd``,
+      ``model_cost_clamped``, ``model_cost_out_of_band_high``) are explicitly
+      NOT in this set — they are written UNCONDITIONALLY per report
+      (display clamp + flags derived from the TRUE raw), so presence never
+      identifies an agent claim for them.
+
+    Engine-observed or engine-derived keys (``status``, ``exit_code``,
+    ``wall_clock_time_ms``, ``cost_estimate_usd``, ``agent_stdout``/stderr and
+    their lengths/artifacts, ``error_*``, ``sandbox_*``, ``stall_reason``,
+    ``workspace_drift*``, ``provider``/``via_provider``) are deliberately NOT
+    stamped — stamping them would attest Modulo's own measurements as producer
+    claims (the taxonomy's over-claim failure mode).
+    """
+    reported: dict[str, Any] = {}
+    if output.output_json is not _UNSET:
+        reported["output_json"] = PROVENANCE_REPORTED
+    if sandbox_mode == "llm" and isinstance(output.output_json, dict):
+        reported.update(_sandbox_reported_extraction_datums(output, output.output_json))
+    reported.update(dict.fromkeys(_SANDBOX_AGENT_COST_DATUM_FIELDS & set(inner), PROVENANCE_REPORTED))
+    return reported
+
+
+def _build_sandbox_node_envelope(
+    *,
+    node_id: str,
+    output: _SandboxNodeOutput,
+    exclude_from_output: frozenset[str] = frozenset(),
+    provider: str = "",
+    via_provider: bool = False,
+    sandbox_mode: str = "",
+    legacy_format: bool = False,
+) -> dict[str, Any]:
+    """Assemble a sandbox_agent node envelope from grouped output fields.
+
+    NEW FORMAT (default, legacy_format=False): Returns a split envelope with
+    three top-level keys:
+      - ``output``: the PURE agent return (``output_json`` for sandbox_agent)
+      - ``telemetry``: exhaustive telemetry (what ``split_node_output`` extracts
+        as telemetry for sandbox_agent)
+      - ``artifacts``: the ``[{node_id, status, output}]`` accumulator entry.
+        This is NOT the split channel — it is the LangGraph state channel the
+        ``_pipeline_state_reducer`` CONCATENATES into ``state["artifacts"]`` so
+        the state readers that resolve a node by id keep working: HITL
+        gate-eval resolution (``_resolve_gate_eval_target`` / FAR-311),
+        DAG-ancestor work-item-ref folding (``_fold_ancestor_emission_refs`` /
+        FAR-795) and the evidence probes. Dropping it from the return silently
+        emptied those for every graph downstream of a sandbox node (FAR-130).
+        Its ``output`` carries the FULL inner field set; ``split_node_output``
+        keys on the ``output``+``telemetry`` channels, never on the artifact,
+        so the accumulator is never re-split or double-counted.
+
+    LEGACY FORMAT (``legacy_format=True``): Returns the legacy envelope shape
+    ``{artifacts: [{node_id, status, output}], output}``. TEST-SUPPORT ONLY —
+    production callers never pass ``legacy_format=True``; it exists so the
+    executor/finalize tests can build pre-split legacy envelopes to exercise
+    the read-side fallbacks. The artifact's inner ``output`` carries the FULL
+    field set; the top-level ``output`` is the reduced telemetry view that
+    omits ``output_json`` and ``exit_code`` plus any caller-supplied
+    artifact-only keys.
+
+    FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
+    ``provider`` stamps BOTH the resolved tier and the provider-routing
+    state (``via_provider``) onto the envelope, which the P1b splitter folds
+    into ``node_telemetry_json`` verbatim — every run is then attributable
+    to provider-mediated execution. Both keys are emitted together. The
+    ``MODULO_E2B_VIA_PROVIDER`` flag ``via_provider`` once reported was
+    RETIRED by FAR-1050 R6 (PR #1033) — the provider path is unconditional —
+    so the key is a historical attribution field; callers that pass no tier
+    (the Bundled Runner route) get neither, so their envelope key set is
+    unchanged.
+
+    FAR-1780: passing ``sandbox_mode`` (the node's validated sandbox mode)
+    lets the builder type the envelope's agent-claimed datums. When the
+    reported-datum map is non-empty it is stamped under the ONE envelope
+    ``provenance`` key into BOTH views (see
+    :func:`_sandbox_reported_datum_provenance` for the per-datum rules).
+    Callers that pass no mode get no stamp (builder-level tests construct
+    partial envelopes that way); the production paths always pass it.
+    """
+    # Build the full inner dict (same as before)
+    inner: dict[str, Any] = {
+        "status": output.status,
+        "summary": output.summary,
+        "exit_code": output.exit_code,
+        "wall_clock_time_ms": output.wall_clock_time_ms,
+        "cost_estimate_usd": output.cost_estimate_usd,
+        **_build_model_cost_fields(output.cost_source),
+        **_build_token_usage_fields(output.cost_source),
+    }
+    if provider:
+        inner["provider"] = provider
+        inner["via_provider"] = bool(via_provider)
+    _set_envelope_sentinels(inner, output, ("output_json",))
+    inner["agent_stdout"] = output.agent_stdout
+    inner["agent_stderr"] = output.agent_stderr
+    inner["stdout_length"] = output.stdout_length
+    inner["stderr_length"] = output.stderr_length
+    if output.stdout_truncated:
+        inner["stdout_truncated"] = True
+    _set_envelope_sentinels(inner, output, ("stdout_artifact", "stderr_artifact"))
+    _set_envelope_sentinels(inner, output, ("changed_files", "pr_url", "agent_status", "agent_outcome"))
+    if output.stall_reason is not _UNSET and output.stall_reason:
+        inner["stall_reason"] = output.stall_reason
+    if output.sandbox_session_lost is not _UNSET and output.sandbox_session_lost:
+        inner["sandbox_session_lost"] = True
+    # FAR-800: surface managed workspace-input drift detection on the envelope.
+    # Left at the ``_UNSET`` sentinel when no workspace inputs were configured,
+    # so the key set is unchanged for every other node type.
+    _set_envelope_sentinels(
+        inner,
+        output,
+        (
+            "error_type",
+            "error_message",
+            "sandbox_id",
+            "sandbox_log_tail",
+            "workspace_drift",
+            "workspace_drift_detected",
+        ),
+    )
+    if output.modulo_synthetic_failure:
+        inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
+    inner["attempt_key"] = output.attempt_key
+    # FAR-1780: type every agent-claimed datum in the envelope ``reported``
+    # under the ONE envelope ``provenance`` key (a per-datum map) — the
+    # extracted cost/token fields, the verbatim ``output_json`` and the LLM
+    # extraction keys. Engine-observed keys stay unstamped. The stamp rides
+    # BOTH views: the full artifact output AND the reduced telemetry view
+    # (and, after the P1b split, ``node_telemetry_json``), so every surface
+    # rendering or persisting a BYO value sees its class.
+    reported = _sandbox_reported_datum_provenance(inner, output, sandbox_mode=sandbox_mode)
+    if reported:
+        inner[PROVENANCE_KEY] = reported
+
+    # The pure return for sandbox_agent is output_json (from the artifact)
+    pure_return = output.output_json if output.output_json is not _UNSET else None
+
+    # The new-format telemetry channel is the exhaustive ``inner`` field set
+    # minus the pure return (``output_json``). The comprehension already
+    # carries every other key — including the ``excluded`` ones — so no
+    # follow-up ``telemetry.update`` is needed (an earlier one re-added the
+    # same values as a dead no-op).
+    telemetry = {k: v for k, v in inner.items() if k != "output_json"}
+
+    # ``excluded`` names the keys the LEGACY outer view omits; it is unused by
+    # the new-format return below.
+    excluded = frozenset(("output_json", "exit_code")) | exclude_from_output
+
+    if legacy_format:
+        # Legacy format: {artifacts: [...], output: outer}
+        outer = {key: value for key, value in inner.items() if key not in excluded}
+        return {
+            "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
+            "output": outer,
+        }
+
+    # New split format: {output: pure_return, telemetry: telemetry}. The
+    # ``artifacts`` accumulator rides alongside so LangGraph's state reducer
+    # still concatenates this node into ``state["artifacts"]`` (gate-eval
+    # resolution, ancestor ref folding, evidence probes) — see the docstring.
+    return {
+        "output": pure_return,
+        "telemetry": telemetry,
+        "artifacts": [{"node_id": node_id, "status": output.status, "output": inner}],
+    }
+
+
+def _build_sandbox_envs(
+    *,
+    run_id: str,
+    pipeline_id: str,
+    org_id: str,
+    input_json: str,
+    sandbox_mode: str,
+    env_vars_extra: dict[str, str],
+    runner_bindings: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Compose the sandbox envs dict: system env vars FIRST, then ``**env_vars_extra`` LAST.
+
+    The ordering is DELIBERATE (AGENTS.md b0c4bde97): pipelines must be able to
+    override system defaults for identity separation (e.g. the PR Reviewer
+    injects its own modulo-reviewbot PAT via ``env_vars_extra``). Script mode
+    does NOT auto-inject the long-lived host credentials (opencode API key /
+    GitHub PAT) — a script only gets what the pipeline passes explicitly.
+
+    Precedence (DELIBERATE, FAR-592 / D6): profile secrets < runner bindings <
+    node ``env_vars_extra`` — THE NODE WINS. ``runner_bindings`` (per-agent
+    Model Backend credential injections) merge AFTER the profile/host creds
+    but BEFORE the node's ``env_vars_extra``:
+
+    1. MODULO_* system vars (reserved — set exactly once here).
+    2. Profile/host standing credentials (host API key / GitHub PAT).
+    3. Per-agent model-backend runner bindings (decrypt at provision).
+    4. Node ``env_vars_extra`` — the sanctioned override; the reviewbot's
+       ``GITHUB_TOKEN`` override keeps working because this layer merges LAST.
+    """
+    sandbox_envs: dict[str, str] = {
+        "MODULO_RUN_ID": run_id,
+        "MODULO_PIPELINE_ID": pipeline_id,
+        "MODULO_ORG_ID": org_id,
+        "MODULO_INPUT_PAYLOAD": input_json,
+    }
+    if sandbox_mode != "script":
+        sandbox_envs["APP_MODULO_OPENCODE_API_KEY"] = os.environ.get("APP_MODULO_OPENCODE_API_KEY", "")
+        sandbox_envs["GITHUB_TOKEN"] = (
+            os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+            or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+            or os.environ.get("GITHUB_TOKEN", "")
+        )
+    if runner_bindings:
+        sandbox_envs.update(runner_bindings)
+    sandbox_envs.update(env_vars_extra)
+    return sandbox_envs
+
+
+def _configure_stall_detector(
+    *,
+    enable_heartbeat: bool,
+    watch_log_path: str | None,
+    stdout_percentage_delta: float | None,
+    watch_globs: list[str],
+    sandbox_mode: str,
+) -> _StallDetector:
+    """Build the per-run stall detector for the idle watchdog (FAR-306 / FAR-1088).
+
+    The agent's ACTUAL output is always a liveness signal (``output`` channel,
+    plus the ``heartbeat`` channel which real-output callbacks refresh); the
+    ``connection`` channel carries probe-success liveness and is enabled only
+    with the heartbeat (dropped in strict mode — ``enable_heartbeat=False``
+    keeps the pre-FAR-306 output-only contract). Opt-in detectors (log-growth,
+    stdout-delta, filesystem) are enabled only when their config is present.
+
+    ``sandbox_mode`` (FAR-1088 scope discriminator) is the node's validated
+    mode from :func:`sandbox_mode._validate_sandbox_mode_config` — ``"llm"``
+    (an LLM agent whose output is EXPECTED to stream) or ``"script"`` (a
+    verbatim shell command whose stdout is redirected to ``agent.log`` and can
+    legitimately be silent for minutes under a block-buffered child). It is
+    REQUIRED so no caller can silently fall back to the streaming contract:
+
+    - ``"llm"`` (streaming): ``_StallDetector`` counts ``connection`` only
+      until the run's first real output; after that it is excluded (the
+      FAR-1088 stall-detector kill the 600s window was measured for).
+    - ``"script"`` (quiet): ``connection`` participates unconditionally —
+      pre-FAR-1088 liveness, bounded by the node's total ``timeout_seconds``
+      rather than by the silence window.
+
+    An explicit per-node ``stall_timeout_seconds`` still overrides the window
+    itself in both modes (resolved by the caller before this build).
+    """
+    _stall = _StallDetector(expect_streaming=sandbox_mode != "script")
+    _stall.enable("output")
+    _stall.enable("heartbeat")
+    if enable_heartbeat:
+        # FAR-1088: probe-success liveness on its OWN channel — the probe no
+        # longer touches `heartbeat` (which real output also refreshes), so a
+        # healthy connection cannot keep a silent STREAMING node alive once
+        # output has been observed (script mode keeps it always — see
+        # _StallDetector.expect_streaming).
+        _stall.enable("connection")
+    else:
+        _stall.disable("heartbeat")
+    if watch_log_path is not None:
+        _stall.enable("log_growth")
+    if stdout_percentage_delta is not None:
+        _stall.enable("stdout")
+    if watch_globs:
+        _stall.enable("filesystem")
+    return _stall
+
+
+def _has_enforcement_sandbox_controls(
+    *,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+) -> bool:
+    """True when an ENFORCEMENT-CRITICAL sandbox control is configured.
+
+    The pre-FAR-1264 body of :func:`_should_apply_sandbox_policy`: the
+    git-credential scope, the read-only seal, and the selected-mode egress
+    allowlist. Failures of THESE controls must propagate (fail-closed — see
+    ``apply_sandbox_policy``), unlike the FAR-1264 ``gh``-guard install,
+    which is best-effort.
+    """
+    return (
+        read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
+    )
+
+
+def _should_apply_sandbox_policy(
+    *,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+    single_pr_per_run: bool = False,
+) -> bool:
+    """True when the FAR-212 sandbox policy step must run before the command.
+
+    FAR-1273: a node with ``single_pr_per_run=True`` runs the step too — that
+    is what scopes the run-scoped one-PR-per-run ``gh`` guard to flagged nodes
+    (e.g. Prompt-to-PR) even when ``read_only``, ``git_credentials`` and the
+    egress policy are all default. For such a flag-only node the policy step
+    installs ONLY the ``gh`` guard (every enforcement step is skipped by
+    ``apply_sandbox_policy``'s own branches), and the call site treats its
+    failure as best-effort — degrade to the prompt-level guard, never wedge
+    the dispatch.
+
+    A non-empty ``delivery_sentinel`` does NOT arm the step (FAR-1273): the
+    sentinel keeps only its FAR-228 idempotency meaning, so a sentinel-only
+    node gets no policy step at all unless an enforcement control is set.
+    """
+    return bool(single_pr_per_run) or _has_enforcement_sandbox_controls(
+        read_only=read_only,
+        git_credentials=git_credentials,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
+    )
+
+
+def _is_script_post_claim_fault(sandbox_mode: str, script_lease_claimed: bool) -> bool:
+    """FAR-296 Phase 2 stage-split: a fault AFTER the script's fencing lease was
+    claimed is POST-CLAIM (terminal, never retryable)."""
+    return sandbox_mode == "script" and script_lease_claimed
+
+
+def _sandbox_wallclock_budget_exceeded(
+    *,
+    sandbox_mode: str,
+    wallclock_budget_seconds: int | None,
+    start_time: float,
+) -> bool:
+    """True when a script-mode node's wall-clock spend budget is already exceeded."""
+    return (
+        sandbox_mode == "script"
+        and wallclock_budget_seconds is not None
+        and (time.monotonic() - start_time) >= wallclock_budget_seconds
+    )
+
+
+def _script_enforcement_requires_remote(
+    *,
+    sandbox_mode: str,
+    egress_policy: str | None,
+    resource_limits: dict[str, Any] | None,
+    read_only: bool,
+    git_credentials: str | None,
+) -> bool:
+    """Script mode that REQUIRES enforcement needs a REMOTE E2B provider."""
+    return bool(
+        sandbox_mode == "script"
+        and (
+            egress_policy in ("deny_all", "selected")
+            or resource_limits
+            or read_only
+            or git_credentials in ("scoped", "none")
+        )
+    )
+
+
+def _resolved_e2b_key_for_enforcement() -> str | None:
+    """Resolved remote E2B credential (FAR-1159, FAR-1171).
+
+    Serves BOTH the script-enforcement refusal AND the E2B
+    ``AsyncSandbox.create`` credential: resolves ``MODULO_E2B_API_KEY``
+    through the runtime-config bridge (override wins over env — the same
+    bridge the provider-registration gate uses, so the paths cannot
+    disagree) and layers the legacy ``E2B_API_KEY`` env fallback exactly as
+    before. ``None`` => fail closed.
+    """
+    from farna.core.runtime_config.key_bridge import get_e2b_api_key
+
+    return get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+
+
+def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
+    """Derive the run/pipeline/org identity strings from internal state keys.
+
+    An explicit ``None`` state value renders as ``""`` — the same result a
+    missing key produces — never the literal string ``"None"`` (gh-1802).
+    """
+    _run_id = state.get("_run_id")
+    _pipeline_id = state.get("_pipeline_id")
+    _org_id = state.get("_org_id")
+    return (
+        str(_run_id) if _run_id is not None else "",
+        str(_pipeline_id) if _pipeline_id is not None else "",
+        str(_org_id) if _org_id is not None else "",
+    )
+
+
+def _runner_binding_env_profile_id() -> uuid.UUID | None:
+    """FAR-592 (D6): the run's environment profile id, for the Local refusal.
+
+    Read from the run-scoped conformance context (set by the executor via
+    ``set_conformance_ctx``). The tuple is
+    ``(session_factory, org_id, environment_profile_id, pipeline_id,
+    claimed_guardrails, claims_load_failed)`` — the THIRD slot (index 2)
+    carries ``environment_profile_id``, unpacked positionally below with a
+    named local so the slot contract is explicit. Absent context (unit tests,
+    direct dispatch) -> None (no tier refusal applied).
+    """
+    ctx = get_conformance_ctx()
+    if ctx is None or len(ctx) < 3:
+        return None
+    _session_factory, _org_id, environment_profile_id = ctx[:3]
+    return _parse_uuid_opt(environment_profile_id)
+
+
+async def _resolve_sandbox_dispatch_route_for_run(state: dict[str, Any], session_factory: Any) -> Any:
+    """FAR-1598: the production seam from the run's conformance ctx to dispatch.
+
+    Route resolution needs TWO values the executor froze from the snapshot
+    into the conformance ctx: the bound ``environment_profile_id`` (slot 2,
+    the FAR-1558 snapshot copy) and the ``pipeline_id`` (slot 3) that the
+    FAR-1598 team-scope backstop resolves the pipeline's effective owner team
+    from. Reading both here — the seam ``_sandbox_agent_impl`` itself calls —
+    is what makes the dispatch chain testable end-to-end without re-wiring
+    the ctx read in the test.
+
+    Absent/short ctx (direct dispatch, unit tests) yields ``None`` for both:
+    no bound profile resolves the default route, and a bound team-private
+    profile with no pipeline id fails CLOSED at the backstop (owner team
+    unknown) rather than dispatching unjudged.
+    """
+    from farna.core.bundled_runner.runner_dispatch import resolve_sandbox_dispatch_route
+
+    ctx = get_conformance_ctx()
+    environment_profile_id = ctx[2] if ctx is not None and len(ctx) > 2 else None
+    pipeline_id = ctx[3] if ctx is not None and len(ctx) > 3 else None
+    return await resolve_sandbox_dispatch_route(
+        session_factory,
+        state.get("_org_id"),
+        environment_profile_id,
+        pipeline_id=pipeline_id,
+    )
+
+
+async def _finalize_artifact_writer(
+    writer: "ArtifactWriter | None",
+    *,
+    session_factory: Any,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """FAR-582: finalize and persist artifact pointers (best-effort, never fatal)."""
+    if writer is None or not writer.enabled or not attempt_key:
+        return
+    try:
+        pointers = writer.finalize()
+        if pointers and session_factory:
+            from farna.db.crud.run_node_outputs import persist_artifact_pointers
+
+            async with session_factory() as session, session.begin():
+                await persist_artifact_pointers(
+                    session,
+                    run_id=uuid.UUID(run_id),
+                    organisation_id=uuid.UUID(org_id),
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    pointers=pointers,  # type: ignore[arg-type]  # ArtifactPointer is a dict subclass
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.artifact_finalize_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+
+
+def _persist_full_stdout_artifact(
+    *,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    node_cap: int,
+    redacted_stdout: str,
+) -> dict[str, Any] | None:
+    """FAR-811: write the full redacted stdout transcript to the artifact store
+    when it exceeds the retention cap, returning an envelope pointer.
+
+    Best-effort and non-fatal: any store failure returns None and the caller
+    keeps today's inline (truncated) behaviour. The transcript is written under
+    a ``:full:<cap>``-suffixed attempt key so it never collides with (or doubles)
+    the FAR-582 live side-car writer's per-attempt stream files. The returned
+    pointer mirrors the artifact-store pointer contract plus the FAR-811 flags
+    ``truncated: False`` / ``redacted: True`` (the stored content is the
+    pre-truncation REDACTED transcript, full length).
+    """
+    if not attempt_key or not redacted_stdout:
+        return None
+    try:
+        from farna.core.artifacts.store import get_store
+
+        store = get_store()
+        overflow_key = f"{attempt_key}:full:{node_cap}"
+        store.append(org_id, run_id, node_id, overflow_key, "stdout", redacted_stdout)
+        pointer = store.finalize(org_id, run_id, node_id, overflow_key, "stdout")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.stdout_artifact_write_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
+    if pointer is None:
+        return None
+    return {
+        "rel_path": pointer.get("rel_path"),
+        "size_bytes": pointer.get("size_bytes"),
+        "sha256": pointer.get("sha256"),
+        "stream": "stdout",
+        "compression": pointer.get("compression"),
+        "truncated": False,
+        "redacted": True,
+    }
+
+
+def _persist_full_stderr_artifact(
+    *,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    node_cap: int,
+    redacted_stderr: str,
+) -> dict[str, Any] | None:
+    """FAR-879: write the full redacted stderr transcript to the artifact store
+    when it exceeds the retention cap, returning an envelope pointer.
+
+    Best-effort and non-fatal: any store failure returns None and the caller
+    keeps today's inline (truncated) behaviour. The transcript is written under
+    a ``:full:stderr:<cap>``-suffixed attempt key so it never collides with (or
+    doubles) the stdout artifact key pattern or the FAR-582 live side-car
+    writer's per-attempt stream files. The returned pointer mirrors the
+    artifact-store pointer contract plus the FAR-811 flags
+    ``truncated: False`` / ``redacted: True`` (the stored content is the
+    pre-truncation REDACTED transcript, full length).
+    """
+    if not attempt_key or not redacted_stderr:
+        return None
+    try:
+        from farna.core.artifacts.store import get_store
+
+        store = get_store()
+        overflow_key = f"{attempt_key}:full:stderr:{node_cap}"
+        store.append(org_id, run_id, node_id, overflow_key, "stderr", redacted_stderr)
+        pointer = store.finalize(org_id, run_id, node_id, overflow_key, "stderr")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.stderr_artifact_write_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
+    if pointer is None:
+        return None
+    return {
+        "rel_path": pointer.get("rel_path"),
+        "size_bytes": pointer.get("size_bytes"),
+        "sha256": pointer.get("sha256"),
+        "stream": "stderr",
+        "compression": pointer.get("compression"),
+        "truncated": False,
+        "redacted": True,
+    }
+
+
+async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _SandboxNodeConfig:
+    """FAR-220: replace whole-field git content refs with their pinned content.
+
+    Runs at the agent_command rendering point BEFORE dispatch, so every
+    provider path (Bundled Runner, legacy E2B) receives resolved fields:
+
+    * a non-ref field passes through untouched (zero cost for inline content);
+    * a pinned ``git+<repo>@<sha>#<path>`` ref is fetched at that exact commit
+      and the file content replaces the ref (the fetched content then flows
+      through the normal Jinja render for llm mode / verbatim for script mode);
+    * an UNPINNED ref or a fetch failure raises a typed
+      :class:`GitContentRefError` / :class:`GitContentFetchError` — fail
+      closed: the node errors with an observed message instead of dispatching
+      the raw ref string to the agent;
+    * a command that is NOT itself a ref but CONTAINS a ``git+`` token raises
+      :class:`GitContentRefError` (M1 fail-closed) — the joined string of a
+      mixed ``agent_commands`` list would otherwise dispatch the raw ref
+      literal to the shell. Defence in depth for save-gate bypasses (e.g. MCP
+      ``update_pipeline_graph``). A prompt that merely MENTIONS ``git+``
+      mid-string is legitimate inline text and is not affected: only the
+      command field (the string executed by the shell) carries this check.
+
+    The resolved pin (repo/sha/path) is logged by the resolver for audit; the
+    pinned SHA itself is already resident in the run snapshot (graph-save
+    validation rejects unpinned refs, and ``modulo apply`` pins before write).
+    """
+    from farna.core.pipeline_engine.git_content import (
+        GIT_CONTENT_PREFIX,
+        GitContentRefError,
+        is_git_content_ref,
+        resolve_git_content_field,
+    )
+
+    prompt = config.agent_prompt_template
+    command = config.agent_command
+    # M1 fail-closed: a raw git+ token anywhere in the command that is not a
+    # whole-field ref means a mixed/embedded ref would reach the shell as a
+    # literal. Raise BEFORE any fetch so the error names the field without a
+    # network round-trip.
+    if GIT_CONTENT_PREFIX in command and not is_git_content_ref(command):
+        msg = (
+            f"agent_command of sandbox_agent node {config.node_id!r} carries a "
+            f"{GIT_CONTENT_PREFIX} git content token but is not a whole-field git content "
+            "ref — git content refs must be the whole field, not one command of several "
+            f"(got {command.strip()[:160]!r})"
+        )
+        raise GitContentRefError(msg)
+    if not (is_git_content_ref(prompt) or is_git_content_ref(command)):
+        return config
+    resolved_prompt = await resolve_git_content_field(
+        prompt,
+        node_id=config.node_id,
+        field="agent_prompt",
+    )
+    resolved_command = await resolve_git_content_field(
+        command,
+        node_id=config.node_id,
+        field="agent_command",
+    )
+    # ``dataclasses.replace`` already returns the concrete dataclass as far as
+    # mypy is concerned, but SonarCloud's analyser only sees the stdlib's
+    # ``_DataclassInstance`` return type (S5886/S5890). Cast for the analyser
+    # and tell mypy the cast is deliberate.
+    return cast(  # type: ignore[redundant-cast]
+        _SandboxNodeConfig,
+        _dc_replace(config, agent_prompt_template=resolved_prompt, agent_command=resolved_command),
+    )
+
+
+async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
+    state: dict[str, Any],
+    *,
+    config: _SandboxNodeConfig,
+) -> dict[str, Any]:
+    # FAR-220: resolve git-sourced content refs BEFORE the config is
+    # destructured / dispatched (covers both the Bundled Runner early-return
+    # path and the legacy E2B render path below).
+    config = await _resolve_sandbox_git_content_config(config)
+    # Destructure the immutable config back to the local names the dispatch
+    # body uses, so the body is unchanged from the pre-dataclass form. Only the
+    # SIGNATURE narrows to a single config object — the running body behaves
+    # identically.
+    node_id = config.node_id
+    node_def = config.node_def
+    sandbox_mode = config.sandbox_mode
+    agent_command = config.agent_command
+    agent_prompt_template = config.agent_prompt_template
+    template_id = config.template_id
+    egress_policy = config.egress_policy
+    egress_allowlist = config.egress_allowlist
+    resource_limits = config.resource_limits
+    read_only = config.read_only
+    git_credentials = config.git_credentials
+    wallclock_budget_seconds = config.wallclock_budget_seconds
+    output_schema_json = config.output_schema_json
+    sandbox_timeout = config.sandbox_timeout
+    stall_timeout_override = config.stall_timeout_override
+    context_files = config.context_files
+    enable_heartbeat = config.enable_heartbeat
+    watch_log_path = config.watch_log_path
+    stdout_percentage_delta = config.stdout_percentage_delta
+    watch_globs = config.watch_globs
+    stdout_retention_mode = config.stdout_retention_mode
+    stdout_max_bytes = config.stdout_max_bytes
+    delivery_sentinel = config.delivery_sentinel
+    single_pr_per_run = config.single_pr_per_run
+    loop_intercept_config = config.loop_intercept_config
+    session_factory = config.session_factory
+    single_sandbox_node = config.single_sandbox_node
+    workspace_inputs = config.workspace_inputs
+    schema_id = config.schema_id
+    schema_version = config.schema_version
+
+    # FAR-899: resolve schema_validator_mode from the effective-setting store
+    # (org.settings_json → system_config → env var → "lenient") instead of
+    # reading the env var directly.  FIX E: single helper replaces 3
+    # copy-pasted blocks.
+    schema_validator_mode = await _resolve_schema_validator_mode(
+        state,
+        session_factory=config.session_factory,
+        node_id=node_id,
+    )
+
+    # FAR-582: the sandbox watchdog + artifact writer are created during
+    # provisioning (after the sandbox is created). Bind them up-front so the
+    # terminal/exception paths that finalize artifacts can never hit
+    # UnboundLocalError when provisioning fails before they are assigned.
+    _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
+    # FAR-844: streaming artifact writer for incremental stdout capture during
+    # drain. Pre-bound so terminal/exception paths can safely check it.
+    _streaming_writer_instance: "StreamingArtifactWriter | None" = None  # noqa: UP037
+
+    # FAR-792: effective stdout/stderr retention cap for this node. "tail"
+    # (legacy default) keeps the 512KB bound; "full" honours stdout_max_bytes
+    # (or the 5MB default). FAR-811: the org-level ceiling
+    # (system_config.sandbox_stdout_retention_max_bytes) hard-clamps the node's
+    # cap so no node can request an unbounded cap. The same cap drives the
+    # stored artifact slices, the retention markers and the watchdog drain
+    # window.
+    org_stdout_ceiling = await _read_org_stdout_retention_ceiling(config.session_factory)
+    _stdout_cap_unclamped = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes)
+    _stdout_cap = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes, org_ceiling=org_stdout_ceiling)
+    if org_stdout_ceiling is not None and _stdout_cap < _stdout_cap_unclamped:
+        _log.warning(
+            "sandbox_agent.stdout_cap_clamped_by_org_ceiling",
+            extra={
+                "node_id": node_id,
+                "cap_without_ceiling": _stdout_cap_unclamped,
+                "org_ceiling": org_stdout_ceiling,
+                "effective_cap": _stdout_cap,
+            },
+        )
+
+    from opentelemetry import trace as _otel_trace
+
+    from farna.core.guardrails.loop_intercept import (
+        LoopInterceptCallbackServer,
+        bridge_client_source,
+        load_loop_intercept_guardrails,
+        persist_loop_interception_audit,
+    )
+    from farna.core.runner_bindings import (
+        AgentBindingResolutionError,
+        LocalProviderBindingsRefusedError,
+        resolve_agent_bindings,
+    )
+
+    # FAR-1050 R4: the provider-neutral vocabulary the dispatch path
+    # builds its WorkspaceSpec and typed refusals from (runtime import so the
+    # names are bound in THIS function's scope on every path).
+    from farna.core.runtime_provider import RuntimeProviderError, WorkspaceSpec
+
+    # FAR-215: mid-run capability re-check at node start (block -> HITL).
+    # The gate raises a LangGraph interrupt on block; control only reaches
+    # the sandbox body when the node may proceed. node_def is forwarded so
+    # the sandbox capability surface (egress certification; write/git-credential
+    # unknown until PR B — FAR-212 PR A) is mechanically derived into the
+    # conformance manifest.
+    agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+    await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
+
+    # D8 (FAR-594): the provider tier attribution for the dispatch marker.
+    # Default = the legacy E2B route ("e2b" or the historical "none" default);
+    # a bound profile's declared provider_type overwrites it below (FAR-1051),
+    # so a Kubernetes dispatch is attributed to "kubernetes" instead of being
+    # silently counted as E2B. The attribution is unconditional rather than a
+    # conditional fallback, so a future provider branch that forgets to set
+    # the variable would produce a type error, not a silent default (FAR-995).
+    # Import is local to match this file's lazy-import convention for
+    # runner_capacity.
+    from farna.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+    _resolved_provider: str = RUNNER_PROVIDER_E2B
+
+    # FAR-1085: the profile's canonical network policy is only available when a
+    # dispatch route was resolved (i.e. a DB-backed dispatch). Session-factory-
+    # less invocations take the legacy E2B path with no bound profile, so the
+    # policy stays unset and the canonical resolver falls through to the tier
+    # default.
+    _profile_net_policy: str | None = None
+
+    # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
+    # profile's provider_type (the validated, same-org-enforced
+    # PipelineSnapshot.environment_profile_id — consumed at dispatch).
+    #  - runner_docker -> the Bundled Runner path (hub-resolved Docker
+    #    provider, hardened workspace, streaming exec) — both sandbox modes.
+    #  - local / legacy-inert local_docker -> dispatch-unbound: the typed
+    #    config error propagates (operator re-binds deliberately; the old
+    #    conformance-context-only binding never silently activates).
+    #  - e2b -> the legacy E2B path below, with a LOUD dispatch-time timeout
+    #    validation (GraphValidator parity, no silent clamp).
+    #  - kubernetes (FAR-1051) -> the provider-mediated path below with the
+    #    hub-resolved Kubernetes provider; an unregistered provider raises the
+    #    typed ProviderNotConfiguredError naming MODULO_KUBERNETES_ENABLED
+    #    (no silent fallback to E2B or local).
+    #  - none -> the historical E2B default route, unchanged.
+    #  FAR-1598: BEFORE any of those branches, a bound TEAM-PRIVATE profile
+    #  is re-validated against the pipeline's effective owner team with the
+    #  shared FAR-1558 predicate — a drifted/forged cross-team binding raises
+    #  the typed dispatch-unbound error (named environment_profile_team_mismatch)
+    #  and selects NO provider, never a silent fallback.
+    #
+    # FAR-1051: the route below may carry a HUB-RESOLVED provider
+    # (kubernetes). Pre-bound at function scope — BEFORE route resolution
+    # assigns them — so the provisioning site and the finally-block teardown
+    # reference them directly on every path (FAR-1315 pre-bind pattern). The
+    # runner_docker route returns above, and the e2b/none routes carry no
+    # provider, so only a hub-resolved (kubernetes) route populates them.
+    # Disposal: the dispatch's finally acloses the hub. On the pre-try
+    # early-return paths (template / idempotency skips) the route's provider
+    # has NOT been used yet — its API client is built lazily on first use —
+    # so nothing external is left open there.
+    _route_provider: RuntimeProvider | None = None
+    _route_hub: Any = None
+    # FAR-1051 review: a kubernetes-bound profile's declared image_ref is the
+    # authoritative pod image, exactly as the bundled-runner mapper
+    # (runner_dispatch._workspace_spec_for_dispatch) treats it. Pre-bound so the
+    # legacy / non-kubernetes paths keep using the node's E2B template_id.
+    _route_image_ref: str | None = None
+    if session_factory is not None:
+        from farna.core.bundled_runner.runner_dispatch import validate_e2b_dispatch_timeout
+        from farna.settings import get_settings
+
+        # FAR-1598: the ctx -> route seam (profile id AND pipeline id both
+        # read from the executor-frozen conformance ctx) — the backstop inside
+        # route resolution refuses a drifted team-mismatched binding here,
+        # before any provider is selected.
+        _route = await _resolve_sandbox_dispatch_route_for_run(state, session_factory)
+        if _route.profile is not None:
+            _profile_net_policy = getattr(_route.profile, "network_policy", None)
+
+        profile_cap = (
+            int(_route.profile.max_node_seconds)
+            if _route.profile is not None and getattr(_route.profile, "max_node_seconds", None) is not None
+            else None
+        )
+        transport_cap = int(get_settings().saq_run_timeout)
+        effective_cap = min(profile_cap, transport_cap) if profile_cap is not None else transport_cap
+        validate_e2b_dispatch_timeout(
+            sandbox_timeout,
+            max_timeout_seconds=effective_cap if _route.profile is not None else None,
+        )
+
+        if _route.provider_type == "runner_docker":
+            from farna.core.bundled_runner.runner_dispatch import run_bundled_runner_node
+
+            # FAR-899: thread the resolved mode into the Bundled Runner path so
+            # its output-schema gate honours the operator toggle (the config is
+            # frozen, so replace rather than mutate).
+            return await run_bundled_runner_node(
+                state,
+                _dc_replace(config, schema_validator_mode=schema_validator_mode),
+                _route,
+            )
+        if _route.profile is not None:
+            # FAR-1051: the bound profile's declared provider type drives BOTH
+            # the marker attribution and the create / isolation / file-IO
+            # provider resolution below. Only "e2b" and "kubernetes" can reach
+            # this point ("runner_docker" returned above; local/local_docker
+            # raise in route resolution), so the value doubles as the egress
+            # tier name (both are registered in _TIER_ENFORCEMENT).
+            _resolved_provider = str(_route.provider_type)
+            # FAR-1051: the route resolved — and fail-loud VALIDATED — the
+            # profile's provider through its hub (kubernetes). Reuse THAT
+            # instance as this dispatch's provider: one client for the whole
+            # dispatch instead of a second hub build at provisioning time
+            # (the e2b route carries no provider, so this stays None there).
+            # The route hub is aclosed in the finally below.
+            _route_provider = _route.provider
+            _route_hub = _route.hub
+            # FAR-1051 review: a kubernetes route carries the bound profile's
+            # declared image_ref (None on every other route), so one profile
+            # resolves the SAME pod image on both dispatch arms. Read
+            # branchlessly here; the template_id fallback lives at the spec
+            # build below.
+            _route_image_ref = _route.image_ref_override
+
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    raw_input: Any = run_context.get("input", {})
+
+    # FAR-418 (MAJOR-3 fix, sandbox_agent path): the sandbox agent's render view
+    # must be bound by context_scope too — otherwise a gated run_context key leaks
+    # into the rendered prompt (written to /home/user/prompt.md) and agent_command
+    # via ``{{ run_context.<key> }}`` / ``{{ state.run_context.<key> }}``. Mirror
+    # the make_node_fn scoped_state/scoped_run_context boundary. ``raw_input`` stays
+    # sourced from the full run_context so input routing is unaffected.
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+    scoped_state = dict(state)
+    scoped_state["run_context"] = scoped_run_context
+
+    run_id, pipeline_id, org_id = _run_identity_strs(state)
+
+    # FAR-296 mode split: llm mode renders the prompt + agent_command through
+    # the SandboxedEnvironment; script mode runs script_command VERBATIM —
+    # no Jinja render of the command, no prompt, no template_vars.
+    if sandbox_mode == "script":
+        rendered_prompt: str = ""
+        rendered_agent_command = agent_command
+    else:
+        env = sandbox_jinja_environment()
+        template = env.from_string(agent_prompt_template)
+        # FAR-436: context_scope — the sandbox agent's run_context VIEW (the keys
+        # fed to the prompt + agent_command templates) is allowlist-gated to the
+        # node's need-to-know set. Internal control keys are always preserved by
+        # filter_run_context_scope (_CONTEXT_ALWAYS_KEPT). Absent scope = legacy.
+        _node_cap = node_def.get("capability_scope") or {}
+        scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+        template_vars: dict[str, Any] = {
+            "state": scoped_state,
+            "run_context": scoped_run_context,
+            "input": raw_input,
+        }
+        resolved = node_def.get("_resolved_parameters")
+        if isinstance(resolved, dict):
+            template_vars["parameter"] = resolved
+
+        # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): the top-level `{{ model }}`
+        # template variable — the dedicated resolution channel. The value is
+        # interpolated from the SNAPSHOT (baked `_resolved_model`), with the
+        # run's frozen `_run_overrides.model` folded in pre-dispatch (run
+        # override wins). Render is interpolation, NEVER resolution: no
+        # registry read here, and `input.model` is neither read nor written
+        # (caller input keeps its own meaning; provenance stays intact).
+        # Reads the full run_context, not the context_scope-filtered view —
+        # the fold-in is a product mechanism, not a user template key.
+        _model_value = effective_model_template_value(node_def, run_context)
+        if _model_value is not None:
+            template_vars["model"] = _model_value
+        elif node_def.get("model_class"):
+            # Fail closed (D3) BEFORE any sandbox work: an opted-in node with
+            # no resolved model must not render `{{ model }}` as empty and
+            # dispatch a sandbox on a blank --model. The normal path bakes at
+            # mint (fail-closed there); this backstop catches a snapshot whose
+            # bake is missing (e.g. an edit-kind snapshot consumed by a run).
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' declares model_class "
+                f"{node_def.get('model_class')!r} but no model was resolved at snapshot mint "
+                "(no baked _resolved_model and no run-override model) — refusing to dispatch "
+                "pre-sandbox (ADR 037 D3)"
+            )
+
+        try:
+            rendered_prompt = template.render(**template_vars)
+        except (jinja2.UndefinedError, TypeError) as e:
+            _log.warning("Prompt template UndefinedError for run %s: %s", run_id, e)
+            return {
+                "status": "skipped",
+                "summary": f"Skipped: prompt template references missing input fields ({e})",
+                "agent_stdout": "",
+                "agent_stderr": "",
+                "exit_code": 0,
+            }
+
+        # Render agent_command through the same SandboxedEnvironment +
+        # template vars as the prompt, so the LLM model (or any other
+        # command flag) can be a per-run / per-parameter value (e.g.
+        # ``--model {{ input.model }}`` for A/B testing). A command with NO
+        # ``{{ }}`` templates renders to itself unchanged — backward
+        # compatible with every existing pipeline.
+        try:
+            rendered_agent_command = env.from_string(agent_command).render(**template_vars)
+        except (jinja2.UndefinedError, TypeError) as e:
+            _log.warning(
+                "agent_command template UndefinedError for run %s node %s: %s",
+                run_id,
+                node_id,
+                e,
+            )
+            return {
+                "status": "skipped",
+                "summary": f"Skipped: agent_command template references missing input fields ({e})",
+                "agent_stdout": "",
+                "agent_stderr": "",
+                "exit_code": 0,
+            }
+        except jinja2.TemplateSyntaxError as e:
+            # Legacy commands that contain Jinja-like syntax without being
+            # valid templates (e.g. ``${{ }}`` shell fragments or an unclosed
+            # ``{{``) predate #1291 and must keep running verbatim.
+            # Rendering them as templates would crash the run with an
+            # uncaught TemplateSyntaxError.
+            _log.warning(
+                "agent_command is not a valid template for run %s node %s; using verbatim: %s",
+                run_id,
+                node_id,
+                e,
+            )
+            rendered_agent_command = agent_command
+        if not rendered_agent_command.strip():
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
+                " — a sandbox agent cannot run an empty command"
+            )
+
+    start_time = time.monotonic()
+    sandbox: _ProviderMediatedHandle | None = None
+    # The per-dispatch RuntimeProvider + its hub-less handle; resolved once,
+    # before create, and disposed in the finally block.
+    _dispatch_provider: RuntimeProvider | None = None
+    # The executor's CAPTURED claim token (seeded into LangGraph state as
+    # ``_claim_lease`` at execute/resume start). Used to fence the DB-atomic
+    # dispatch marker so a superseded original cannot set a marker / create a
+    # sandbox for a run a successor owns.
+    claim_lease: str | None = state.get("_claim_lease")
+    dispatch_marker_set = False
+    # FAR-296 Phase 2 fencing lease: True once the script-mode fencing lease
+    # is persisted IMMEDIATELY BEFORE ``sandbox.commands.run`` — i.e. the
+    # script PROCESS has started (execution claimed). Gates the stage-split:
+    # a fault with ``_script_lease_claimed`` True is POST-CLAIM (terminal,
+    # never retryable); before it the fault is PRE-CLAIM (retryable).
+    _script_lease_claimed = False
+    # FAR-296 Phase 3b-3: platform-side resource-cap killer state lives on
+    # the per-run _SandboxWatchdog instance (never LangGraph state):
+    # ``_budget_check_ticks`` counts watchdog.tick invocations to pace the
+    # get_metrics() poll; ``_budget_killed`` flips True the instant the killer
+    # kills the sandbox so the post-watchdog classification raises
+    # ScriptBudgetKilledError (never a generic side-effect-unknown / failed
+    # misclassification).
+    # Per-node, per-claim-attempt idempotency key (dist/cleanup-idempotency D5):
+    # ``run:{run_id}:node:{node_id}:{claim_count}``. Derived from the run row's
+    # claim_count inside the fenced acquire, carried by the dispatch marker, and
+    # surfaced on the node output/telemetry so a re-run of the same node under a
+    # DIFFERENT claim is distinguishable (a successor resumes from the previous
+    # claim's checkpoint and re-executes the wedged node with a new attempt key).
+    attempt_key: str | None = None
+
+    _stdout_len = 0
+    _stderr_len = 0
+    _sandbox_id: str | None = None
+    _sandbox_log_tail: str = ""
+    agent_stdout: str = ""
+    agent_stderr: str = ""
+    output_json: Any = None
+    # FAR-1315: the captured streams and the agent-reported pr_url are bound
+    # inside the try; pre-bind at function scope (same pattern as the vars
+    # above) so the finally-block settle REFERENCES them directly instead of
+    # probing ``locals()`` by string name — an unbound value is simply "" /
+    # None, which contributes no spend evidence.
+    agent_stdout_raw: str = ""
+    agent_stderr_raw: str = ""
+    pr_url: str = ""
+    # FAR-228: the cancellation-retention handler below runs whenever a
+    # CancelledError escapes — including during provisioning, BEFORE the
+    # inner drain closure is ever defined. Pre-bind at function scope so
+    # the handler's guard (`_drain_fn is not None`) short-circuits safely
+    # instead of raising UnboundLocalError that replaces the cancellation.
+    _drain_fn: Any = None
+    _drained_chunks: list[str] = []
+    # FAR-704: the cancellation-triage marker (below, in the CancelledError
+    # handler) reads the idle-watchdog stall reason so a stall kill's
+    # no_output_reason carries it. Pre-bound at function scope for the same
+    # reason as _drain_fn: a cancellation during provisioning must not hit
+    # UnboundLocalError inside the handler (the inner try re-assigns it
+    # when the dispatch gets far enough to resolve the stall detector).
+    stall_reason: str | None = None
+    # FAR-211: the local loop-interception callback server, started when the
+    # node's loop_intercept config is enabled AND the pipeline has bound
+    # guardrails. Pre-bound at function scope so the finally-block teardown
+    # short-circuits safely (None) when the bridge was never started.
+    _bridge_server: LoopInterceptCallbackServer | None = None
+    # FAR-1315 (MAJOR 2b): the one-PR guard's INSTALL STATUS as reported by
+    # apply_isolation. Pre-bound at function scope so the finally-block
+    # settle references it directly (None there means "no live install
+    # known"), which keeps a receipt probe from being read as a
+    # definitive "confirmed no create".
+    _gh_guard_install_status: str | None = None
+
+    # FAR-228 guard A (early skipped-return / fallback): when the run has
+    # ALREADY delivered (a prior attempt's marker carries delivery_done=True)
+    # and this is the opt-in single-node case, return the SKIPPED ENVELOPE
+    # without provisioning a sandbox. Non-opt-in nodes pay ZERO here (no
+    # settings read, no DB read). Fail-open in every direction: a settings
+    # read error, a DB read error, or a non-matching marker all proceed to
+    # provision normally. The run then completes COMPLETE via the normal
+    # path (_stream_graph publishes run_completed); the phantom
+    # node_attempt_count increment is accepted by design.
+    if delivery_sentinel and single_sandbox_node:
+        _gate_enabled = True
+        try:
+            from farna.settings import get_settings
+
+            _gate_enabled = getattr(get_settings(), "modulo_idempotency_gate_enabled", True)
+        except Exception:
+            _log.warning(
+                "sandbox_agent.idempotency_gate_killswitch_check_failed",
+                extra={"node_id": node_id, "run_id": run_id},
+                exc_info=True,
+            )
+        if _gate_enabled:
+            _markers = await _read_run_raw_output_markers_for_gate(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=org_id,
+                claim_lease=claim_lease,
+                node_id=node_id,
+            )
+            if _marker_delivery_done_for_node(_markers, run_id, node_id):
+                _log.info(
+                    "sandbox_agent.idempotency_gate.skipped",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+                return _idempotency_gate_skipped_envelope(node_id)
+
+    async def _acquire_dispatch_marker() -> str | None:
+        """D8 atomic dispatch gate + marker (FAR-594): capacity check and the
+        dispatch reservation commit in ONE transaction — own-row fenced lock,
+        per-org advisory lock (flag-on), lock-free count over the
+        running-only marker population, then the fenced marker UPDATE. The
+        marker carries the tier (``provider``/``written_at``). Applied to
+        EVERY sandbox_agent dispatch regardless of sandbox_mode (the
+        pre-D8 script-only racy pre-gate is REPLACED by this).
+
+        Returns the attempt key on success, ``None`` when denied
+        (superseded / not running — no sandbox may be created). Raises
+        :class:`SandboxCapacityExceededError` (retryable, ``capacity.org``)
+        when at capacity or the lock degraded. Fail-open on any other DB
+        error: the marker is still written best-effort in its own
+        transaction, then the sandbox provisions.
+        """
+        return await _sandbox_acquire_dispatch_marker(
+            session_factory=session_factory,
+            claim_lease=claim_lease,
+            org_id=org_id,
+            run_id=run_id,
+            node_id=node_id,
+            provider=_resolved_provider,
+            via_provider=True,
+        )
+
+    async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
+        """Persist the real sandbox id onto the runs row after a successful create."""
+        await _sandbox_store_dispatch_marker_sandbox(
+            sandbox_id_value,
+            session_factory=session_factory,
+            claim_lease=claim_lease,
+            org_id=org_id,
+            run_id=run_id,
+            attempt_key=attempt_key,
+            provider=_resolved_provider,
+            via_provider=True,
+        )
+
+    async def _store_script_lease() -> None:
+        """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
+
+        Reuses the EXISTING ``runs.sandbox_dispatch_state`` machinery — no
+        parallel lease store. Persists ``{"state": "script_executing",
+        "attempt_key": ...}`` IMMEDIATELY BEFORE ``sandbox.commands.run``, so
+        the durable marker proves "the script PROCESS started (execution
+        claimed, completion marker pending)". Fenced on the claim token +
+        status so a superseded original cannot stamp a lease on a successor's
+        row. Fail-open (no session factory / claim lease / org) — the lease
+        is a safety backstop, never a correctness dependency.
+        """
+        await _sandbox_store_script_lease(
+            session_factory=session_factory,
+            claim_lease=claim_lease,
+            org_id=org_id,
+            run_id=run_id,
+            attempt_key=attempt_key,
+            provider=_resolved_provider,
+            via_provider=True,
+        )
+
+    async def _issue_run_credential_for_sandbox() -> IssuedRunCredential | None:
+        """Issue a short-TTL run-scoped credential for this sandbox (FAR-1690 A1).
+
+        Returns the issued credential handle (secret + issuance provenance), or
+        None when issuance is unavailable/failed (fail-open — the sandbox runs
+        without the key rather than failing the dispatch). The raw secret is
+        returned to the caller only, which injects it into the sandbox envs —
+        it is NEVER logged, checkpointed, or placed in LangGraph state.
+        """
+        return await _sandbox_issue_run_credential_for_sandbox(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id,
+            node_id=node_id,
+            sandbox_timeout=sandbox_timeout,
+        )
+
+    async def _clear_dispatch_marker() -> None:
+        """Fenced marker clear — only when the claim token still matches.
+
+        A superseded original (token rotated by a successor) must not clear
+        the successor's dispatch marker / sandbox id.
+        """
+        await _sandbox_clear_dispatch_marker(
+            session_factory=session_factory,
+            claim_lease=claim_lease,
+            org_id=org_id,
+            run_id=run_id,
+        )
+
+    try:
+        # D8 (FAR-594): the pre-D8 script-only racy check-then-act capacity
+        # pre-gate is REPLACED by the atomic gate inside
+        # ``_acquire_dispatch_marker`` below — one transaction reserves the
+        # slot for EVERY sandbox_agent dispatch (any sandbox_mode, any
+        # provider tier) before provisioning.
+        # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
+        # retired Redis SETNX E2B fence. Exactly ONE executor wins the
+        # dispatch slot; a superseded claim / non-running run is refused
+        # BEFORE any sandbox is created. Fail-open when no session factory
+        # or no claim lease is available (the heartbeat claim fence remains
+        # the primary guard).
+        if (attempt_key := await _acquire_dispatch_marker()) is None:
+            _log.warning(
+                "sandbox_agent.dispatch_marker_denied",
+                extra={"node_id": node_id, "run_id": run_id},
+            )
+            raise SupersededNodeError("E2B dispatch marker denied — run superseded or not running; sandbox not created")
+        dispatch_marker_set = True
+
+        # FAR-592 (D6): per-agent runner bindings resolve at PROVISION time —
+        # BEFORE ``AsyncSandbox.create`` — so a resolution failure (or a Local
+        # tier refusal) leaves the sandbox NEVER created and the script
+        # PROCESS never started: both error classes stay pre-claim/re-dispatch
+        # safe. A fresh short-lived hub per dispatch resolves ONLY the
+        # referenced backends and is explicitly disposed inside
+        # ``resolve_agent_bindings``. Precedence is deliberate: profile secrets
+        # < runner bindings < node ``env_vars_extra`` — THE NODE WINS (see
+        # ``_build_sandbox_envs``).
+        _runner_bindings: dict[str, str] = {}
+        if agent_id is not None:
+            try:
+                _runner_bindings = await asyncio.wait_for(
+                    resolve_agent_bindings(
+                        session_factory=session_factory,
+                        org_id=org_id,
+                        agent_id=agent_id,
+                        environment_profile_id=_runner_binding_env_profile_id(),
+                        run_id=run_id,
+                        node_id=node_id,
+                    ),
+                    # FAR-766: bound the previously-unbounded pre-claim secrets
+                    # backend / DB read. A hard stall here also used to ride the
+                    # slow nodeless sweep — a timeout is a retryable binding
+                    # resolution failure (never terminal harness.unknown).
+                    timeout=_sandbox_binding_resolve_timeout(),
+                )
+            except TimeoutError:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_timed_out",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "timeout_seconds": _sandbox_binding_resolve_timeout(),
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution timed out after {_sandbox_binding_resolve_timeout()}s "
+                    f"for node '{node_id}'"
+                ) from None
+            except LocalProviderBindingsRefusedError as exc:
+                _log.warning(
+                    "sandbox_agent.bindings_local_refused",
+                    extra={"run_id": run_id, "node_id": node_id},
+                )
+                # The typed refusal carries the remediation copy (opt-in flag
+                # / tier alternatives) — surface it, never drop it.
+                raise SandboxTierRefusedError(
+                    f"Local provider tier refused runner bindings for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+            except AgentBindingResolutionError as exc:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "exc_msg": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # FAR-592 (D6 F12): a SECRETS-BACKEND hard failure (DB down,
+                # fernet misconfig, unexpected exception shape) must NOT fall
+                # through to the generic ``harness.unknown`` classification —
+                # the pre-claim bindings block is re-dispatch safe, so
+                # non-timeout secrets failures classify as the RETRYABLE
+                # ``sandbox.binding_resolution`` code the D6 rollback trigger
+                # reads.
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_failed",
+                    extra={"run_id": run_id, "node_id": node_id, "exc_type": type(exc).__name__},
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+
+        # FAR-800: resolve managed workspace input refs → SHA HOST-SIDE
+        # BEFORE any sandbox is created.  A resolution failure (ref not
+        # found, transient network error) must NEVER create a sandbox.
+        # FAR-802: killswitch — when MWI is disabled (default), refuse to
+        # provision inputs with a clear error code so the run is never
+        # silently pretending inputs were provisioned.
+        _resolved_workspace_inputs: list[Any] = []
+        if workspace_inputs:
+            from farna.core.pipeline_engine.workspace_input_orchestration import (
+                ProvisioningError as WorkspaceProvisioningError,
+            )
+            from farna.settings import get_settings as _get_mwi_settings
+
+            if not _get_mwi_settings().modulo_workspace_inputs_enabled:
+                raise WorkspaceProvisioningError(
+                    "Managed workspace inputs are disabled (MODULO_WORKSPACE_INPUTS_ENABLED is not set or false)",
+                    error_code=_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
+                    retryable=False,
+                )
+            from farna.core.pipeline_engine.workspace_input_orchestration import (
+                resolve_managed_inputs_host_side,
+            )
+
+            # Wire a real (pinned-transport) httpx client so the least-privilege
+            # read-only credential assertion is ACTIVE in production (the assertion
+            # probes https://api.github.com/user; without a client it is unreachable
+            # and the advertised guarantee silently no-ops). The client is built
+            # through the SSRF egress factory so the resolved address is pinned onto
+            # the connection (no DNS-rebinding window).
+            from farna.core.ssrf import pinned_async_client_sync
+
+            _http_client = pinned_async_client_sync("https://api.github.com", timeout=10.0)
+            try:
+                _resolved_workspace_inputs = await resolve_managed_inputs_host_side(
+                    workspace_inputs,
+                    org_id=org_id,
+                    session_factory=session_factory,
+                    http_client=_http_client,
+                )
+            except WorkspaceProvisioningError as exc:
+                _log.warning(
+                    "workspace_input.resolution_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "error_code": exc.error_code,
+                        "retryable": exc.retryable,
+                        "detail": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxNodeFailedError(
+                    f"Workspace input resolution failed: {str(exc)[:_MAX_ERROR_MSG]}",
+                    node_id=node_id,
+                ) from exc
+            finally:
+                await _http_client.aclose()
+
+            # FAR-801: persist the resolved inputs audit record (best-effort).
+            if _resolved_workspace_inputs and session_factory is not None and run_id and org_id:
+                try:
+                    import uuid as _uuid
+
+                    from farna.core.pipeline_engine.workspace_input_audit import (
+                        WorkspaceInputAuditRecord,
+                        record_resolved_inputs,
+                        redact_url,
+                    )
+                    from farna.core.pipeline_engine.workspace_input_orchestration import (
+                        _extract_host_from_url,
+                    )
+                    from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+                    # Map each resolved input back to its requested ref (kind/value)
+                    # for auditability — the audit record should carry the real
+                    # movable ref that was resolved, not empty strings.
+                    _ref_by_dest = {(wi.get("dest")): (wi.get("ref") or {}) for wi in (workspace_inputs or [])}
+
+                    _audit_records = [
+                        WorkspaceInputAuditRecord(
+                            input_name=inp.dest,
+                            connector_instance_id=getattr(inp, "connector_instance_id", None),
+                            host=_extract_host_from_url(inp.url) if hasattr(inp, "url") else "",
+                            url_redacted=redact_url(inp.url) if hasattr(inp, "url") else "",
+                            requested_ref_kind=(_ref_by_dest.get(inp.dest) or {}).get("kind", "branch"),
+                            requested_ref_value=(_ref_by_dest.get(inp.dest) or {}).get("value", ""),
+                            resolved_sha=inp.resolved_sha,
+                            final_sha=None,
+                            drift_detected=False,
+                            dest=inp.dest,
+                            status="resolved",
+                        )
+                        for inp in _resolved_workspace_inputs
+                    ]
+                    _run_uuid = _uuid.UUID(run_id)
+                    _org_uuid = _uuid.UUID(org_id)
+                    async with session_factory() as _audit_session, _audit_session.begin():
+                        # FAR-801/RBAC: run_node_outputs + runs are RLS FORCE, so
+                        # the audit write must run with the tenant context set or
+                        # Postgres raises 42501 (swallowed by the best-effort
+                        # except) and the row never persists.
+                        await set_rls_org(_audit_session, _org_uuid)
+                        await record_resolved_inputs(
+                            _audit_session,
+                            run_id=_run_uuid,
+                            organisation_id=_org_uuid,
+                            node_id=node_id,
+                            attempt_key=FINAL_ATTEMPT_KEY,
+                            records=_audit_records,
+                            status="resolved",
+                        )
+                except Exception:
+                    _log.exception(
+                        "workspace_input.audit_record_failed",
+                        extra={"run_id": run_id, "node_id": node_id},
+                    )
+
+        # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
+        # and selected map to allow_internet_access=False; resource_limits
+        # and the selected-mode host:port allowlist are carried as sandbox
+        # metadata (e2b tags) so a server-side template/config can enforce
+        # them (the e2b SDK has no native allowlist / cap enforcement).
+        _metadata: dict[str, str] = {}
+        if resource_limits:
+            _metadata["resource_limits"] = json.dumps(resource_limits)
+        # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
+        # The route threads the profile's network_policy (resolved above) so
+        # the canonical resolver can apply the node→profile→provider-default
+        # precedence chain. FAR-1051: the TIER is the resolved provider type
+        # ("e2b" on the legacy route — unchanged; "kubernetes" for a
+        # Kubernetes-bound profile), so a tier that cannot enforce the policy
+        # (e.g. deny_all/selected on Kubernetes, where bounded egress is the
+        # customer's NetworkPolicy) refuses here by name instead of
+        # certifying an enforcement the provider never performs.
+        from farna.core.pipeline_engine.egress import resolve_egress
+
+        _egress_tier = _resolved_provider
+        _egress_resolved = resolve_egress(
+            node_egress_policy=egress_policy,
+            node_egress_allowlist=egress_allowlist,
+            profile_network_policy=_profile_net_policy,
+            tier=_egress_tier,
+        )
+        if _egress_resolved.refusal is not None:
+            raise SandboxTierRefusedError(
+                f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
+            )
+        # FAR-1690: record the TYPED egress posture (never a boolean) on the
+        # workspace, riding the same provider-neutral workspace_metadata carrier
+        # as the allowlist below. Full rationale lives on EgressPosture in
+        # core/pipeline_engine/egress.py and the mirrored comment in
+        # runner_dispatch._workspace_spec_for_dispatch; kept as a pointer here so
+        # the two dispatch sites cannot drift.
+        _metadata["modulo.egress.posture"] = _egress_resolved.posture.value
+        if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
+            _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
+        # FAR-1051 (qa-iterate): run/org/node attribution rides the spec's
+        # workspace_metadata — the SAME provider-neutral keys the Docker
+        # route stamps in ``runner_dispatch._workspace_spec_for_dispatch``.
+        # Without them the Kubernetes workspace pod carries no
+        # ``modulo.run.id`` LABEL, and the workspace-orphan reconciler
+        # deliberately skips pods without one (no run to cross-reference),
+        # so a pod that outlives its dispatch could never be reclaimed.
+        # Empty identity values are dropped (parity with that mapper's
+        # ``if value`` filter) rather than stamped as "".
+        for _attribution_key, _attribution_value in (
+            ("modulo.run.id", run_id),
+            ("modulo.org.id", org_id),
+            ("modulo.node.id", node_id),
+        ):
+            if _attribution_value:
+                _metadata[_attribution_key] = str(_attribution_value)
+        # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
+        # exhausted) are TRANSIENT. Retry ``AsyncSandbox.create`` with
+        # exponential backoff, bounded by the create timeout window and the
+        # node timeout. A run that exhausts the retries fails RETRYABLY
+        # (sandbox.rate_limited) — it must NOT permanently fail as
+        # harness.unknown.
+        _rate_limit_attempt = 0
+        # FAR-766: provisioning watchdog. The dispatch marker is written
+        # ("dispatching") BEFORE ``AsyncSandbox.create``; if create never returns
+        # (E2B provider degradation observed 06:05-13:58), the node never reaches
+        # "script_executing" and sits claimed-but-never-dispatched until the
+        # slow 35-min ``dispatcher_reconcile`` nodeless sweep. Bound the
+        # provisioning await so the node fails RETRYABLY within this window.
+        # The bound applies to the create await AND the rate-limit backoff sleeps
+        # so a retry train cannot stack past the window.
+        # FAR-901: set MODULO_SCHEMA_DIR at sandbox creation time (not per-command).
+        # The env var is set unconditionally — the schema files may or may not be
+        # written (they're advisory), but the env var must be present for any
+        # consumer that checks it.
+        _schema_dir_for_sandbox: dict[str, str] = {
+            "MODULO_SCHEMA_DIR": "/home/user/schemas",
+        }
+
+        _provision_timeout = _sandbox_provisioning_timeout()
+        _dispatch_spec: WorkspaceSpec | None = None
+        _dispatch_ref: str | None = None
+        if _route_provider is not None:
+            # FAR-1051: the route already resolved — and fail-loud validated —
+            # the profile's provider (kubernetes), so THIS dispatch reuses that
+            # one instance instead of building a second hub. Its hub is
+            # aclosed in the finally (after this provider's own close, which
+            # is idempotent — a provider's close() only tears down state it
+            # still tracks).
+            _dispatch_provider = _require_dispatch_provider(_route_provider)
+        else:
+            # Legacy / profile-less shape (unchanged): resolve the run's own
+            # provider through a fresh hub — e2b (hub-registered) or None,
+            # which _require_dispatch_provider refuses with the typed error.
+            _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
+        # FAR-1050 R5: ``E2BRuntimeProvider.create_workspace`` now carries
+        # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
+        # (deny_all/selected/none -> False; default/None -> True), and the
+        # selected-mode allowlist rides the spec's ``workspace_metadata``
+        # under the same key the legacy create stamps. A restrictive
+        # policy is therefore ENFORCED at provision time on this path, so
+        # the earlier "cannot express egress yet — refuse" stopgap is
+        # gone. ``_egress_resolved.refusal`` above still fires for a
+        # genuine tier refusal (e.g. an unrecognised policy).
+        _dispatch_spec = WorkspaceSpec(
+            environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
+            organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
+            run_id=_parse_uuid_opt(run_id),
+            # T2 parity with the legacy create kwargs: same template, same
+            # strictly-greater-than-command lifetime (FAR-487/FAR-489).
+            # NOTE (FAR-1051): on a kubernetes route ``_route_image_ref`` is the
+            # kubernetes-bound profile's own ``image_ref`` when set (same source
+            # the bundled-runner mapper, runner_dispatch.py, reads), so one
+            # profile resolves one image on both arms. Only when the profile
+            # declares no image_ref does the E2B-template ``template_id`` fall
+            # through as the pod image — and a non-image template_id then fails
+            # loudly at provision time (ImagePullBackOff ->
+            # ProvisionTimeoutError). Non-kubernetes routes are unchanged.
+            image_ref=_route_image_ref or template_id,
+            timeout_seconds=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
+            resource_limits=dict(resource_limits or {}),
+            egress_policy=_egress_resolved.policy,
+            workspace_metadata=dict(_metadata),
+        )
+        try:
+            while True:
+                try:
+                    _dispatch_ref = await asyncio.wait_for(
+                        _require_dispatch_provider(_dispatch_provider).create_workspace(
+                            _require_dispatch_spec(_dispatch_spec)
+                        ),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+                    break
+                except Exception as _rle:
+                    # The provider's typed RateLimitedError AND the
+                    # RateLimitException the E2B provider wraps onto
+                    # ``__cause__`` (T8) both land here, so a real 429
+                    # still enters this backoff instead of degrading to a
+                    # terminal ``harness.unknown``.
+                    _rate_limited = _is_rate_limited_error(_rle)
+                    if not _rate_limited:
+                        raise
+                    _rate_limit_attempt += 1
+                    if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
+                        raise SandboxQueueTimeoutError(
+                            f"E2B rate-limited after {_rate_limit_attempt} attempts "
+                            f"creating sandbox for node '{node_id}'"
+                        ) from None
+                    _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
+                    _log.warning(
+                        "sandbox_agent.e2b_rate_limited_retrying",
+                        extra={
+                            "run_id": run_id,
+                            "node_id": node_id,
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    _emit_script_span_event(
+                        "script.rate_limited_retry",
+                        {
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    await asyncio.wait_for(
+                        asyncio.sleep(_backoff),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+        except TimeoutError:
+            _log.warning(
+                "sandbox_agent.provisioning_watchdog_fired",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "timeout_seconds": _provision_timeout,
+                    "state": "dispatching",
+                },
+            )
+            raise SandboxQueueTimeoutError(
+                f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound "
+                "(AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)"
+            ) from None
+        if _dispatch_provider is None or _dispatch_ref is None or not _dispatch_ref:
+            raise RuntimeProviderError("FAR-1050 dispatch lost its runtime provider after create")
+        _sandbox_id = _dispatch_ref
+        sandbox = _ProviderMediatedHandle(_dispatch_provider, _sandbox_id)
+        _emit_script_span_event(
+            "script.provisioned",
+            {
+                "sandbox_id": _sandbox_id,
+                "template": template_id,
+                "mode": sandbox_mode,
+            },
+        )
+        # Persist the real sandbox id so the heartbeat-lost path
+        # (run_executor_with_watchdog) can kill the sandbox by id.
+        await _store_dispatch_marker_sandbox(_sandbox_id)
+        for raw_path, raw_content in context_files.items():
+            write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
+            write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
+            await asyncio.wait_for(
+                _write_file_via_provider(
+                    _sandbox_id,
+                    write_path,
+                    write_content,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
+                ),
+                timeout=_SANDBOX_IO_TIMEOUT,
+            )
+
+        # FAR-901: write advisory schema contract files into the sandbox.
+        # The contract is ADVISORY — Modulo validates independently; these
+        # files are inputs for the dispatched runtime's own tooling.
+        _sandbox_schema_dir = "/home/user/schemas"
+        _node_schema_profile: SchemaProfile = _resolve_schema_profile(node_def) or "verbatim"
+        # Resolve the provider_id from the node's agent → model backend.
+        # Best-effort: the resolver returns None on absence/failure and never raises.
+        _schema_provider_id = await _resolve_provider_id_from_agent(
+            session_factory,
+            _parse_uuid_opt(node_def.get("agent_id")),
+        )
+        # Write to a LOCAL temp dir, then upload to the sandbox.  The contract
+        # writer is E2B-decoupled — it writes to a real filesystem Path.
+        _contract_local_tmp: Path | None = None
+        try:
+            import tempfile
+
+            _contract_local_tmp = Path(tempfile.mkdtemp(prefix="schema_contract_"))
+            _contract_result = write_schema_contract(
+                _contract_local_tmp,
+                node_id=node_id,
+                input_schema=config.input_schema_json,
+                output_schema=config.output_schema_json,
+                profile=_node_schema_profile,
+                provider_id=_schema_provider_id,
+            )
+            if _contract_result.warnings:
+                _log.warning(
+                    "contract.write_warnings",
+                    extra={"node_id": node_id, "warnings": _contract_result.warnings},
+                )
+            # Upload the schema files into the sandbox via the file API.
+            if _contract_result.schema_files_written:
+                _local_schema_dir = _contract_local_tmp / "schemas" / node_id
+                if _local_schema_dir.is_dir():
+                    for _schema_file in _local_schema_dir.iterdir():
+                        if _schema_file.is_file():
+                            _file_content = _schema_file.read_text(encoding="utf-8")
+                            _sandbox_rel = f"{_sandbox_schema_dir}/{node_id}/{_schema_file.name}"
+                            await asyncio.wait_for(
+                                _write_file_via_provider(
+                                    _sandbox_id,
+                                    _sandbox_rel,
+                                    _file_content,
+                                    provider_type=_resolved_provider,
+                                    borrowed_provider=_dispatch_provider,
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                    # LLM mode: inject schema file paths into the rendered prompt.
+                    if sandbox_mode != "script":
+                        _input_schema_path = f"{_sandbox_schema_dir}/{node_id}/input.active.json"
+                        _output_schema_path = f"{_sandbox_schema_dir}/{node_id}/output.active.json"
+                        _schema_injection = (
+                            f"\n\n---\nSchema contract files (advisory — Modulo validates independently):\n"
+                            f"  Input schema:  {_input_schema_path}\n"
+                            f"  Output schema: {_output_schema_path}\n"
+                            f"  Schema dir:    {_sandbox_schema_dir}/{node_id}/\n"
+                            f"  Environment:   MODULO_SCHEMA_DIR={_sandbox_schema_dir}\n"
+                            f"---"
+                        )
+                        rendered_prompt = rendered_prompt + _schema_injection
+        except Exception:
+            _log.warning(
+                "contract.sandbox_write_failed",
+                extra={"node_id": node_id},
+                exc_info=True,
+            )
+        finally:
+            # FAR-901: the contract files are uploaded to the sandbox above, so
+            # the local temp dir is removed here on EVERY path.  Cleaning up
+            # only in the output-schema validation ``finally`` (further below)
+            # leaked the dir whenever a node declared an input schema but no
+            # output schema, because that validation block never ran.
+            if _contract_local_tmp is not None:
+                import shutil
+
+                shutil.rmtree(_contract_local_tmp, ignore_errors=True)
+
+        # FAR-296 mode split: llm mode writes the rendered prompt to
+        # prompt.md; script mode writes the FULL run input (no 10KB
+        # truncation) to /home/user/input.json and never writes a prompt.
+        _input_json = json.dumps(raw_input)
+        if sandbox_mode == "script":
+            await asyncio.wait_for(
+                _write_file_via_provider(
+                    _sandbox_id,
+                    "/home/user/input.json",
+                    _input_json,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
+                ),
+                timeout=_SANDBOX_IO_TIMEOUT,
+            )
+        else:
+            if len(_input_json) > 10240:
+                _input_json = json.dumps(
+                    {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+                )
+            await asyncio.wait_for(
+                _write_file_via_provider(
+                    _sandbox_id,
+                    "/home/user/prompt.md",
+                    rendered_prompt,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
+                ),
+                timeout=_SANDBOX_IO_TIMEOUT,
+            )
+
+        # FAR-800: provision managed workspace inputs INSIDE the sandbox.
+        # Runs AFTER context files and prompt are written but BEFORE the
+        # sandbox policy (credential helper, egress) and the agent command.
+        # A provisioning failure must KILL the sandbox — the agent command
+        # must never run on partial provision.
+        _drift_results: list[Any] = []
+        if _resolved_workspace_inputs:
+            from farna.core.pipeline_engine.workspace_input_orchestration import (
+                ProvisioningError as WorkspaceProvisioningError,
+            )
+            from farna.core.pipeline_engine.workspace_input_orchestration import (
+                provision_workspace_inputs_in_sandbox,
+            )
+
+            try:
+                await provision_workspace_inputs_in_sandbox(
+                    sandbox,
+                    _resolved_workspace_inputs,
+                )
+            except WorkspaceProvisioningError as exc:
+                _log.warning(
+                    "workspace_input.provisioning_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "error_code": exc.error_code,
+                        "detail": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxNodeFailedError(
+                    f"Workspace input provisioning failed: {str(exc)[:_MAX_ERROR_MSG]}",
+                    node_id=node_id,
+                ) from exc
+
+        env_vars_extra: dict[str, str] = await resolve_env_var_refs(
+            node_def.get("env_vars") or {},
+            lambda k: _sandbox_resolve_secret_ref(
+                k,
+                session_factory=session_factory,
+                org_id=org_id,
+            ),
+        )
+
+        # FAR-418: expose the node's capability_scope.allowed_tools to the sandbox
+        # agent runtime (FAR-402 P4 / FAR-418) so the agent's MCP client can
+        # forward it as the ``X-Modulo-Allowed-Tools`` header. The MCP server's
+        # McpAuthMiddleware lifts that header into the request-scoped allow-list
+        # consumed by check_tool_scope, enforcing node-level tool scoping in the
+        # production run path. Absent/empty (the UNRESTRICTED default) sets nothing,
+        # preserving pre-scope behaviour.
+        _node_scope = node_def.get("capability_scope") or {}
+        _allowed_tools = _node_scope.get("allowed_tools")
+        if _allowed_tools:
+            env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in _allowed_tools)
+
+        # FAR-212 PR B: apply the enforced sandbox policy AFTER the Modulo-owned
+        # context files / prompt / input are written but BEFORE the agent/script
+        # command executes. Any policy field set on the node invokes the policy
+        # step (read-only workspace chmod, git-credential scope helper, or
+        # selected-mode egress allowlist). Selected-mode allowlist hostnames are
+        # pre-resolved to concrete IPs so the iptables rules bind real addresses
+        # (an unresolvable host stays denied — fail-closed). The policy is
+        # best-effort at the command level (each step is itself fail-closed) and
+        # never wedges the dispatch.
+        # FAR-1085: use the resolved egress values from resolve_egress, not the
+        # raw config values, so the policy step enforces the same policy the
+        # capability derivation certifies.
+        _resolved_egress_for_policy = _egress_resolved.policy
+        _resolved_allowlist_for_policy = _egress_resolved.allowlist
+        # FAR-1273: OBSERVABLE DISARM. The guard's trigger moved from the
+        # delivery sentinel to the explicit ``single_pr_per_run`` flag, so a
+        # stored graph that predates the flag (e.g. a live Prompt-to-PR node
+        # carrying only ``delivery_sentinel``) loses the in-sandbox guard the
+        # moment this code deploys. Warn at the guard's own decision point so
+        # the disarm is visible in logs/metrics (node id + pipeline id), and
+        # FAIL OPEN: the run proceeds unchanged. Deliberately do NOT re-arm on
+        # the sentinel — that would defeat the ticket; the operator must set
+        # the flag (no JSON-rewriting data migration was shipped).
+        if delivery_sentinel and not single_pr_per_run:
+            _log.warning(
+                "sandbox_agent.single_pr_per_run_flag_missing",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "pipeline_id": pipeline_id,
+                    "detail": (
+                        "node carries a non-empty delivery_sentinel but NOT "
+                        "single_pr_per_run: the one-PR-per-run gh guard is not "
+                        "installed for this run (set single_pr_per_run=true on "
+                        "the node to arm it)"
+                    ),
+                },
+            )
+        if _should_apply_sandbox_policy(
+            read_only=read_only,
+            git_credentials=git_credentials,
+            egress_policy=_resolved_egress_for_policy,
+            egress_allowlist=_resolved_allowlist_for_policy,
+            # FAR-1273: a flagged node runs the policy step for the
+            # one-PR-per-run gh guard even with every enforcement control
+            # default (Prompt-to-PR's shape). A delivery sentinel alone does
+            # NOT arm it.
+            single_pr_per_run=single_pr_per_run,
+        ):
+            # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
+            # per-host env-var name) into the sandbox policy so the multi-host
+            # git-credential helper is actually installed when scoped
+            # credentials grant more than one host. Without this, the capability
+            # ``sandbox.git_credentials.multi_host`` certifies a guarantee the
+            # runtime never enforced (capability/enforcement mismatch). Only
+            # relevant for scoped credentials; other scopes ignore it.
+            # Allowlist pre-resolution runs once, BEFORE the isolation call,
+            # so resolution and enforcement use the identical resolved values
+            # (unchanged by FAR-1050 R3 — only the invocation seam moved, onto
+            # ``apply_isolation``; R6 then retired the flag and deleted the
+            # legacy branch, leaving this single unconditional path).
+            _resolved_allowlist = await _resolve_egress_allowlist(_resolved_allowlist_for_policy)
+            _policy_allowed_hosts = node_def.get("allowed_hosts") if git_credentials == "scoped" else None
+            from farna.settings import get_settings
+
+            # FAR-1264: when this invocation exists ONLY for the gh guard
+            # (no enforcement control set), its failure must NOT fail the run
+            # — degrade to the prompt-level one-PR-per-run guard, exactly as
+            # before this ticket (the guard install is best-effort by
+            # contract). When an enforcement control IS set, failures keep
+            # propagating unchanged (fail-closed — a node that asked for the
+            # read-only seal / scoped credentials / egress allowlist must
+            # never run without it).
+            _policy_enforces_controls = _has_enforcement_sandbox_controls(
+                read_only=read_only,
+                git_credentials=git_credentials,
+                egress_policy=_resolved_egress_for_policy,
+                egress_allowlist=_resolved_allowlist_for_policy,
+            )
+            try:
+                _gh_guard_install_status = await _apply_isolation_via_provider(
+                    _sandbox_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=_resolved_egress_for_policy,
+                    egress_allowlist=_resolved_allowlist,
+                    allowed_hosts=_policy_allowed_hosts,
+                    # FAR-1273: rides the typed IsolationPolicy (the single
+                    # carrier) to the E2B policy call site.
+                    single_pr_per_run=single_pr_per_run,
+                    # FAR-1315: the claiming node's identity for the run's
+                    # one-PR ledger (same typed carrier).
+                    guard_owner=node_id,
+                    # FAR-1051: the profile's provider (legacy E2B route
+                    # unchanged; a kubernetes profile reaches its provider).
+                    # ``borrowed_provider`` threads the dispatch's own
+                    # already-resolved instance so the policy step reuses it
+                    # instead of building a hub per call (closed by the
+                    # dispatch's finally, never here).
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # The install status is unknown when isolation failed — leave
+                # the pre-bound None so the settle can never read a receipt
+                # probe as definitive.
+                _gh_guard_install_status = None
+                if _policy_enforces_controls:
+                    raise
+                _log.warning(
+                    "sandbox_policy.delivery_guard_install_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "detail": "gh one-PR-per-run guard not installed; degrading to the prompt-level guard",
+                    },
+                    exc_info=True,
+                )
+
+        # Bound to None up front so the post-provisioning guard below is a real
+        # check on a possibly-unset watchdog (the watchdog is only constructed
+        # once provisioning succeeds inside the try), never an identity test on
+        # an unbound local.
+        watchdog: _SandboxWatchdog | None = None
+        try:
+            # FAR-306 / FAR-1088: per-channel stall detector. The `heartbeat`
+            # channel is refreshed only by REAL output callbacks (stream
+            # chunks / log growth); probe-success liveness sits on the
+            # separate `connection` channel (enabled with the heartbeat,
+            # dropped in strict mode) and — for a STREAMING node only —
+            # counts until the run's first output. `sandbox_mode` scopes that
+            # exclusion: script mode keeps connection liveness unconditionally
+            # (its stdout is redirected to agent.log and a block-buffered
+            # child can be quiet for far longer than the silence window).
+            # The opt-in detectors (log-growth, stdout-delta, filesystem) add
+            # extra channels that must ALL be silent before the watchdog
+            # fires. ``_activity`` remains the stream-buffer/throttle dict
+            # (not a liveness source).
+            _stall = _configure_stall_detector(
+                enable_heartbeat=enable_heartbeat,
+                watch_log_path=watch_log_path,
+                stdout_percentage_delta=stdout_percentage_delta,
+                watch_globs=watch_globs,
+                sandbox_mode=sandbox_mode,
+            )
+            # Track the last time the agent emitted output so the idle
+            # watchdog can fail fast on stalls (FAR-97). The callbacks run
+            # from the SDK's event task and may be async or sync.
+            stall_reason = None
+
+            # FAR-98: stall_timeout_seconds (node config) overrides the idle
+            # watchdog's silence window. Resolve the DEFAULT at runtime so
+            # the constant stays patchable (the FAR-97 tests patch it).
+            try:
+                stall_timeout: float = (
+                    float(stall_timeout_override) if stall_timeout_override is not None else _SANDBOX_IDLE_TIMEOUT
+                )
+            except (TypeError, ValueError):
+                _log.warning(
+                    "sandbox_agent.stall_timeout_invalid_fallback",
+                    extra={"node_id": node_id, "stall_timeout_raw": stall_timeout_override},
+                )
+                stall_timeout = _SANDBOX_IDLE_TIMEOUT
+
+            # Live-output streaming (FAR-98): look the run event broker up in
+            # the process-local registry by run id (the broker is never carried
+            # inside LangGraph state — it is not msgpack-serializable, and
+            # carrying it in state broke checkpoint writes for every run).
+            # Buffer stdout/stderr chunks and publish a throttled
+            # node.stdout_chunk / node.stderr_chunk event at most once per
+            # _STREAM_FLUSH_INTERVAL so Run detail can show live output while
+            # the sandbox process runs. No broker registered -> skip silently
+            # (streaming is best-effort, never fatal).
+            _stream_broker = None
+            if run_id:
+                try:
+                    _stream_broker = get_registry().get(uuid.UUID(run_id))
+                except (TypeError, ValueError):
+                    _stream_broker = None
+
+            # FAR-582: full stdout/stderr side-car artifact writer.
+            # Bound to the node run; appends on every on_stdout/on_stderr
+            # callback; finalized on every terminal path.
+            _artifact_writer = None  # re-binding (annotated at function top)
+            if run_id and node_id:
+                try:
+                    from farna.core.artifacts import ArtifactWriter
+                    from farna.core.artifacts.store import get_store
+                    from farna.settings import get_settings as _get_settings
+
+                    _settings = _get_settings()
+                    if getattr(_settings, "modulo_artifacts_enabled", True):
+                        _artifact_writer = ArtifactWriter(
+                            org_id=org_id,
+                            run_id=run_id,
+                            node_id=node_id,
+                            attempt_key=attempt_key or "",
+                            store=get_store(),
+                            enabled=True,
+                        )
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.artifact_writer_init_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    _artifact_writer = None
+
+            watchdog = _SandboxWatchdog(
+                sandbox=sandbox,
+                stall=_stall,
+                node_id=node_id,
+                run_id=run_id,
+                watch=_WatchdogWatchConfig(
+                    log_path=watch_log_path,
+                    globs=watch_globs,
+                    percentage_delta=stdout_percentage_delta,
+                ),
+                resource_limits=resource_limits,
+                sandbox_mode=sandbox_mode,
+                stream_broker=_stream_broker,
+                drained_chunks=_drained_chunks,
+                wall_clock=_WatchdogWallClock(wallclock_budget_seconds, start_time),
+                # FAR-792: only "full" mode widens the drain window to the node
+                # cap (so 5MB can actually be retained); "tail" keeps the legacy
+                # ``_MAX_DRAIN_WINDOW`` bound (and honors test patches of it).
+                drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
+                # FAR-1051: the probes above run against the profile's provider.
+                provider_type=_resolved_provider,
+            )
+            # FAR-582: assign artifact_writer post-construction to keep
+            # __init__ param count under 13 (S107).
+            watchdog._artifact_writer = _artifact_writer
+            # FAR-1051 follow-up: hand the watchdog the dispatch's own
+            # already-resolved provider (same post-construction pattern) so
+            # its per-tick probes borrow it instead of building a fresh
+            # hub+provider on every tick.
+            watchdog._dispatch_provider = _dispatch_provider
+            _drain_fn = watchdog.drain_sandbox_log
+
+            # FAR-844: streaming artifact writer for incremental stdout capture.
+            # Chunks are fed to the writer during drain_sandbox_log(), so the
+            # full transcript is persisted to the artifact store without
+            # assembling the entire string in memory. The writer computes SHA256
+            # incrementally. It is deliberately UNCAPPED (max_bytes=None): it
+            # must mirror the one-shot _persist_full_stdout_artifact fallback
+            # (which stores the FULL redacted transcript) — the streaming path
+            # is the incremental implementation of that same "keep everything
+            # the drain delivered" contract, NOT the retention-cap truncation
+            # that bounds the inline agent_stdout. Capping it at _stdout_cap
+            # silently dropped the tail of an over-cap redacted stream while the
+            # envelope still advertised truncated=False (FAR-844 review fix).
+            # Uses the same overflow key pattern as _persist_full_stdout_artifact.
+            if attempt_key:
+                try:
+                    from farna.core.artifacts.store import get_store as _get_streaming_store
+                    from farna.core.artifacts.streaming import StreamingArtifactWriter
+
+                    # NOSONAR S2083 - _streaming_overflow_key is a derived artifact
+                    # key (attempt_key + a size suffix); it flows into
+                    # StreamingArtifactWriter -> LocalArtifactStore, whose _raw_path
+                    # rejects path-traversal chars and percent-encodes every segment
+                    # (see store.py). No traversal is possible.
+                    _streaming_overflow_key = f"{attempt_key}:full:{_stdout_cap}"
+                    _streaming_writer_instance = StreamingArtifactWriter(
+                        _get_streaming_store(),
+                        org_id=org_id,
+                        run_id=run_id,
+                        node_id=node_id,
+                        attempt_key=_streaming_overflow_key,
+                        stream="stdout",
+                        max_bytes=None,
+                    )
+                    watchdog._streaming_writer = _streaming_writer_instance
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_init_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    _streaming_writer_instance = None
+
+            # Redirect the agent's stdout/stderr into a sandbox log file so
+            # the process writes to a regular file — never a pipe that can
+            # fill and block a long session (FAR-97). The subshell preserves
+            # the command's exit code for the SDK's wait().
+            # System env vars first — provide defaults from the host. DO NOT
+            # move pipeline env before these: pipelines need to override
+            # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
+            # modulo-reviewbot PAT, not the default GITHUB_TOKEN identity).
+            # The reserved-prefix validator already prevents overriding
+            # MODULO_* vars, so update() below is the sanctioned override.
+            # FAR-592 (D6): ``_runner_bindings`` was resolved BEFORE the sandbox
+            # was created (see the provision-time block above the
+            # ``AsyncSandbox.create`` loop) and merges between the profile
+            # creds and the node envs — THE NODE WINS (see _build_sandbox_envs
+            # docstring for the deliberate precedence).
+            sandbox_envs: dict[str, str] = _build_sandbox_envs(
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+                input_json=_input_json,
+                sandbox_mode=sandbox_mode,
+                env_vars_extra=env_vars_extra,
+                runner_bindings=_runner_bindings,
+            )
+            sandbox_envs = {**_schema_dir_for_sandbox, **sandbox_envs}
+            # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
+            # slow provisioning sequence may already have consumed the budget
+            # before the script process starts. Even though no side effects
+            # occurred, the budget was exhausted — re-dispatching would waste
+            # another provisioning cycle on a run that already consumed its
+            # budget allocation. Script mode only: LLM-mode nodes do not take a
+            # wall-clock budget; raising ScriptBudgetKilledError for an LLM-mode
+            # node would be a misclassification.
+            _check_wallclock_budget_pre_run(
+                sandbox_mode=sandbox_mode,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                start_time=start_time,
+                watchdog=watchdog,
+                run_id=run_id,
+                node_id=node_id,
+            )
+            # FAR-296 Phase 2 fencing lease (script mode only): persist the
+            # execution claim IMMEDIATELY BEFORE the script process starts so
+            # a durable marker proves the script RAN. Once claimed, any fault
+            # is POST-CLAIM (terminal — never retryable, exactly-once). LLM
+            # mode does NOT take a lease (at-least-once, no fencing).
+            if sandbox_mode == "script":
+                await _store_script_lease()
+                _script_lease_claimed = True
+                _emit_script_span_event(
+                    "script.lease_claimed",
+                    {
+                        "run_id": run_id,
+                        "node_id": node_id,
+                    },
+                )
+            # FAR-1690 slice A1: EVERY sandbox dispatch (script AND llm mode)
+            # issues a short-TTL, run-scoped runner-role API key through the
+            # CredentialIssuer seam, so the workspace always holds a run-scoped
+            # token and never only the long-lived host credentials. The key is
+            # per-run, revoked at run finalization (and by the compensating
+            # sweep), and its issuance provenance is stamped as
+            # ``modulo_minted`` (attested — NEVER ``observed``). Fail-open: an
+            # issuance failure leaves the key absent (the sandbox still runs).
+            _issued_credential = await _issue_run_credential_for_sandbox()
+            if _issued_credential is not None:
+                sandbox_envs["MODULO_API_KEY"] = _issued_credential.secret
+                sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = _issued_credential.provenance
+            _bridge_wrapped_command = rendered_agent_command
+            # FAR-211: start the loop-interception callback server + write
+            # the bridge client into the sandbox. Best-effort and
+            # fail-open in EVERY direction: the bridge is only started when
+            # the node's loop_intercept config is enabled AND the pipeline
+            # has bound guardrails (zero guardrails -> the bridge is
+            # inert); a setup failure disables the bridge for this node but
+            # NEVER blocks the dispatch or wedges the agent loop. The
+            # endpoint is the Modulo sandbox-agent process's localhost —
+            # the ADR 044 amendment documents how it is exposed into the
+            # sandbox (in the test-driven slice it is the same host).
+            if loop_intercept_config is not None and loop_intercept_config.enabled:
+                try:
+                    bridge_defs = await load_loop_intercept_guardrails(
+                        session_factory,
+                        org_id=state.get("_org_id"),
+                        pipeline_id=state.get("_pipeline_id"),
+                    )
+                    if bridge_defs:
+                        _bridge_server = LoopInterceptCallbackServer(
+                            engine=EvalEngine(),
+                            definitions=bridge_defs,
+                            config=loop_intercept_config,
+                            audit_sink=partial(
+                                persist_loop_interception_audit,
+                                session_factory=session_factory,
+                                org_id=org_id,
+                                run_id=run_id,
+                                node_id=node_id,
+                            ),
+                        )
+                        _bridge_port = await _bridge_server.start()
+                        await asyncio.wait_for(
+                            _write_file_via_provider(
+                                _sandbox_id,
+                                "/home/user/modulo_bridge.py",
+                                bridge_client_source(),
+                                provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
+                            ),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
+                        await asyncio.wait_for(
+                            _write_file_via_provider(
+                                _sandbox_id,
+                                "/home/user/modulo_bridge_config.json",
+                                json.dumps(loop_intercept_config.model_dump(mode="json")),
+                                provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
+                            ),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
+                        sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
+                        sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+                        # FAR-664 (newline-safe bridge handoff): the rendered
+                        # agent command is handed to the bridge via a FILE, not
+                        # inline after ``--``. An inline interpolation word-
+                        # splits a multi-line command in the outer bash, so only
+                        # its first line would reach the bridge argv and any
+                        # post-heredoc statement would escape guardrail
+                        # interception (same class of bug FAR-651 fixed for the
+                        # outer log-redirect wrap). ``bash <file>`` is a single
+                        # argv element after ``--``; sandbox_bridge.py joins the
+                        # post-``--`` argv and runs it as a shell command, so
+                        # interception semantics are unchanged. Uniform for
+                        # single-line and multi-line commands (one code path).
+                        await asyncio.wait_for(
+                            _write_file_via_provider(
+                                _sandbox_id,
+                                "/home/user/.modulo_bridge_cmd.sh",
+                                rendered_agent_command,
+                                provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
+                            ),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
+                        _bridge_wrapped_command = (
+                            "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.loop_intercept_setup_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    _bridge_server = None
+            # FAR-296 Phase 4a: wall-clock spend budget — non-tick path (final
+            # check immediately before the command starts). A very slow bridge /
+            # env setup may have consumed the budget; do not start the command
+            # past the budget. ``_budget_killed`` may already be set by the
+            # pre-lease check above (script mode) — guard against a double
+            # kill/raise. Script mode only: same rationale as the pre-lease
+            # check.
+            _check_wallclock_budget_pre_run(
+                sandbox_mode=sandbox_mode,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                start_time=start_time,
+                watchdog=watchdog,
+                run_id=run_id,
+                node_id=node_id,
+            )
+            wrapped_command = _wrap_sandbox_command_with_log_redirect(_bridge_wrapped_command, _SANDBOX_LOG_PATH)
+            _cmd_start_bound = min(sandbox_timeout, 120)
+            _exec_process: Any = None
+            _exec_process = await asyncio.wait_for(
+                _require_dispatch_provider(_dispatch_provider).exec_command_stream(
+                    _sandbox_id or "",
+                    # FAR-1470: bash, not sh — ``sh`` on the sandbox image is
+                    # dash, which has no ``pipefail`` and aborted any
+                    # ``set -euo pipefail`` agent command. bash -c (NOT -lc)
+                    # matches today's env behaviour exactly: ``sh -c`` was a
+                    # non-login shell inheriting the exec env, and a login
+                    # shell would re-source the profile and change PATH.
+                    ["bash", "-c", wrapped_command],
+                    environment=sandbox_envs,
+                ),
+                timeout=_cmd_start_bound,
+            )
+            cmd_handle: Any = _exec_process
+            _emit_script_span_event(
+                "script.command_started",
+                {
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "command": rendered_agent_command[:200] if sandbox_mode == "script" else "llm",
+                },
+            )
+            cmd_result, stall_reason = await _wait_command_with_exec_process(
+                cmd_handle,
+                total_timeout=sandbox_timeout,
+                idle_timeout=stall_timeout,
+                last_activity=_stall.last_activity,
+                on_tick=watchdog.tick,
+                tick_interval=_SANDBOX_TAIL_INTERVAL,
+                on_stdout=watchdog.on_stdout,
+                on_stderr=watchdog.on_stderr,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            _log.warning(
+                "sandbox_agent.command_timed_out",
+                extra={
+                    "node_id": node_id,
+                    "timeout": sandbox_timeout,
+                },
+            )
+            cmd_result = None
+        except SupersededNodeError:
+            # A superseded script lease (rowcount 0 in _store_script_lease)
+            # must propagate as a RETRYABLE SupersededNodeError — never be
+            # swallowed into a post-claim script failure. Raising here lets
+            # the outer handler re-raise it to the executor's retry path.
+            raise
+        except Exception as _cee:
+            _log.exception(
+                "sandbox_agent.command_failed",
+                extra={
+                    "node_id": node_id,
+                    "exc_type": type(_cee).__name__,
+                    "exc_msg": str(_cee)[:_MAX_ERROR_MSG],
+                },
+            )
+            cmd_result = getattr(_cee, "result", None) or _cee
+
+        # Narrow watchdog for post-try/except uses (drain, budget checks, finalize).
+        # The watchdog is constructed inside the try block; if provisioning failed
+        # before construction, mypy may flag this as possibly-unbound. Guard
+        # with a runtime check instead of assert (assert is stripped under -O
+        # and is a SonarQube S5779 when inside a broad try-except).
+        if watchdog is None:
+            raise RuntimeError("watchdog was not constructed — provisioning failed before sandbox creation")
+        # One final drain so the last growth (between the last tick and the
+        # process exit) is captured before we read output.json. The probe is
+        # fully guarded — on a dead sandbox it returns immediately.
+        await watchdog.drain_sandbox_log()
+
+        # FAR-800: detect workspace input drift AFTER the agent command.
+        # This MUST happen even if drift detection itself fails (wrap in
+        # try/except — the audit write must still occur).  Drift results
+        # are attached to the envelope as first-class run flags.
+        if _resolved_workspace_inputs:
+            from farna.core.pipeline_engine.workspace_input_orchestration import (
+                detect_workspace_input_drift,
+            )
+
+            try:
+                _drift_results = await detect_workspace_input_drift(
+                    sandbox,
+                    _resolved_workspace_inputs,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "workspace_input.drift_detection_error",
+                    extra={"run_id": run_id, "node_id": node_id},
+                    exc_info=True,
+                )
+                _drift_results = []
+
+            # FAR-801: persist the drift audit record (best-effort).
+            if _drift_results and session_factory is not None and run_id and org_id:
+                try:
+                    import uuid as _uuid
+
+                    from farna.core.pipeline_engine.workspace_input_audit import (
+                        record_drift,
+                    )
+                    from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+                    _final_shas = {d.dest: d.final_sha for d in _drift_results}
+                    _run_uuid = _uuid.UUID(run_id)
+                    _org_uuid = _uuid.UUID(org_id)
+                    async with session_factory() as _audit_session, _audit_session.begin():
+                        # FAR-801/RBAC: run_node_outputs + runs are RLS FORCE, so
+                        # the drift write must run with the tenant context set or
+                        # Postgres raises 42501 (swallowed by the best-effort
+                        # except) and the row + drift flag never persist.
+                        await set_rls_org(_audit_session, _org_uuid)
+                        await record_drift(
+                            _audit_session,
+                            run_id=_run_uuid,
+                            organisation_id=_org_uuid,
+                            node_id=node_id,
+                            attempt_key=FINAL_ATTEMPT_KEY,
+                            final_shas=_final_shas,
+                        )
+                except Exception:
+                    _log.exception(
+                        "workspace_input.drift_audit_failed",
+                        extra={"run_id": run_id, "node_id": node_id},
+                    )
+
+        elapsed = time.monotonic() - start_time
+        exit_code: int = getattr(cmd_result, "exit_code", -1)
+        # The redirected log file is the process's real stdout — prefer the
+        # drained content (which also survives a timeout where cmd_result is
+        # None and would otherwise surface EMPTY output), falling back to the
+        # SDK's captured stream for non-redirected (legacy) paths.
+        agent_stdout_raw = "".join(_drained_chunks) or (getattr(cmd_result, "stdout", "") or "")
+        agent_stderr_raw = getattr(cmd_result, "stderr", "") or ""
+        _stdout_len = len(agent_stdout_raw)
+        _stderr_len = len(agent_stderr_raw)
+        # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
+        # full stream, then slice to the node's effective retention cap.
+        agent_stdout = _redact_raw_output(agent_stdout_raw)[:_stdout_cap]
+        agent_stderr = _redact_raw_output(agent_stderr_raw)[:_stdout_cap]
+        stdout_truncated = _stdout_len > _stdout_cap
+        if stdout_truncated or _stderr_len > _stdout_cap:
+            _log.warning(
+                "sandbox_agent.stdout_stderr_truncated",
+                extra={
+                    "node_id": node_id,
+                    "run_id": run_id,
+                    "retention_cap_bytes": _stdout_cap,
+                    "stderr_truncated": _stderr_len > _stdout_cap,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                },
+            )
+
+        # A timed-out command leaves ``cmd_result`` as None: the run timed
+        # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
+        # exit_code -1. Surface a clear explanation instead of silently
+        # returning an empty-summary failure. A STALLED command (idle
+        # watchdog fired, FAR-98) carries a distinct stall_reason so the
+        # two failure modes are distinguishable.
+        command_error: str = ""
+        # FAR-1694 S2 (bridge protocol): detect an in-loop escalation marker and
+        # surface its typed context. No control-flow change — a non-zero exit
+        # still fails the node (fail-closed) until the suspension slice lands.
+        _bridge_escalation_error = _bridge_escalation_failure_detail(exit_code, agent_stdout_raw)
+        if _bridge_escalation_error is not None:
+            command_error = _bridge_escalation_error
+        elif cmd_result is None:
+            if stall_reason:
+                command_error = stall_reason
+            else:
+                command_error = (
+                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
+                    "No stdout/stderr was captured — the agent likely hung before "
+                    "writing any result."
+                )
+            # The E2B kill reason only lives in the sandbox logs, and the logs
+            # endpoint only serves live sandboxes — fetch the tail BEFORE the
+            # kill below (FAR-97 observability).
+            from farna.settings import get_settings
+
+            _sandbox_log_tail = await _read_log_tail_via_provider(
+                _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
+            )
+            # The command stalled or timed out. Kill the sandbox BEFORE
+            # reading output.json: the interrupted-but-alive process could
+            # otherwise write a fabricated completion in the grace window
+            # (FAR-97 — Improve Tests reported "improvement applied" with
+            # changed_files: [] exactly this way).
+            try:
+                await asyncio.wait_for(
+                    sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT),
+                    timeout=_OUTPUT_READ_TIMEOUT,
+                )
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.kill_before_output_read_failed",
+                    extra={"node_id": node_id},
+                )
+            # A6: a stall or total timeout is a retryable sandbox-infra
+            # failure — RAISE (never a silent completed/wrong-success node).
+            # FAR-188: output.json was never read, so retain the captured
+            # stdout as the raw evidence — a pr_url created before the stall
+            # must not be lost either. The drain window keeps only the last
+            # _MAX_DRAIN_WINDOW (512KB) tail, so the marker's raw_output is
+            # a bounded tail (documented in _retain_raw_output_marker).
+            _stall_source: str = agent_stdout_raw
+            if cmd_result is not None:
+                _sdk_stdout = str(getattr(cmd_result, "stdout", "") or "")
+                if len(_sdk_stdout) > len(_stall_source):
+                    _stall_source = _sdk_stdout
+            # FAR-811: when redacted stdout exceeds the retention cap, persist
+            # the full redacted transcript to the artifact store and attach the
+            # pointer to the stall marker — mirrors the success path's
+            # _persist_full_stdout_artifact call so downstream consumers can
+            # retrieve the full transcript instead of only the truncated tail.
+            # FAR-811: when the stall/timeout fires and stdout exceeds the
+            # retention cap, persist the full redacted transcript to the artifact
+            # store and attach the pointer to the stall marker — mirrors the
+            # success path's _persist_full_stdout_artifact call so downstream
+            # consumers can retrieve the full transcript instead of only the
+            # truncated tail.
+            #
+            # When cmd_result is None (stall/timeout), the drain window has
+            # already bounded _drained_chunks to _stdout_cap bytes, so
+            # agent_stdout_raw may appear under-cap even though the sandbox log
+            # is larger.  A fresh read of the log file detects the true size and
+            # feeds the artifact store with the full redacted content.
+            _stall_stdout_artifact: dict[str, Any] | None = None
+            _stall_full_stdout: str | None = None
+            if cmd_result is None:
+                try:
+                    _fresh_log = await asyncio.wait_for(
+                        _read_file_via_provider(
+                            _sandbox_id,
+                            _SANDBOX_LOG_PATH,
+                            provider_type=_resolved_provider,
+                            borrowed_provider=_dispatch_provider,
+                        ),
+                        timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                    )
+                    if isinstance(_fresh_log, str):
+                        _fresh_text = _fresh_log
+                    else:
+                        _fresh_text = bytes(_fresh_log).decode("utf-8", "replace")
+                    if len(_fresh_text) > _stdout_cap:
+                        _stall_full_stdout = _fresh_text
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.debug(
+                        "sandbox_agent.stall_fresh_log_read_failed",
+                        extra={"node_id": node_id},
+                    )
+            if stdout_truncated or _stall_full_stdout is not None:
+                # FAR-844: clean up the streaming writer's raw file before the
+                # stall path writes its own artifact (fresh read content, not
+                # the drain-window content the streaming writer captured).
+                if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+                    try:
+                        _streaming_writer_instance.cleanup()
+                    except Exception:
+                        _log.debug(
+                            "sandbox_agent.streaming_writer_cleanup_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
+                _redacted_for_artifact = _redact_raw_output(
+                    _stall_full_stdout if _stall_full_stdout is not None else agent_stdout_raw
+                )
+                _stall_stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redacted_for_artifact,
+                )
+            # FAR-879: stderr parity — persist the full redacted stderr
+            # transcript on the stall/timeout path too.
+            _stall_stderr_artifact: dict[str, Any] | None = None
+            if _stderr_len > _stdout_cap:
+                _stall_stderr_artifact = _persist_full_stderr_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stderr=_redact_raw_output(agent_stderr_raw),
+                )
+            await _retain_raw_output_marker(
+                session_factory,
+                _RawOutputMarkerRequest(
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary=(
+                        "Sandbox agent command stalled/timed out — raw stdout retained "
+                        "(bounded to the node's retention cap)"
+                    ),
+                    source=_stall_source,
+                    parse_error=command_error,
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=_stdout_cap,
+                    stdout_artifact=_stall_stdout_artifact,
+                    stderr_artifact=_stall_stderr_artifact,
+                ),
+            )
+            if watchdog.budget_killed:
+                # FAR-296 Phase 3b-3: the platform-side resource-cap killer
+                # fired — the sandbox was killed for exceeding its limits.
+                # TERMINAL (never retryable, exactly-once) and distinct from
+                # an unknown side-effect state: the kill REASON is known.
+                raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+            if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
+                # FAR-296 Phase 2 stage-split (3): the script PROCESS started
+                # (fencing lease claimed) and was terminated mid-execution
+                # (timeout / budget / watchdog) with exit undetermined — the
+                # side effect may or may not have happened. Never retryable:
+                # escalate to needs-human via ``script.side_effect_unknown``.
+                raise ScriptSideEffectUnknownError(
+                    "Script-mode sandbox terminated mid-execution (side effect unknown): "
+                    + (command_error or f"no output within {sandbox_timeout}s")
+                )
+            # FAR-1994: the agent burned tokens before the stall/timeout. The
+            # retained raw stdout carries opencode ``step_finish`` counters; the
+            # failure records ZERO without them. Recover them (agent-reported)
+            # so the terminal write prices the work the agent actually did.
+            _stall_failure = SandboxNodeFailedError(
+                command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)",
+                node_id=node_id,
+            )
+            _attach_recovered_token_usage(_stall_failure, _stall_source)
+            raise _stall_failure
+
+        raw_output: str = ""
+        output_read_error: str = ""
+        if cmd_result is not None:
+            try:
+                _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
+                raw_output = await asyncio.wait_for(
+                    _read_file_via_provider(
+                        _sandbox_id,
+                        "/home/user/output.json",
+                        provider_type=_resolved_provider,
+                        borrowed_provider=_dispatch_provider,
+                    ),
+                    timeout=_remaining_after_cmd,
+                )
+                output_json = json.loads(raw_output)
+            except asyncio.CancelledError:
+                raise
+            except Exception as _read_exc:
+                output_read_error = f"{type(_read_exc).__name__}: {str(_read_exc)[:_MAX_ERROR_MSG]}"
+                _log.info(
+                    "sandbox_agent.no_output_json",
+                    extra={
+                        "node_id": node_id,
+                        "exit_code": exit_code,
+                        "command_error": command_error,
+                        "output_read_error": output_read_error,
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
+                        "sandbox_id": _sandbox_id,
+                    },
+                )
+
+        # FAR-188: an agent that produced no usable output.json content — a
+        # failed/unparseable read (output_json None) or a PARSEABLE but
+        # non-dict value ([], "str", 123, null). In BOTH cases the raw
+        # evidence is retained (pr_url extraction, marker persist). Only the
+        # TRULY-no-output case (output_json is None — read failure or
+        # json.loads("null")) raises SandboxNodeFailedError: a node with
+        # zero usable work must never complete the run silently (A6).
+        # A parseable non-dict value retains the marker and CONTINUES
+        # through the existing shaping path — agent_status stays None
+        # exactly as before (corrected FIX 4; test_node_runner_agent_status
+        # asserts this proceed-with-None behaviour and stays green).
+        if output_json is None or not isinstance(output_json, dict):
+            # Evidence is the UNION of raw sources — the file content AND
+            # the captured stdout (a pr_url echoed to stdout when output.json
+            # is present-but-malformed must be found). pr_url is extracted
+            # from the FULL pre-truncation source, then raw_output is
+            # truncated for storage (inside the builder).
+            _raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
+            _raw_combined = "\n".join(_raw_parts)
+            if output_json is None:
+                _parse_error = output_read_error or "output.json is empty or JSON null"
+                await _retain_raw_output_marker(
+                    session_factory,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent produced no parseable output.json — raw output retained",
+                        source=_raw_combined,
+                        parse_error=_parse_error,
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
+                )
+                # FAR-197: surface WHY the agent failed. The captured
+                # stdout/stderr tails plus the E2B log tail (the only place
+                # the kill reason lives) are fetched BEFORE the finally-block
+                # kill, while the sandbox is still alive — the logs endpoint
+                # only serves live sandboxes.
+                from farna.settings import get_settings
+
+                _no_output_log_tail = await _read_log_tail_via_provider(
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
+                )
+                if watchdog.budget_killed:
+                    # FAR-296 Phase 3b-3: the platform-side resource-cap killer
+                    # fired. On the REAL kill path the command handle raises an
+                    # e2b SandboxException (not TimeoutError), which lands here
+                    # with cmd_result non-None and output.json unreadable — the
+                    # kill REASON is known, so never misclassify as
+                    # script.invalid_output / script.side_effect_unknown.
+                    raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+                if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
+                    # FAR-296 Phase 2 stage-split (2): the script PROCESS
+                    # started (lease claimed) and produced no parseable
+                    # output.json — post-claim, TERMINAL (never retryable).
+                    raise ScriptInvalidOutputError(
+                        _build_no_output_message(
+                            exit_code=exit_code,
+                            stdout_raw=agent_stdout_raw,
+                            stderr_raw=agent_stderr_raw,
+                            sandbox_id=_sandbox_id,
+                            read_raw=raw_output,
+                            read_error=output_read_error,
+                            log_tail=_no_output_log_tail,
+                        )
+                    )
+                # FAR-1994: no parseable output.json, but the retained raw
+                # output (the FULL pre-display-slice source) still carries the
+                # agent's opencode ``step_finish`` token counters. Recover them
+                # as agent-reported usage so the terminal write is not a false
+                # zero; a parse failure attaches nothing (fail-open).
+                _no_output_failure = SandboxNodeFailedError(
+                    _build_no_output_message(
+                        exit_code=exit_code,
+                        stdout_raw=agent_stdout_raw,
+                        stderr_raw=agent_stderr_raw,
+                        sandbox_id=_sandbox_id,
+                        read_raw=raw_output,
+                        read_error=output_read_error,
+                        log_tail=_no_output_log_tail,
+                    ),
+                    node_id=node_id,
+                )
+                _attach_recovered_token_usage(_no_output_failure, _raw_combined)
+                raise _no_output_failure
+            # Parseable non-dict output: retain the marker, do NOT raise —
+            # fall through to the shared shaping path below.
+            await _retain_raw_output_marker(
+                session_factory,
+                _RawOutputMarkerRequest(
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary="Sandbox agent output.json parsed to a non-dict value — raw output retained",
+                    source=_raw_combined,
+                    parse_error=f"output.json parsed to non-dict type {type(output_json).__name__}",
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=_stdout_cap,
+                ),
+            )
+
+        if sandbox_mode == "script":
+            _emit_script_span_event(
+                "script.finalized",
+                {
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                    "budget_killed": watchdog.budget_killed,
+                    "exit_code": exit_code if cmd_result is not None else None,
+                },
+            )
+
+        _span = _otel_trace.get_current_span()
+        if _span.is_recording():
+            _span.add_event(
+                "sandbox.agent.output",
+                {
+                    "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
+                    "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    "attempt_key": attempt_key or "",
+                },
+            )
+
+        # FIX C: validate ANY output against non-empty schema (not just dicts)
+        if isinstance(output_schema_json, dict) and output_schema_json:
+            # FIX B: sandbox path — no synchronous repair invoke available
+            # (run_repair_loop calls invoke synchronously; sandbox APIs are
+            # async). Strict-mode validation failures are terminal with no
+            # auto-repair — documented hard-fail for this path.
+            _sandbox_repair_invoke_fn = None
+
+            from farna.core.pipeline_engine.schema_enforcement import build_enforcement_record
+
+            # FAR-902: repair stats for the enforcement record.  Initialised
+            # BEFORE the try so the terminal-failure arm can still read it.
+            _sandbox_repair_info: dict[str, int] = {}
+            try:
+                # FAR-899: use real JSON Schema validation with mode support
+                # FAR-902: collect repair stats for the enforcement record.
+                _val_outcome, _val_errors, _ = _validate_against_schema(
+                    output_json,
+                    output_schema_json,
+                    mode=schema_validator_mode,
+                    schema_id=schema_id,
+                    schema_version=schema_version,
+                    _repair_invoke_fn=_sandbox_repair_invoke_fn,
+                    _repair_info=_sandbox_repair_info,
+                )
+                # FIX H: log the validation outcome for observability
+                # FAR-902: persist the enforcement record BEFORE terminalization.
+                # Best-effort: a persistence failure must NEVER fail the node.
+                # FAR-902: native_output is False for the sandbox path — the
+                # sandbox runs a CLI (opencode) that returns raw text; Modulo
+                # validates post-hoc, never via the provider's native channel.
+                await _persist_enforcement_record_best_effort(
+                    build_enforcement_record(
+                        outcome=_val_outcome,
+                        resolved_profile=_node_schema_profile if isinstance(_node_schema_profile, str) else None,
+                        native_output=False,
+                        repair_attempts=_sandbox_repair_info.get("repair_attempts", 0),
+                        wasted_attempts=_sandbox_repair_info.get("wasted_attempts", 0),
+                        validation_errors=_val_errors,
+                    ),
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                )
+            except ValueError as _schema_exc:
+                _log.exception(
+                    "sandbox_agent.schema_validation_failed",
+                    extra={"node_id": node_id},
+                )
+                # FAR-902 (D3): persist the terminal-failure enforcement record
+                # BEFORE the node is terminalized (the raw-output marker,
+                # artifact finalization, and the terminal raise below).
+                await _persist_enforcement_record_best_effort(
+                    _build_error_enforcement_record(
+                        _schema_exc,
+                        resolved_profile=_node_schema_profile if isinstance(_node_schema_profile, str) else None,
+                        native_output=False,
+                        repair_info=_sandbox_repair_info,
+                    ),
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                )
+                if _is_script_post_claim_fault(sandbox_mode, _script_lease_claimed):
+                    # FAR-296 Phase 2 stage-split (2): the script PROCESS
+                    # started (lease claimed) and its output failed schema
+                    # validation — post-claim, TERMINAL (never retryable).
+                    # Raise a ScriptModeError subclass (not the shared
+                    # OutputSchemaValidationError) so the fault surfaces
+                    # under the never-retryable ``script.invalid_output``
+                    # code and is excluded from ``failure`` retries. The
+                    # generic ``schema_validation_failure`` code is SHARED
+                    # with LLM-mode/manual paths and must stay retryable.
+                    raise ScriptInvalidOutputError(
+                        f"Script-mode output failed schema validation for node '{node_id}': {_schema_exc}"
+                    ) from None
+                elapsed = time.monotonic() - start_time
+                _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+                # FAR-582: finalize artifacts before the node terminates on the
+                # schema-failure path (both the old envelope return and the
+                # FAR-780 retryable raise below need consistent artifact state).
+                await _finalize_artifact_writer(
+                    _artifact_writer,
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                )
+                # FAR-780 (E2B parity — mirrors the bundled runner): an
+                # llm-mode output that violates the node's DECLARED output
+                # contract (a missing schema-required field such as pr_url)
+                # must fail RETRYABLY so runtime_retry re-dispatches the node
+                # in a fresh sandbox. The previous synthetic ``status="failed"``
+                # envelope (modulo_synthetic_failure=True) completed the node
+                # non-retryably: the run proceeded to a blocking eval
+                # (eval.blocked) with the sandbox destroyed and tokens burned,
+                # and the retryable ``sandbox.no_output_json`` path never
+                # fired. The raw agent evidence is retained via the raw-output
+                # marker exactly as the no-output path above (the union of the
+                # output.json file content and the captured stdout), and the
+                # E2B log tail is fetched while the sandbox is STILL ALIVE —
+                # the finally block kills it next.
+                _schema_raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
+                await _retain_raw_output_marker(
+                    session_factory,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary=("Sandbox agent output failed declared output schema validation — raw output retained"),
+                        source="\n".join(_schema_raw_parts),
+                        parse_error=str(_schema_exc),
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
+                )
+                from farna.settings import get_settings
+
+                _schema_log_tail = await _read_log_tail_via_provider(
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
+                )
+                raise SandboxNodeFailedError(
+                    _build_schema_failure_message(
+                        schema_exc=str(_schema_exc),
+                        sandbox_id=_sandbox_id,
+                        stdout_raw=agent_stdout_raw,
+                        stderr_raw=agent_stderr_raw,
+                        log_tail=_schema_log_tail,
+                    ),
+                    node_id=node_id,
+                ) from None
+
+        status: str = "completed" if exit_code == 0 else "failed"
+        result_summary: str = ""
+        changed_files: list[str] = []
+        pr_url = ""
+        # A1 elevation input (agent-failure UX, phase 1): surface the
+        # agent's RAW verdict from output.json VERBATIM — never derived from
+        # exit_code. Missing / non-string values degrade to None so a
+        # missing status can never look like a false "complete".
+        agent_status: str | None = None
+        agent_outcome: str | None = None
+        # FAR-227: the E2B wrapper's fallback echo for a dead opencode
+        # session is NOT an agent verdict — the agent never wrote it. Detect
+        # the placeholder, suppress the fabricated ``agent_status="failed"``
+        # (which A1-elevates to non-retryable ``agent.failed``), and stamp a
+        # distinct marker the executor routes to retryable
+        # ``sandbox.no_output_json`` instead. The summary is preserved so the
+        # failure detail stays visible.
+        sandbox_session_lost: bool = False
+
+        if sandbox_mode == "script":
+            # FAR-296 Phase 2 stage-split (2): a non-zero exit AFTER the
+            # script process started (the fencing lease is claimed) is a
+            # POST-CLAIM fault — TERMINAL, never retryable (exactly-once).
+            # Re-dispatching could double-execute the side-effecting script.
+            if exit_code != 0:
+                if watchdog.budget_killed:
+                    # The command died BECAUSE the platform-side resource-cap
+                    # killer killed the sandbox — never misclassify the kill
+                    # as a generic script.failed.
+                    raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
+                raise ScriptFailedError(f"Script-mode sandbox exited with code {exit_code} (post-claim, terminal)")
+            # FAR-296 script mode: the raw parsed output IS the node output.
+            # No LLM envelope extraction (summary/changed_files/pr_url/
+            # status/outcome elevation) — output_json carries the script's
+            # output verbatim and the summary is a short auto-generated line.
+            result_summary = f"script mode: exit_code={exit_code}"
+        elif isinstance(output_json, dict):
+            result_summary = output_json.get("summary", "")
+            changed_files = output_json.get("changed_files", [])
+            pr_url = output_json.get("pr_url", "")
+            sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
+            _raw_status = output_json.get("status")
+            _raw_outcome = output_json.get("outcome")
+            if isinstance(_raw_status, str) and not sandbox_session_lost:
+                agent_status = _raw_status
+            if isinstance(_raw_outcome, str) and not sandbox_session_lost:
+                agent_outcome = _raw_outcome
+            if sandbox_session_lost:
+                # A dead session is never a completed node, regardless of the
+                # command's exit code (the wrapper may exit 0 after echoing).
+                status = "failed"
+
+        if status == "failed" and not result_summary:
+            # Never report a silent empty-summary failure — explain WHY the
+            # command produced no usable output.
+            result_summary = command_error or "Sandbox agent command failed"
+
+        _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+
+        # FAR-228 success-path marker: when opt-in AND the sentinel is a
+        # FULL-LINE match in the FULL pre-truncation stdout (``agent_stdout_raw``,
+        # NOT the head-truncated ``agent_stdout``), persist a delivery_done
+        # marker into the marker-row store — the ONLY store guard A /
+        # guard B / classification / gate_fired read. The envelope stamp
+        # alone was unobservable (nothing reads delivery_done from
+        # the outputs dicts); the marker is the durable record that closes the
+        # completed-node-then-process-death gap. Best-effort and fail-open:
+        # a persist failure must never break a successful run.
+        if delivery_sentinel and _source_contains_delivery_sentinel(agent_stdout_raw, delivery_sentinel):
+            try:
+                await _retain_raw_output_marker(
+                    session_factory,
+                    _RawOutputMarkerRequest(
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                        source=agent_stdout_raw,
+                        parse_error="",
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        status=status,
+                        max_artifact_bytes=_stdout_cap,
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.success_delivery_marker_persist_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+
+        # FAR-582: finalize artifacts before returning on main success/failure path.
+        await _finalize_artifact_writer(
+            _artifact_writer,
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+        )
+
+        # FAR-811: over-cap redacted stdout is retained IN FULL in the artifact
+        # store with an envelope pointer (`stdout_artifact`) instead of only the
+        # truncated head. Best-effort: a store failure keeps today's inline
+        # (truncated) behaviour with no pointer key. Redaction happened BEFORE
+        # this point (order unchanged) — the stored bytes are the redacted text.
+        # FAR-844: prefer the streaming writer's pointer (incrementally captured
+        # during drain) over the one-shot _persist_full_stdout_artifact fallback.
+        _stdout_artifact: dict[str, Any] | None = None
+        if stdout_truncated:
+            if _streaming_writer_instance is not None:
+                try:
+                    _ptr = _streaming_writer_instance.finalize()
+                    if _ptr is not None:
+                        # ``truncated`` reflects the streaming writer's ACTUAL
+                        # state (honest notice): the writer is uncapped, so it is
+                        # normally False — but if a future cap is reintroduced or
+                        # the drain fed more than the writer accepted, surface the
+                        # truth rather than advertising a complete artifact.
+                        _stdout_artifact = {
+                            "rel_path": _ptr.get("rel_path"),
+                            "size_bytes": _ptr.get("size_bytes"),
+                            "sha256": _ptr.get("sha256"),
+                            "stream": "stdout",
+                            "compression": _ptr.get("compression"),
+                            "truncated": _streaming_writer_instance.truncated,
+                            "redacted": True,
+                        }
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_finalize_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+            if _stdout_artifact is None:
+                _stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redact_raw_output(agent_stdout_raw),
+                )
+
+        # FAR-879: stderr parity — persist the full redacted stderr transcript
+        # to the artifact store when it exceeds the inline retention cap,
+        # mirroring the stdout path above. Best-effort: a store failure keeps
+        # today's inline (truncated) behaviour with no pointer key.
+        _stderr_artifact: dict[str, Any] | None = None
+        stderr_truncated = _stderr_len > _stdout_cap
+        if stderr_truncated:
+            _stderr_artifact = _persist_full_stderr_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stderr=_redact_raw_output(agent_stderr_raw),
+            )
+
+        return _build_sandbox_node_envelope(
+            node_id=node_id,
+            output=_SandboxNodeOutput(
+                status=status,
+                summary=result_summary,
+                changed_files=changed_files,
+                pr_url=pr_url,
+                exit_code=exit_code,
+                wall_clock_time_ms=int(elapsed * 1000),
+                cost_estimate_usd=_cost_estimate_usd,
+                cost_source=output_json,
+                output_json=output_json,
+                agent_stdout=agent_stdout,
+                agent_stderr=agent_stderr,
+                stdout_length=_stdout_len,
+                stderr_length=_stderr_len,
+                stdout_truncated=stdout_truncated,
+                stdout_artifact=_stdout_artifact if _stdout_artifact is not None else _UNSET,
+                stderr_artifact=_stderr_artifact if _stderr_artifact is not None else _UNSET,
+                attempt_key=attempt_key,
+                agent_status=agent_status,
+                agent_outcome=agent_outcome,
+                stall_reason=stall_reason,
+                sandbox_session_lost=sandbox_session_lost,
+                workspace_drift=[
+                    {
+                        "dest": d.dest,
+                        "expected_sha": d.expected_sha,
+                        "final_sha": d.final_sha,
+                        "drift_detected": d.drift_detected,
+                    }
+                    for d in _drift_results
+                ]
+                if _drift_results
+                else _UNSET,
+                workspace_drift_detected=(any(d.drift_detected for d in _drift_results) if _drift_results else _UNSET),
+            ),
+            exclude_from_output=frozenset({"changed_files", "pr_url"}),
+            provider=_resolved_provider,
+            via_provider=True,
+            sandbox_mode=sandbox_mode,
+        )
+
+    except asyncio.CancelledError:
+        # FAR-228 (THE INCIDENT FIX): before re-raising, retain delivery
+        # evidence. Run 9559's attempt 1 was cancelled AFTER the email was
+        # sent but no marker was retained, so attempt 2 re-sent it. The
+        # cancellation may land between the last 5s drain tick and the
+        # process exit, so do ONE guarded final drain, then best-effort
+        # persist a delivery_done marker when the sentinel is a full-line
+        # match in the drained tail.
+        if _drain_fn is not None and sandbox is not None:
+            # FAR-1914 round-3 M3: ONE sequencer for both looks. A slow
+            # shielded drain must never be re-started by the grace look (that
+            # duplicated bytes and their step_finish costs on the same
+            # _drain_offset); the second look joins the in-flight task instead.
+            _final_drain = _BoundedFinalDrain(
+                _drain_fn,
+                timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                log_context={"node_id": node_id, "run_id": run_id},
+            )
+
+            await _final_drain.run_once()
+            # FAR-1914 B2: one bounded second look. A delivered-then-killed run
+            # can flush its `gh pr create` line just after the cancellation
+            # lands; without this grace the marker is built from a tail that
+            # predates the delivery and the run reads as a bare failure.
+            if _CANCEL_DELIVERY_GRACE_SECONDS > 0:
+                try:
+                    await asyncio.sleep(_CANCEL_DELIVERY_GRACE_SECONDS)
+                except asyncio.CancelledError:  # NOSONAR
+                    _uncancel_current_task()
+                # Join the in-flight drain (or start a fresh look once it has
+                # completed) — never a second concurrent drain.
+                await _final_drain.run_once()
+        # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
+        # existed. The absolute node-deadline watchdog (pipeline_execution)
+        # cancels this dispatch before output.json is ever read, so no node
+        # envelope reaches run_node_outputs — without this marker the run
+        # detail carries nodes:[] and Mode 2 (healthy agent killed at E2B
+        # endAt) vs Mode 3 (provider op-timeout) cannot be told apart
+        # post-hoc. The marker is the dedicated attempt_key-keyed retention
+        # store (FAR-188); it NEVER rides outputs_json / node_telemetry_json
+        # (the Agent Return Contract columns). The FAR-228 delivery_done
+        # stamp rides the SAME marker when the sentinel was drained (the
+        # marker merge is monotone — a later retry never unsets it).
+        if sandbox is not None:
+            _drained_tail = "".join(_drained_chunks)
+            # The E2B kill reason only lives in the sandbox logs, and the
+            # logs endpoint only serves live sandboxes — fetch the tail
+            # BEFORE the finally-block kill, while the sandbox may still be
+            # alive (FAR-97/FAR-197 observability, mirrored here). Guarded +
+            # bounded + cancel-safe: a nested cancel or any error degrades
+            # to an empty tail, never blocks the marker write or the
+            # original cancellation's re-raise.
+            _cancel_log_tail = ""
+            try:
+                _cancel_log_tail = await asyncio.wait_for(
+                    asyncio.shield(
+                        _read_log_tail_via_provider(
+                            _sandbox_id,
+                            max_bytes=6000,
+                            provider_type=_resolved_provider,
+                            borrowed_provider=_dispatch_provider,
+                        )
+                    ),
+                    timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                )
+            # Nested cancellation is deliberate — the triage marker must
+            # still be written; the original cancellation re-raises below.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_log_tail_fetch_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+            _cancel_sentinel_hit = bool(
+                delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
+            )
+            _cancel_pr_url = _extract_pr_url(_drained_tail)
+            # FAR-1914 B2 / C1: the PR url is EVIDENCE, never a gate. Only the
+            # configured full-line sentinel may set ``delivery_done`` — the
+            # idempotency gate suppresses a retry on that field alone, so
+            # arming it from ANY url in the tail (a ``gh pr list --json url``
+            # payload, a quoted url) could turn a false positive into a MISSED
+            # delivery. The url is retained on the marker's existing
+            # non-gating ``pr_url`` field for human/analytics evidence.
+            _cancel_no_output_reason = (
+                stall_reason
+                or "Sandbox attempt cancelled before a terminal node envelope was produced "
+                "(node-deadline watchdog, run cancel, or worker shutdown)"
+            )
+            if _cancel_sentinel_hit:
+                _cancel_summary = (
+                    "Sandbox agent cancelled after delivery sentinel observed — "
+                    "delivery_done retained (idempotency gate)"
+                )
+            elif _cancel_pr_url:
+                _cancel_summary = (
+                    "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
+                )
+            else:
+                _cancel_summary = "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+            _cancel_marker: dict[str, Any] = {
+                "_modulo_marker": True,
+                "status": "failed",
+                "summary": _cancel_summary,
+                "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
+                "parse_error": "",
+                "pr_url": _cancel_pr_url,
+                "exit_code": -1,
+                "stdout_length": len(_drained_tail),
+                "stderr_length": 0,
+                "attempt_key": attempt_key,
+                "node_id": node_id,
+                # FAR-704 triage surface: the run detail API projects markers
+                # carrying this flag into RunResponse.deadline_triage.
+                "deadline_triage": True,
+                "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
+                "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
+            }
+            if _cancel_sentinel_hit:
+                _cancel_marker["delivery_done"] = True
+            try:
+                await _sandbox_cancel_retention_persist(
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    # FAR-2082: the kill's evidence is stored under its OWN key,
+                    # never the node's normal attempt key — a kill that produced
+                    # nothing must not look like work by row existence, and it
+                    # must not overwrite the attempt's real marker. The marker
+                    # payload keeps the real attempt_key/node_id (evidence
+                    # attribution); only the ROW identity moves.
+                    attempt_key=_cancel_triage_attempt_key(run_id, node_id, attempt_key),
+                    marker=_cancel_marker,
+                )
+            # Nested cancellation here is deliberate — idempotency-gate cleanup
+            # must not re-raise early or the delivery-done marker is skipped
+            # (FAR-228 fix); the original cancellation re-raises at line 4566.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_retention_persist_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        raise
+    except (SupersededNodeError, SandboxNodeFailedError, ScriptModeError):
+        # A6: the retryable/superseded node-failure classes propagate to the
+        # executor — they must NOT be swallowed into a failed-node output
+        # dict (a superseded dispatch must never look like a completed/failed
+        # node, and a retryable infra failure must reach the retry path).
+        # FAR-296 Phase 2: the TERMINAL ScriptModeError subclasses (post-claim
+        # script-mode faults) also propagate so the executor maps them to the
+        # never-retryable ``script.*`` codes — never to a silent failed-node
+        # output dict that would let the run land 'complete'.
+        raise
+    except Exception as _exc:
+        _translated = _translate_provider_dispatch_error(_exc)
+        if _translated is not None:
+            raise _translated from _exc
+        elapsed = time.monotonic() - start_time
+        _exc_type = type(_exc).__name__
+        # FAR-1050 R4/T9: the dispatch never holds an SDK exception —
+        # provider failures arrive as typed ``RuntimeProviderError``
+        # members (or a provider-wrapped RuntimeError), so the SDK
+        # isinstance probe stays off and the message is the provider's own.
+        _exc_msg = _format_sandbox_provider_error(_exc)
+        _log.exception(
+            "sandbox_agent.execution_failed",
+            extra={
+                "node_id": node_id,
+                "elapsed_ms": int(elapsed * 1000),
+                "exc_type": _exc_type,
+                "exc_msg": _exc_msg,
+            },
+        )
+        _span = _otel_trace.get_current_span()
+        if _span.is_recording():
+            _span.add_event(
+                "sandbox.agent.output",
+                {
+                    "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
+                    "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    "attempt_key": attempt_key or "",
+                },
+            )
+        _exc_stdout = agent_stdout
+        _exc_stderr = agent_stderr
+        _exc_output_json = output_json
+        # Best-effort sandbox trace on the generic-exception path too — the
+        # sandbox may already be dead, in which case the helper returns "".
+        from farna.settings import get_settings
+
+        _exc_log_tail = await _read_log_tail_via_provider(
+            _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
+        )
+        _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
+        # FAR-582: finalize artifacts before returning on exception path.
+        await _finalize_artifact_writer(
+            _artifact_writer,
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+        )
+        # FAR-811: emit the same stdout_artifact pointer on the exception path.
+        # The exception may fire before the drain populates agent_stdout_raw,
+        # so the pointer is only written when pre-exception stdout was captured
+        # AND exceeded the cap. ``agent_stdout_raw`` is pre-bound at function
+        # scope (empty string when the drain never ran) and ``_stdout_len`` is
+        # pre-bound to 0, so the length check short-circuits on its own.
+        _exc_stdout_artifact: dict[str, Any] | None = None
+        if _stdout_len > _stdout_cap:
+            # FAR-844: prefer the streaming writer's pointer.
+            if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+                try:
+                    _ptr = _streaming_writer_instance.finalize()
+                    if _ptr is not None:
+                        _exc_stdout_artifact = {
+                            "rel_path": _ptr.get("rel_path"),
+                            "size_bytes": _ptr.get("size_bytes"),
+                            "sha256": _ptr.get("sha256"),
+                            "stream": "stdout",
+                            "compression": _ptr.get("compression"),
+                            "truncated": _streaming_writer_instance.truncated,
+                            "redacted": True,
+                        }
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.streaming_writer_finalize_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+            if _exc_stdout_artifact is None:
+                _exc_stdout_artifact = _persist_full_stdout_artifact(
+                    org_id=org_id,
+                    run_id=run_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    node_cap=_stdout_cap,
+                    redacted_stdout=_redact_raw_output(agent_stdout_raw),
+                )
+        # FAR-879: stderr parity on the exception path — mirror the stdout
+        # artifact logic above. ``agent_stderr_raw`` is pre-bound at function
+        # scope and ``_stderr_len`` starts at 0, so the length check alone
+        # short-circuits when the drain never ran.
+        _exc_stderr_artifact: dict[str, Any] | None = None
+        if _stderr_len > _stdout_cap:
+            _exc_stderr_artifact = _persist_full_stderr_artifact(
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+                node_cap=_stdout_cap,
+                redacted_stderr=_redact_raw_output(agent_stderr_raw),
+            )
+        return _build_sandbox_node_envelope(
+            node_id=node_id,
+            output=_SandboxNodeOutput(
+                status="failed",
+                summary=SANDBOX_AGENT_FAILED_SUMMARY,
+                exit_code=-1,
+                wall_clock_time_ms=int(elapsed * 1000),
+                cost_estimate_usd=_cost_estimate_usd,
+                cost_source=_exc_output_json,
+                agent_stdout=_exc_stdout,
+                agent_stderr=_exc_stderr,
+                stdout_length=_stdout_len,
+                stderr_length=_stderr_len,
+                stdout_truncated=_stdout_len > _stdout_cap,
+                stdout_artifact=_exc_stdout_artifact if _exc_stdout_artifact is not None else _UNSET,
+                stderr_artifact=_exc_stderr_artifact if _exc_stderr_artifact is not None else _UNSET,
+                attempt_key=attempt_key,
+                error_type=_exc_type,
+                error_message=_exc_msg,
+                sandbox_id=_sandbox_id,
+                sandbox_log_tail=_exc_log_tail,
+                modulo_synthetic_failure=True,
+            ),
+            # FAR-511: stop hiding error_type/error_message. The node-failure
+            # envelope now carries the provider error (e.g. the e2b 400 detail)
+            # instead of masking it as a bare "Sandbox agent execution failed".
+            exclude_from_output=frozenset(),
+            provider=_resolved_provider,
+            via_provider=True,
+            sandbox_mode=sandbox_mode,
+        )
+    finally:
+        # FAR-1315: settle this node's run-scoped one-PR guard slot. Runs ONLY
+        # for flagged nodes (the flag is bound before the try), is exception-
+        # safe (never masks teardown), and reads the captured streams /
+        # ``pr_url`` / install status from the function-scope pre-binds above
+        # DIRECTLY (no ``locals()`` string lookups — see
+        # tests/architecture/test_no_locals_lookup.py); an unbound value is
+        # simply "" / None and contributes no spend evidence.
+        #
+        # SPEND EVIDENCE (robust to a truncated drain window, unforgeable by
+        # reading the shim): first HARVEST the shim's success RECEIPT from the
+        # still-alive sandbox (this runs BEFORE the finally's workspace kill
+        # below; a stall path already killed it -> the exec fails -> None),
+        # plus a CORROBORATED delivered ``pr_url``; the captured streams
+        # (sentinel) only count as a fallback when the receipt is UNKNOWN.
+        # A definitive receipt=False (LIVE install + probe ran) ignores both
+        # pr_url and the sentinel and RELEASES this node's hold so a later
+        # flagged node can still claim; an unbound stream, an unavailable
+        # harvest, or an ABSENT/FAILED install simply contributes the weaker
+        # evidence (see ``settle_run_pr_guard``).
+        #
+        # CANCELLATION (re-gate MAJOR 1): the harvest is the first await in
+        # this finally, and ``asyncio.CancelledError`` is a BaseException the
+        # ``except Exception`` below would not catch — a cancel landing here
+        # used to unwind the finally BEFORE the sandbox kill / provider close
+        # / marker clear below (leaked sandbox, stale dispatch marker). The
+        # bounded harvest therefore catches it, treats the receipt as
+        # unknown, and the teardown runs UNCONDITIONALLY; the cancellation is
+        # re-raised only once teardown is guaranteed (end of this finally).
+        _gh_settle_cancelled: asyncio.CancelledError | None = None
+        if single_pr_per_run:
+            try:
+                from farna.core.pipeline_engine.sandbox_policy import (
+                    harvest_gh_pr_claim_bounded,
+                    settle_run_pr_guard,
+                )
+
+                _claim_receipt: bool | None = None
+                if _dispatch_provider is not None and _sandbox_id:
+
+                    async def _claim_receipt_exec(command: list[str]) -> Any:
+                        return await _require_dispatch_provider(_dispatch_provider).exec_command(
+                            _sandbox_id or "",
+                            command,
+                            cmd_timeout=15,
+                        )
+
+                    try:
+                        # Bounded AND cancellation-safe: the probe task is
+                        # always awaited-or-cancelled (never left running
+                        # against a container this finally is about to kill),
+                        # and a cancellation is recorded rather than allowed to
+                        # unwind past the teardown below.
+                        _claim_receipt = await harvest_gh_pr_claim_bounded(
+                            _claim_receipt_exec,
+                            run_scope=run_id,
+                        )
+                    # Cancellation is RECORDED, not re-raised here: the dispatch
+                    # re-raises it only after the sandbox kill / provider close /
+                    # marker clear below run (FAR-1315 re-gate MAJOR 1).
+                    except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                        _claim_receipt = None
+                        _gh_settle_cancelled = _cancel_exc
+                    except Exception:
+                        _claim_receipt = None
+                _output_json = output_json
+                settle_run_pr_guard(
+                    run_id,
+                    node_id,
+                    agent_stdout_raw,
+                    agent_stderr_raw,
+                    "".join(_drained_chunks) if _drained_chunks else None,
+                    agent_stdout,
+                    agent_stderr,
+                    pr_url=pr_url or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
+                    claim_receipt=_claim_receipt,
+                    # FAR-1315 (MAJOR 2b): only a LIVE install makes a
+                    # definitive receipt=False mean "confirmed no create".
+                    guard_install_status=_gh_guard_install_status,
+                )
+            except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                # Defence in depth: settle itself is synchronous, but never
+                # let a cancellation skip the teardown below either.
+                if _gh_settle_cancelled is None:
+                    _gh_settle_cancelled = _cancel_exc
+            except Exception:
+                _log.debug("sandbox_agent.gh_guard_settle_failed", exc_info=True)
+        # FAR-211: stop the loop-interception callback server. Best-effort
+        # (shielded + bounded) — a teardown failure must not mask the
+        # sandbox kill or the marker clear below.
+        if _bridge_server is not None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(_bridge_server.close()),
+                    timeout=_OUTPUT_READ_TIMEOUT,
+                )
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.loop_intercept_teardown_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        # FAR-844: clean up the streaming writer if it was never finalized
+        # (e.g. on exception or cancellation). Best-effort removal of the
+        # orphaned raw .tmp file.
+        if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
+            try:
+                _streaming_writer_instance.cleanup()
+            except Exception:
+                _log.debug(
+                    "sandbox_agent.streaming_writer_cleanup_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        if sandbox is not None:
+            try:
+                # FAR-1050 R6: ``sandbox`` is only ever created as a
+                # ``_ProviderMediatedHandle`` (the direct E2B path was retired),
+                # so the dispatch provider and its by-ref id are always present
+                # here; the former ``sandbox.kill`` fallback branch was
+                # unreachable dead code and is gone. Teardown-of-record is the
+                # ABC by-ref primitive — idempotent, and it works from the
+                # persisted ``runs.sandbox_id`` alone (ADR 040's stated
+                # reclamation use), so the sandbox dies even if the in-process
+                # handle map is gone. The budget/stall kills above use
+                # ``destroy_workspace`` on the live handle.
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        _require_dispatch_provider(_dispatch_provider).destroy_workspace_by_ref(sandbox.sandbox_id),
+                    ),
+                    timeout=_OUTPUT_READ_TIMEOUT,
+                )
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.kill_failed",
+                    extra={"node_id": node_id},
+                )
+        if _dispatch_provider is not None:
+            # FAR-1050 R4: dispose the per-dispatch provider exactly as the
+            # Docker route disposes its per-dispatch hub — bounded,
+            # best-effort, and after the kill so ``close()`` normally finds an
+            # empty workspace map (no second API round trip).
+            try:
+                await asyncio.wait_for(_dispatch_provider.close(), timeout=_OUTPUT_READ_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.dispatch_provider_close_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        if _route_hub is not None:
+            # FAR-1051: dispose the ROUTE's hub (its registrations beyond the
+            # provider used above hold no client until used, so this is the
+            # ADR 029 bookkeeping pass — and a second, idempotent close() of
+            # the provider itself, which only tears down state it still
+            # tracks). Bounded + best-effort, same contract as above.
+            try:
+                await asyncio.wait_for(_route_hub.aclose(), timeout=_ROUTE_HUB_CLOSE_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.route_hub_aclose_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        # Fenced dispatch-marker clear (3.11): runs in a finally REGARDLESS
+        # of whether ``sandbox`` was assigned (covers the cancel-during-create
+        # leak). Only clears when the claim token still matches — a
+        # superseded original must not clear the successor's marker.
+        if dispatch_marker_set:
+            try:
+                await _clear_dispatch_marker()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.dispatch_marker_clear_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        # FAR-1315 (re-gate MAJOR 1): every teardown step above has now run —
+        # deliver the cancellation that landed during the receipt harvest, so
+        # the caller still sees a cancelled task rather than a swallowed one.
+        if _gh_settle_cancelled is not None:
+            raise _gh_settle_cancelled
+
+
+# FAR-2082: the cancellation-retention marker gets its OWN attempt-key identity.
+#
+# A node-deadline kill writes the FAR-704 triage marker from inside the
+# CancelledError handler. Storing it under the node's NORMAL attempt key
+# (``run:<run>:node:<node>:<claim_count>``) made "this attempt wrote a marker
+# row" and "this attempt produced something" the same observation: a kill that
+# produced nothing was indistinguishable from work by row existence, and the
+# triage write also merged into (and so overwrote) the attempt's real marker.
+#
+# The key is DELIBERATELY UNPARSEABLE by the ``run:<uuid>:node:<id>:<suffix>``
+# grammar, exactly like the run-level ``terminal-triage:`` / ``redispatch-triage:``
+# keys in ``cron_helpers``. That is load-bearing, not cosmetic:
+#   * it derives the ``__unknown__`` sentinel node id (an ALLOWED ``__``
+#     bookkeeping row — FAR-188 preserves the full key as evidence), so every
+#     existing reader that already excludes the reserved
+#     ``SENTINEL_NODE_ID_PREFIX`` namespace treats the row as bookkeeping rather
+#     than node progress, with NO new exclusion rule anywhere;
+#   * a PARSEABLE key deriving a new ``__cancel_triage__`` node id would be
+#     REJECTED by ``run_node_outputs._validate_sentinel_keys`` (qa M19b:
+#     sentinel squatting via the grammar), so the unparseable shape is also the
+#     only sentinel-namespace attribution the write path permits.
+#
+# The NODE ID and the attempt's own suffix both ride in the key, so it stays
+# unique per (node, attempt): two nodes in one run cancelled on the same claim
+# count must not collide (``write_run_markers`` keys the merged dict by this
+# string, so a collision would silently drop one node's evidence). The marker
+# PAYLOAD keeps the REAL ``node_id`` / ``attempt_key`` fields — the evidence
+# attribution every content-driven reader uses (``_marker_delivery_done_for_node``
+# matches ``:node:<node_id>:`` in ``marker["attempt_key"]``; the FAR-704 triage
+# projection and the log-correlation reader both read ``marker["node_id"]``),
+# so moving the ROW's identity does not move the delivery/triage attribution.
+_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX = "cancel-triage:"
+# Used when the caller had no attempt key (the same ``fallback`` suffix
+# ``_write_raw_output_marker`` falls back to).
+_CANCEL_TRIAGE_SUFFIX_FALLBACK = "fallback"
+
+
+def _cancel_triage_attempt_key(run_id: str, node_id: str, attempt_key: str | None) -> str:
+    """The dedicated retention-store key for a cancellation-triage marker.
+
+    See the block comment above: unparseable by the marker grammar (so the row
+    lands on the ``__unknown__`` bookkeeping sentinel) and unique per
+    ``(node, attempt)`` so two cancelled nodes never share a key.
+
+    FAR-2084: the attempt suffix is read through the ONE shared parser
+    (``run_node_outputs.marker_attempt_suffix``), never an inline ``rsplit``, so
+    every attempt-identity shape the writer produces (numeric claim count, the
+    fail-open hex / ``claim-unknown`` suffixes, ``fallback``, the ``agent`` /
+    ``connector`` slots) carries through unchanged. A caller key that is not
+    attempt-scoped at all (empty or missing the ``:node:`` segment) is NOT this
+    attempt's identity and falls back to the same deterministic suffix the
+    raw-output retention writer uses.
+    """
+    from farna.db.crud.run_node_outputs import marker_attempt_suffix
+
+    suffix = marker_attempt_suffix(attempt_key) if attempt_key else None
+    if not suffix:
+        suffix = _CANCEL_TRIAGE_SUFFIX_FALLBACK
+    return f"{_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}:{node_id}:{suffix}"
+
+
+async def _sandbox_cancel_retention_persist(
+    *,
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+) -> None:
+    """Best-effort persist of a cancellation-retention marker (FAR-228).
+
+    Runs inside a caught ``asyncio.CancelledError``. Shield + uncancel: awaiting
+    a DB write inside a caught CancelledError must not be re-cancelled or
+    mis-attributed to the persist's own timeout bookkeeping. Bounded and
+    fail-open — the caller's re-raise must not be delayed.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    # nosemgrep: create-task-without-guard — this helper is an `async def`, so a
+    # running event loop always exists; the rule's own `async def` exclusion
+    # applies. CI's --baseline-commit mode flags it only because this helper is
+    # new on this branch.
+    _persist_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
+        _persist_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            marker=marker,
+        )
+    )
+    await asyncio.wait_for(
+        asyncio.shield(_persist_task),
+        timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+    )
+    _uncancel_current_task()
+
+
+def _coerce_stdout_percentage_delta(raw: Any) -> float | None:
+    """Coerce a node's ``stdout_percentage_delta`` to a (0, 1] fraction or None."""
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if 0.0 < value <= 1.0 else None
+
+
+_STDOUT_RETENTION_MODES = ("tail", "full")
+
+
+def _coerce_stdout_retention_mode(raw: Any) -> str:
+    """Coerce a node's ``stdout_retention_mode`` to ``"tail"`` | ``"full"``.
+
+    Anything other than the two recognised modes falls back to the legacy
+    ``"tail"`` behaviour (512KB cap) so a smuggled value can never silently
+    raise the retention cap (FAR-792).
+    """
+    return raw if raw in _STDOUT_RETENTION_MODES else "tail"
+
+
+def _coerce_stdout_max_bytes(raw: Any) -> int | None:
+    """Coerce a node's ``stdout_max_bytes`` to a positive int or None.
+
+    Non-positive, non-integral, non-finite and boolean values are rejected
+    (None) so only a genuine positive byte count can raise the retention cap.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer() or value <= 0 or value == float("inf"):
+        return None
+    return int(value)
+
+
+def _coerce_org_stdout_ceiling(raw: Any) -> int | None:
+    """Coerce the org-level stdout retention ceiling (FAR-811) to a positive int or None.
+
+    Stricter than ``_coerce_stdout_max_bytes``: only genuine scalar DB values
+    (int/float/str) are accepted. Non-scalar values - including the
+    bare ``MagicMock`` results unit-test ``_FakeSession`` fakes return for
+    un-routed queries - reject to ``None``, so a mock artifact can never clamp
+    real nodes to a bogus 1-byte ceiling. ``bool``, non-positive, non-integral
+    and non-finite values are rejected too (a ceiling can only ever be a
+    positive whole byte count).
+    """
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer() or value <= 0 or value == float("inf"):
+        return None
+    return int(value)
+
+
+def _resolve_stdout_cap(
+    stdout_retention_mode: str,
+    stdout_max_bytes: int | None,
+    org_ceiling: int | None = None,
+) -> int:
+    """Resolve the effective stdout/stderr retention cap for a run (FAR-792).
+
+    ``"tail"`` keeps the legacy bounded 512KB artifact cap
+    (``_MAX_ARTIFACT_LOG``). ``"full"`` retains up to ``stdout_max_bytes`` when
+    set, defaulting to ``_FULL_MODE_DEFAULT_MAX_BYTES`` when absent.
+
+    ``org_ceiling`` (FAR-811) is the org-level hard ceiling from
+    ``system_config.sandbox_stdout_retention_max_bytes``; the resolved cap is
+    clamped to it when set, so a node can never request an unbounded cap.
+    """
+    if stdout_retention_mode == "full":
+        resolved = stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES
+    else:
+        resolved = _MAX_ARTIFACT_LOG
+    if org_ceiling is not None:
+        resolved = min(resolved, org_ceiling)
+    return resolved
+
+
+async def _read_org_stdout_retention_ceiling(
+    session_factory: Callable[..., Any] | None,
+) -> int | None:
+    """Read the org-level sandbox stdout retention ceiling (FAR-811).
+
+    Returns the integer ceiling stored under ``system_config`` key
+    ``sandbox_stdout_retention_max_bytes``, or ``None`` when unset.  A missing
+    ``session_factory`` or a failed read is a fail-open no-op (``None``) — the
+    node's own cap still applies and a transient system_config hiccup must never
+    block sandbox dispatch.
+    """
+    if session_factory is None:
+        return None
+    from farna.core.cost_controller.system_config import read_system_config
+
+    try:
+        async with session_factory() as session, session.begin():
+            raw = await asyncio.wait_for(
+                read_system_config(session, _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES),
+                timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.org_stdout_ceiling_read_failed",
+            extra={"key": _ORG_SANDBOX_STDOUT_RETENTION_MAX_BYTES},
+        )
+        return None
+    return _coerce_org_stdout_ceiling(raw)
+
+
+def _filter_watch_globs(raw: Any) -> list[str]:
+    """Filter a node's ``watch_globs`` to non-empty string entries."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [g for g in raw if isinstance(g, str) and g]
+
+
+def _resolve_stdout_retention(
+    node_def: dict[str, Any],
+    pipeline_stdout_retention_config: dict[str, Any] | None,
+) -> tuple[str, int | None]:
+    """Resolve ``(stdout_retention_mode, stdout_max_bytes)`` (FAR-792 / FAR-811).
+
+    Precedence: an explicit node mode wins on BOTH fields; a node that set only
+    ``stdout_max_bytes`` keeps its explicit max_bytes while the mode inherits
+    the pipeline default (or legacy ``"tail"``); with neither set the node
+    inherits both pipeline-default fields, else the legacy ``"tail"`` default.
+    """
+    node_raw_mode = node_def.get("stdout_retention_mode")
+    node_raw_max_bytes = node_def.get("stdout_max_bytes")
+    if node_raw_mode is not None:
+        return _coerce_stdout_retention_mode(node_raw_mode), _coerce_stdout_max_bytes(node_raw_max_bytes)
+    if node_raw_max_bytes is not None:
+        inherited_mode = (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
+            if pipeline_stdout_retention_config is not None
+            else "tail"
+        )
+        return inherited_mode, _coerce_stdout_max_bytes(node_raw_max_bytes)
+    if pipeline_stdout_retention_config is not None:
+        return (
+            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode")),
+            _coerce_stdout_max_bytes(pipeline_stdout_retention_config.get("max_bytes")),
+        )
+    return "tail", None
+
+
+def _parse_loop_intercept_config(node_def: dict[str, Any], node_id: str) -> LoopInterceptConfig | None:
+    """Parse the node's ``loop_intercept`` config, or ``None`` when absent.
+
+    A malformed config is a programming error (graph validation already
+    rejects it at save-time) — fail the node construction with a named error,
+    never silently disable a declared control.
+    """
+    from farna.core.guardrails.loop_intercept import (
+        LoopInterceptConfigError,
+        parse_loop_intercept_config,
+    )
+
+    loop_intercept_raw = node_def.get("loop_intercept")
+    if not loop_intercept_raw:
+        return None
+    try:
+        return parse_loop_intercept_config(loop_intercept_raw)
+    except LoopInterceptConfigError as exc:
+        raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
+
+
+def _build_sandbox_node_config(
+    node_def: dict[str, Any],
+    *,
+    session_factory: Callable[..., Any] | None,
+    single_sandbox_node: bool,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
+) -> _SandboxNodeConfig:
+    """Read + validate a sandbox_agent node's config from ``node_def``.
+
+    The single source for the ``node_def`` -> ``_SandboxNodeConfig`` mapping
+    used by ``make_sandbox_agent_fn``. All the defensive reads (validated
+    scopes, float coercion, glob-list filtering) live here so the factory stays
+    a thin wrapper around the immutable config.
+    """
+    node_id: str = str(node_def["id"])
+    sandbox_mode, agent_command, _sandbox_mode_config = _validate_sandbox_mode_config(node_def)
+    agent_prompt_template: str = str(_sandbox_mode_config.get("agent_prompt") or "")
+    template_id: str = node_def.get("template_id", "opencode")
+    # FAR-296 Phase 3: egress control + resource-limit config surface. The
+    # shared validators (sandbox_mode) have already rejected any unknown
+    # egress_policy / resource_limits keys at save-time AND here at run-time.
+    egress_policy: str | None = node_def.get("egress_policy")
+    egress_allowlist: list[dict[str, Any]] | None = node_def.get("egress_allowlist")
+    resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
+    # FAR-212 PR B: read-only-workspace + git-credential scope surface. The
+    # shared validators (sandbox_mode) have already rejected any invalid
+    # read_only / git_credentials keys at save-time (Pydantic, GraphValidator,
+    # MCP) AND here at run-time; the values are read defensively so a smuggled
+    # raw-import value can never trigger a policy step that does not match what
+    # the capability derivation certified (read_only is only enforced when it is
+    # the genuine boolean True; git_credentials only when it is a recognised
+    # scope).
+    read_only: bool = node_def.get("read_only") is True
+    git_credentials: str | None = node_def.get("git_credentials")
+    git_credentials = git_credentials if git_credentials in ("scoped", "unscoped", "none") else None
+    # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the sandbox
+    # is killed once the wall-clock elapsed time exceeds this budget — a tighter
+    # spend bound than the node timeout. Validated (positive int) at save-time
+    # and here; a None value disables the wall-clock killer.
+    wallclock_budget_seconds: int | None = node_def.get("wallclock_budget_seconds")
+    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial,
+    # resource limits, read-only workspace, or git-credential scope) requires a
+    # REMOTE E2B provider (the E2B API key) because local providers have no
+    # egress/resource/enforcement point — deny_all / selected (allowlist) /
+    # resource_limits / read_only / git-credential scoping would silently no-op.
+    # Fail closed ONLY when enforcement is actually requested; a plain script-mode
+    # node with no enforcement config runs fine on any provider (there is nothing
+    # to enforce). This keeps the refusal scoped to exactly the security concern
+    # it guards.
+    if _script_enforcement_requires_remote(
+        sandbox_mode=sandbox_mode,
+        egress_policy=egress_policy,
+        resource_limits=resource_limits,
+        read_only=read_only,
+        git_credentials=git_credentials,
+    ) and not (_resolved_e2b_key_for_enforcement()):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
+            "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "
+            "read_only, or git_credentials scoped/none) which requires a "
+            "remote E2B provider (set MODULO_E2B_API_KEY or E2B_API_KEY) — local "
+            "providers have no egress, resource-limit, or sandbox-policy enforcement point for script mode"
+        )
+    output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
+    input_schema_json: dict[str, Any] | None = node_def.get("input_schema_json")
+    sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
+    stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
+    context_files: dict[str, str] = node_def.get("context_files") or {}
+
+    # FAR-306: opt-in stall detectors layered on the default heartbeat. Each
+    # detector is a separate liveness channel; the idle watchdog fires only when
+    # ALL *enabled* channels are silent for stall_timeout_seconds. Defaults keep
+    # the heartbeat ON and every opt-in detector OFF. FAR-1088: probe-success
+    # liveness moved off `heartbeat` onto its own `connection` channel (which
+    # counts only until the run's first real output), so output silence is a
+    # genuine stall signal again.
+    enable_heartbeat: bool = node_def.get("enable_heartbeat", True) is not False
+    watch_log_path: str | None = node_def.get("watch_log_path")
+    watch_log_path = watch_log_path if isinstance(watch_log_path, str) and watch_log_path else None
+    stdout_percentage_delta: float | None = _coerce_stdout_percentage_delta(node_def.get("stdout_percentage_delta"))
+    watch_globs: list[str] = _filter_watch_globs(node_def.get("watch_globs"))
+    # FAR-792: per-node stdout/stderr retention. ``stdout_retention_mode`` is
+    # "tail" (legacy 512KB cap) by default; "full" raises the cap to
+    # ``stdout_max_bytes`` (or the 5MB default). Coercers fall back silently to
+    # the safe legacy defaults on any malformed value.
+    # FAR-811: pipeline-level default (node > pipeline > org ceiling).  When the
+    # node did NOT explicitly set stdout_retention_mode (raw key absent from
+    # node_def), the pipeline default's mode/max_bytes are inherited.  Node-
+    # explicit settings always win — including a node that sets ONLY
+    # stdout_max_bytes without stdout_retention_mode: its explicit max_bytes must
+    # win, while the mode is inherited from the pipeline default (or the legacy
+    # "tail" default when there is no pipeline default).
+    stdout_retention_mode, stdout_max_bytes = _resolve_stdout_retention(node_def, pipeline_stdout_retention_config)
+    # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
+    # that proves the side effect — e.g. an email — was sent) and the
+    # single-node guard (the gate is inert on multi-node graphs).
+    delivery_sentinel: str | None = node_def.get("delivery_sentinel")
+    delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
+
+    # FAR-1273: the explicit one-PR-per-run guard flag. Strict ``is True`` so a
+    # malformed import value (e.g. the string "true") never arms an
+    # enforcement-adjacent guard — the Pydantic model already validates the
+    # type on the write path; this is the run-time belt-and-braces.
+    single_pr_per_run: bool = node_def.get("single_pr_per_run") is True
+
+    # FAR-211: agent-loop interior tool-call interception (ADR 044 amendment).
+    # When the node carries a ``loop_intercept`` config, a Modulo-hosted bridge
+    # runs INSIDE the sandbox alongside the agent: tool calls are reported to
+    # the Modulo side BEFORE execution and tool results BEFORE they re-enter
+    # the model context, evaluated against the SAME bound guardrails as the T1
+    # ingestion edge. A malformed config is a programming error (graph
+    # validation already rejects it at save-time) — fail the node construction,
+    # never silently disable a declared control.
+    loop_intercept_config: LoopInterceptConfig | None = _parse_loop_intercept_config(node_def, node_id)
+
+    # FIX E: schema_validator_mode — env-var seed removed; the async caller
+    # (_sandbox_agent_impl) resolves the authoritative value via
+    # _resolve_schema_validator_mode() so a DB-stored runtime value always wins.
+    # Default "lenient" is set in the _SandboxNodeConfig dataclass.
+
+    # Schema identifier and version for logging/repair
+    _schema_id = node_def.get("output_schema_id", "unknown")
+    _schema_version = node_def.get("output_schema_version", 0)
+
+    return _SandboxNodeConfig(
+        node_id=node_id,
+        node_def=node_def,
+        sandbox_mode=sandbox_mode,
+        agent_command=agent_command,
+        agent_prompt_template=agent_prompt_template,
+        template_id=template_id,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
+        resource_limits=resource_limits,
+        read_only=read_only,
+        git_credentials=git_credentials,
+        wallclock_budget_seconds=wallclock_budget_seconds,
+        output_schema_json=output_schema_json,
+        input_schema_json=input_schema_json,
+        sandbox_timeout=sandbox_timeout,
+        stall_timeout_override=stall_timeout_override,
+        context_files=context_files,
+        enable_heartbeat=enable_heartbeat,
+        watch_log_path=watch_log_path,
+        stdout_percentage_delta=stdout_percentage_delta,
+        watch_globs=watch_globs,
+        stdout_retention_mode=stdout_retention_mode,
+        stdout_max_bytes=stdout_max_bytes,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+        delivery_sentinel=delivery_sentinel,
+        single_pr_per_run=single_pr_per_run,
+        loop_intercept_config=loop_intercept_config,
+        session_factory=session_factory,
+        single_sandbox_node=single_sandbox_node,
+        workspace_inputs=node_def.get("workspace_inputs") or [],
+        schema_id=_schema_id,
+        schema_version=_schema_version,
+    )
+
+
+def make_sandbox_agent_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+    session_factory: Callable[..., Any] | None = None,
+    single_sandbox_node: bool = False,
+    pipeline_stdout_retention_config: dict[str, Any] | None = None,
+) -> Any:
+    """Return a decorated async node function that dispatches work to an external
+    agent runtime in an E2B sandbox.
+
+    The node_def must have:
+      - mode: "llm" | "script" —  (default "llm"). llm mode dispatches an LLM
+        agent; script mode runs a verbatim script.
+      - agent_prompt: str —  REQUIRED in llm mode: Jinja2 template rendered
+        against state (never required in script mode).
+      - template_id: str —  E2B sandbox template ID (default "opencode")
+      - agent_command: str —  REQUIRED in llm mode: command to run inside the
+        sandbox (no default — a sandbox agent cannot run without an explicit
+        command). Belongs to llm mode; mutually exclusive with script_command.
+      - script_command: str —  REQUIRED in script mode: command to run VERBATIM
+        inside the sandbox (no Jinja render). Mutually exclusive with
+        agent_command / agent_commands.
+      - output_schema_json: dict | None —  optional output schema validation
+      - timeout_seconds: int —  max wall-clock time (default 1200)
+      - stall_timeout_seconds: float —  max seconds of agent output silence
+        before the idle watchdog treats the command as stalled (default 600;
+        FAR-1088 — the connection-liveness fallback only extends a node that
+        has produced no output at all, see _StallDetector)
+      - context_files: dict[str, str] —  optional files to write into the sandbox
+        keyed by path
+      - loop_intercept: dict | None —  optional agent-loop interior tool-call
+        interception config (FAR-211 / ADR 044 amendment). When enabled AND the
+        pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
+        sandbox: tool calls are evaluated against the SAME bound guardrails as
+        the T1 ingestion edge before execution and before results re-enter the
+        model context, under a per-call latency budget (fail-open with audit,
+        never wedges the loop). Best-effort: a bridge setup failure disables it
+        for that node but never blocks the dispatch.
+
+    The node creates an E2B sandbox. In llm mode it writes the rendered prompt +
+    context files and runs the external agent; in script mode it writes the full
+    run input to /home/user/input.json (no 10KB truncation) and runs the script
+    verbatim. Structured output is read from /home/user/output.json and the
+    sandbox is torn down. Wall-clock time and exit code are captured natively —
+    even on failure. Script mode does NOT run the LLM envelope field extraction
+    (summary/changed_files/pr_url/status/outcome) — the raw parsed output is the
+    node output.
+
+    env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
+    resolved at run time from the org vault (when a ``session_factory`` is
+    provided), so secret rotation takes effect on the next run and secrets
+    never enter the compiled graph. There is NO process-environment fallback
+    (anti-exfiltration). An unresolved reference is OMITTED from the sandbox
+    envs with a warning (FAR-480) — never resolved to an empty string, which
+    would clobber the system-injected default (e.g. the host GITHUB_TOKEN) and
+    silently break the sandbox credential.
+    """
+    config = _build_sandbox_node_config(
+        node_def,
+        session_factory=session_factory,
+        single_sandbox_node=single_sandbox_node,
+        pipeline_stdout_retention_config=pipeline_stdout_retention_config,
+    )
+    node_id = config.node_id
+    sandbox_timeout = config.sandbox_timeout
+
+    @cancellable_node(
+        timeout=(timeout or sandbox_timeout) + _OUTPUT_READ_TIMEOUT + _DECORATOR_GRACE,
+        role="sandbox_agent",
+    )
+    async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+        # FAR-764: community execution gate — community-sourced sandbox agents
+        # that have not been granted are blocked from executing.
+        agent_id_raw = node_def.get("agent_id")
+        gated = state.get("_community_gated_agents") or set()
+        # Compare the canonicalised UUID form, not the raw snapshot string — a
+        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+        # id would otherwise slip past the gate and fail it open.
+        agent_id = _parse_uuid_opt(agent_id_raw)
+        if agent_id is not None and str(agent_id) in gated:
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "blocked",
+                        "reason": "community_sourced_not_granted",
+                    }
+                ]
+            }
+        return await _sandbox_agent_impl(state, config=config)
+
+    _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"
+    return _sandbox_agent
+
+
+def _validate_against_schema(
+    data: Any,
+    schema: dict[str, Any],
+    *,
+    mode: str = "lenient",
+    schema_id: str = "unknown",
+    schema_version: int = 0,
+    repair_budget_config: Any = None,
+    _repair_invoke_fn: Any | None = None,
+    _repair_info: dict[str, int] | None = None,
+) -> tuple[str, list[dict[str, Any]], Any]:
+    """Validate *data* against *schema* using Draft202012Validator.
+
+    FAR-899: thin mode-switching dispatcher. Repair orchestration lives in
+    ``schema_repair.run_repair_loop``; error-summary formatting in
+    ``schema_repair.format_error_summary``.
+
+    Returns:
+        ``(outcome, errors, effective_data)`` where outcome is a
+        SchemaValidationOutcome value, errors is a list of structured error
+        dicts, and ``effective_data`` is the REPAIRED payload when strict-mode
+        repair succeeds (PASSED_AFTER_REPAIR) and the ORIGINAL *data*
+        otherwise — so a caller never emits a schema-invalid payload after a
+        successful repair.
+
+    When *_repair_info* is provided (a mutable dict), it is populated with
+    ``"repair_attempts"`` and ``"wasted_attempts"`` from the repair loop so
+    the caller can thread them into the FAR-902 enforcement record.
+
+    Raises:
+        OutputSchemaValidationError: In strict mode when validation fails
+            and repair is exhausted or not applicable.
+    """
+    from farna.core.pipeline_engine.schema_repair import (
+        SchemaValidationOutcome,
+        format_error_summary,
+        get_repair_budget,
+        run_repair_loop,
+        validate_against_schema,
+    )
+
+    # No schema → nothing to validate
+    if not isinstance(schema, dict) or not schema:
+        return SchemaValidationOutcome.NO_SCHEMA.value, [], data
+
+    # Run validation
+    is_valid, errors = validate_against_schema(data, schema)
+
+    if is_valid:
+        return SchemaValidationOutcome.NATIVE_DECODED_AND_VALIDATED.value, [], data
+
+    # Validation failed — handle based on mode
+    if mode == "lenient":
+        # Graduated validation (FAR-899 reviewer fix — option B):
+        # Split enforcement by constraint provenance:
+        #   - "required" (the pre-existing enforcement that existed before
+        #     FAR-899) MUST STILL RAISE the same retryable error as before.
+        #     This preserves the pre-existing contract exactly: pipelines that
+        #     used to fail on a bad schema still fail on missing required fields.
+        #   - All other constraints (type, enum, const, pattern, format,
+        #     bounds, anyOf/oneOf, etc.) are NEWLY-ADDED strictness; under
+        #     lenient they are WARN-only so operators can stage the new
+        #     strictness without breaking existing pipelines.
+        required_errors = [e for e in errors if e.get("constraint") == "required"]
+        if required_errors:
+            # Pre-existing enforcement: required-field violations raise even
+            # in lenient mode, preserving the pre-FAR-899 contract exactly.
+            raise OutputSchemaValidationError(
+                f"Schema validation failed (required fields missing): "
+                f"(schema={schema_id} v{schema_version}): "
+                f"{format_error_summary(required_errors)}",
+                # FAR-902 (D3): a required-field violation is a hard failure
+                # even under lenient mode; record it as a post-hoc validation
+                # failure so the terminal arm is observable (severity 1).
+                outcome=SchemaValidationOutcome.POSTHOC_VALIDATION_FAILED.value,
+                validation_errors=required_errors,
+            )
+        # New-constraint violations (non-required) are warn-only under lenient.
+        _log.warning(
+            "schema_validation.lenient_bypass",
+            extra={
+                "schema_id": schema_id,
+                "error_count": len(errors),
+                "first_error": errors[0] if errors else None,
+            },
+        )
+        return SchemaValidationOutcome.LENIENT_VALIDATION_BYPASSED.value, errors, data
+
+    # Strict mode: delegate repair orchestration to schema_repair.run_repair_loop
+    budget = get_repair_budget(repair_budget_config)
+    outcome_val, final_errors, effective_data = run_repair_loop(
+        data,
+        schema,
+        budget=budget,
+        schema_id=schema_id,
+        schema_version=schema_version,
+        repair_invoke_fn=_repair_invoke_fn,
+        _repair_info=_repair_info,
+    )
+
+    # Terminal failure → raise
+    if outcome_val in (
+        SchemaValidationOutcome.REPAIR_EXHAUSTED.value,
+        SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON.value,
+        SchemaValidationOutcome.NATIVE_DECODE_FAILED.value,
+    ):
+        raise OutputSchemaValidationError(
+            f"Strict schema validation failed ({outcome_val}): "
+            f"(schema={schema_id} v{schema_version}): "
+            f"{format_error_summary(final_errors)}",
+            # FAR-902 (D3): carry the terminal outcome + errors so the caller
+            # persists the enforcement record before terminalizing the node.
+            outcome=outcome_val,
+            validation_errors=final_errors,
+        )
+
+    # PASSED_AFTER_REPAIR or other success
+    return outcome_val, final_errors, effective_data

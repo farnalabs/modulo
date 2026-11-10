@@ -77,13 +77,13 @@ def _session_returning(rows: list[Any]) -> AsyncMock:
 
 
 def _extract_bindings(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from modulo.core.team_visibility import extract_connector_bindings
+    from farna.core.team_visibility import extract_connector_bindings
 
     return extract_connector_bindings(nodes)
 
 
 def _run_validation(ctx: dict) -> None:
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     name = ctx["instance_name"]
     instance_ids = [str(_instance_uuid(name))]

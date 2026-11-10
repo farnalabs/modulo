@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.routes.auth import router as auth_router
-from modulo.settings import Settings, get_settings
+from farna.api.constants import MSG_INTERNAL_SERVER_ERROR
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.routes.auth import router as auth_router
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -124,7 +124,7 @@ def test_accept_invite_creates_account_and_membership(client: TestClient) -> Non
     patches = _base_patches(invitation)
     create_membership = AsyncMock(return_value=MagicMock())
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -157,7 +157,7 @@ def test_accept_invite_existing_account_keeps_password_and_flags(client: TestCli
     account = _make_account(auth_provider="local", password_hash=existing_password_hash)
     patches = _base_patches(invitation)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -178,7 +178,7 @@ def test_accept_invite_existing_member_does_not_duplicate_membership(client: Tes
     patches = _base_patches(invitation)
     create_membership = AsyncMock(return_value=MagicMock())
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -198,7 +198,7 @@ def test_accept_invite_passwordless_local_account_is_adopted(client: TestClient)
     account = _make_account(auth_provider="local", password_hash=None)
     patches = _base_patches(invitation)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -226,7 +226,7 @@ def test_accept_invite_rejects_a_service_principal(client: TestClient) -> None:
     account.kind = "service"
     patches = _base_patches(invitation)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {**patches, "validate_password_strength": MagicMock(), "get_account_by_email": AsyncMock(return_value=account)},
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
@@ -241,7 +241,7 @@ def test_accept_invite_sso_account_never_gains_local_password(client: TestClient
     account = _make_account(auth_provider="oidc", password_hash=None)
     patches = _base_patches(invitation)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {**patches, "validate_password_strength": MagicMock(), "get_account_by_email": AsyncMock(return_value=account)},
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
@@ -251,7 +251,7 @@ def test_accept_invite_sso_account_never_gains_local_password(client: TestClient
 
 def test_accept_invite_invalid_token_generic_400(client: TestClient) -> None:
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {"get_valid_by_token_hash": AsyncMock(return_value=None)},
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "bogus", "password": _STRONG_PASSWORD})
@@ -271,7 +271,7 @@ def test_accept_invite_non_live_invitation_flavours_share_byte_identical_rejecti
     API response is byte-identical (the lookup cannot distinguish them — by
     design)."""
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {"get_valid_by_token_hash": AsyncMock(return_value=None)},
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": f"tok-{flavour}", "password": _STRONG_PASSWORD})
@@ -284,7 +284,7 @@ def test_accept_invite_weak_password_422(client: TestClient) -> None:
     patches = _base_patches(invitation)
     consume_invitation = AsyncMock(return_value=True)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {**patches, "consume_invitation": consume_invitation},
     ):
         resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": "12345678"})
@@ -298,7 +298,7 @@ def test_accept_invite_cas_loss_aborts_with_generic_400(client: TestClient) -> N
     patches = _base_patches(invitation)
     patches["consume_invitation"] = AsyncMock(return_value=False)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -317,9 +317,9 @@ def test_accept_invite_records_rate_limit_failure_on_denial(client: TestClient) 
     fake_limiter = MagicMock()
     fake_limiter.record_failure = AsyncMock()
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=fake_limiter),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=fake_limiter),
         patch.dict(
-            "modulo.api.routes.auth.__dict__",
+            "farna.api.routes.auth.__dict__",
             {"get_valid_by_token_hash": AsyncMock(return_value=None)},
         ),
     ):
@@ -330,9 +330,9 @@ def test_accept_invite_records_rate_limit_failure_on_denial(client: TestClient) 
 
 def test_accept_invite_works_without_rate_limiter(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=None),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=None),
         patch.dict(
-            "modulo.api.routes.auth.__dict__",
+            "farna.api.routes.auth.__dict__",
             {"get_valid_by_token_hash": AsyncMock(return_value=None)},
         ),
     ):
@@ -345,7 +345,7 @@ def test_accept_invite_audit_failure_is_fail_open(client: TestClient) -> None:
     patches = _base_patches(invitation)
     patches["append_audit_event"] = AsyncMock(side_effect=RuntimeError("audit down"))
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -370,7 +370,7 @@ def test_accept_invite_tombstoned_membership_is_reactivated(client: TestClient) 
     reactivate = AsyncMock(return_value=MagicMock())
     create_membership = AsyncMock(return_value=MagicMock())
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -396,9 +396,9 @@ def test_accept_invite_record_success_failure_is_fail_open(client: TestClient) -
     invitation = _make_invitation()
     patches = _base_patches(invitation)
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=fake_limiter),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=fake_limiter),
         patch.dict(
-            "modulo.api.routes.auth.__dict__",
+            "farna.api.routes.auth.__dict__",
             {
                 **patches,
                 "validate_password_strength": MagicMock(),
@@ -421,7 +421,7 @@ def test_accept_invite_integrity_error_conflicts(client: TestClient) -> None:
     patches = _base_patches(invitation)
     patches["create_account"] = AsyncMock(side_effect=IntegrityError("dup", None, None))
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -441,7 +441,7 @@ def test_accept_invite_programming_error_501(client: TestClient) -> None:
     patches = _base_patches(invitation)
     patches["create_account"] = AsyncMock(side_effect=ProgrammingError("no column", None, None))
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -461,7 +461,7 @@ def test_accept_invite_sqlalchemy_error_503(client: TestClient) -> None:
     patches = _base_patches(invitation)
     patches["create_account"] = AsyncMock(side_effect=SQLAlchemyError("down"))
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -481,7 +481,7 @@ def test_accept_invite_unexpected_exception_maps_to_500(client: TestClient) -> N
     invitation = _make_invitation()
     patches = _base_patches(invitation)
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "validate_password_strength": MagicMock(),
@@ -547,7 +547,7 @@ def test_accept_invite_audit_lock_timeout_is_contained_by_the_outer_savepoint(
     audit = AsyncMock(side_effect=_lock_timeout_error())
 
     with patch.dict(
-        "modulo.api.routes.auth.__dict__",
+        "farna.api.routes.auth.__dict__",
         {
             **patches,
             "append_audit_event": audit,

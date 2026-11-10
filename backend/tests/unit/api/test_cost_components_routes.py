@@ -16,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.cost_component import CostComponentKind
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.cost_component import CostComponentKind
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -30,7 +30,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _COMPONENT_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
-_PREFIX = "modulo.api.routes.cost_components."
+_PREFIX = "farna.api.routes.cost_components."
 
 
 def _make_settings() -> Settings:
@@ -76,7 +76,7 @@ def client() -> Generator[TestClient, None, None]:
     # Patch get_settings at module level (model validators call it directly)
     # and _verify_identity to skip real DB auth verification in tests.
     p1 = patch(f"{_PREFIX}get_settings", return_value=_make_settings())
-    p2 = patch("modulo.auth.dependencies._verify_identity", new_callable=AsyncMock, return_value="admin")
+    p2 = patch("farna.auth.dependencies._verify_identity", new_callable=AsyncMock, return_value="admin")
     p1.start()
     p2.start()
     yield TestClient(app)

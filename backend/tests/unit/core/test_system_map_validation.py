@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from modulo.core.system_map_validation import validate_system_map_graph_references
+from farna.core.system_map_validation import validate_system_map_graph_references
 
 
 @dataclass(frozen=True)

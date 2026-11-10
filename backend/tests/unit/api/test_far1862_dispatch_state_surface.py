@@ -20,14 +20,14 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from modulo.api.mcp_server import _run_status_base
-from modulo.api.routes.runs import (
+from farna.api.mcp_server import _run_status_base
+from farna.api.routes.runs import (
     RunResponse,
     _build_list_item,
     _build_run_response,
     _ListPageContext,
 )
-from modulo.db.models.run import Run
+from farna.db.models.run import Run
 
 _NOW = datetime(2026, 10, 16, 12, 0, 0, tzinfo=UTC)
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")

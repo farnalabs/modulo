@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
-from modulo.db.crud.hitl_review_guard import (
+from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
+from farna.db.crud.hitl_review_guard import (
     REASON_CORRELATION_KEY_MISMATCH,
     REASON_INSUFFICIENT_ROLE,
     REASON_LEGACY_SNAPSHOT_AMBIGUOUS,
@@ -22,8 +22,8 @@ from modulo.db.crud.hitl_review_guard import (
     DiffResult,
     HitlReviewWeakeningDenied,
 )
-from modulo.db.crud.pipeline import GraphWriteActor, _edge_to_plain_dict, replace_pipeline_graph
-from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from farna.db.crud.pipeline import GraphWriteActor, _edge_to_plain_dict, replace_pipeline_graph
+from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -187,7 +187,7 @@ async def test_replace_pipeline_graph_guard_runs_before_delete(monkeypatch: pyte
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -213,9 +213,9 @@ async def test_rollback_to_snapshot_guard_runs_before_delete(monkeypatch: pytest
     old = [_EdgeRow(cfg=dict(_GATE))]
     session = _build_session(_snapshot_result(snapshot), _pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+        "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
         AsyncMock(return_value=_SnapshotRow({"nodes": [], "edges": []})),
     )
 
@@ -242,7 +242,7 @@ async def test_live_role_check_runs_after_the_row_lock(monkeypatch: pytest.Monke
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     events: list[str] = []
 
@@ -254,7 +254,7 @@ async def test_live_role_check_runs_after_the_row_lock(monkeypatch: pytest.Monke
         events.append("role_query")
         return "admin"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     result = await replace_pipeline_graph(
         session,
@@ -283,7 +283,7 @@ async def test_fail_closed_no_retry_on_role_query_db_error(monkeypatch: pytest.M
         calls += 1
         raise SQLAlchemyError("boom")
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -306,7 +306,7 @@ async def test_missing_membership_denies_with_role_changed(monkeypatch: pytest.M
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> None:
         return None
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -339,7 +339,7 @@ async def test_non_liftable_regardless_of_authz_enforce(monkeypatch: pytest.Monk
         def _fail_switch(*_a: object, **_k: object) -> None:
             raise AssertionError("guard must not consult the authz kill switch")
 
-        monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", _fail_switch)
+        monkeypatch.setattr("farna.db.settings_resolver.resolve_authz_enforce", _fail_switch)
 
         with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
             await replace_pipeline_graph(
@@ -367,7 +367,7 @@ async def test_mcp_caller_type_is_always_denied_even_when_privileged(
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -398,7 +398,7 @@ async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatc
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -426,7 +426,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
     # Denied for non-privileged.
     pipeline = _PipelineRow()
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     with pytest.raises(HitlReviewWeakeningDenied):
         await replace_pipeline_graph(
             session,
@@ -442,7 +442,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
         return "admin"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     pipeline = _PipelineRow()
     session2 = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -484,7 +484,7 @@ async def test_replace_denies_node_level_hitl_config_weakening_for_non_privilege
     pipeline.graph_nodes_json = [old_hitl_node]
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -522,12 +522,12 @@ async def test_replace_allows_node_level_weakening_for_privileged_with_audit(
     old, new = _weakening_edges(dict(_GATE), dict(_GATE))  # no edge-level weakening
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
         return "admin"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     result = await replace_pipeline_graph(
         session,
@@ -555,7 +555,7 @@ async def test_replace_denies_hitl_node_removal_for_non_privileged(
     pipeline.graph_nodes_json = [old_hitl_node]
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -580,7 +580,7 @@ async def test_replace_untouched_hitl_config_is_not_weakening(
     pipeline.graph_nodes_json = [old_hitl_node]
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -600,12 +600,12 @@ async def test_allowed_weakening_with_live_admin_role_under_lock(monkeypatch: py
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
         return "admin"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     result = await replace_pipeline_graph(
         session,
@@ -628,7 +628,7 @@ async def test_live_role_demotion_denies_even_when_route_flag_privileged(monkeyp
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
         return "viewer"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -652,7 +652,7 @@ async def test_on_lock_acquired_is_noop_by_default(monkeypatch: pytest.MonkeyPat
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -669,7 +669,7 @@ async def test_on_lock_acquired_hook_invoked_after_lock(monkeypatch: pytest.Monk
     pipeline = _PipelineRow()
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     events: list[str] = []
 
@@ -698,7 +698,7 @@ async def test_edge_deletion_denied_with_correlation_key_mismatch(monkeypatch: p
     old = [_EdgeRow(cfg=dict(_GATE))]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -735,7 +735,7 @@ async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytes
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -769,7 +769,7 @@ async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pyte
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -800,7 +800,7 @@ async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: py
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -833,7 +833,7 @@ async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -866,7 +866,7 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -903,7 +903,7 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
@@ -937,7 +937,7 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,
@@ -976,7 +976,7 @@ async def test_replace_pipeline_graph_denies_guardrail_binding_strip_for_nonadmi
     """A NON-ADMIN replacing the graph and removing a guardrail-bound node is
     denied (FAR-309 PR A review service-layer guard). The strip guard runs
     under the row lock, before any delete/insert."""
-    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+    from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -987,7 +987,7 @@ async def test_replace_pipeline_graph_denies_guardrail_binding_strip_for_nonadmi
         _guardrail_rows_result([_guardrail_row(bound_node)]),
     )
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     with pytest.raises(GuardrailBindingStripDenied) as excinfo:
         await replace_pipeline_graph(
@@ -1017,9 +1017,9 @@ async def test_replace_pipeline_graph_allows_guardrail_strip_for_admin(
         _guardrail_rows_result([_guardrail_row(bound_node)]),
     )
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline.apply_gated_edge_diff",
+        "farna.db.crud.pipeline.apply_gated_edge_diff",
         MagicMock(
             return_value=DiffResult(
                 weakened_edges=[],
@@ -1048,7 +1048,7 @@ async def test_replace_pipeline_graph_denies_guardrail_strip_via_live_role(
     """The service-layer guard re-reads the caller's live role under the lock:
     a caller whose route flag claims admin but whose live membership is NOT
     admin is denied (fail-closed on a stale admin claim)."""
-    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+    from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -1059,12 +1059,12 @@ async def test_replace_pipeline_graph_denies_guardrail_strip_via_live_role(
         _guardrail_rows_result([_guardrail_row(bound_node)]),
     )
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     async def _fake_role(*_a: object, **_k: object) -> str:
         return "operator"
 
-    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", _fake_role)
+    monkeypatch.setattr("farna.db.crud.org_membership.resolve_role_from_membership", _fake_role)
 
     with pytest.raises(GuardrailBindingStripDenied) as excinfo:
         await replace_pipeline_graph(
@@ -1083,7 +1083,7 @@ async def test_rollback_to_snapshot_denies_guardrail_binding_strip_for_nonadmin(
 ) -> None:
     """A NON-ADMIN rolling back to a snapshot whose graph LACKS a currently
     guardrail-bound node is denied (FAR-309 PR A review service-layer guard)."""
-    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+    from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -1098,7 +1098,7 @@ async def test_rollback_to_snapshot_denies_guardrail_binding_strip_for_nonadmin(
         _guardrail_rows_result([_guardrail_row(bound_node)]),
     )
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
 
     with pytest.raises(GuardrailBindingStripDenied) as excinfo:
         await rollback_to_snapshot(
@@ -1129,9 +1129,9 @@ async def test_rollback_to_snapshot_allows_guardrail_strip_for_admin(
         _guardrail_rows_result([_guardrail_row(bound_node)]),
     )
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+        "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
         MagicMock(
             return_value=DiffResult(
                 weakened_edges=[],
@@ -1143,7 +1143,7 @@ async def test_rollback_to_snapshot_allows_guardrail_strip_for_admin(
         ),
     )
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+        "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
         AsyncMock(return_value=_SnapshotRow({"nodes": [], "edges": []})),
     )
 
@@ -1183,7 +1183,7 @@ async def test_replace_pipeline_graph_persists_condition_expression(
     pipeline = _PipelineRow()
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     result = await replace_pipeline_graph(
         session,

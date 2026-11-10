@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
+from farna.core.schema_registry import SchemaInferenceError, SchemaInferenceService
 
 pytestmark = pytest.mark.integration
 

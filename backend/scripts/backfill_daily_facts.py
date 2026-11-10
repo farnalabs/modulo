@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.analytics.maintenance import backfill_facts, backfill_ledger, repair_stale_facts
+from farna.core.analytics.maintenance import backfill_facts, backfill_ledger, repair_stale_facts
 
 
 def _normalise_async_url(raw: str) -> str:

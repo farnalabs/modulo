@@ -6,7 +6,7 @@ import socket
 import pytest
 from pydantic import ValidationError
 
-from modulo.settings import MAX_NODE_TIMEOUT_SECONDS, Settings, resolve_instance_identity
+from farna.settings import MAX_NODE_TIMEOUT_SECONDS, Settings, resolve_instance_identity
 
 _VALID_32 = "a" * 32
 _VALID_KEY = "x" * 32
@@ -53,7 +53,7 @@ def test_saq_run_timeout_rejects_above_max() -> None:
 
 def test_saq_setup_grace_gte_claim_stale_warns(caplog: pytest.LogCaptureFixture) -> None:
     """grace >= stale warns (no raise) — the currently deployed config (600 >= 450)."""
-    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+    with caplog.at_level(logging.WARNING, logger="farna.settings"):
         settings = _make(SAQ_SETUP_GRACE_SECONDS="600", RUN_CLAIM_STALE_SECONDS="450")
     assert settings.saq_setup_grace_seconds == 600
     assert settings.run_claim_stale_seconds == 450
@@ -62,7 +62,7 @@ def test_saq_setup_grace_gte_claim_stale_warns(caplog: pytest.LogCaptureFixture)
 
 def test_saq_setup_grace_below_claim_stale_no_warning(caplog: pytest.LogCaptureFixture) -> None:
     """grace < stale is compliant — no warning is emitted."""
-    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+    with caplog.at_level(logging.WARNING, logger="farna.settings"):
         settings = _make(SAQ_SETUP_GRACE_SECONDS="300", RUN_CLAIM_STALE_SECONDS="450")
     assert settings.saq_setup_grace_seconds == 300
     assert settings.run_claim_stale_seconds == 450
@@ -187,7 +187,7 @@ def test_saq_zero_progress_max_age_default_covers_every_consumer_floor() -> None
     """The derived default (~135m) must sit above BOTH consumer floors — the
     bound can never kill a legitimately slow-starting run, nor a still-
     progressing mid-graph run."""
-    from modulo.core.cron_helpers import _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+    from farna.core.cron_helpers import _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
 
     assert _zero_progress_required_minutes(600) <= _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     # At the shipped defaults the mid-graph floor (135) BINDS over the
@@ -262,7 +262,7 @@ def test_saq_zero_progress_max_age_rejects_below_min() -> None:
 def test_nodeless_early_detect_gte_full_window_warns(caplog: pytest.LogCaptureFixture) -> None:
     """early-detect >= full nodeless window silently disables the FAR-873
     branch — warn (no raise) so the misconfiguration is visible at load."""
-    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+    with caplog.at_level(logging.WARNING, logger="farna.settings"):
         settings = _make(SAQ_NODELESS_EARLY_DETECT_MINUTES="100", SAQ_CLAIMED_NODELESS_MINUTES="35")
     assert settings.saq_nodeless_early_detect_minutes == 100
     assert settings.saq_claimed_nodeless_minutes == 35
@@ -271,7 +271,7 @@ def test_nodeless_early_detect_gte_full_window_warns(caplog: pytest.LogCaptureFi
 
 def test_nodeless_early_detect_below_full_window_no_warning(caplog: pytest.LogCaptureFixture) -> None:
     """early-detect < full nodeless window is compliant — no warning."""
-    with caplog.at_level(logging.WARNING, logger="modulo.settings"):
+    with caplog.at_level(logging.WARNING, logger="farna.settings"):
         settings = _make(SAQ_NODELESS_EARLY_DETECT_MINUTES="15", SAQ_CLAIMED_NODELESS_MINUTES="35")
     assert settings.saq_nodeless_early_detect_minutes == 15
     assert settings.saq_claimed_nodeless_minutes == 35
@@ -314,7 +314,7 @@ def test_instance_identity_reads_env_at_call_time(monkeypatch: pytest.MonkeyPatc
     """Zero module-scope os.environ reads (ADR 043 Decision 5): the resolver
     observes env changes made AFTER import, proving the read happens per
     call, not at module scope."""
-    import modulo.settings as settings_mod
+    import farna.settings as settings_mod
 
     monkeypatch.setenv("HOSTNAME", "first-host")
     assert settings_mod.resolve_instance_identity() == "first-host"

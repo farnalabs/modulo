@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import bind_connector_to_node, update_pipeline_graph
-from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+from farna.api.mcp_server import bind_connector_to_node, update_pipeline_graph
+from farna.core.team_visibility import CONNECTOR_TEAM_MISMATCH
 from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -18,7 +18,7 @@ _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
 def _set_ctx() -> None:
-    from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+    from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
     _ctx_org_id.set(_ORG_ID)
     _ctx_role.set("admin")
@@ -27,7 +27,7 @@ def _set_ctx() -> None:
 
 
 def _clear_ctx() -> None:
-    from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+    from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
     _ctx_org_id.set(None)
     _ctx_role.set(None)
@@ -68,10 +68,10 @@ class TestUpdatePipelineGraphEnforcement:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches")
+    @patch("farna.db.crud.pipeline.get_pipeline")
     async def test_blocks_cross_team_binding(
         self,
         mock_get_pipeline: AsyncMock,
@@ -104,10 +104,10 @@ class TestUpdatePipelineGraphEnforcement:
         assert "eng-db" in result.get("detail", "")
         assert mock_find_mismatches.await_args.kwargs["pipeline_owner_team_id"] == _TEAM_A
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches")
+    @patch("farna.db.crud.pipeline.get_pipeline")
     async def test_unresolvable_binding_is_refused(
         self,
         mock_get_pipeline: AsyncMock,
@@ -117,7 +117,7 @@ class TestUpdatePipelineGraphEnforcement:
     ) -> None:
         """FAR-1515 CRITICAL 1: a binding the team-blind read cannot resolve is
         the SAME named refusal as a real mismatch - never a silent skip."""
-        from modulo.core.team_visibility import ConnectorBindingMissingError
+        from farna.core.team_visibility import ConnectorBindingMissingError
 
         pipeline_id = uuid.uuid4()
         connector_id = uuid.uuid4()
@@ -134,11 +134,11 @@ class TestUpdatePipelineGraphEnforcement:
         assert result["error"] == CONNECTOR_TEAM_MISMATCH
         assert str(connector_id) in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_same_team_binding_proceeds(
         self,
         mock_replace_graph: AsyncMock,
@@ -164,9 +164,9 @@ class TestUpdatePipelineGraphEnforcement:
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
     async def test_missing_pipeline_returns_not_found(
         self,
         mock_get_pipeline: AsyncMock,
@@ -198,9 +198,9 @@ class TestBindConnectorToNodeEnforcement:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.get_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.get_connector_instance")
     async def test_blocks_cross_team_binding(
         self,
         mock_get_connector: AsyncMock,
@@ -239,9 +239,9 @@ class TestBindConnectorToNodeEnforcement:
         assert result["error"] == CONNECTOR_TEAM_MISMATCH
         assert "eng-db" in result.get("detail", "")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.get_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.get_connector_instance")
     async def test_same_team_binding_proceeds(
         self,
         mock_get_connector: AsyncMock,
@@ -278,7 +278,7 @@ class TestBindConnectorToNodeEnforcement:
         # minting needs a real engine (advisory lock). The subject of this test
         # is the TEAM gate, so only the mint is stubbed.
         with patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_edit",
             new=AsyncMock(return_value=AsyncMock(snapshot_version=1)),
         ):
             result = await bind_connector_to_node(
@@ -291,9 +291,9 @@ class TestBindConnectorToNodeEnforcement:
         assert result.get("status") == "bound"
         assert result.get("error") is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.get_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.get_connector_instance")
     async def test_bound_response_echoes_operation_and_dispatch_action(
         self,
         mock_get_connector: AsyncMock,
@@ -329,7 +329,7 @@ class TestBindConnectorToNodeEnforcement:
         # FAR-1810: the bind's edit-snapshot mint is stubbed (it needs a real
         # engine); this test is about the echoed verb/action, not the mint.
         with patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_edit",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_edit",
             new=AsyncMock(return_value=AsyncMock(snapshot_version=1)),
         ):
             result = await bind_connector_to_node(

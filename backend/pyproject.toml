@@ -10,7 +10,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "farnalabs-modulo"
+name = "farna-control"
 # SINGLE SOURCE OF TRUTH for the product version. Mirrored by
 # scripts/bump-version.py into backend/uv.lock, frontend/package.json and
 # deploy/helm/modulo/Chart.yaml (version + appVersion). Files carry X.Y.Z only;
@@ -62,7 +62,7 @@ dependencies = [
     "aiomysql>=0.3.2",
     "pymysql>=1.1.1",
     # HTTP client (GitHub connector)
-    # SSRF pinned transport (modulo.core.ssrf) installs the pin by overriding
+    # SSRF pinned transport (farna.core.ssrf) installs the pin by overriding
     # httpcore's PRIVATE `_pool._network_backend` seam. Pin this to a
     # KNOWN-GOOD compatible range so a breaking upgrade is explicit rather than
     # silent: if httpcore stops routing that attribute into connection creation,
@@ -125,9 +125,9 @@ Source = "https://github.com/farnalabs/modulo"
 BugTracker = "https://github.com/farnalabs/modulo/issues"
 
 [project.scripts]
-modulo = "modulo.cli.main:cli"
-modulo-migrate = "modulo.cli.migrate:cli"
-modulo-break-glass = "modulo.cli.break_glass:cli"
+modulo = "farna.cli.main:cli"
+modulo-migrate = "farna.cli.migrate:cli"
+modulo-break-glass = "farna.cli.break_glass:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -168,7 +168,7 @@ redis = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/modulo"]
+packages = ["src/farna"]
 
 [tool.ruff]
 line-length = 120
@@ -444,17 +444,17 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"src/modulo/api/mcp_server.py" = ["RET503"]
+"src/farna/api/mcp_server.py" = ["RET503"]
 "tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008", "PERF", "ISC", "DTZ"]
 
-"src/modulo/api/routes/scim.py" = ["N815", "N803"]
+"src/farna/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
 
 # PT019 mis-fires on FastAPI dependency-injection parameters (require_feature /
 # require_permission / Depends) whose underscore-prefixed names are DI binding
 # targets, not pytest fixtures. These files are route handlers, not tests.
-"src/modulo/api/routes/admin_sso.py" = ["PT019"]
-"src/modulo/api/routes/observability.py" = ["PT019"]
+"src/farna/api/routes/admin_sso.py" = ["PT019"]
+"src/farna/api/routes/observability.py" = ["PT019"]
 
 "scripts/**" = ["T20", "PERF", "ISC"]
 "scripts/gen_seed_sql.py" = ["S608"]
@@ -463,13 +463,13 @@ ignore = [
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
-"src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
-"src/modulo/db/migrations/versions/0254_eval_backfill_cutover.py" = ["S608"]
-"src/modulo/api/routes/triggers.py" = ["UP017"]
-"src/modulo/core/cron_scheduler.py" = ["UP017"]
-"src/modulo/core/reports/scheduler.py" = ["UP017"]
-"src/modulo/core/trigger_engine/polling.py" = ["UP017"]
-"src/modulo/core/housekeeping.py" = ["E501"]
+"src/farna/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"src/farna/db/migrations/versions/0254_eval_backfill_cutover.py" = ["S608"]
+"src/farna/api/routes/triggers.py" = ["UP017"]
+"src/farna/core/cron_scheduler.py" = ["UP017"]
+"src/farna/core/reports/scheduler.py" = ["UP017"]
+"src/farna/core/trigger_engine/polling.py" = ["UP017"]
+"src/farna/core/housekeeping.py" = ["E501"]
 
 "tests/unit/test_mcp_security.py" = ["E402"]
 "tests/unit/test_multi_backend_sqlite.py" = ["E402"]
@@ -504,7 +504,7 @@ disallow_incomplete_defs = false
 
 
 [[tool.mypy.overrides]]
-module = "modulo.api.mcp_server"
+module = "farna.api.mcp_server"
 # "return" errors remain because static analysis can't prove the for retry loop
 # always returns or raises (OperationalError raises on attempt 2).
 disable_error_code = ["return"]
@@ -631,7 +631,7 @@ parallel = true
 # reported as uncovered — a false negative that fails the changed-lines gate on
 # correct code (FAR-247). ``thread`` is retained for the TestClient portal.
 concurrency = ["thread", "greenlet"]
-source = ["src/modulo"]
+source = ["src/farna"]
 # `_far252_dead_probe.py` is a TRANSIENT fixture: the vulture gate tests write it
 # into `src/modulo` and unlink it in a `finally`. Coverage's un-executed-source
 # scan (`find_possibly_unexecuted_files`) walks every `.py` under `source` when a
@@ -652,17 +652,17 @@ exclude_lines = [
 
 [tool.mutmut]
 source_paths = [
-    "src/modulo/auth/",
-    "src/modulo/db/rls.py",
-    "src/modulo/core/license.py",
-    "src/modulo/core/pipeline_engine/",
-    "src/modulo/core/eval_engine/",
-    "src/modulo/core/cost_controller/",
-    "src/modulo/core/audit_logger/",
-    "src/modulo/core/connector_hub/",
-    "src/modulo/core/model_backend_hub/",
-    "src/modulo/core/graph_validator/",
-    "src/modulo/core/run_context/",
+    "src/farna/auth/",
+    "src/farna/db/rls.py",
+    "src/farna/core/license.py",
+    "src/farna/core/pipeline_engine/",
+    "src/farna/core/eval_engine/",
+    "src/farna/core/cost_controller/",
+    "src/farna/core/audit_logger/",
+    "src/farna/core/connector_hub/",
+    "src/farna/core/model_backend_hub/",
+    "src/farna/core/graph_validator/",
+    "src/farna/core/run_context/",
 ]
 runner = "pytest -q --timeout=60 -m 'not integration and not e2e'"
 backup = false
@@ -679,7 +679,7 @@ pytest_add_cli_args_test_selection = [
 ]
 
 [tool.importlinter]
-root_package = "modulo"
+root_package = "farna"
 
 [dependency-groups]
 dev = [

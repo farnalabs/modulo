@@ -33,7 +33,7 @@ def ctx() -> dict:
 
 @given("an Azure Key Vault connector configured with valid credentials")
 def akv_valid_connector(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
 
     ctx["connector"] = AzureKeyVaultConnector(token="az_kv_test_token", vault_url=VAULT_URL)
     ctx["credentials_valid"] = True
@@ -41,7 +41,7 @@ def akv_valid_connector(ctx: dict) -> None:
 
 @given("an Azure Key Vault connector configured with invalid credentials")
 def akv_invalid_connector(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
 
     ctx["connector"] = AzureKeyVaultConnector(token="bad_token", vault_url=VAULT_URL)
     ctx["credentials_valid"] = False
@@ -49,7 +49,7 @@ def akv_invalid_connector(ctx: dict) -> None:
 
 @when("the connector checks health")
 def akv_health_check(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -74,8 +74,8 @@ def akv_health_result(ctx: dict, expected: str) -> None:
 
 @when("the connector queries secrets")
 def akv_query_secrets(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -91,8 +91,8 @@ def akv_query_secrets(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries secret "{name}"'))
 def akv_query_secret(ctx: dict, name: str) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -108,8 +108,8 @@ def akv_query_secret(ctx: dict, name: str) -> None:
 
 @when("the connector queries keys")
 def akv_query_keys(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -125,8 +125,8 @@ def akv_query_keys(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries key "{name}"'))
 def akv_query_key(ctx: dict, name: str) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -142,8 +142,8 @@ def akv_query_key(ctx: dict, name: str) -> None:
 
 @when("the connector queries certificates")
 def akv_query_certificates(ctx: dict) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -159,8 +159,8 @@ def akv_query_certificates(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries certificate "{name}"'))
 def akv_query_certificate(ctx: dict, name: str) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -176,8 +176,8 @@ def akv_query_certificate(ctx: dict, name: str) -> None:
 
 @when(parsers.parse('the connector creates secret "{name}" with value "{value}"'))
 def akv_create_secret(ctx: dict, name: str, value: str) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
@@ -193,8 +193,8 @@ def akv_create_secret(ctx: dict, name: str, value: str) -> None:
 
 @when(parsers.parse('the connector deletes secret "{name}"'))
 def akv_delete_secret(ctx: dict, name: str) -> None:
-    from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)

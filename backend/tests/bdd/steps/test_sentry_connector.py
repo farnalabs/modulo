@@ -32,7 +32,7 @@ def ctx() -> dict:
 
 @given("a Sentry connector configured with valid credentials")
 def sentry_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.sentry import SentryConnector
+    from farna.connectors.sentry import SentryConnector
 
     ctx["connector"] = SentryConnector(token=TOKEN, organization=ORG)
     ctx["valid"] = True
@@ -40,7 +40,7 @@ def sentry_connector_valid(ctx: dict) -> None:
 
 @given("a Sentry connector configured with invalid credentials")
 def sentry_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.sentry import SentryConnector
+    from farna.connectors.sentry import SentryConnector
 
     ctx["connector"] = SentryConnector(token=TOKEN, organization=ORG)
     ctx["valid"] = False
@@ -57,7 +57,7 @@ def sentry_health_check(ctx: dict) -> None:
 
 @when("the connector queries issues")
 def sentry_query_issues(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     issues = [
         {"id": "1", "title": "Crash in login", "status": "unresolved"},
@@ -72,7 +72,7 @@ def sentry_query_issues(ctx: dict) -> None:
 
 @when("the connector queries projects")
 def sentry_query_projects(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     projects = [
         {"id": "p1", "slug": "project-alpha"},
@@ -85,7 +85,7 @@ def sentry_query_projects(ctx: dict) -> None:
 
 @when(parsers.parse('the connector updates issue status to "{status}"'))
 def sentry_write_issue_status(status: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.put(f"{_BASE}/issues/42/").mock(return_value=httpx.Response(200, json={"id": "42", "status": status}))
@@ -96,7 +96,7 @@ def sentry_write_issue_status(status: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector creates a release with version "{version}"'))
 def sentry_write_release(version: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(

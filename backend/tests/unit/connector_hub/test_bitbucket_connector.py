@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.bitbucket import BitbucketConnector
 
 TOKEN = "bb_test_token"
 _BASE = "https://api.bitbucket.org/2.0"

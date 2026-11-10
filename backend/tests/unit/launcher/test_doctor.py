@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.launcher import doctor as doctor_module
-from modulo.launcher.doctor import (
+from farna.launcher import doctor as doctor_module
+from farna.launcher.doctor import (
     EXIT_DEGRADED,
     EXIT_HEALTHY,
     EXIT_UNHEALTHY,
@@ -59,10 +59,10 @@ from modulo.launcher.doctor import (
     default_probes,
     run_doctor,
 )
-from modulo.launcher.entry import PGDATA_DIRNAME
-from modulo.launcher.secrets_file import LauncherSecrets, _parse
-from modulo.launcher.state import LauncherState, load_state, save_state
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from farna.launcher.entry import PGDATA_DIRNAME
+from farna.launcher.secrets_file import LauncherSecrets, _parse
+from farna.launcher.state import LauncherState, load_state, save_state
+from farna.model_backends.base import HealthResult, ModelBackendBase
 from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
@@ -704,9 +704,9 @@ def _mock_provider_clients(handler: Callable[[httpx.Request], httpx.Response]) -
         return httpx.AsyncClient(transport=httpx.MockTransport(_record))
 
     with (
-        patch("modulo.model_backends.module.pinned_async_client_sync", side_effect=_factory),
-        patch("modulo.model_backends.base.pinned_async_client_sync", side_effect=_factory),
-        patch("modulo.model_backends.module.ChatOpenAI"),
+        patch("farna.model_backends.module.pinned_async_client_sync", side_effect=_factory),
+        patch("farna.model_backends.base.pinned_async_client_sync", side_effect=_factory),
+        patch("farna.model_backends.module.ChatOpenAI"),
     ):
         yield
 
@@ -839,7 +839,7 @@ async def test_anthropic_backend_probes_models_not_health() -> None:
         seen.append(request)
         return httpx.Response(200)
 
-    with _mock_provider_clients(_handler), patch("modulo.model_backends.anthropic.ChatAnthropic"):
+    with _mock_provider_clients(_handler), patch("farna.model_backends.anthropic.ChatAnthropic"):
         result = await doctor_module._probe_backend_row(
             _provider_row("anthropic", model_id="claude-3"),
             _FakeSecretsBackend(json.dumps({"api_key": "sk-ant-1"})),
@@ -862,7 +862,7 @@ async def test_healthy_backends_summarise_to_ok_not_failed() -> None:
         seen.append(request)
         return httpx.Response(200)
 
-    with _mock_provider_clients(_handler), patch("modulo.model_backends.anthropic.ChatAnthropic"):
+    with _mock_provider_clients(_handler), patch("farna.model_backends.anthropic.ChatAnthropic"):
         secrets_backend = _FakeSecretsBackend(json.dumps({"api_key": "sk-live"}))
         results = [
             await doctor_module._probe_backend_row(_provider_row("openai", name="gpt"), secrets_backend),
@@ -1222,7 +1222,7 @@ async def test_probe_reads_every_org_and_probes_its_backends(monkeypatch: pytest
     async def _set_rls(_session: object, org_id: uuid.UUID) -> None:
         rls_orgs.append(org_id)
 
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", _set_rls)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", _set_rls)
 
     secrets_backend = object()
     built_with: list[tuple[str, object]] = []
@@ -1258,7 +1258,7 @@ def test_build_doctor_secrets_backend_returns_the_configured_backend(monkeypatch
         calls.append((fernet_key, session))
         return sentinel
 
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", _create)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", _create)
     session = MagicMock()
 
     assert doctor_module._build_doctor_secrets_backend("fernet-key", session) is sentinel
@@ -1271,12 +1271,12 @@ def test_build_doctor_secrets_backend_falls_back_to_the_db_fernet_store(
     """A configured external backend that cannot initialise must not blank credentials."""
     from cryptography.fernet import Fernet
 
-    from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+    from farna.core.secrets_backend.fernet import FernetSecretsBackend
 
     def _broken(*, fernet_key: str, session: object) -> object:
         raise RuntimeError("vault unavailable")
 
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", _broken)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", _broken)
     session = MagicMock()
 
     backend = doctor_module._build_doctor_secrets_backend(Fernet.generate_key().decode(), session)
@@ -1297,7 +1297,7 @@ async def test_probe_backend_row_propagates_credential_cancellation(monkeypatch:
     async def _cancel(*_args: object, **_kwargs: object) -> object:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _cancel)
+    monkeypatch.setattr("farna.core.model_backend_hub._resolve_backend_credentials", _cancel)
 
     with pytest.raises(asyncio.CancelledError):
         await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
@@ -1310,8 +1310,8 @@ async def test_probe_backend_row_propagates_build_cancellation(monkeypatch: pyte
     def _cancel(*_args: object, **_kwargs: object) -> object:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _creds)
-    monkeypatch.setattr("modulo.core.model_backend_hub._instantiate_backend", _cancel)
+    monkeypatch.setattr("farna.core.model_backend_hub._resolve_backend_credentials", _creds)
+    monkeypatch.setattr("farna.core.model_backend_hub._instantiate_backend", _cancel)
 
     with pytest.raises(asyncio.CancelledError):
         await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
@@ -1326,8 +1326,8 @@ async def test_probe_backend_row_reports_an_unresolvable_endpoint_as_unreachable
     def _unresolvable(*_args: object, **_kwargs: object) -> object:
         raise ValueError("DNS resolution failed for api.example.com")
 
-    monkeypatch.setattr("modulo.core.model_backend_hub._resolve_backend_credentials", _creds)
-    monkeypatch.setattr("modulo.core.model_backend_hub._instantiate_backend", _unresolvable)
+    monkeypatch.setattr("farna.core.model_backend_hub._resolve_backend_credentials", _creds)
+    monkeypatch.setattr("farna.core.model_backend_hub._instantiate_backend", _unresolvable)
 
     result = await doctor_module._probe_backend_row(_provider_row("openai"), _FakeSecretsBackend("{}"))
 
@@ -1450,7 +1450,7 @@ def test_apply_fix_sweeps_orphan_and_sweeps_debris(tmp_path: Path, monkeypatch: 
     stale_pid.write_text("99999\n0\n-1\n", encoding="utf-8")  # dead PID => stale
     (pgdata.parent / ".redis-conf-deadbeef").write_text("requirepass x", encoding="utf-8")
 
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     monkeypatch.setattr(supervisor_module, "_is_postgres_process", lambda _pid: False)
     monkeypatch.setattr(supervisor_module, "_pid_alive", lambda _pid: False)
@@ -1465,7 +1465,7 @@ def test_apply_fix_refuses_live_postgres(tmp_path: Path, monkeypatch: pytest.Mon
     pgdata.mkdir()
     (pgdata / "postmaster.pid").write_text("99999\n0\n0\n", encoding="utf-8")
 
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     monkeypatch.setattr(supervisor_module, "_is_postgres_process", lambda _pid: True)
     monkeypatch.setattr(supervisor_module, "_pid_alive", lambda _pid: True)
@@ -1583,7 +1583,7 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
     mock_engine.dispose = AsyncMock()
     with (
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as create_engine,
-        patch("modulo.db.health_checks.db_is_at_migration_head", AsyncMock(return_value=True)),
+        patch("farna.db.health_checks.db_is_at_migration_head", AsyncMock(return_value=True)),
     ):
         assert migrations_at_head() is True
 
@@ -1687,7 +1687,7 @@ def _stub_bundle_bin_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     """Create a bundled ``postgres`` binary and point resolve_bin_dir at it."""
     (tmp_path / "postgres").write_text("", encoding="ascii")
     (tmp_path / "postgres.exe").write_text("", encoding="ascii")
-    import modulo.launcher.entry as entry_module
+    import farna.launcher.entry as entry_module
 
     monkeypatch.setattr(entry_module, "resolve_bin_dir", lambda *_a, **_k: tmp_path)
 
@@ -1723,7 +1723,7 @@ def test_probe_bundle_pg_version_run_error(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_probe_installed_bundle_pg_version_reads_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A string ``installed_bundle_pg_version`` in the manifest's extra dict is returned."""
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     monkeypatch.setattr(
         supervisor_module,
@@ -1735,7 +1735,7 @@ def test_probe_installed_bundle_pg_version_reads_manifest(monkeypatch: pytest.Mo
 
 def test_probe_installed_bundle_pg_version_non_string(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A non-string version field -> honest None."""
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     monkeypatch.setattr(
         supervisor_module,

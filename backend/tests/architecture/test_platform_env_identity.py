@@ -26,7 +26,7 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 # Explicitly-declared platform adapters permitted to read FLY_* env vars,
 # as POSIX-style paths relative to src/modulo (e.g. "core/platform/fly.py").

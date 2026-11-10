@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.dependencies import require_permission, require_team_membership_or_admin
-from modulo.api.team_scope import (
+from farna.api.dependencies import require_permission, require_team_membership_or_admin
+from farna.api.team_scope import (
     TEAM_SCOPED_RESOLVERS,
     TeamScopedResource,
     resolve_pipeline_team_scope,
 )
-from modulo.auth.jwt import TenantPrincipal
+from farna.auth.jwt import TenantPrincipal
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()
@@ -195,7 +195,7 @@ class TestRunsSpecialCase:
 
     def test_run_model_has_no_visibility_column(self) -> None:
         """Pin the schema fact that makes the runs special case necessary."""
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         assert not hasattr(Run, "visibility")
 

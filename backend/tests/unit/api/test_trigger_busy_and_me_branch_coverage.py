@@ -11,8 +11,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api import trigger_busy
-from modulo.api.routes import me
+from farna.api import trigger_busy
+from farna.api.routes import me
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -246,7 +246,7 @@ async def test_me_change_password_audit_failure_is_logged_and_programming_error_
         patch.object(me, "list_families_for_account", new_callable=AsyncMock, return_value=[family]),
         patch.object(me, "blacklist_family", new_callable=AsyncMock),
         patch.object(me, "set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock, side_effect=RuntimeError("audit")),
+        patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock, side_effect=RuntimeError("audit")),
         caplog.at_level("ERROR"),
     ):
         result = await me.change_password(

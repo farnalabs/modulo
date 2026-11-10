@@ -19,19 +19,19 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from modulo.core.events import listeners
-from modulo.core.events.listeners import (
+from farna.core.events import listeners
+from farna.core.events.listeners import (
     _make_listener,
     _PendingEvent,
     _queue_for_commit,
     _safe_str_attr,
     register_listeners,
 )
-from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY
-from modulo.db.models.agent import Agent
-from modulo.db.models.notification import Notification
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from farna.core.events.notification_events import NOTIFIER_SESSION_KEY
+from farna.db.models.agent import Agent
+from farna.db.models.notification import Notification
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.run import Run
 from tests.unit.events._helpers import drain_background_tasks
 
 
@@ -117,7 +117,7 @@ def test_safe_str_attr(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Reads the attribute, stringifies non-strings, warns + returns None on failure."""
-    with caplog.at_level("WARNING", logger="modulo.core.events.listeners"):
+    with caplog.at_level("WARNING", logger="farna.core.events.listeners"):
         assert _safe_str_attr(target, attr, "run", "created") == expected
 
     if expected_log is None:
@@ -311,7 +311,7 @@ def test_eval_audit_registration_covers_the_live_eval_model() -> None:
     must resolve ``Eval`` to the ``"eval"`` resource type, and registration must
     attach all three actions to it.
     """
-    from modulo.db.models.eval import Eval
+    from farna.db.models.eval import Eval
 
     assert listeners._RESOURCE_TYPES[Eval] == "eval"
 
@@ -598,7 +598,7 @@ class TestNotificationListenerPayload:
 def test_deliver_pending_without_running_loop_warns(caplog: pytest.LogCaptureFixture, session: Session) -> None:
     """A queued event delivered with no running loop warns and is not lost."""
     _queue_for_commit(session, _pending())
-    with caplog.at_level("WARNING", logger="modulo.core.events.listeners"):
+    with caplog.at_level("WARNING", logger="farna.core.events.listeners"):
         listeners._deliver_pending(session)
     assert "event_listener.no_running_loop" in caplog.text
 
@@ -628,7 +628,7 @@ def test_on_soft_rollback_without_pending_is_noop(
 ) -> None:
     """An outermost rollback with no queued events logs nothing and returns."""
     assert session.in_transaction() is False
-    with caplog.at_level("INFO", logger="modulo.core.events.listeners"):
+    with caplog.at_level("INFO", logger="farna.core.events.listeners"):
         listeners._on_soft_rollback(session, MagicMock())
 
     # Nothing was queued, so the hook must not invent a queue and must not

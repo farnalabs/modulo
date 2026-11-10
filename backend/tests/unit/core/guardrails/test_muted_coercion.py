@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.eval_engine import EvalType
-from modulo.core.guardrails import (
+from farna.core.eval_engine import EvalType
+from farna.core.guardrails import (
     serialize_guardrail_pin,
     to_engine_definition,
     to_engine_definition_from_pin,

@@ -8,13 +8,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.connector_instance import (
+from farna.db.crud.connector_instance import (
     delete_connector_instance,
     get_connector_instance,
     update_connector_instance,
 )
-from modulo.db.crud.org_membership import create_membership, resolve_live_role_and_kind
-from modulo.db.crud.rating import (
+from farna.db.crud.org_membership import create_membership, resolve_live_role_and_kind
+from farna.db.crud.rating import (
     get_rating_aggregate,
     list_abuse_reports,
     list_ratings_for_primitive,
@@ -22,9 +22,9 @@ from modulo.db.crud.rating import (
     submit_abuse_report,
     submit_rating,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.primitive_rating import PrimitiveRating
+from farna.db.models.account import Account
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.primitive_rating import PrimitiveRating
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +34,7 @@ async def test_connector_update_get_and_delete_use_tenant_session(
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    from modulo.db.crud.connector_instance import create_connector_instance
+    from farna.db.crud.connector_instance import create_connector_instance
 
     connector = await create_connector_instance(
         rls_session,

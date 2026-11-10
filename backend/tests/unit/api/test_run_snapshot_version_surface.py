@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.dialects import postgresql
 
-from modulo.api.routes.runs import (
+from farna.api.routes.runs import (
     _attached_snapshot_version,
     _build_list_item,
     _build_run_response,
@@ -39,9 +39,9 @@ from modulo.api.routes.runs import (
     _ListRunsQuery,
     _load_snapshot_versions,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from farna.auth.jwt import TenantPrincipal
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -323,13 +323,13 @@ async def test_do_list_runs_fetches_snapshot_versions_in_one_query() -> None:
     )
 
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=_make_page(runs)),
-        patch("modulo.api.routes.runs.get_child_run_rollup", new_callable=AsyncMock, return_value={}),
-        patch("modulo.api.routes.runs.get_run_cost_breakdowns", new_callable=AsyncMock, return_value={}),
-        patch("modulo.api.routes.runs.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
-        patch("modulo.api.routes.runs.get_org_run_concurrency_limit", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=_make_page(runs)),
+        patch("farna.api.routes.runs.get_child_run_rollup", new_callable=AsyncMock, return_value={}),
+        patch("farna.api.routes.runs.get_run_cost_breakdowns", new_callable=AsyncMock, return_value={}),
+        patch("farna.api.routes.runs.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
+        patch("farna.api.routes.runs.get_org_run_concurrency_limit", new_callable=AsyncMock, return_value=None),
     ):
         result = await _do_list_runs(_RecordingSessionFactory(session), principal, _ListRunsQuery())
 
@@ -361,17 +361,17 @@ async def test_do_list_runs_issues_no_snapshot_query_for_legacy_only_page() -> N
     )
 
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([_make_run(snapshot_id=None)]),
         ),
-        patch("modulo.api.routes.runs.get_child_run_rollup", new_callable=AsyncMock, return_value={}),
-        patch("modulo.api.routes.runs.get_run_cost_breakdowns", new_callable=AsyncMock, return_value={}),
-        patch("modulo.api.routes.runs.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
-        patch("modulo.api.routes.runs.get_org_run_concurrency_limit", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.runs.get_child_run_rollup", new_callable=AsyncMock, return_value={}),
+        patch("farna.api.routes.runs.get_run_cost_breakdowns", new_callable=AsyncMock, return_value={}),
+        patch("farna.api.routes.runs.count_active_runs_for_org", new_callable=AsyncMock, return_value=0),
+        patch("farna.api.routes.runs.get_org_run_concurrency_limit", new_callable=AsyncMock, return_value=None),
     ):
         result = await _do_list_runs(_RecordingSessionFactory(session), principal, _ListRunsQuery())
 
@@ -472,7 +472,7 @@ def test_schema_ts_carries_snapshot_version() -> None:
     schema by the pinned generator and CI's schema-freshness gate diffs it, so
     this is the fast local half of that gate.
     """
-    from modulo.api.routes.runs import RunResponse
+    from farna.api.routes.runs import RunResponse
 
     repo_root = Path(__file__).resolve().parents[4]
     props = RunResponse.model_json_schema()["properties"]

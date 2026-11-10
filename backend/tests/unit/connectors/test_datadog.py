@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.datadog import DatadogConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.datadog import DatadogConnector
 
 API_KEY = "dummy_api_key"
 APP_KEY = "dummy_app_key"

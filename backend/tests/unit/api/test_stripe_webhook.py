@@ -18,23 +18,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.main import app
-from modulo.core.license import (
+from farna.api.main import app
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     RENEWAL_MODE_AUTO,
     RENEWAL_MODE_MANUAL,
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.registry.crypto import generate_keypair
-from modulo.core.stripe_fulfilment import _processed_event_ids
-from modulo.settings import Settings, get_settings
+from farna.core.registry.crypto import generate_keypair
+from farna.core.stripe_fulfilment import _processed_event_ids
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _TEST_SECRET = "whsec_test_123"
 
-_FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_team_purchase"
+_FULFIL_MODULE = "farna.api.routes.stripe_webhook.fulfil_team_purchase"
 
 _KP = generate_keypair()
 _LICENSE_KEY_PATTERN = re.compile(r"MODULO_LICENSE_KEY=(\S+)")
@@ -55,7 +55,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_stripe_settings(
@@ -314,7 +314,7 @@ class TestRenewalModeFromEvent:
     def _fulfil(self, client: TestClient, event: dict) -> str:
         body = json.dumps(event).encode()
         with patch(
-            "modulo.core.stripe_fulfilment.send_email",
+            "farna.core.stripe_fulfilment.send_email",
             new=MagicMock(return_value=True),
         ) as mock_send:
             resp = _post(client, body, _sign(body))
@@ -474,7 +474,7 @@ class TestChosenStartsAt:
         body = json.dumps(_invoice_event_with_starts_at("evt_real_start", starts_at)).encode()
 
         with patch(
-            "modulo.core.stripe_fulfilment.send_email",
+            "farna.core.stripe_fulfilment.send_email",
             new=MagicMock(return_value=True),
         ) as mock_send:
             resp = _post(fulfilment_client, body, _sign(body))

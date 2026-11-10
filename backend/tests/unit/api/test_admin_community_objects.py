@@ -9,13 +9,13 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import admin as admin_routes
-from modulo.api.routes.admin import UpdateCommunityObjectsRequest
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.runtime_config.org_flags import FLAG_COMMUNITY_OBJECTS_ENABLED, clear_org_flag_cache
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import admin as admin_routes
+from farna.api.routes.admin import UpdateCommunityObjectsRequest
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.runtime_config.org_flags import FLAG_COMMUNITY_OBJECTS_ENABLED, clear_org_flag_cache
 from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
@@ -224,7 +224,7 @@ def _raise(exc: Exception):
 @pytest.mark.anyio
 async def test_get_programming_error_returns_501(client_admin):
     with patch(
-        "modulo.api.routes.admin.read_org_flag",
+        "farna.api.routes.admin.read_org_flag",
         new=_raise(ProgrammingError("stmt", {}, Exception("missing table"))),
     ):
         resp = await client_admin.get("/api/v1/admin/org/community-objects")
@@ -234,7 +234,7 @@ async def test_get_programming_error_returns_501(client_admin):
 @pytest.mark.anyio
 async def test_get_sqlalchemy_error_returns_503(client_admin):
     with patch(
-        "modulo.api.routes.admin.read_org_flag",
+        "farna.api.routes.admin.read_org_flag",
         new=_raise(SQLAlchemyError("mock", {}, "")),
     ):
         resp = await client_admin.get("/api/v1/admin/org/community-objects")
@@ -266,7 +266,7 @@ async def test_get_cancelled_error_propagates():
 @pytest.mark.anyio
 async def test_get_unexpected_error_returns_500(client_admin):
     with patch(
-        "modulo.api.routes.admin.read_org_flag",
+        "farna.api.routes.admin.read_org_flag",
         new=_raise(ValueError("boom")),
     ):
         resp = await client_admin.get("/api/v1/admin/org/community-objects")
@@ -286,7 +286,7 @@ async def test_put_missing_org_returns_404(client_admin, mock_session):
 @pytest.mark.anyio
 async def test_put_integrity_error_returns_409(client_admin):
     with patch(
-        "modulo.api.routes.admin.set_org_flag",
+        "farna.api.routes.admin.set_org_flag",
         new=_raise(IntegrityError("stmt", {}, Exception("dup"))),
     ):
         resp = await client_admin.put(
@@ -299,7 +299,7 @@ async def test_put_integrity_error_returns_409(client_admin):
 @pytest.mark.anyio
 async def test_put_programming_error_returns_501(client_admin):
     with patch(
-        "modulo.api.routes.admin.set_org_flag",
+        "farna.api.routes.admin.set_org_flag",
         new=_raise(ProgrammingError("stmt", {}, Exception("missing table"))),
     ):
         resp = await client_admin.put(
@@ -329,7 +329,7 @@ async def test_put_http_exception_reraises():
 @pytest.mark.anyio
 async def test_put_unexpected_error_returns_500(client_admin):
     with patch(
-        "modulo.api.routes.admin.set_org_flag",
+        "farna.api.routes.admin.set_org_flag",
         new=_raise(ValueError("boom")),
     ):
         resp = await client_admin.put(
@@ -367,7 +367,7 @@ async def test_put_audit_cancelled_error_propagates():
         patch.object(admin_routes, "set_rls_org", new=AsyncMock()),
         patch.object(admin_routes, "set_rls_user_context", new=AsyncMock()),
         patch(
-            "modulo.core.audit_logger.append_audit_event",
+            "farna.core.audit_logger.append_audit_event",
             new=_raise(asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),

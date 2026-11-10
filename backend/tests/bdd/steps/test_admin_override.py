@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 from tests.bdd.conftest import _shared_state, make_connector_row, make_pipeline_row, session_client
 
 scenarios("../features/teams/admin_override.feature")
@@ -69,9 +69,9 @@ def request_pipeline_list(request, ctx) -> None:
     rows = [make_pipeline_row(pdata) for pdata in ctx.get("pipelines", {}).values()]
     with (
         session_client(_caller_role(request)) as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.list_pipelines",
+            "farna.api.routes.pipelines.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=rows, total=len(rows), page=1, page_size=20),
         ),
@@ -88,8 +88,8 @@ def request_connector(connector_name: str, request, ctx) -> None:
 
     with (
         session_client(_caller_role(request)) as client,
-        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.get_connector_instance", new_callable=AsyncMock, return_value=ci),
+        patch("farna.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.get_connector_instance", new_callable=AsyncMock, return_value=ci),
     ):
         resp = client.get(f"/api/v1/connectors/{ci.id}")
     request.node._resp = resp
@@ -101,9 +101,9 @@ def delete_pipeline(name: str, request, ctx) -> None:
     pipeline_id = uuid.UUID(pdata["id"]) if pdata else uuid.uuid4()
     with (
         session_client(_caller_role(request)) as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.soft_delete_pipeline",
+            "farna.api.routes.pipelines.soft_delete_pipeline",
             new_callable=AsyncMock,
             return_value=pdata is not None,
         ),
@@ -124,11 +124,9 @@ def reassign_pipeline(pipeline_name: str, team_name: str, request, ctx) -> None:
     )
     with (
         session_client(_caller_role(request)) as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
-        patch(
-            "modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=make_pipeline_row(pdata)
-        ),
-        patch("modulo.api.routes.pipelines.update_pipeline", new_callable=AsyncMock, return_value=updated),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=make_pipeline_row(pdata)),
+        patch("farna.api.routes.pipelines.update_pipeline", new_callable=AsyncMock, return_value=updated),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{uuid.UUID(pdata['id']) if pdata else uuid.uuid4()}",
@@ -168,10 +166,10 @@ def bulk_reassign(team_name: str, request, ctx) -> None:
     team_row.organisation_id = _ORG_ID
     with (
         session_client(_caller_role(request)) as client,
-        patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin.get_team", new_callable=AsyncMock, return_value=team_row),
+        patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin.get_team", new_callable=AsyncMock, return_value=team_row),
         patch(
-            "modulo.api.routes.admin.reassign_team_resources_to_org",
+            "farna.api.routes.admin.reassign_team_resources_to_org",
             new_callable=AsyncMock,
             side_effect=_reassign,
         ),
@@ -194,9 +192,9 @@ def request_pipeline(pipeline_name: str, request, ctx) -> None:
     pipeline_id = uuid.UUID(pdata["id"]) if pdata else uuid.uuid4()
     with (
         session_client(role) as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.get_pipeline",
+            "farna.api.routes.pipelines.get_pipeline",
             new_callable=AsyncMock,
             return_value=make_pipeline_row(pdata) if role == "admin" else None,
         ),

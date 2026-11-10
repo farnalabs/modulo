@@ -3,19 +3,19 @@ id: feat-observability
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/errors.py
-  - backend/src/modulo/api/routes/observability.py
-  - backend/src/modulo/api/routes/error_forwarder_config.py
-  - backend/src/modulo/api/routes/admin_monitor_config.py
-  - backend/src/modulo/api/routes/error_notification_rules.py
-  - backend/src/modulo/api/middleware/rate_limiter.py
-  - backend/src/modulo/api/models/problem.py
-  - backend/src/modulo/core/error_tracking/
-  - backend/src/modulo/otel_bridge/
-  - backend/src/modulo/db/crud/error_tracking.py
-  - backend/src/modulo/db/crud/observability.py
-  - backend/src/modulo/db/models/error_event.py
-  - backend/src/modulo/db/models/error_group.py
+  - backend/src/farna/api/routes/errors.py
+  - backend/src/farna/api/routes/observability.py
+  - backend/src/farna/api/routes/error_forwarder_config.py
+  - backend/src/farna/api/routes/admin_monitor_config.py
+  - backend/src/farna/api/routes/error_notification_rules.py
+  - backend/src/farna/api/middleware/rate_limiter.py
+  - backend/src/farna/api/models/problem.py
+  - backend/src/farna/core/error_tracking/
+  - backend/src/farna/otel_bridge/
+  - backend/src/farna/db/crud/error_tracking.py
+  - backend/src/farna/db/crud/observability.py
+  - backend/src/farna/db/models/error_event.py
+  - backend/src/farna/db/models/error_group.py
   - frontend/src/views/SettingsObservabilityView.vue
   - frontend/src/views/SettingsErrorForwardersView.vue
   - frontend/src/views/SettingsMonitorConfigView.vue
@@ -179,7 +179,7 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
       equals the HTTP status the raising route declares (§3.1.2) and carries a
       short per-type title (§3.1.3), and the frontend error formatter mirrors
       the per-type titles so a surfaced problem title matches the backend
-      (`backend/src/modulo/api/models/problem.py`,
+      (`backend/src/farna/api/models/problem.py`,
       `backend/tests/unit/api/models/test_problem.py`,
       `frontend/src/lib/api/formatError.ts`)
 
@@ -219,7 +219,7 @@ re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
   instance-errors surface the feature PR's allowlist excluded: the three
   system-admin sentinel-partition read routes (`GET /api/v1/errors/instance`,
   `/instance/{error_id}`, `/instance/{error_id}/events` in
-  `backend/src/modulo/api/routes/errors.py`, already cited above), the
+  `backend/src/farna/api/routes/errors.py`, already cited above), the
   `backend/tests/unit/error_tracking/test_error_instance_scope.py` suite and the
   two frontend scope-toggle spec files, plus a ticked behavior bullet for the
   two-partition boundary. Behavior and `status: covered` re-verified against

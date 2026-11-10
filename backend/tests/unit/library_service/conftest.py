@@ -12,7 +12,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from modulo.core.library_service import (
+from farna.core.library_service import (
     _COMMUNITY_BY_ID,
     _COMMUNITY_BY_SLUG,
     _COMMUNITY_PRIMITIVES,

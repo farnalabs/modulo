@@ -20,17 +20,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.models.problem import ProblemType
-from modulo.api.routes.hitl import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.models.problem import ProblemType
+from farna.api.routes.hitl import (
     _restore_failed_mcp_resume_for_reconcile,
     _run_is_f6a_reconcile_candidate,
     _session_row_is_f6a_reconcile_candidate,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.hitl_manager import (
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
@@ -39,7 +39,7 @@ from modulo.core.hitl_manager import (
     GateNotFoundError,
     RunNotAwaitingError,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -114,11 +114,11 @@ def _claim_gate(http: TestClient) -> object:
 
 
 def test_build_resume_executor_survives_notifier_init_failure() -> None:
-    from modulo.api.routes.hitl import _build_resume_executor
+    from farna.api.routes.hitl import _build_resume_executor
 
     with (
-        patch("modulo.api.routes.hitl.Notifier", side_effect=RuntimeError("no fernet")),
-        patch("modulo.api.routes.hitl.PipelineExecutor", return_value="executor") as executor_cls,
+        patch("farna.api.routes.hitl.Notifier", side_effect=RuntimeError("no fernet")),
+        patch("farna.api.routes.hitl.PipelineExecutor", return_value="executor") as executor_cls,
     ):
         executor = _build_resume_executor(MagicMock())
 
@@ -135,8 +135,8 @@ def test_claim_gate_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     gate = _gate_mock()
     with (
-        patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
-        patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)) as transition,
+        patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
+        patch("farna.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)) as transition,
     ):
         resp = _claim_gate(http)
 
@@ -161,7 +161,7 @@ def test_claim_gate_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
 )
 def test_claim_gate_assert_error_matrix(client: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
     http, _session = client
-    with patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=exc)):
+    with patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=exc)):
         resp = _claim_gate(http)
 
     assert resp.status_code == expected, resp.text
@@ -171,8 +171,8 @@ def test_claim_gate_missing_claim_data_returns_500(client: tuple[TestClient, Asy
     http, _session = client
     gate = _gate_mock(claim_token=None)
     with (
-        patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
-        patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
+        patch("farna.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
     ):
         resp = _claim_gate(http)
 
@@ -211,7 +211,7 @@ def test_claim_gate_maps_domain_errors_to_typed_problems(
     (the frontend discriminates by ``type``, not by prose) with identical status
     (409) and human detail text as before."""
     http, _session = client
-    with patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=exc)):
+    with patch("farna.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=exc)):
         resp = _claim_gate(http)
 
     assert resp.status_code == 409, resp.text
@@ -244,8 +244,8 @@ def _decision_patches(hitl_method: str, side_effect: object, *, resume: object =
     executor = MagicMock()
     executor.resume = resume
     return [
-        patch(f"modulo.api.routes.hitl.HITLManager.{hitl_method}", new=AsyncMock(side_effect=side_effect)),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(f"farna.api.routes.hitl.HITLManager.{hitl_method}", new=AsyncMock(side_effect=side_effect)),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
     ]
 
 
@@ -347,8 +347,8 @@ def test_resume_failure_returns_500(
     executor.resume = AsyncMock(side_effect=RuntimeError("executor down"))
     route = next(r for r in _DECISION_ROUTES if r[1] == path)
     patches = [
-        patch(f"modulo.api.routes.hitl.HITLManager.{route[3]}", new=AsyncMock(return_value=MagicMock())),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch(f"farna.api.routes.hitl.HITLManager.{route[3]}", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
     ]
     for p in patches:
         p.start()
@@ -378,7 +378,7 @@ def test_deliver_manual_empty_output_returns_422(client: tuple[TestClient, Async
 
 def test_list_run_pending_gates_unknown_run_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=None)):
+    with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=None)):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 404, resp.text
@@ -390,7 +390,7 @@ def test_list_run_pending_gates_error_mapping(
     client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
 ) -> None:
     http, _session = client
-    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(side_effect=exc)):
+    with patch("farna.api.routes.hitl.get_run", new=AsyncMock(side_effect=exc)):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == expected, resp.text
@@ -425,7 +425,7 @@ def test_list_org_pending_gates_resolves_pipeline_names(client: tuple[TestClient
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -437,7 +437,7 @@ def test_list_org_pending_gates_resolves_pipeline_names(client: tuple[TestClient
 def test_list_org_pending_gates_no_gates_skips_pipeline_query(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (
-        patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[])),
     ):
         resp = http.get("/api/v1/hitl/pending")
 
@@ -456,7 +456,7 @@ def test_list_org_pending_gates_requests_include_claimed(
     unclaimed = _org_gate()
     unclaimed.account_id = None
     list_pending = AsyncMock(return_value=[claimed, unclaimed])
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=list_pending):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=list_pending):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -523,7 +523,7 @@ def test_list_org_pending_gates_resolves_gate_labels(
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[claimed, unclaimed])):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[claimed, unclaimed])):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -577,10 +577,10 @@ def test_list_org_pending_gates_resolves_claimant_names(
     session.execute = AsyncMock(side_effect=_execute)
     with (
         patch(
-            "modulo.api.routes.hitl.HITLManager.list_pending",
+            "farna.api.routes.hitl.HITLManager.list_pending",
             new=AsyncMock(return_value=[mine, theirs, ghost]),
         ),
-        patch("modulo.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})),
+        patch("farna.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})),
     ):
         resp = http.get("/api/v1/hitl/pending")
 
@@ -603,7 +603,7 @@ def test_list_org_pending_gates_error_mapping(
     client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
 ) -> None:
     http, _session = client
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(side_effect=exc)):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(side_effect=exc)):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == expected, resp.text
@@ -629,7 +629,7 @@ def _briefed_gate(graph_review_id: str, *, context: dict | None) -> MagicMock:
 
 
 def _graph_with_gate(review_id: str, description: str | None = "Why this gate needs a human decision.") -> dict:
-    from modulo.db.crud.hitl_review_config import parse_hitl_review_id
+    from farna.db.crud.hitl_review_config import parse_hitl_review_id
 
     source, target = parse_hitl_review_id(review_id) or ("src-1", "tgt-2")
     config: dict = {"label": "Review gate"}
@@ -665,7 +665,7 @@ def test_list_run_pending_gates_carries_description_and_context(client: tuple[Te
     session.execute = AsyncMock(side_effect=_execute)
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -706,7 +706,7 @@ def test_list_run_pending_gates_prefers_the_captured_description(client: tuple[T
     session.execute = AsyncMock(side_effect=_execute)
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -746,7 +746,7 @@ def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
     session.execute = AsyncMock(side_effect=_execute)
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -777,7 +777,7 @@ def test_list_org_pending_gates_carries_description_and_context(client: tuple[Te
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -818,7 +818,7 @@ def test_list_org_pending_gates_prefers_the_captured_description(client: tuple[T
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
+    with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -862,7 +862,7 @@ def test_list_run_pending_gates_resolves_claimant_names(
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+    with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -898,7 +898,7 @@ def test_pending_gate_without_context_or_description_renders_null_fields(client:
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+    with patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
@@ -1197,7 +1197,7 @@ def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})):
+    with patch("farna.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})):
         resp = http.get("/api/v1/hitl/reviews?status=approved")
 
     assert resp.status_code == 200, resp.text
@@ -1235,7 +1235,7 @@ def _modify_patches(side_effect: object) -> list:
     return [
         *_decision_patches("approve_with_modification", side_effect),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1285,10 +1285,10 @@ def test_modify_approve_choice_gate_valid_answer_reaches_manager_and_resume(
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1322,10 +1322,10 @@ def test_modify_approve_non_choice_gate_without_answer_unchanged(client: tuple[T
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
         ),
     ]
@@ -1353,7 +1353,7 @@ def _approve_choice_patches(side_effect: object) -> list:
     return [
         *_decision_patches("approve", side_effect),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1391,10 +1391,10 @@ def test_approve_choice_gate_valid_answer_reaches_manager_and_resume(
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1423,10 +1423,10 @@ def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClie
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
         ),
     ]
@@ -1467,10 +1467,10 @@ def test_approve_notes_ride_in_the_persisted_decision_payload(client: tuple[Test
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.approve", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
+            "farna.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
         ),
     ]
@@ -1502,8 +1502,8 @@ def test_reject_reason_rides_in_the_persisted_decision_payload(client: tuple[Tes
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.reject", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.routes.hitl.HITLManager.reject", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
     ]
     for p in patches:
         p.start()
@@ -1532,9 +1532,9 @@ def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tu
     executor = MagicMock()
     executor.resume = resume
     patches = [
-        patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
-        patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
-        patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
+        patch("farna.api.routes.hitl._build_resume_executor", return_value=executor),
+        patch("farna.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
     ]
     for p in patches:
         p.start()
@@ -1613,8 +1613,8 @@ def test_viewer_run_pending_gates_query_contains_account_team_scope(
     captured = _empty_execute_capture(session)
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=True)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -1637,8 +1637,8 @@ def test_viewer_run_pending_foreign_team_run_maps_to_not_found(
     run.owner_team_id = None
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=False)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -1656,8 +1656,8 @@ def test_run_pending_non_viewer_never_consults_the_membership_clamp(
     clamp = AsyncMock(return_value=False)
 
     with (
-        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=clamp),
+        patch("farna.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.hitl.viewer_run_scope_visible", new=clamp),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
@@ -1719,14 +1719,14 @@ async def test_f6a_candidate_false_when_run_missing() -> None:
 
 async def test_f6a_candidate_false_for_non_hitl_status() -> None:
     session = _candidate_session(("running", "saq"))
-    with patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
+    with patch("farna.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
         assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is False
     guard.assert_not_awaited()
 
 
 async def test_f6a_candidate_false_for_non_saq_dispatcher() -> None:
     session = _candidate_session(("awaiting_human", None))
-    with patch("modulo.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
+    with patch("farna.api.routes.hitl._awaiting_human_has_committed_decision", new_callable=AsyncMock) as guard:
         assert await _session_row_is_f6a_reconcile_candidate(session, org_id=_ORG_ID, run_id=_RUN_ID) is False
     guard.assert_not_awaited()
 
@@ -1734,7 +1734,7 @@ async def test_f6a_candidate_false_for_non_saq_dispatcher() -> None:
 async def test_f6a_candidate_requires_committed_decision() -> None:
     session = _candidate_session(("awaiting_human", "saq"))
     with patch(
-        "modulo.api.routes.hitl._awaiting_human_has_committed_decision",
+        "farna.api.routes.hitl._awaiting_human_has_committed_decision",
         new_callable=AsyncMock,
         return_value=False,
     ):
@@ -1744,7 +1744,7 @@ async def test_f6a_candidate_requires_committed_decision() -> None:
 async def test_f6a_candidate_true_for_decided_claimable_row() -> None:
     session = _candidate_session(("hitl_parked", "saq"))
     with patch(
-        "modulo.api.routes.hitl._awaiting_human_has_committed_decision",
+        "farna.api.routes.hitl._awaiting_human_has_committed_decision",
         new_callable=AsyncMock,
         return_value=True,
     ) as guard:
@@ -1756,13 +1756,13 @@ async def test_run_is_f6a_candidate_wrapper_opens_rls_session() -> None:
     session = AsyncMock()
     session.begin = MagicMock(return_value=_async_session_context(session))
     with (
-        patch("modulo.api.routes.hitl.async_sessionmaker") as sessionmaker,
+        patch("farna.api.routes.hitl.async_sessionmaker") as sessionmaker,
         patch(
-            "modulo.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
+            "farna.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
             new_callable=AsyncMock,
             return_value=True,
         ) as candidate,
-        patch("modulo.api.routes.hitl.set_rls_org", new_callable=AsyncMock) as set_rls,
+        patch("farna.api.routes.hitl.set_rls_org", new_callable=AsyncMock) as set_rls,
     ):
         sessionmaker.return_value = MagicMock(return_value=_async_session_context(session))
         assert await _run_is_f6a_reconcile_candidate(engine=MagicMock(), org_id=_ORG_ID, run_id=_RUN_ID) is True
@@ -1782,11 +1782,11 @@ async def test_restore_bounds_lock_and_reports_row_recoverability() -> None:
     session.execute = AsyncMock(return_value=update_result)
     session.begin = MagicMock(return_value=_async_session_context(session))
     with (
-        patch("modulo.api.routes.hitl.async_sessionmaker") as sessionmaker,
-        patch("modulo.api.routes.hitl.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.hitl.set_mutation_row_lock_timeout", new_callable=AsyncMock) as bound,
+        patch("farna.api.routes.hitl.async_sessionmaker") as sessionmaker,
+        patch("farna.api.routes.hitl.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.hitl.set_mutation_row_lock_timeout", new_callable=AsyncMock) as bound,
         patch(
-            "modulo.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
+            "farna.api.routes.hitl._session_row_is_f6a_reconcile_candidate",
             new_callable=AsyncMock,
             return_value=True,
         ),

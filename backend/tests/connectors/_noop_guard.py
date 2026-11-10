@@ -5,7 +5,7 @@ REST connector unit tests reuse one definition instead of copy-pasting the
 guard body (which tripped SonarCloud's copy-paste/duplication gate).
 """
 
-from modulo.connectors.rest import SecurityGuard
+from farna.connectors.rest import SecurityGuard
 
 
 def make_noop_security_guard() -> SecurityGuard:

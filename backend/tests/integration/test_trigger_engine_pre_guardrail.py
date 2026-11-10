@@ -30,13 +30,13 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.trigger_engine import DuplicateWebhookError, TriggerEngine
-from modulo.core.trigger_engine.pre_guardrail import (
+from farna.core.trigger_engine import DuplicateWebhookError, TriggerEngine
+from farna.core.trigger_engine.pre_guardrail import (
     GuardrailBlockedAtIntakeError,
     canonical_payload_hash,
     run_pre_trigger_guardrail_pass,
 )
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration

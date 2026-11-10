@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core import audit_logger as audit_mod
-from modulo.core.audit_logger import (
+from farna.auth.jwt import TenantPrincipal
+from farna.core import audit_logger as audit_mod
+from farna.core.audit_logger import (
     BATCH_MAX_SIZE,
     LIST_MAX_LIMIT,
     LIST_MIN_LIMIT,
@@ -27,7 +27,7 @@ from modulo.core.audit_logger import (
     stream_export_chain,
     verify_chain,
 )
-from modulo.db.models.audit_event import AuditChainHead
+from farna.db.models.audit_event import AuditChainHead
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 EVENT_ID = "00000000-0000-0000-0000-000000000002"
@@ -1124,7 +1124,7 @@ class TestAppendAuditEventErrors:
 
     async def test_integrity_error_exhausts_retries(self, session):
         """Persistent IntegrityError propagates after exhausting retries."""
-        from modulo.core.audit_logger import APPEND_MAX_RETRIES
+        from farna.core.audit_logger import APPEND_MAX_RETRIES
 
         call_count = 0
 
@@ -1186,7 +1186,7 @@ class TestAppendAuditEventIsolated:
         return _IsolatedSession()
 
     async def test_appends_event_and_reestablishes_rls(self, monkeypatch):
-        from modulo.core import audit_logger as mod
+        from farna.core import audit_logger as mod
 
         set_org = AsyncMock()
         set_ctx = AsyncMock()
@@ -1227,7 +1227,7 @@ class TestAppendAuditEventIsolated:
         )
 
     async def test_cancelled_error_propagates(self, monkeypatch):
-        from modulo.core import audit_logger as mod
+        from farna.core import audit_logger as mod
 
         async def _cancel(*args, **kwargs):
             raise asyncio.CancelledError
@@ -1250,7 +1250,7 @@ class TestAppendAuditEventIsolated:
             )
 
     async def test_failure_is_fail_open_and_logged(self, monkeypatch, caplog):
-        from modulo.core import audit_logger as mod
+        from farna.core import audit_logger as mod
 
         async def _boom(*args, **kwargs):
             raise RuntimeError("db down")
@@ -1262,7 +1262,7 @@ class TestAppendAuditEventIsolated:
         principal = self._principal()
         resource_id = uuid.uuid4()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.core.audit_logger"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.audit_logger"):
             # Must not raise: a broken append must never fail the already-
             # completed operation.
             await append_audit_event_isolated(

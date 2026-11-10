@@ -59,7 +59,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -118,8 +118,8 @@ async def _seed_team(
     label: str,
 ) -> uuid.UUID:
     """A committed team, plus an optional membership row, via the ORM CRUD layer."""
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -768,7 +768,7 @@ async def _seed_team_private_connector(
     background machinery uses) so the team-visibility RLS ``WITH CHECK`` lets
     the row in - the CALLER under test never gets that context.
     """
-    from modulo.db.crud.connector_instance import create_connector_instance
+    from farna.db.crud.connector_instance import create_connector_instance
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

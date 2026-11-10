@@ -100,7 +100,7 @@ def test_bridge_gate_installs_when_stack_already_loaded(
     """``sys.modules`` marker alone is sufficient — source need not mention it.
 
     This is the case where the dispatch chain is already loaded (module-level
-    import in the test module, a conftest, or ``import modulo.api.main``), so
+    import in the test module, a conftest, or ``import farna.api.main``), so
     ``install_bridge``'s import is a cache hit and installing is free.
     """
     request = _fake_request(tmp_path, monkeypatch, "value = 1\n")
@@ -123,7 +123,7 @@ def test_bridge_gate_installs_on_source_mention_of_lazy_import(
     The lazy in-body-import shape: the fixture decides BEFORE the test body
     imports the dispatch, so the source scan is the only signal.
     """
-    source = "def go():\n    from modulo.core.pipeline_engine import node_runner\n    return node_runner\n"
+    source = "def go():\n    from farna.core.pipeline_engine import node_runner\n    return node_runner\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_stack_marker(monkeypatch)
     install_spy = MagicMock()

@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -137,10 +137,10 @@ class TestListEdgeCases:
         events = [_make_event_dict() for _ in range(2)]
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 return_value=_build_list_response(events, next_cursor=str(events[-1]["id"])),
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{LIST_URL}?cursor=")
         assert resp.status_code == 200
@@ -150,10 +150,10 @@ class TestListEdgeCases:
     def test_invalid_cursor_format_still_returns_200(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 return_value=_build_list_response([]),
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{LIST_URL}?cursor=not-a-valid-uuid")
         assert resp.status_code == 200
@@ -161,13 +161,13 @@ class TestListEdgeCases:
     def test_list_with_limit_returns_correct_count(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 side_effect=lambda session, org_id, cursor=None, limit=50, **kw: _build_list_response(
                     [_make_event_dict() for _ in range(min(limit, 5))],
                     next_cursor=None,
                 ),
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{LIST_URL}?limit=3")
         assert resp.status_code == 200
@@ -178,8 +178,8 @@ class TestListEdgeCases:
 class TestBatchDetailEdgeCases:
     def test_batch_with_non_existent_ids(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[]),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.get_audit_events_batch", return_value=[]),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.post(
                 BATCH_URL,
@@ -192,8 +192,8 @@ class TestBatchDetailEdgeCases:
         event_id = str(uuid.uuid4())
         expected = _make_event_dict(event_id=event_id, payload_json={"key": "value"})
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[expected]),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.get_audit_events_batch", return_value=[expected]),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.post(BATCH_URL, json={"event_ids": [event_id]})
         assert resp.status_code == 200
@@ -204,8 +204,8 @@ class TestBatchDetailEdgeCases:
     def test_batch_detail_respects_rls(self, client: TestClient) -> None:
         event_id = str(uuid.uuid4())
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[]),
-            patch("modulo.api.routes.audit.set_rls_org") as mock_rls,
+            patch("farna.api.routes.audit.get_audit_events_batch", return_value=[]),
+            patch("farna.api.routes.audit.set_rls_org") as mock_rls,
         ):
             resp = client.post(BATCH_URL, json={"event_ids": [event_id]})
         assert resp.status_code == 200
@@ -218,7 +218,7 @@ class TestExportPagination:
         page_events = events[:50]
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={
                     "items": page_events,
                     "total": 150,
@@ -226,7 +226,7 @@ class TestExportPagination:
                     "page_size": 50,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{EXPORT_URL}?page=1&page_size=50")
         assert resp.status_code == 200
@@ -240,7 +240,7 @@ class TestExportPagination:
         page_events = events[50:100]
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={
                     "items": page_events,
                     "total": 150,
@@ -248,7 +248,7 @@ class TestExportPagination:
                     "page_size": 50,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{EXPORT_URL}?page=2&page_size=50")
         assert resp.status_code == 200
@@ -260,7 +260,7 @@ class TestExportPagination:
         events = [_make_event_dict() for _ in range(10)]
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={
                     "items": events,
                     "total": 10,
@@ -268,7 +268,7 @@ class TestExportPagination:
                     "page_size": 100,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{EXPORT_URL}?page=1&page_size=100")
         assert resp.status_code == 200
@@ -279,10 +279,10 @@ class TestExportPagination:
     def test_export_beyond_last_page_returns_empty(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.export_chain",
+                "farna.api.routes.audit.export_chain",
                 return_value={"items": [], "total": 10, "page": 10, "page_size": 50},
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(f"{EXPORT_URL}?page=10&page_size=50")
         assert resp.status_code == 200
@@ -294,8 +294,8 @@ class TestExportPagination:
 class TestFilterCombinations:
     def test_filter_type_and_date_and_user(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = _build_list_response([])
             resp = client.get(
@@ -315,8 +315,8 @@ class TestFilterCombinations:
 
     def test_filter_only_from_date(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.list_audit_events") as mock_list,
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.list_audit_events") as mock_list,
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = _build_list_response([])
             resp = client.get(f"{LIST_URL}?from_date=2025-06-01T00:00:00Z")
@@ -348,14 +348,14 @@ class TestVerifyChain:
     def test_verify_chain_broken_hash(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.verify_chain",
+                "farna.api.routes.audit.verify_chain",
                 return_value={
                     "valid": False,
                     "events_checked": 2,
                     "chain_break": {"index": 1, "expected": "hash_0001", "actual": "tampered"},
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(VERIFY_URL)
         assert resp.status_code == 200
@@ -366,10 +366,10 @@ class TestVerifyChain:
     def test_verify_chain_empty_log(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.verify_chain",
+                "farna.api.routes.audit.verify_chain",
                 return_value={"valid": True, "events_checked": 0, "chain_break": None},
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get(VERIFY_URL)
         assert resp.status_code == 200

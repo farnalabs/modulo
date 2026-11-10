@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.confluence import ConfluenceConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.confluence import ConfluenceConnector
 
 INSTANCE = "my-domain.atlassian.net/wiki"
 TOKEN = "bearer_token"

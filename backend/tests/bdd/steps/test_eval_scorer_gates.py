@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, ModelJudgeCallable
+from farna.core.eval_engine import EvalBlockedError, EvalDefinition, ModelJudgeCallable
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -129,7 +129,7 @@ def _run_eval(ctx: dict[str, Any]) -> None:
         return
     ctx["eval_run"] = True
 
-    from modulo.core.eval_engine import EvalEngine
+    from farna.core.eval_engine import EvalEngine
 
     eval_def = EvalDefinition(
         id=uuid.uuid4(),

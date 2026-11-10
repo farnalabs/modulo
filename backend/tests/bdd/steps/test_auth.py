@@ -96,7 +96,7 @@ def login(client: Any, email: str, password: str, request: Any, ctx: dict[str, A
 
     Mocks ``authenticate_user`` so the test controls success/failure.
     """
-    with patch("modulo.api.routes.auth.authenticate_db_user") as mock_auth:
+    with patch("farna.api.routes.auth.authenticate_db_user") as mock_auth:
         if email == "alice@example.com" and password == "correct-horse-battery":
             mock_auth.return_value = True
         else:
@@ -214,7 +214,7 @@ def step_delete_team(request: Any, name: str, ctx: dict[str, Any], client: Any =
     from tests.bdd.conftest import _make_mock_team
 
     team = ctx.get("teams", {}).get(name, _make_mock_team(name))
-    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
+    with patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
     _store_response(request, ctx, resp)
 
@@ -237,8 +237,8 @@ def step_get_teams_gated(request: Any, client: Any, ctx: dict[str, Any]) -> None
         def has_license_key(self) -> bool:
             return False
 
-    from modulo.api.dependencies import get_plan_context
-    from modulo.api.main import app
+    from farna.api.dependencies import get_plan_context
+    from farna.api.main import app
 
     previous = dict(app.dependency_overrides)
     app.dependency_overrides[get_plan_context] = lambda: _NoTeamRbacPlan()
@@ -457,9 +457,9 @@ def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
         shaped.__aexit__ = AsyncMock(return_value=False)
         return shaped
 
-    import modulo.api.dependencies as api_deps
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+    import farna.api.dependencies as api_deps
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_tenant_user_or_api_key
     from tests.bdd.conftest import session_client
 
     with (
@@ -554,7 +554,7 @@ def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str,
     test_client = alt_org_client if current == "globex" else client
     all_pipelines: dict[str, dict[str, Any]] = getattr(request.node, "pipelines", {})
 
-    with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
+    with patch("farna.api.routes.pipelines.list_pipelines") as mock_list:
         org_id = ORG_ID if current == "acme" else ALT_ORG_ID
         visible = [p["mock"] for p in all_pipelines.values() if p["org_id"] == org_id]
 
@@ -607,7 +607,7 @@ def step_raw_query_no_rls() -> None:
 @then(parsers.parse("the query returns no rows for {expected}"))
 def step_rls_enforced(request: Any, expected: str) -> None:
     """Verify that ``set_rls_org`` raises outside an active transaction."""
-    from modulo.api.routes.pipelines import set_rls_org
+    from farna.api.routes.pipelines import set_rls_org
 
     session = request.getfixturevalue("mock_session")
     # ``session`` is an AsyncMock, whose ``in_transaction`` would return an
@@ -644,7 +644,7 @@ def cross_org_run(
     """
     pipeline_id = uuid.uuid5(ORG_ID, pipeline_name)
 
-    with patch("modulo.api.routes.runs.get_pipeline") as mock_get:
+    with patch("farna.api.routes.runs.get_pipeline") as mock_get:
         mock_get.return_value = None
         resp = alt_org_client.post(
             "/api/v1/runs",

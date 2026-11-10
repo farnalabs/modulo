@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD, MAX_REPORTABLE_USD_MIN
-from modulo.core.pipeline_engine.node_runner import _build_model_cost_fields, _extract_reported_cost
+from farna.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD, MAX_REPORTABLE_USD_MIN
+from farna.core.pipeline_engine.node_runner import _build_model_cost_fields, _extract_reported_cost
 
 
 def _extract(output: dict, **kw: float) -> tuple[float, float, bool, bool] | None:

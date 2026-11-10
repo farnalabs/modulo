@@ -21,10 +21,10 @@ from sqlalchemy.exc import (
 )
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import modulo.api.mcp_server as ms
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.api.mcp_server import _tool_exception_error, search_documentation
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+import farna.api.mcp_server as ms
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.mcp_server import _tool_exception_error, search_documentation
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 
 _MSG = "Failed to do the thing"
 _LOG_KEY = "mcp.test_tool"

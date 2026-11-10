@@ -25,13 +25,13 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.eval import Eval
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.system_map import SystemMap, SystemMapRevision
-from modulo.db.models.team import Team
-from modulo.db.repositories.system_map import SystemMapRepository
-from modulo.db.rls import set_rls_user_context
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.eval import Eval
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.system_map import SystemMap, SystemMapRevision
+from farna.db.models.team import Team
+from farna.db.repositories.system_map import SystemMapRepository
+from farna.db.rls import set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

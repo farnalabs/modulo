@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+from farna.core.secrets_backend.aws import AWSSecretsManagerBackend
 
 pytestmark = [
     pytest.mark.usefixtures("aws_env"),
@@ -19,8 +19,8 @@ pytestmark = [
 @pytest.fixture
 def mock_boto3():
     with (
-        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.aws._boto3") as mb,
+        patch("farna.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("farna.core.secrets_backend.aws._boto3") as mb,
     ):
         yield mb
 
@@ -285,7 +285,7 @@ class TestEnsureClient:
 
     def test_constructor_raises_without_boto3(self):
         with (
-            patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", False),
+            patch("farna.core.secrets_backend.aws._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="boto3"),
         ):
             AWSSecretsManagerBackend()
@@ -293,7 +293,7 @@ class TestEnsureClient:
     async def test_ensure_client_raises_without_boto3(self, mock_boto3):
         backend = AWSSecretsManagerBackend()
         with (
-            patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", False),
+            patch("farna.core.secrets_backend.aws._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="boto3"),
         ):
             await backend._ensure_client()

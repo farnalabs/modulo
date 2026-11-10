@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.library_service import (
+from farna.core.library_service import (
     _MODULO_PRIMITIVES,
     copy_to_adapt,
     get_primitive,
     list_primitives,
 )
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 from .helpers import mock_session as _mock_session
 
@@ -73,9 +73,9 @@ async def test_list_primitives_filters_and_merges_composite_type(org_slug: str):
     org_page: PageResult = PageResult(items=[org_composite], total=1, page=1, page_size=20)
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.list_library_primitives",
+            "farna.core.library_service.list_library_primitives",
             new_callable=AsyncMock,
             return_value=org_page,
         ) as mock_list,
@@ -101,9 +101,9 @@ async def test_get_composite_primitive():
     composite = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             return_value=composite,
         ),
@@ -126,14 +126,14 @@ async def test_copy_to_adapt_composite_succeeds():
     copied = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             return_value=source,
         ),
         patch(
-            "modulo.core.library_service.create_library_primitive",
+            "farna.core.library_service.create_library_primitive",
             new_callable=AsyncMock,
             return_value=copied,
         ),
@@ -164,14 +164,14 @@ async def test_copy_to_adapt_composite_preserves_content_json():
         return copied
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             return_value=source,
         ),
         patch(
-            "modulo.core.library_service.create_library_primitive",
+            "farna.core.library_service.create_library_primitive",
             side_effect=_capture,
         ),
     ):

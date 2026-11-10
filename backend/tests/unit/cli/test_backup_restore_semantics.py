@@ -28,8 +28,8 @@ import pytest
 from click.testing import CliRunner
 from psycopg.types.json import Jsonb
 
-import modulo.cli.backup as backup_mod
-from modulo.cli.backup import (
+import farna.cli.backup as backup_mod
+from farna.cli.backup import (
     MANIFEST_VERSION,
     RestorePostureError,
     _fernet_key_hash,
@@ -37,7 +37,7 @@ from modulo.cli.backup import (
     _restore_checkpoints_sync,
     cli,
 )
-from modulo.launcher.state import LauncherState, load_state, save_state
+from farna.launcher.state import LauncherState, load_state, save_state
 
 _FERNET_KEY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 _RESTORE_OUTPUTS = "restore-outputs"
@@ -74,22 +74,22 @@ def _seed_data_dir(tmp_path: Path) -> Path:
 
 def _enter_backup_patches(stack: contextlib.ExitStack, lock: MagicMock | None = None) -> None:
     for factory in (
-        lambda: patch("modulo.cli.backup._print_size"),
-        lambda: patch("modulo.cli.backup._export_checkpoint_writes_sync", return_value=[]),
-        lambda: patch("modulo.cli.backup._export_checkpoints_sync", return_value=[]),
+        lambda: patch("farna.cli.backup._print_size"),
+        lambda: patch("farna.cli.backup._export_checkpoint_writes_sync", return_value=[]),
+        lambda: patch("farna.cli.backup._export_checkpoints_sync", return_value=[]),
         lambda: patch(
-            "modulo.cli.backup._export_credentials_references_sync",
+            "farna.cli.backup._export_credentials_references_sync",
             return_value={"connector_instances": [], "model_backends": []},
         ),
-        lambda: patch("modulo.cli.backup._export_checkpoint_blobs_sync", return_value=[]),
-        lambda: patch("modulo.cli.backup._get_schema_versions", return_value=["rev1"]),
-        lambda: patch("modulo.cli.backup._get_db_version", return_value="PostgreSQL 16.0"),
-        lambda: patch("modulo.cli.backup._run_pg_dump", side_effect=_write_dump_for),
-        lambda: patch("modulo.cli.backup.get_settings", **{"return_value.fernet_key": _FERNET_KEY}),
+        lambda: patch("farna.cli.backup._export_checkpoint_blobs_sync", return_value=[]),
+        lambda: patch("farna.cli.backup._get_schema_versions", return_value=["rev1"]),
+        lambda: patch("farna.cli.backup._get_db_version", return_value="PostgreSQL 16.0"),
+        lambda: patch("farna.cli.backup._run_pg_dump", side_effect=_write_dump_for),
+        lambda: patch("farna.cli.backup.get_settings", **{"return_value.fernet_key": _FERNET_KEY}),
     ):
         stack.enter_context(factory())
     if lock is not None:
-        stack.enter_context(patch("modulo.cli.backup._acquire_data_lock", return_value=lock))
+        stack.enter_context(patch("farna.cli.backup._acquire_data_lock", return_value=lock))
 
 
 def _write_dump_for(_url: Any, output: Path) -> None:
@@ -98,13 +98,13 @@ def _write_dump_for(_url: Any, output: Path) -> None:
 
 def _enter_restore_patches(stack: contextlib.ExitStack, lock: MagicMock | None = None) -> None:
     for factory in (
-        lambda: patch("modulo.cli.backup._restore_checkpoint_writes_sync", return_value=0),
-        lambda: patch("modulo.cli.backup._restore_checkpoints_sync", return_value=0),
-        lambda: patch("modulo.cli.backup._restore_checkpoint_blobs_sync", return_value=0),
-        lambda: patch("modulo.cli.backup._run_psql"),
-        lambda: patch("modulo.cli.backup._ensure_restore_posture"),
+        lambda: patch("farna.cli.backup._restore_checkpoint_writes_sync", return_value=0),
+        lambda: patch("farna.cli.backup._restore_checkpoints_sync", return_value=0),
+        lambda: patch("farna.cli.backup._restore_checkpoint_blobs_sync", return_value=0),
+        lambda: patch("farna.cli.backup._run_psql"),
+        lambda: patch("farna.cli.backup._ensure_restore_posture"),
         lambda: patch(
-            "modulo.cli.backup.get_settings",
+            "farna.cli.backup.get_settings",
             **{
                 "return_value.fernet_key": _FERNET_KEY,
                 "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo",
@@ -112,17 +112,17 @@ def _enter_restore_patches(stack: contextlib.ExitStack, lock: MagicMock | None =
         ),
         # Default: the target DB probes EMPTY (a real probe would try to
         # connect to the developer's own Postgres). Individual tests override.
-        lambda: patch("modulo.cli.backup._db_has_modulo_tables", return_value=False),
+        lambda: patch("farna.cli.backup._db_has_modulo_tables", return_value=False),
         # Default: the local alembic head matches the archive's recorded
         # ["rev1"] birthplace schema (no surprise downgrade refusals).
-        lambda: patch("modulo.cli.backup._get_schema_versions", return_value=["rev1"]),
+        lambda: patch("farna.cli.backup._get_schema_versions", return_value=["rev1"]),
         # Default: the pre-restore safety dump "succeeds" (a real invocation
         # shells out to pg_dump). Individual tests override with side effects.
-        lambda: patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake")),
+        lambda: patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake")),
     ):
         stack.enter_context(factory())
     if lock is not None:
-        stack.enter_context(patch("modulo.cli.backup._acquire_data_lock", return_value=lock))
+        stack.enter_context(patch("farna.cli.backup._acquire_data_lock", return_value=lock))
 
 
 def _base_manifest_versioned(manifest_version: int, state_mac: str | None) -> dict[str, Any]:
@@ -161,7 +161,7 @@ def _target_mac(data_dir: Path) -> str:
 def _enter_click_refusal(stack: contextlib.ExitStack, message: str) -> None:
     import click
 
-    stack.enter_context(patch("modulo.cli.backup._acquire_data_lock", side_effect=click.ClickException(message)))
+    stack.enter_context(patch("farna.cli.backup._acquire_data_lock", side_effect=click.ClickException(message)))
 
 
 #    Backup: versioned manifest + default exclusions
@@ -243,7 +243,7 @@ def test_backup_refuses_while_a_launcher_is_running(tmp_path: Path) -> None:
     data_dir = _seed_data_dir(tmp_path)
     dump_mock = MagicMock()
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.cli.backup._run_pg_dump", dump_mock))
+        stack.enter_context(patch("farna.cli.backup._run_pg_dump", dump_mock))
         _enter_click_refusal(stack, _LOCK_REFUSAL)
         result = CliRunner().invoke(cli, ["backup", "--data-dir", str(data_dir)], input="y\n")
     assert result.exit_code != 0
@@ -283,7 +283,7 @@ def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(
     is a bug, so it is logged at ERROR level WITH the traceback."""
     data_dir = _seed_data_dir(tmp_path)
     with (
-        patch("modulo.launcher.state.save_state", side_effect=RuntimeError("boom")),
+        patch("farna.launcher.state.save_state", side_effect=RuntimeError("boom")),
         caplog.at_level(logging.ERROR, logger=backup_mod._log.name),
     ):
         _record_last_backup(data_dir, "2026-09-10T00:00:00+00:00")
@@ -368,7 +368,7 @@ def test_restore_accepts_supported_manifest_version(tmp_path: Path) -> None:
     psql_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._run_psql", psql_mock))
+        stack.enter_context(patch("farna.cli.backup._run_psql", psql_mock))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code == 0, result.output
     assert "Restore complete" in result.output
@@ -393,7 +393,7 @@ def test_restore_replace_cluster_requires_loud_confirmation_if_declined(tmp_path
         _enter_restore_patches(stack, lock=MagicMock())
         # Interactive-terminal gate: the confirmation is only reachable from
         # a real tty (a piped "echo y |" must not be able to approve it).
-        stack.enter_context(patch("modulo.cli.backup._is_interactive_stdin", return_value=True))
+        stack.enter_context(patch("farna.cli.backup._is_interactive_stdin", return_value=True))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir), "--replace-cluster"]
         result = CliRunner().invoke(cli, args, input="n\n")
     assert result.exit_code != 0
@@ -477,7 +477,7 @@ def test_restore_disk_preflight_refuses_dump_too_large_for_disk(tmp_path: Path) 
     usage.free = 16
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup.shutil.disk_usage", return_value=usage))
+        stack.enter_context(patch("farna.cli.backup.shutil.disk_usage", return_value=usage))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code != 0
@@ -490,7 +490,7 @@ def test_restore_declined_confirmation_reaches_no_psql(tmp_path: Path) -> None:
     psql_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._run_psql", psql_mock))
+        stack.enter_context(patch("farna.cli.backup._run_psql", psql_mock))
         args = ["restore", str(archive), "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="n\n")
     assert result.exit_code != 0
@@ -502,8 +502,8 @@ def test_restore_collation_drift_prints_hard_warning(tmp_path: Path) -> None:
     collation_conn = _make_collation_connection([("en_US.UTF-8", "2.28", "2.35", "c")])
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture"))
-        stack.enter_context(patch("modulo.cli.backup.psycopg.connect", return_value=collation_conn))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture"))
+        stack.enter_context(patch("farna.cli.backup.psycopg.connect", return_value=collation_conn))
         args = ["restore", str(archive), "--yes", "--db-url", "postgresql://modulo:pw@127.0.0.1:5432/modulo"]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
@@ -525,8 +525,8 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
     posture_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", posture_mock))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         args = ["restore", str(archive), "--yes", "--db-url", "postgresql://modulo:pw@127.0.0.1:5432/modulo"]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
@@ -550,7 +550,7 @@ def test_restore_resolves_app_role_from_configuration_not_db_url(
     posture_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", posture_mock))
         args = [
             "restore",
             str(archive),
@@ -574,7 +574,7 @@ def test_restore_app_db_url_option_overrides_configuration(tmp_path: Path, monke
     posture_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", posture_mock))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", posture_mock))
         args = [
             "restore",
             str(archive),
@@ -598,7 +598,7 @@ def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
     )
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture", side_effect=failure))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", side_effect=failure))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code != 0
     assert "modulo_app can bypass RLS" in result.output
@@ -608,7 +608,7 @@ def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
 def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
     """FAR-2021: the posture helper itself raises, naming the failing check."""
     failing = AsyncMock(side_effect=RuntimeError("modulo_app has BYPASSRLS"))
-    with patch("modulo.db.bootstrap_role.bootstrap_roles", failing), pytest.raises(RestorePostureError) as excinfo:
+    with patch("farna.db.bootstrap_role.bootstrap_roles", failing), pytest.raises(RestorePostureError) as excinfo:
         backup_mod._ensure_restore_posture(
             "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
             "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
@@ -620,7 +620,7 @@ def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
 
 def test_ensure_restore_posture_echoes_the_application_role_on_success(capsys: pytest.CaptureFixture[str]) -> None:
     """FAR-2021: a SUCCESSFUL posture re-run says which role it configured."""
-    with patch("modulo.db.bootstrap_role.bootstrap_roles", AsyncMock()):
+    with patch("farna.db.bootstrap_role.bootstrap_roles", AsyncMock()):
         backup_mod._ensure_restore_posture(
             "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
             "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
@@ -644,7 +644,7 @@ def test_executed_restore_does_not_rewrap_a_posture_error(tmp_path: Path, monkey
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(
             patch(
-                "modulo.cli.backup._ensure_restore_posture",
+                "farna.cli.backup._ensure_restore_posture",
                 side_effect=RestorePostureError("Role-posture verification FAILED after the restore."),
             )
         )
@@ -736,11 +736,11 @@ def test_restore_validates_the_app_url_before_touching_the_target(
     safety_dump = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._restore_cluster", restore_cluster))
-        stack.enter_context(patch("modulo.cli.backup._take_safety_dump", safety_dump))
+        stack.enter_context(patch("farna.cli.backup._restore_cluster", restore_cluster))
+        stack.enter_context(patch("farna.cli.backup._take_safety_dump", safety_dump))
         stack.enter_context(
             patch(
-                "modulo.cli.backup.get_settings",
+                "farna.cli.backup.get_settings",
                 **{
                     "return_value.fernet_key": _FERNET_KEY,
                     "return_value.database_url": "",
@@ -779,7 +779,7 @@ def test_restore_carries_nullable_checkpoint_type_through_json_export(tmp_path: 
     conn = MagicMock()
     conn.__enter__.return_value = conn
     conn.cursor.return_value.__enter__.return_value = cursor
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         restored = _restore_checkpoints_sync(
             "postgresql://localhost/db",
             json.loads((archive / "checkpoints.json").read_text(encoding="utf-8")),
@@ -825,7 +825,7 @@ def test_backup_chmod_failure_continues_per_entry(tmp_path: Path, monkeypatch: p
             raise OSError("simulated EPERM")
         real_chmod(path, mode, follow_symlinks=follow_symlinks)
 
-    monkeypatch.setattr("modulo.cli.backup.os.chmod", _flaky_chmod)
+    monkeypatch.setattr("farna.cli.backup.os.chmod", _flaky_chmod)
     with contextlib.ExitStack() as stack:
         _enter_backup_patches(stack, lock=MagicMock())
         result = CliRunner().invoke(cli, ["backup", "--output-dir", str(backup_dir)], input="y\n")
@@ -869,7 +869,7 @@ def test_backup_round_trips_to_the_same_instance_without_replace(tmp_path: Path)
     # and the restore accepts the same instance identity without --replace-cluster
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         args = ["restore", str(backup_dir), "--yes", "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
@@ -894,8 +894,8 @@ def test_restore_writes_pre_restore_safety_dump_before_psql(tmp_path: Path) -> N
 
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._take_safety_dump", side_effect=_fake_safety))
-        stack.enter_context(patch("modulo.cli.backup._run_psql", side_effect=_failing_psql))
+        stack.enter_context(patch("farna.cli.backup._take_safety_dump", side_effect=_fake_safety))
+        stack.enter_context(patch("farna.cli.backup._run_psql", side_effect=_failing_psql))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code != 0
     assert order == ["safety", "psql"], order
@@ -911,21 +911,21 @@ def test_restore_safety_dump_failure_refuses_before_the_wipe(tmp_path: Path) -> 
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(
             patch(
-                "modulo.cli.backup._take_safety_dump",
+                "farna.cli.backup._take_safety_dump",
                 side_effect=click.ClickException("safety dump FAILED"),
             )
         )
         psql_mock = MagicMock()
-        stack.enter_context(patch("modulo.cli.backup._run_psql", psql_mock))
+        stack.enter_context(patch("farna.cli.backup._run_psql", psql_mock))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code != 0
     assert psql_mock.called is False
 
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         psql_mock = MagicMock()
-        stack.enter_context(patch("modulo.cli.backup._run_psql", psql_mock))
+        stack.enter_context(patch("farna.cli.backup._run_psql", psql_mock))
         args = ["restore", str(archive), "--yes", "--no-safety-dump"]
         result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
@@ -950,7 +950,7 @@ def test_restore_adopts_launcher_files_only_after_db_restore_succeeds(tmp_path: 
             psql_started()
             raise RuntimeError("simulated psql failure")
 
-        stack.enter_context(patch("modulo.cli.backup._run_psql", side_effect=_failing_psql))
+        stack.enter_context(patch("farna.cli.backup._run_psql", side_effect=_failing_psql))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code != 0
@@ -966,7 +966,7 @@ def test_restore_fresh_target_over_populated_db_is_not_exempt(tmp_path: Path) ->
     data_dir = tmp_path / "fresh-data"
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._db_has_modulo_tables", return_value=True))
+        stack.enter_context(patch("farna.cli.backup._db_has_modulo_tables", return_value=True))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code != 0
@@ -981,8 +981,8 @@ def test_restore_replace_cluster_on_populated_db_with_fresh_data_dir_proceeds(tm
     data_dir = tmp_path / "fresh-data"
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._db_has_modulo_tables", return_value=True))
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._db_has_modulo_tables", return_value=True))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir), "--replace-cluster"]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
@@ -996,7 +996,7 @@ def test_restore_data_dir_without_launcher_files_skips_adoption(tmp_path: Path) 
     data_dir = tmp_path / "fresh-data"
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir)]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
@@ -1011,8 +1011,8 @@ def test_restore_refuses_schema_downgrade(tmp_path: Path) -> None:
     psql_mock = MagicMock()
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._get_schema_versions", return_value=["older_head"]))
-        stack.enter_context(patch("modulo.cli.backup._run_psql", psql_mock))
+        stack.enter_context(patch("farna.cli.backup._get_schema_versions", return_value=["older_head"]))
+        stack.enter_context(patch("farna.cli.backup._run_psql", psql_mock))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code != 0
     assert "NEWER than this installation speaks" in result.output
@@ -1026,8 +1026,8 @@ def test_restore_accepts_matching_schema_versions(tmp_path: Path) -> None:
     (archive / "backup-info.json").write_text(json.dumps(archive_manifest), encoding="utf-8")
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
-        stack.enter_context(patch("modulo.cli.backup._get_schema_versions", return_value=["same_head"]))
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._get_schema_versions", return_value=["same_head"]))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code == 0, result.output
 
@@ -1128,8 +1128,8 @@ def test_restore_psql_single_transaction_and_no_password_argv(tmp_path: Path) ->
         return MagicMock(returncode=0, stderr=b"")
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.cli.backup.shutil.which", return_value="/usr/bin/psql"))
-        stack.enter_context(patch("modulo.cli.backup.subprocess.run", side_effect=_capture))
+        stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/psql"))
+        stack.enter_context(patch("farna.cli.backup.subprocess.run", side_effect=_capture))
         # -1 must reach psql
         dump_input = tmp_path / "dump-input.sql"
         dump_input.write_text("-- dump", encoding="utf-8")
@@ -1150,8 +1150,8 @@ def test_backup_pg_dump_no_password_in_argv(tmp_path: Path) -> None:
 
     output = tmp_path / "out.sql"
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
-        stack.enter_context(patch("modulo.cli.backup.subprocess.run", side_effect=_capture))
+        stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
+        stack.enter_context(patch("farna.cli.backup.subprocess.run", side_effect=_capture))
         backup_mod._run_pg_dump("postgresql://modulo:secret@127.0.0.1:5432/modulo", output)
     joined = " ".join(str(a) for a in seen["argv"])
     assert "secret" not in joined
@@ -1165,8 +1165,8 @@ def test_pg_dump_output_file_is_created_private(tmp_path: Path) -> None:
     SQL dump readable at umask mode."""
     output = tmp_path / "out.sql"
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
-        stack.enter_context(patch("modulo.cli.backup.subprocess.run", return_value=MagicMock(returncode=0, stderr=b"")))
+        stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
+        stack.enter_context(patch("farna.cli.backup.subprocess.run", return_value=MagicMock(returncode=0, stderr=b"")))
         backup_mod._run_pg_dump("postgresql://modulo:secret@127.0.0.1:5432/modulo", output)
     assert (output.stat().st_mode & 0o777) == 0o600, "the dump must be born 0600"
 
@@ -1187,8 +1187,8 @@ def test_backup_records_state_before_snapshotting(tmp_path: Path) -> None:
             order.append("snapshot")
             return real_snapshot(data_dir, backup_dir, include_secrets)
 
-        stack.enter_context(patch("modulo.cli.backup._record_last_backup", side_effect=_spy_record))
-        stack.enter_context(patch("modulo.cli.backup._launcher_snapshot_files", side_effect=_spy_snapshot))
+        stack.enter_context(patch("farna.cli.backup._record_last_backup", side_effect=_spy_record))
+        stack.enter_context(patch("farna.cli.backup._launcher_snapshot_files", side_effect=_spy_snapshot))
         _enter_backup_patches(stack, lock=MagicMock())
         data_dir = _seed_data_dir(tmp_path)
         backup_dir = tmp_path / "b"
@@ -1313,7 +1313,7 @@ def test_restore_checkpoints_encodes_jsonb_columns_with_psycopg_jsonb() -> None:
     metadata = {"source": "loop", "step": 3, "writes": {"a": [1, 2]}}
     rows = [_checkpoint_row(checkpoint=checkpoint, metadata=metadata)]
     conn, cursor = _fake_restore_connection()
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         restored = backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
     assert restored == 1
     assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoints")
@@ -1332,7 +1332,7 @@ def test_restore_checkpoints_keeps_null_jsonb_columns_null() -> None:
     checkpoint = {"v": 1, "id": "1ef0"}
     rows = [_checkpoint_row(checkpoint=checkpoint, metadata=None)]
     conn, cursor = _fake_restore_connection()
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
     params = _insert_params(cursor, 1)
     columns = _insert_columns(cursor, 1)
@@ -1346,7 +1346,7 @@ def test_restore_checkpoints_adapts_a_list_valued_jsonb_column() -> None:
     metadata: list[Any] = [{"step": 0}, {"step": 1}]
     rows = [_checkpoint_row(metadata=metadata)]
     conn, cursor = _fake_restore_connection()
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         backup_mod._restore_checkpoints_sync(_TEST_DB_URL, rows)
     params = _insert_params(cursor, 1)
     columns = _insert_columns(cursor, 1)
@@ -1388,7 +1388,7 @@ def test_restore_checkpoint_blobs_decodes_hex_blobs_to_bytes() -> None:
         },
     ]
     conn, cursor = _fake_restore_connection()
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         restored = backup_mod._restore_checkpoint_blobs_sync(_TEST_DB_URL, rows)
     assert restored == 3
     assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoint_blobs")
@@ -1418,7 +1418,7 @@ def test_restore_checkpoint_writes_decodes_hex_blobs_to_bytes() -> None:
         }
     ]
     conn, cursor = _fake_restore_connection()
-    with patch("modulo.cli.backup.psycopg.connect", return_value=conn):
+    with patch("farna.cli.backup.psycopg.connect", return_value=conn):
         restored = backup_mod._restore_checkpoint_writes_sync(_TEST_DB_URL, rows)
     assert restored == 1
     assert cursor.execute.call_args_list[0].args[0].startswith("TRUNCATE TABLE checkpoint_writes")

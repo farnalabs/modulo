@@ -22,13 +22,13 @@ from decimal import Decimal
 import hypothesis.strategies as st
 from hypothesis import given, settings
 
-from modulo.core.cost_controller.breakdown.aggregate import clamp_reported
-from modulo.core.cost_controller.breakdown.constants import (
+from farna.core.cost_controller.breakdown.aggregate import clamp_reported
+from farna.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
     MAX_REPORTABLE_USD_MIN,
     MAX_SELF_REPORTED_USD,
 )
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.params import (
     MAX_REPORTABLE_TOKEN_COUNT,
     coerce_reported_token,
 )

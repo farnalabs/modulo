@@ -8,9 +8,9 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
-from modulo.core.secrets_backend import create_secrets_backend, validate_key
-from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+from farna.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
+from farna.core.secrets_backend import create_secrets_backend, validate_key
+from farna.core.secrets_backend.fernet import FernetSecretsBackend
 
 _KEY = Fernet.generate_key().decode()
 
@@ -28,15 +28,15 @@ class _ExternalBackendSpec:
 _EXTERNAL_BACKENDS: dict[str, _ExternalBackendSpec] = {
     "vault": _ExternalBackendSpec(
         env={"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"},
-        module="modulo.core.secrets_backend.vault",
+        module="farna.core.secrets_backend.vault",
         class_name="VaultSecretsBackend",
-        sdk_patch="modulo.core.secrets_backend.vault._hvac",
+        sdk_patch="farna.core.secrets_backend.vault._hvac",
     ),
     "aws": _ExternalBackendSpec(
         env={"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"},
-        module="modulo.core.secrets_backend.aws",
+        module="farna.core.secrets_backend.aws",
         class_name="AWSSecretsManagerBackend",
-        sdk_patch="modulo.core.secrets_backend.aws._boto3",
+        sdk_patch="farna.core.secrets_backend.aws._boto3",
     ),
 }
 
@@ -123,7 +123,7 @@ def test_external_secrets_flag_is_not_registered() -> None:
 
 def test_external_secrets_flag_absent_from_seed_catalog() -> None:
     """The tier catalog seed is derived from ``_KNOWN_FLAGS``; the flag is gone there too."""
-    from modulo.core.seed_data.catalog import FLAGS
+    from farna.core.seed_data.catalog import FLAGS
 
     assert "external_secrets" not in {entry["name"] for entry in FLAGS}
 
@@ -143,7 +143,7 @@ def test_external_secrets_flag_absent_on_every_tier(tier: str, has_license_key: 
 
 def test_external_secrets_licence_helper_is_removed() -> None:
     """The factory must not consult licence state for backend construction."""
-    import modulo.core.secrets_backend as secrets_module
+    import farna.core.secrets_backend as secrets_module
 
     assert not hasattr(secrets_module, "_check_external_secrets_licensed")
 

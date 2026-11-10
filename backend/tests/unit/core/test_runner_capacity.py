@@ -14,9 +14,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.runner_capacity import (
+from farna.core.connector_hub.locking import _uuid_to_lock_keys
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.runner_capacity import (
     HOST_RESOURCE_PROVIDERS,
     MARKER_STATE_CLEARED_AT_HITL,
     MARKER_STATE_DISPATCHING,
@@ -102,18 +102,18 @@ def _patch_gate(monkeypatch: pytest.MonkeyPatch, *, flag_on: bool = False) -> No
         runner_capacity_lock_timeout_ms = 2000
         runner_marker_sweep_lock_timeout_seconds = 5
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
 
 def _patch_gate_structural(monkeypatch: pytest.MonkeyPatch, executed: list[tuple[str, Any]], *, flag_on: bool) -> None:
     """Like :func:`_patch_gate` but the RLS stubs RECORD their statements
     (as ``(text, params)`` tuples) so the structural test can assert the RLS
     set_config class is present."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _S:
         runner_capacity_gate_enabled = flag_on
@@ -127,8 +127,8 @@ def _patch_gate_structural(monkeypatch: pytest.MonkeyPatch, executed: list[tuple
     async def _record_set_ctx(_session: Any) -> None:
         executed.append(("SELECT set_config('app.execution_context', 'true', true)", None))
 
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", _record_set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", _record_set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", _record_set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", _record_set_ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +176,8 @@ def test_org_cost_state_lock_keys_are_stable_and_namespaced() -> None:
 async def test_lock_org_cost_state_takes_the_advisory_on_postgres() -> None:
     session = AsyncMock()
     with (
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()) as bound,
-        patch("modulo.db.crud.run.get_dialect_name", new=AsyncMock(return_value="postgresql")),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()) as bound,
+        patch("farna.db.crud.run.get_dialect_name", new=AsyncMock(return_value="postgresql")),
     ):
         await lock_org_cost_state(session, _ORG)
 
@@ -194,8 +194,8 @@ async def test_lock_org_cost_state_noops_off_postgres() -> None:
     documented no-op after the (also dialect-gated) lock-timeout bound."""
     session = AsyncMock()
     with (
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.db.crud.run.get_dialect_name", new=AsyncMock(return_value="sqlite")),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.db.crud.run.get_dialect_name", new=AsyncMock(return_value="sqlite")),
     ):
         await lock_org_cost_state(session, _ORG)
 
@@ -268,7 +268,7 @@ def test_host_resource_filter_sql_matches_the_python_bucket() -> None:
     db owns the count body); a provider added to one and not the other makes
     the gate deny on a count that never included the tier being admitted.
     """
-    from modulo.db.crud.run import RUNNER_HOST_RESOURCE_FILTER_SQL
+    from farna.db.crud.run import RUNNER_HOST_RESOURCE_FILTER_SQL
 
     missing = [p for p in sorted(HOST_RESOURCE_PROVIDERS) if f"'{p}'" not in RUNNER_HOST_RESOURCE_FILTER_SQL]
     assert not missing, f"RUNNER_HOST_RESOURCE_FILTER_SQL does not count {missing}"
@@ -348,13 +348,13 @@ async def test_contract_flag_off_absent_key_means_no_gate(monkeypatch: pytest.Mo
     gate flag."""
     _patch_gate(monkeypatch, flag_on=False)
 
-    from modulo.db.crud.run import SandboxConcurrencyLimit
+    from farna.db.crud.run import SandboxConcurrencyLimit
 
     async def _fake_limit(_session: Any, _org: uuid.UUID) -> SandboxConcurrencyLimit:
         return SandboxConcurrencyLimit(cap=4, is_default=True)
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
-    from modulo.core.runner_capacity import read_runner_cap_contract
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
+    from farna.core.runner_capacity import read_runner_cap_contract
 
     cap, host_only = await read_runner_cap_contract(MagicMock(), _ORG)
     assert cap is None
@@ -364,13 +364,13 @@ async def test_contract_flag_off_absent_key_means_no_gate(monkeypatch: pytest.Mo
 async def test_contract_flag_on_absent_key_activates_docker_tier_default(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=True)
 
-    from modulo.db.crud.run import SandboxConcurrencyLimit
+    from farna.db.crud.run import SandboxConcurrencyLimit
 
     async def _fake_limit(_session: Any, _org: uuid.UUID) -> SandboxConcurrencyLimit:
         return SandboxConcurrencyLimit(cap=4, is_default=True)
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
-    from modulo.core.runner_capacity import read_runner_cap_contract
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
+    from farna.core.runner_capacity import read_runner_cap_contract
 
     cap, host_only = await read_runner_cap_contract(MagicMock(), _ORG)
     assert cap == 4
@@ -381,13 +381,13 @@ async def test_contract_flag_on_absent_key_activates_docker_tier_default(monkeyp
 async def test_contract_flag_on_explicit_value_gates_all_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=True)
 
-    from modulo.db.crud.run import SandboxConcurrencyLimit
+    from farna.db.crud.run import SandboxConcurrencyLimit
 
     async def _fake_limit(_session: Any, _org: uuid.UUID) -> SandboxConcurrencyLimit:
         return SandboxConcurrencyLimit(cap=2, is_default=False)
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
-    from modulo.core.runner_capacity import read_runner_cap_contract
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
+    from farna.core.runner_capacity import read_runner_cap_contract
 
     cap, host_only = await read_runner_cap_contract(MagicMock(), _ORG)
     assert cap == 2
@@ -397,13 +397,13 @@ async def test_contract_flag_on_explicit_value_gates_all_tiers(monkeypatch: pyte
 async def test_contract_flag_on_explicit_null_means_no_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=True)
 
-    from modulo.db.crud.run import SandboxConcurrencyLimit
+    from farna.db.crud.run import SandboxConcurrencyLimit
 
     async def _fake_limit(_session: Any, _org: uuid.UUID) -> SandboxConcurrencyLimit:
         return SandboxConcurrencyLimit(cap=None, is_default=False)
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
-    from modulo.core.runner_capacity import read_runner_cap_contract
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
+    from farna.core.runner_capacity import read_runner_cap_contract
 
     cap, _host_only = await read_runner_cap_contract(MagicMock(), _ORG)
     assert cap is None
@@ -453,27 +453,27 @@ async def test_gate_flag_on_statement_class_set_and_ordering(monkeypatch: pytest
     factory = MagicMock(return_value=session_cm)
 
     async def _fake_limit(_session: Any, _org: uuid.UUID) -> Any:
-        from modulo.db.crud.run import SandboxConcurrencyLimit
+        from farna.db.crud.run import SandboxConcurrencyLimit
 
         return SandboxConcurrencyLimit(cap=2, is_default=False)
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _fake_limit)
 
-    from modulo.core.runner_capacity import resolve_runner_capacity_decision
+    from farna.core.runner_capacity import resolve_runner_capacity_decision
 
     async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
-        from modulo.core.runner_capacity import RunnerCapacityDecision
+        from farna.core.runner_capacity import RunnerCapacityDecision
 
         return RunnerCapacityDecision(cap=2, active=1, host_resource_only=False)
 
     monkeypatch.setattr(
-        "modulo.core.runner_capacity.resolve_runner_capacity_decision",
+        "farna.core.runner_capacity.resolve_runner_capacity_decision",
         _fake_decision,
     )
     # resolve_runner_capacity_decision is called via the module-global name
     # inside acquire_runner_dispatch_slot; patch both spellings defensively.
     monkeypatch.setattr(
-        "modulo.core.runner_capacity.count_active_runner_dispatches_for_decision",
+        "farna.core.runner_capacity.count_active_runner_dispatches_for_decision",
         AsyncMock(return_value=1),
     )
     _ = resolve_runner_capacity_decision
@@ -537,11 +537,11 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
     factory = MagicMock(return_value=session_cm)
 
     async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
-        from modulo.core.runner_capacity import RunnerCapacityDecision
+        from farna.core.runner_capacity import RunnerCapacityDecision
 
         return RunnerCapacityDecision(cap=4, active=9, host_resource_only=True)
 
-    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
+    monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
         await acquire_runner_dispatch_slot(
@@ -560,7 +560,7 @@ async def test_gate_skips_cap_for_non_host_resource_provider(monkeypatch: pytest
     async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
         return RunnerCapacityDecision(cap=4, active=9, host_resource_only=True)
 
-    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
+    monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
     slot = await acquire_runner_dispatch_slot(
         factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_E2B
@@ -614,9 +614,9 @@ async def test_gate_fail_open_still_writes_marker_best_effort(monkeypatch: pytes
     async def _boom(*_a: Any, **_kw: Any) -> Any:
         raise RuntimeError("db down")
 
-    monkeypatch.setattr("modulo.db.crud.run.get_sandbox_concurrency_limit", _boom)
+    monkeypatch.setattr("farna.db.crud.run.get_sandbox_concurrency_limit", _boom)
 
-    from modulo.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker
+    from farna.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker
 
     key = await _sandbox_acquire_dispatch_marker(
         session_factory=factory,
@@ -724,7 +724,7 @@ def caplog_at_level_warning() -> Any:
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
-    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _logger = logging.getLogger("farna.core.runner_capacity")
     _prev_level = _logger.level
     handler = _Handler(level=logging.WARNING)
     _logger.addHandler(handler)
@@ -748,7 +748,7 @@ def caplog_at_level_error() -> Any:
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
-    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _logger = logging.getLogger("farna.core.runner_capacity")
     _prev_level = _logger.level
     handler = _Handler(level=logging.ERROR)
     _logger.addHandler(handler)
@@ -1012,7 +1012,7 @@ def _freeze_rc_now(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
     stale and the protected row get terminalised alongside the leak. Freezing the
     module's ``datetime`` to ``_NOW`` removes that collection-to-execution race.
     """
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _FrozenDatetime(datetime):
         @classmethod
@@ -1065,7 +1065,7 @@ def test_sweep_b_recoverable_beats_staleness() -> None:
 def test_sweep_c_terminal_anomaly_codes_exempt() -> None:
     """Rule (c): terminal runs carrying the rollback detector's anomaly error
     codes KEEP their markers."""
-    from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
+    from farna.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
 
     for code in sorted(SCRIPT_ANOMALY_ERROR_CODES):
         action = classify_sweep_action(
@@ -1361,8 +1361,8 @@ def test_sweep_recoverability_predicate_resolves_early_detect_window(
     judge it recoverable too — otherwise the sweep clears a dispatch marker it
     should keep. A defaulted argument at this call site silently diverged the
     two predicates, so this pins the window flows through."""
-    import modulo.core.cron_helpers as ch
-    import modulo.core.runner_capacity as rc
+    import farna.core.cron_helpers as ch
+    import farna.core.runner_capacity as rc
 
     captured: dict[str, Any] = {}
 
@@ -1391,8 +1391,8 @@ def test_sweep_recoverability_predicate_disables_early_detect_when_not_early(
     """When the early-detect window is not EARLIER than the full window the
     shared resolver returns None, so the scan and the sweep disable the branch
     identically — no silent one-sided divergence."""
-    import modulo.core.cron_helpers as ch
-    import modulo.core.runner_capacity as rc
+    import farna.core.cron_helpers as ch
+    import farna.core.runner_capacity as rc
 
     captured: dict[str, Any] = {}
 
@@ -1559,7 +1559,7 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     # The recoverability predicate build (cron_helpers import) is stubbed out —
@@ -1594,7 +1594,7 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
 
 async def test_sweep_org_index_cancellation_propagates() -> None:
     """Cancellation of the org-index query aborts the sweep, never swallowed."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     session = MagicMock()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError())
@@ -1613,7 +1613,7 @@ async def test_sweep_org_index_cancellation_propagates() -> None:
 
 async def test_sweep_org_pass_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cancellation inside an org pass aborts the sweep instead of counting it."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "_scan_org_markers", AsyncMock(side_effect=asyncio.CancelledError()))
     with pytest.raises(asyncio.CancelledError):
@@ -1652,7 +1652,7 @@ async def test_sweep_far1808_reclaims_node_started_leak_and_protects_fresh_heart
         saq_claimed_nodeless_minutes = 20
         node_started_stale_seconds = _NODE_STARTED_STALE
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -1709,7 +1709,7 @@ async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pyt
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -1781,7 +1781,7 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -1848,7 +1848,7 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -1897,7 +1897,7 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -1912,10 +1912,10 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
 
     factory = _FakeSweepFactory([stale_awaiting])
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.runner_capacity"):
         result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
-    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.DEBUG, logger="farna.core.runner_capacity")
     result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
     assert result["cleared"] == 1, "fail-open must proceed and clear the stale marker"
@@ -1941,7 +1941,7 @@ async def test_sweep_serialises_contending_sweeps_via_polling(
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2015,7 +2015,7 @@ async def test_marker_sweep_lock_engine_reads_real_sessionmaker_bind() -> None:
 def test_marker_sweep_lock_engine_requires_bound_engine() -> None:
     """``_marker_sweep_lock_engine`` must refuse a factory with no bound engine
     (no ``kw['bind']``) rather than leaking a broken connection later in the sweep."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _NoBind:
         pass
@@ -2031,7 +2031,7 @@ async def test_acquire_sweep_lock_connect_failure_fails_open(
     OPEN (``(False, None)``) and logs ``marker_sweep_lock_failed`` — never hangs or
     raises into the cron tick. ``engine.connect()`` sits inside the lock-acquire
     try, so a pool-exhaustion error is swallowed into fail-open."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _FailConnectEngine:
         async def connect(self) -> Any:
@@ -2040,7 +2040,7 @@ async def test_acquire_sweep_lock_connect_failure_fails_open(
     class _Factory:
         kw: ClassVar[dict[str, Any]] = {"bind": _FailConnectEngine()}
 
-    caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.WARNING, logger="farna.core.runner_capacity")
     acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
     assert acquired is False
     assert lock_conn is None
@@ -2053,7 +2053,7 @@ async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
     """If ``pg_try_advisory_lock`` itself raises on the open connection, the lock
     acquisition fails open AND the dedicated connection is still closed (no leak)
     — covering the acquire-side cleanup branch."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _FailExecConn:
         async def execute(self, stmt: Any, params: Any = None) -> Any:
@@ -2069,7 +2069,7 @@ async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
     class _Factory:
         kw: ClassVar[dict[str, Any]] = {"bind": _Engine()}
 
-    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.DEBUG, logger="farna.core.runner_capacity")
     acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
     assert acquired is False
     assert lock_conn is None
@@ -2081,7 +2081,7 @@ async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
 async def test_acquire_sweep_lock_cancelled_reraises() -> None:
     """The acquire loop must propagate ``asyncio.CancelledError`` so the sweep
     task can be cancelled cleanly (it must NOT be swallowed into fail-open)."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _CancelConn:
         async def execute(self, stmt: Any, params: Any = None) -> Any:
@@ -2107,7 +2107,7 @@ async def test_release_sweep_lock_unlock_failure_logs_and_closes(
     """If ``pg_advisory_unlock`` raises on the dedicated connection, the release
     logs ``marker_sweep_unlock_failed`` and STILL closes the connection (the
     close is the backstop that actually frees the lock)."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _UnlockFailConn:
         async def execute(self, stmt: Any, params: Any = None) -> Any:
@@ -2116,7 +2116,7 @@ async def test_release_sweep_lock_unlock_failure_logs_and_closes(
         async def close(self) -> None:
             return None
 
-    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.DEBUG, logger="farna.core.runner_capacity")
     await rc._release_sweep_dedup_lock(_UnlockFailConn(), 1, 2)
     assert any("runner.capacity.marker_sweep_unlock_failed" in r.message for r in caplog.records)
 
@@ -2127,7 +2127,7 @@ async def test_release_sweep_lock_close_failure_logs(
     """If the dedicated connection's ``close`` raises, the release must log
     ``marker_sweep_lock_conn_close_failed`` rather than propagate (the lock is
     already released by the unlock or will be reclaimed on disconnect)."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _CloseFailConn:
         async def execute(self, stmt: Any, params: Any = None) -> Any:
@@ -2136,7 +2136,7 @@ async def test_release_sweep_lock_close_failure_logs(
         async def close(self) -> None:
             raise RuntimeError("close down")
 
-    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.DEBUG, logger="farna.core.runner_capacity")
     await rc._release_sweep_dedup_lock(_CloseFailConn(), 1, 2)
     assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
 
@@ -2144,7 +2144,7 @@ async def test_release_sweep_lock_close_failure_logs(
 async def test_release_sweep_lock_cancelled_reraises() -> None:
     """The release must propagate ``asyncio.CancelledError`` so a cancelled
     sweep task tears down without swallowing the cancellation."""
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     class _CancelConn:
         async def execute(self, stmt: Any, params: Any = None) -> Any:
@@ -2166,7 +2166,7 @@ def test_sweep_sql_sandbox_id_asymmetry() -> None:
     ``_TRANSITION_STALE_RUNNING_SQL`` NULLS it — that run is killed, so its
     workspace must NOT be re-adopted (FAR-595 pinning test).
     """
-    from modulo.core import runner_capacity as rc
+    from farna.core import runner_capacity as rc
 
     clear_sql = str(rc._CLEAR_MARKER_SQL)
     transition_sql = str(rc._TRANSITION_STALE_RUNNING_SQL)
@@ -2195,7 +2195,7 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2253,7 +2253,7 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
     _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        caplog.at_level(logging.WARNING, logger="farna.core.runner_capacity"),
         pytest.raises(RunnerMarkerSweepError) as excinfo,
     ):
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
@@ -2273,7 +2273,7 @@ async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest
     """F5 liveness contract: the SAQ cron wrapper persists the PARTIAL counts
     with an enriched ``error`` (``sweep_failed (<ExceptionType>: <message>)``)
     BEFORE re-raising (SAQ retries engage)."""
-    from modulo.core import saq_worker
+    from farna.core import saq_worker
 
     persisted: list[tuple[str, dict[str, Any]]] = []
 
@@ -2286,7 +2286,7 @@ async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest
         raise RunnerMarkerSweepError(scanned=3, cleared=1, transitioned=0, org_failures=1)
 
     monkeypatch.setattr(
-        "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+        "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
         _boom,
     )
     monkeypatch.setattr(saq_worker, "_make_session_factory", lambda: MagicMock())
@@ -2311,10 +2311,10 @@ async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest
 async def test_sweep_wired_into_dispatcher_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sweep is invoked by the 60s dispatcher_reconcile compensating-sweep
     block — a sweep with zero production callers is a silent critical."""
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     called = AsyncMock(return_value={"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0})
-    monkeypatch.setattr("modulo.core.runner_capacity.reconcile_runner_dispatch_markers", called)
+    monkeypatch.setattr("farna.core.runner_capacity.reconcile_runner_dispatch_markers", called)
     summary = cron_helpers._dispatcher_summary()
     await cron_helpers._run_reconcile_sweeps(MagicMock(), summary)
     called.assert_awaited_once()
@@ -2323,10 +2323,10 @@ async def test_sweep_wired_into_dispatcher_reconcile(monkeypatch: pytest.MonkeyP
 async def test_sweep_wired_into_saq_cron(monkeypatch: pytest.MonkeyPatch) -> None:
     """The dedicated 5-min SAQ cron wrapper invokes the sweep (independent
     periodic path with a liveness key)."""
-    from modulo.core import saq_worker
+    from farna.core import saq_worker
 
     called = AsyncMock(return_value={"scanned": 1, "cleared": 1, "transitioned": 0, "violations": 0, "orgs_failed": 0})
-    monkeypatch.setattr("modulo.core.runner_capacity.reconcile_runner_dispatch_markers", called)
+    monkeypatch.setattr("farna.core.runner_capacity.reconcile_runner_dispatch_markers", called)
     result = await saq_worker.runner_marker_sweep({})
     called.assert_awaited_once()
     assert result["cleared"] == 1
@@ -2343,7 +2343,7 @@ async def test_sweep_violations_count_breach_only(monkeypatch: pytest.MonkeyPatc
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2354,14 +2354,14 @@ async def test_sweep_violations_count_breach_only(monkeypatch: pytest.MonkeyPatc
     async def _uncapped(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
         return RunnerCapacityDecision(cap=None, active=3, host_resource_only=False)
 
-    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _uncapped)
+    monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _uncapped)
     result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
     assert result["violations"] == 0, "a cap-less org's live markers are activity, not a breach"
 
     async def _breached(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
         return RunnerCapacityDecision(cap=1, active=2, host_resource_only=False)
 
-    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _breached)
+    monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _breached)
     result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
     assert result["violations"] == 1, "a genuine breach (active > cap) is counted exactly once per org"
 
@@ -2381,11 +2381,11 @@ async def test_resume_gate_converges_onto_reserved_namespace(monkeypatch: pytest
     class _S(_FakeGateSettings):
         runner_capacity_gate_enabled = True
 
-    # The executor imports get_settings from modulo.settings directly.
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    # The executor imports get_settings from farna.settings directly.
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
 
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-    from modulo.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
+    from farna.core.connector_hub.locking import _uuid_to_lock_keys
+    from farna.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
 
     executor = PipelineExecutor(MagicMock())
     executed: list[tuple[str, Any]] = []
@@ -2407,21 +2407,21 @@ async def test_resume_gate_converges_onto_reserved_namespace(monkeypatch: pytest
         return {"nodes": [{"id": "s", "node_type": "sandbox_agent"}], "edges": []}
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent",
+        "farna.core.pipeline_engine.executor._graph_contains_sandbox_agent",
         lambda _graph: True,
     )
 
     async def _fake_contract(_session: Any, _org: uuid.UUID) -> tuple[int | None, bool]:
         return 2, False
 
-    monkeypatch.setattr("modulo.core.runner_capacity.read_runner_cap_contract", _fake_contract)
-    from modulo.core.runner_capacity import count_active_runner_dispatches_for_decision
+    monkeypatch.setattr("farna.core.runner_capacity.read_runner_cap_contract", _fake_contract)
+    from farna.core.runner_capacity import count_active_runner_dispatches_for_decision
 
     async def _fake_count(_session: Any, _org: uuid.UUID, **_kw: Any) -> int:
         return 2
 
     monkeypatch.setattr(
-        "modulo.core.runner_capacity.count_active_runner_dispatches_for_decision",
+        "farna.core.runner_capacity.count_active_runner_dispatches_for_decision",
         _fake_count,
     )
     _ = count_active_runner_dispatches_for_decision
@@ -2455,11 +2455,11 @@ async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
         runner_capacity_gate_enabled = True
         runner_capacity_lock_timeout_ms = 750
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
 
     from sqlalchemy.exc import DBAPIError
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
+    from farna.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
 
     executor = PipelineExecutor(MagicMock())
     inner = Exception("lock timeout")
@@ -2475,14 +2475,14 @@ async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
 
     session.execute = AsyncMock(side_effect=_execute)
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent",
+        "farna.core.pipeline_engine.executor._graph_contains_sandbox_agent",
         lambda _graph: True,
     )
 
     async def _fake_contract(_session: Any, _org: uuid.UUID) -> tuple[int | None, bool]:
         return 2, False
 
-    monkeypatch.setattr("modulo.core.runner_capacity.read_runner_cap_contract", _fake_contract)
+    monkeypatch.setattr("farna.core.runner_capacity.read_runner_cap_contract", _fake_contract)
 
     with pytest.raises(SandboxCapacityExceededError) as exc_info:
         await executor._enforce_resume_sandbox_capacity(
@@ -2491,7 +2491,7 @@ async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
     # The mapped error carries the 55P03 DBAPI chain (sqlstate_of extraction).
     dbapi_cause = exc_info.value.__cause__
     assert dbapi_cause is not None
-    from modulo.db.sqlstates import sqlstate_of
+    from farna.db.sqlstates import sqlstate_of
 
     assert sqlstate_of(dbapi_cause) == "55P03"
 
@@ -2522,7 +2522,7 @@ async def test_sweep_org_lock_timeout_fail_open(
         saq_claimed_nodeless_minutes = 20
         runner_marker_sweep_lock_timeout_seconds = 1
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2587,7 +2587,7 @@ async def test_sweep_org_lock_timeout_fail_open(
 
     t0 = time.monotonic()
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        caplog.at_level(logging.WARNING, logger="farna.core.runner_capacity"),
         pytest.raises(RunnerMarkerSweepError) as excinfo,
     ):
         await reconcile_runner_dispatch_markers(_factory_with_lock_timeout)  # type: ignore[arg-type]
@@ -2623,7 +2623,7 @@ async def test_sweep_lock_timeout_only_affected_org(
         saq_claimed_nodeless_minutes = 20
         runner_marker_sweep_lock_timeout_seconds = 1
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2687,7 +2687,7 @@ async def test_sweep_lock_timeout_only_affected_org(
     _two_org_factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        caplog.at_level(logging.WARNING, logger="farna.core.runner_capacity"),
         pytest.raises(RunnerMarkerSweepError) as excinfo,
     ):
         await reconcile_runner_dispatch_markers(_two_org_factory)  # type: ignore[arg-type]
@@ -2731,7 +2731,7 @@ async def test_org_index_query_runs_inside_explicit_transaction(monkeypatch: pyt
         saq_reenqueue_window = 600
         saq_claimed_nodeless_minutes = 20
 
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
@@ -2813,7 +2813,7 @@ class TestHotRunsRowLockBoundFAR1601:
         the call site) — patched so no test builds a real ``Settings`` and so
         the pin can assert an exact value."""
         with patch(
-            "modulo.db.crud.row_lock.get_settings",
+            "farna.db.crud.row_lock.get_settings",
             return_value=MagicMock(mutation_row_lock_timeout_ms=4321),
         ):
             yield
@@ -2862,7 +2862,7 @@ class TestHotRunsRowLockBoundFAR1601:
         async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
             return RunnerCapacityDecision(cap=None, active=0, host_resource_only=False)
 
-        monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
+        monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
         slot = await acquire_runner_dispatch_slot(
             factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b"
@@ -2989,7 +2989,7 @@ class TestHotRunsRowLockBoundFAR1601:
         session.execute = AsyncMock(side_effect=_execute)
         session.get_bind = MagicMock(return_value=_pg_bind())
 
-        caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+        caplog.set_level(logging.WARNING, logger="farna.core.runner_capacity")
         tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
 
         assert tombstoned is False, "a bounded-wait expiry must not report a tombstone"
@@ -3027,7 +3027,7 @@ class TestHotRunsRowLockBoundFAR1601:
         session.execute = AsyncMock(side_effect=_execute)
         session.get_bind = MagicMock(return_value=_pg_bind())
 
-        caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+        caplog.set_level(logging.WARNING, logger="farna.core.runner_capacity")
         tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
 
         assert tombstoned is False, "a failed tombstone write must not report a tombstone"

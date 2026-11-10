@@ -3,11 +3,11 @@ id: feat-core-secrets-backend
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/secrets_backend/__init__.py
-  - backend/src/modulo/core/secrets_backend/fernet.py
-  - backend/src/modulo/core/secrets_backend/vault.py
-  - backend/src/modulo/core/secrets_backend/aws.py
-  - backend/src/modulo/core/fernet_rotation.py
+  - backend/src/farna/core/secrets_backend/__init__.py
+  - backend/src/farna/core/secrets_backend/fernet.py
+  - backend/src/farna/core/secrets_backend/vault.py
+  - backend/src/farna/core/secrets_backend/aws.py
+  - backend/src/farna/core/fernet_rotation.py
 unit-tests:
   - backend/tests/unit/secrets_backend/test_factory.py
   - backend/tests/unit/secrets_backend/test_fernet_backend.py

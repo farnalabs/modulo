@@ -29,12 +29,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes import costs as costs_routes
-from modulo.api.routes.costs import UpdateCostControlsRequest
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cost_controller.finalize import _ledger_block
-from modulo.core.runner_capacity import lock_org_cost_state
-from modulo.db.sqlstates import sqlstate_of
+from farna.api.routes import costs as costs_routes
+from farna.api.routes.costs import UpdateCostControlsRequest
+from farna.auth.jwt import TenantPrincipal
+from farna.core.cost_controller.finalize import _ledger_block
+from farna.core.runner_capacity import lock_org_cost_state
+from farna.db.sqlstates import sqlstate_of
 
 pytestmark = pytest.mark.integration
 
@@ -234,7 +234,7 @@ async def test_contended_cost_state_lock_degrades_to_bounded_55p03_not_40p01(
     unbounded wait and never a 40P01 deadlock abort.
     """
     monkeypatch.setenv("MUTATION_ROW_LOCK_TIMEOUT_MS", str(_SHORT_LOCK_TIMEOUT_MS))
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
 

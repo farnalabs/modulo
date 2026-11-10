@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.analytics import (
+from farna.core.analytics import (
     _derive_graph_dimensions,
     _fact_duration_ms,
     _fact_final_idle_ms,
@@ -36,9 +36,9 @@ from modulo.core.analytics import (
     _fact_telemetry_bytes,
     _fact_total_queue_wait_ms,
 )
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.db.models.base import Base
+from farna.db.models.run import Run
 from tests.unit._store_seed import seed_run_blobs
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}

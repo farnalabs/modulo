@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.error_tracking.alert_dispatcher import (
+from farna.core.error_tracking.alert_dispatcher import (
     _build_summary,
     _dispatch_webhook,
     _escape_html,
@@ -22,7 +22,7 @@ from modulo.core.error_tracking.alert_dispatcher import (
     dispatch_alert,
     dispatch_alert_resolved,
 )
-from modulo.db.models.organisation import Organisation
+from farna.db.models.organisation import Organisation
 from tests.unit.error_tracking._factories import make_alert, make_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -32,7 +32,7 @@ _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 def _patch_pinned(**kwargs: object) -> object:
     """Patch the dispatcher's pinned-client SSRF seam with an async mock."""
     return patch(
-        "modulo.core.error_tracking.alert_dispatcher.pinned_async_client",
+        "farna.core.error_tracking.alert_dispatcher.pinned_async_client",
         new_callable=AsyncMock,
         **kwargs,
     )
@@ -114,7 +114,7 @@ def _run_sync(fn: object, *args: object, **kwargs: object) -> object:
 
 def _patch_to_thread() -> object:
     """Run the email path's ``asyncio.to_thread`` work inline."""
-    return patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync)
+    return patch("farna.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync)
 
 
 class TestEscapeHtml:
@@ -133,7 +133,7 @@ class TestBuildSummary:
 class TestDispatchRouting:
     async def test_unknown_action_type_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         alert = make_alert(action_type="sms", webhook_url=None)
-        with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
+        with caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"):
             await dispatch_alert(_ORG_ID, alert, make_session())
         assert any("alert.unknown_action_type" in rec.message for rec in caplog.records)
         assert any(getattr(rec, "action_type", None) == "sms" for rec in caplog.records)
@@ -223,8 +223,8 @@ class TestDispatchEmail:
         settings = _MockSettings()
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
             _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
@@ -249,8 +249,8 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="global.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
             _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
@@ -263,9 +263,9 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email") as send,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -277,9 +277,9 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="smtp.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email") as send,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -295,9 +295,9 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="smtp.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email") as send,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -313,17 +313,17 @@ class TestDispatchEmail:
         )
         settings = _MockSettings(smtp_host="smtp.example.com")
 
-        from modulo.core.email_service import EmailSendingError
+        from farna.core.email_service import EmailSendingError
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch(
-                "modulo.core.error_tracking.alert_dispatcher.send_email",
+                "farna.core.error_tracking.alert_dispatcher.send_email",
                 side_effect=EmailSendingError("smtp down"),
             ),
             _patch_to_thread(),
-            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, alert, session)
 
@@ -339,11 +339,11 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="smtp.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=False),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=False),
             _patch_to_thread(),
-            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
-            caplog.at_level("INFO", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("INFO", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -362,10 +362,10 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="smtp.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", side_effect=RuntimeError("boom")),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", side_effect=RuntimeError("boom")),
             _patch_to_thread(),
-            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
+            caplog.at_level("ERROR", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -392,8 +392,8 @@ class TestDispatchEmail:
         settings = _MockSettings(smtp_host="global.example.com")
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("farna.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
             _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
@@ -409,8 +409,8 @@ class TestDispatchEmail:
         settings = _MockSettings()
 
         with (
-            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
-            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            caplog.at_level("ERROR", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -419,7 +419,7 @@ class TestDispatchEmail:
 
 class TestDispatchWebhook:
     async def test_webhook_no_url_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
+        with caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"):
             await _dispatch_webhook(make_alert(webhook_url=None), "", "/admin/errors/x")
         assert any("alert.webhook_no_url" in rec.message for rec in caplog.records)
 
@@ -468,8 +468,8 @@ class TestDispatchWebhook:
         client.responses = [_FakeResponseFail()]
         with (
             _patch_pinned(return_value=client),
-            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await _dispatch_webhook(alert, "", "/admin/errors/x")
 
@@ -482,7 +482,7 @@ class TestDispatchWebhook:
         alert = make_alert()
         with (
             _patch_pinned(return_value=_FakeClientError()),
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, alert, make_session())
 
@@ -491,8 +491,8 @@ class TestDispatchWebhook:
     async def test_webhook_request_error_records_failure(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             _patch_pinned(return_value=_FakeClientError()),
-            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await _dispatch_webhook(make_alert(), "", "/admin/errors/x")
 
@@ -505,8 +505,8 @@ class TestDispatchWebhook:
             _patch_pinned(
                 side_effect=ValueError("outbound URL blocked: private/metadata address"),
             ),
-            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await _dispatch_webhook(
                 make_alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x"
@@ -562,7 +562,7 @@ class TestDispatchAlertResolved:
         client.responses = [_FakeResponseFail()]
         with (
             _patch_pinned(return_value=client),
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(
                 _ORG_ID,
@@ -580,7 +580,7 @@ class TestDispatchAlertResolved:
             _patch_pinned(
                 side_effect=ValueError("outbound URL blocked: private/metadata address"),
             ),
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(
                 _ORG_ID,
@@ -597,7 +597,7 @@ class TestDispatchAlertResolved:
         session = make_session()
         with (
             _patch_pinned(return_value=_FakeClientError()),
-            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+            caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert_resolved(
                 _ORG_ID,

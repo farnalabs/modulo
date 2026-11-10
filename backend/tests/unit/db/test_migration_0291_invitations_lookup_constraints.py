@@ -43,11 +43,11 @@ import pytest
 from sqlalchemy import CheckConstraint, create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from modulo.db.crud.invitations import _live_conditions
-from modulo.db.models.invitation import Invitation
+from farna.db.crud.invitations import _live_conditions
+from farna.db.models.invitation import Invitation
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0291_invitations_lookup_constraints"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0290_scheduled_reports_due_scan"

@@ -18,12 +18,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.work_item_enrichment import clear_enrichment_cache
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.work_item_enrichment import clear_enrichment_cache
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -124,8 +124,8 @@ def _install_overrides(session: AsyncMock, *, org_role: str = "admin") -> None:
 def _clean_state():
     clear_enrichment_cache()
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.work_item_enrichment.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.work_item_enrichment.set_rls_org", new_callable=AsyncMock),
     ):
         yield
     clear_enrichment_cache()
@@ -181,16 +181,16 @@ def _enrich_env(*, run: MagicMock | Exception, instances: list, hub: MagicMock):
     lister = AsyncMock(return_value=SimpleNamespace(items=instances))
     hub_cls = MagicMock(return_value=hub)
     run_patcher = (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=run)
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=run)
         if isinstance(run, Exception)
-        else patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run)
+        else patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run)
     )
     with (
         run_patcher,
-        patch("modulo.core.work_item_enrichment.list_connector_instances", new=lister),
-        patch("modulo.core.work_item_enrichment.ConnectorHub", hub_cls),
+        patch("farna.core.work_item_enrichment.list_connector_instances", new=lister),
+        patch("farna.core.work_item_enrichment.ConnectorHub", hub_cls),
         patch(
-            "modulo.core.work_item_enrichment.create_secrets_backend",
+            "farna.core.work_item_enrichment.create_secrets_backend",
             MagicMock(return_value=MagicMock()),
         ),
     ):
@@ -358,7 +358,7 @@ def test_enrichment_unknown_run_returns_404(client: tuple[TestClient, AsyncMock]
 def test_enrichment_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc),
     ):
         resp = http.get(_ENDPOINT)
 

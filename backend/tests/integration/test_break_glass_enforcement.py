@@ -20,9 +20,9 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.db.bootstrap_role import ACCOUNTS_WRITABLE_COLUMNS, _find_allow_list_violations
-from modulo.db.crud.break_glass_deny import BREAK_GLASS_COLUMNS
-from modulo.db.crud.org_membership import resolve_role_from_membership
+from farna.db.bootstrap_role import ACCOUNTS_WRITABLE_COLUMNS, _find_allow_list_violations
+from farna.db.crud.break_glass_deny import BREAK_GLASS_COLUMNS
+from farna.db.crud.org_membership import resolve_role_from_membership
 
 pytestmark = pytest.mark.integration
 _BG_COLS = tuple(BREAK_GLASS_COLUMNS)

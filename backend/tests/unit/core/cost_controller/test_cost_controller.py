@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.core.cost_controller import (
+from farna.core.cost_controller import (
     build_cost_report_buckets,
     check_and_record_spend,
     get_cost_export_rows,
@@ -37,7 +37,7 @@ def mock_session() -> AsyncMock:
 
 @pytest.fixture(autouse=True)
 def _freeze_datetime() -> Iterator[None]:
-    with patch("modulo.core.cost_controller.datetime") as mock_dt:
+    with patch("farna.core.cost_controller.datetime") as mock_dt:
         mock_dt.now.return_value = _FROZEN
         mock_dt.UTC = UTC
         mock_dt.date = date
@@ -203,7 +203,7 @@ class TestCheckAndRecordSpend:
         org_count = _make_daily_count_row(run_count=2, total_spend_usd=Decimal(10))
         mock_session.execute = self._mock_execute(self._scalar_none())
         with patch(
-            "modulo.core.cost_controller.get_or_create_daily_count",
+            "farna.core.cost_controller.get_or_create_daily_count",
             new=AsyncMock(return_value=org_count),
         ):
             approved, reason = await check_and_record_spend(
@@ -228,7 +228,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),  # org limit
             self._scalar_one(Decimal(50)),  # created-at SUM (excludes current)
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -246,7 +246,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),
             self._scalar_one(Decimal(40)),  # other runs at 40; +10 current = 50 (half)
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
             approved, _ = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -262,7 +262,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),
             self._scalar_one(Decimal(100)),  # other runs AT the limit
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -280,7 +280,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),
             self._scalar_one(Decimal(95)),
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -302,7 +302,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),  # org limit
             self._scalar_one(Decimal(100)),  # created-at SUM already AT the limit
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_saturated)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_saturated)):
             approved, reason = await check_and_record_spend(
                 mock_session,
                 org_id=_ORG_ID,
@@ -328,7 +328,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(30)),  # team SUM
         )
         with patch(
-            "modulo.core.cost_controller.get_or_create_daily_count",
+            "farna.core.cost_controller.get_or_create_daily_count",
             new=AsyncMock(side_effect=[org_count, team_count]),
         ):
             approved, reason = await check_and_record_spend(
@@ -360,7 +360,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(45)),
         )
         with patch(
-            "modulo.core.cost_controller.get_or_create_daily_count",
+            "farna.core.cost_controller.get_or_create_daily_count",
             new=AsyncMock(side_effect=[org_refused, team_refused]),
         ):
             approved, reason = await check_and_record_spend(
@@ -390,7 +390,7 @@ class TestCheckAndRecordSpend:
             self._scalar_none(),  # team limit NULL
         )
         with patch(
-            "modulo.core.cost_controller.get_or_create_daily_count",
+            "farna.core.cost_controller.get_or_create_daily_count",
             new=AsyncMock(side_effect=[org_count, team_count]),
         ):
             approved, reason = await check_and_record_spend(
@@ -412,7 +412,7 @@ class TestCheckAndRecordSpend:
         mock_session.execute = self._mock_execute(
             self._scalar_none(),
         )
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -450,7 +450,7 @@ class TestCheckAndRecordSpend:
     async def test_approves_zero_cost(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(10))
         mock_session.execute = self._mock_execute(self._scalar_none())
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -463,7 +463,7 @@ class TestCheckAndRecordSpend:
         """The started-at-day row over the column ceiling is clamped + flagged."""
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("99999999.999998"))
         mock_session.execute = self._mock_execute(self._scalar_none())
-        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+        with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
             approved, reason = await check_and_record_spend(
                 mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
             )
@@ -691,7 +691,7 @@ class TestGetCostExportRows:
             }
         ]
         delegated = AsyncMock(return_value=team_rows)
-        monkeypatch.setattr("modulo.core.cost_controller.get_cost_report", delegated)
+        monkeypatch.setattr("farna.core.cost_controller.get_cost_report", delegated)
 
         rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="team", period="month")
 

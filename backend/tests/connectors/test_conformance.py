@@ -30,7 +30,7 @@ import json
 
 import pytest
 
-from modulo.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorType
 from tests.connectors._conformance import assert_health_shape, assert_result_shape, assert_write_result_shape
 
 pytestmark = pytest.mark.connector_conformance

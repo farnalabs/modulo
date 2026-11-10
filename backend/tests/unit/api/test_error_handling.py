@@ -15,17 +15,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.sql import Select, Update
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     _get_session_factory,
     get_db_session,
     get_plan_context,
     get_system_db_session,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -593,7 +593,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         None,
         "database",
-        "modulo.api.routes.schemas.list_schemas",
+        "farna.api.routes.schemas.list_schemas",
     ),
     (
         "schemas_list_sqla",
@@ -603,7 +603,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         None,
         None,
-        "modulo.api.routes.schemas.list_schemas",
+        "farna.api.routes.schemas.list_schemas",
     ),
     (
         "schemas_create_prog",
@@ -613,7 +613,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         {"name": "Test", "description": "test"},
         "database",
-        "modulo.api.routes.schemas.create_schema",
+        "farna.api.routes.schemas.create_schema",
     ),
     (
         "schemas_create_sqla",
@@ -623,7 +623,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         {"name": "Test", "description": "test"},
         None,
-        "modulo.api.routes.schemas.create_schema",
+        "farna.api.routes.schemas.create_schema",
     ),
     (
         "schemas_create_integrity",
@@ -633,7 +633,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         409,
         {"name": "Test", "description": "test"},
         "already exists",
-        "modulo.api.routes.schemas.create_schema",
+        "farna.api.routes.schemas.create_schema",
     ),
     (
         "schemas_get_prog",
@@ -643,7 +643,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         None,
         "database",
-        "modulo.api.routes.schemas.get_schema",
+        "farna.api.routes.schemas.get_schema",
     ),
     (
         "schemas_get_sqla",
@@ -653,7 +653,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         None,
         None,
-        "modulo.api.routes.schemas.get_schema",
+        "farna.api.routes.schemas.get_schema",
     ),
     (
         "schemas_update_prog",
@@ -663,7 +663,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         {"name": "x"},
         "database",
-        "modulo.api.routes.schemas.update_schema",
+        "farna.api.routes.schemas.update_schema",
     ),
     (
         "schemas_update_sqla",
@@ -673,7 +673,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         None,
         None,
-        "modulo.api.routes.schemas.update_schema",
+        "farna.api.routes.schemas.update_schema",
     ),
     (
         "schemas_update_integrity",
@@ -683,7 +683,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         409,
         {"name": "x"},
         "already exists",
-        "modulo.api.routes.schemas.update_schema",
+        "farna.api.routes.schemas.update_schema",
     ),
     (
         "schemas_delete_prog",
@@ -693,7 +693,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         None,
         "database",
-        "modulo.api.routes.schemas.delete_schema",
+        "farna.api.routes.schemas.delete_schema",
     ),
     (
         "schemas_delete_sqla",
@@ -703,7 +703,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         None,
         None,
-        "modulo.api.routes.schemas.delete_schema",
+        "farna.api.routes.schemas.delete_schema",
     ),
     (
         "schemas_deprecate_prog",
@@ -713,7 +713,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         501,
         None,
         "database",
-        "modulo.api.routes.schemas.deprecate_schema",
+        "farna.api.routes.schemas.deprecate_schema",
     ),
     (
         "schemas_deprecate_sqla",
@@ -723,7 +723,7 @@ PATCH_CASES: list[tuple[str, str, str, type, int, dict | None, str | None, str |
         503,
         None,
         None,
-        "modulo.api.routes.schemas.deprecate_schema",
+        "farna.api.routes.schemas.deprecate_schema",
     ),
 ]
 
@@ -758,9 +758,9 @@ class TestPatchLevelErrors:
         # they must be left alone.
         with ExitStack() as stack:
             stack.enter_context(patch(mock_target, mock_fn))
-            stack.enter_context(patch("modulo.api.routes.schemas.set_rls_org"))
-            if mock_target != "modulo.api.routes.schemas.get_schema":
-                stack.enter_context(patch("modulo.api.routes.schemas.get_schema", return_value=_make_owned_schema()))
+            stack.enter_context(patch("farna.api.routes.schemas.set_rls_org"))
+            if mock_target != "farna.api.routes.schemas.get_schema":
+                stack.enter_context(patch("farna.api.routes.schemas.get_schema", return_value=_make_owned_schema()))
 
             if method == "GET":
                 resp = client.get(url)
@@ -801,9 +801,9 @@ def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> Non
     schema.deprecated_at = None
 
     with (
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.update_schema", new_callable=AsyncMock, return_value=schema) as mock_update,
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=schema),
+        patch("farna.api.routes.schemas.update_schema", new_callable=AsyncMock, return_value=schema) as mock_update,
     ):
         resp = client.patch(
             f"/api/v1/schemas/{_SCHEMA_ID}",
@@ -1048,9 +1048,9 @@ def test_model_backend_create_persists_health_check_on_save(client: TestClient) 
 
     from cryptography.fernet import Fernet
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.db.models.model_backend import ModelBackend
+    from farna.settings import Settings, get_settings
 
     backend_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -1095,12 +1095,12 @@ def test_model_backend_create_persists_health_check_on_save(client: TestClient) 
     )
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_model_backend", return_value=mb),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save",
+            "farna.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("unhealthy", "401 Incorrect API key provided")),
         ),
     ):
@@ -1130,9 +1130,9 @@ def test_model_backend_update_persists_health_check_on_key_rotation(client: Test
 
     from cryptography.fernet import Fernet
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.db.models.model_backend import ModelBackend
+    from farna.settings import Settings, get_settings
 
     backend_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -1175,13 +1175,13 @@ def test_model_backend_update_persists_health_check_on_key_rotation(client: Test
     )
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=mb),
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=mb),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=mb),
+        patch("farna.api.routes.model_backends.update_model_backend", return_value=mb),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save",
+            "farna.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("unhealthy", "429 rate limit exceeded")),
         ),
     ):
@@ -1199,12 +1199,12 @@ def test_model_backend_update_persists_health_check_on_key_rotation(client: Test
 
 async def test_run_health_check_on_save_ok() -> None:
     """A provider that responds OK maps to ('ok', None)."""
-    from modulo.api.routes.model_backends import _run_health_check_on_save
-    from modulo.model_backends.base import HealthResult
+    from farna.api.routes.model_backends import _run_health_check_on_save
+    from farna.model_backends.base import HealthResult
 
     fake = AsyncMock()
     fake.health_check = AsyncMock(return_value=HealthResult(ok=True))
-    with patch("modulo.api.routes.model_backends._build_backend", return_value=fake):
+    with patch("farna.api.routes.model_backends._build_backend", return_value=fake):
         status_, detail = await _run_health_check_on_save("openai", "gpt-4o", "sk-test", {})
 
     assert status_ == "ok"
@@ -1214,12 +1214,12 @@ async def test_run_health_check_on_save_ok() -> None:
 async def test_run_health_check_on_save_unhealthy() -> None:
     """A provider-reported failure (auth / quota / status code) maps to
     ('unhealthy', <provider detail>)."""
-    from modulo.api.routes.model_backends import _run_health_check_on_save
-    from modulo.model_backends.base import HealthResult
+    from farna.api.routes.model_backends import _run_health_check_on_save
+    from farna.model_backends.base import HealthResult
 
     fake = AsyncMock()
     fake.health_check = AsyncMock(return_value=HealthResult(ok=False, detail="401 Incorrect API key provided"))
-    with patch("modulo.api.routes.model_backends._build_backend", return_value=fake):
+    with patch("farna.api.routes.model_backends._build_backend", return_value=fake):
         status_, detail = await _run_health_check_on_save("openai", "gpt-4o", "sk-test", {})
 
     assert status_ == "unhealthy"
@@ -1231,12 +1231,12 @@ async def test_run_health_check_on_save_not_applicable_when_build_fails() -> Non
     needs 'project', bedrock aws keys, watsonx 'project_id', azure 'azure_endpoint')
     maps to ('not_applicable', None) — NOT a health failure, so the graph
     validator must never surface MODEL_BACKEND_UNHEALTHY for it."""
-    from modulo.api.routes.model_backends import _run_health_check_on_save
+    from farna.api.routes.model_backends import _run_health_check_on_save
 
     def _raise(*args: object, **kwargs: object) -> object:
         raise ValueError("Missing 'project' in credentials for provider 'vertexai'")
 
-    with patch("modulo.api.routes.model_backends._build_backend", side_effect=_raise):
+    with patch("farna.api.routes.model_backends._build_backend", side_effect=_raise):
         status_, detail = await _run_health_check_on_save("vertexai", "gemini-pro", "sk-test", {})
 
     assert status_ == "not_applicable"
@@ -1246,11 +1246,11 @@ async def test_run_health_check_on_save_not_applicable_when_build_fails() -> Non
 async def test_run_health_check_on_save_exception_maps_unhealthy() -> None:
     """An exception raised by the provider health check (network error, timeout,
     provider SDK failure) maps to ('unhealthy', <truncated message>)."""
-    from modulo.api.routes.model_backends import _run_health_check_on_save
+    from farna.api.routes.model_backends import _run_health_check_on_save
 
     fake = AsyncMock()
     fake.health_check = AsyncMock(side_effect=RuntimeError("boom"))
-    with patch("modulo.api.routes.model_backends._build_backend", return_value=fake):
+    with patch("farna.api.routes.model_backends._build_backend", return_value=fake):
         status_, detail = await _run_health_check_on_save("openai", "gpt-4o", "sk-test", {})
 
     assert status_ == "unhealthy"
@@ -1266,9 +1266,9 @@ def test_model_backend_recheck_health_persists_result(client: TestClient) -> Non
 
     from cryptography.fernet import Fernet
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.db.models.model_backend import ModelBackend
+    from farna.settings import Settings, get_settings
 
     backend_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -1305,17 +1305,17 @@ def test_model_backend_recheck_health_persists_result(client: TestClient) -> Non
         yield mock_session
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save",
+            "farna.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("ok", None)),
         ) as mock_health,
         # FAR-2046: the re-check reads the stored base_url from the credential
         # JSON, so the secrets backend must be stubbed (this suite's session
         # mock rejects unexpected executes).
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         client.app.dependency_overrides[get_settings] = lambda: settings
         client.app.dependency_overrides[get_db_session] = override_session
@@ -1339,9 +1339,9 @@ def test_model_backend_recheck_health_clears_not_applicable_error(client: TestCl
 
     from cryptography.fernet import Fernet
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.db.models.model_backend import ModelBackend
+    from farna.settings import Settings, get_settings
 
     backend_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -1377,14 +1377,14 @@ def test_model_backend_recheck_health_clears_not_applicable_error(client: TestCl
         yield mock_session
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
         patch(
-            "modulo.api.routes.model_backends._run_health_check_on_save",
+            "farna.api.routes.model_backends._run_health_check_on_save",
             new=AsyncMock(return_value=("not_applicable", None)),
         ),
-        patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+        patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
     ):
         client.app.dependency_overrides[get_settings] = lambda: settings
         client.app.dependency_overrides[get_db_session] = override_session
@@ -1399,8 +1399,8 @@ def test_model_backend_recheck_health_404_when_missing(client: TestClient) -> No
     """Re-checking a backend that does not exist returns 404 before any check."""
     from unittest.mock import AsyncMock, patch
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.settings import Settings, get_settings
 
     mock_session = _make_mock_session()
 
@@ -1415,9 +1415,9 @@ def test_model_backend_recheck_health_404_when_missing(client: TestClient) -> No
     )
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         client.app.dependency_overrides[get_settings] = lambda: settings
         client.app.dependency_overrides[get_db_session] = override_session
@@ -1432,7 +1432,7 @@ def test_delete_model_backend_blocked_by_non_terminal_run_snapshot(client: TestC
     resolve the pinned backend, e.g. after a HITL pause/resume)."""
     from unittest.mock import AsyncMock, patch
 
-    from modulo.api.dependencies import get_db_session
+    from farna.api.dependencies import get_db_session
 
     backend_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -1443,16 +1443,16 @@ def test_delete_model_backend_blocked_by_non_terminal_run_snapshot(client: TestC
 
     with (
         patch(
-            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            "farna.api.routes.model_backends.list_backends_referencing_fallback",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "modulo.api.routes.model_backends._list_snapshots_referencing_backend",
+            "farna.api.routes.model_backends._list_snapshots_referencing_backend",
             new=AsyncMock(return_value=[{"snapshot_id": snapshot_id, "pipeline_id": uuid.uuid4()}]),
         ),
-        patch("modulo.api.routes.model_backends.delete_model_backend") as mock_delete,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.delete_model_backend") as mock_delete,
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/model-backends/{backend_id}")
@@ -1469,8 +1469,8 @@ def test_delete_model_backend_allowed_when_snapshot_runs_terminal(client: TestCl
     from datetime import UTC, datetime
     from unittest.mock import AsyncMock, patch
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.db.models.model_backend import ModelBackend
+    from farna.api.dependencies import get_db_session
+    from farna.db.models.model_backend import ModelBackend
 
     backend_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -1497,21 +1497,21 @@ def test_delete_model_backend_allowed_when_snapshot_runs_terminal(client: TestCl
 
     with (
         patch(
-            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            "farna.api.routes.model_backends.list_backends_referencing_fallback",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "modulo.api.routes.model_backends._list_snapshots_referencing_backend",
+            "farna.api.routes.model_backends._list_snapshots_referencing_backend",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
-        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("farna.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
+        patch("farna.api.routes.model_backends.delete_model_backend", return_value=True),
         patch(
-            "modulo.api.routes.model_backends.append_audit_event_isolated",
+            "farna.api.routes.model_backends.append_audit_event_isolated",
             new=AsyncMock(return_value=MagicMock()),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/model-backends/{backend_id}")
@@ -1558,14 +1558,14 @@ class TestCronTimezoneValidation:
     """
 
     def test_invalid_timezone_returns_error_string(self) -> None:
-        from modulo.core.cron_helpers import validate_cron_expression
+        from farna.core.cron_helpers import validate_cron_expression
 
         error = validate_cron_expression("0 0 * * *", timezone="Not/AZone")
         assert error is not None
         assert "Invalid timezone" in error
 
     def test_valid_timezone_returns_none(self) -> None:
-        from modulo.core.cron_helpers import validate_cron_expression
+        from farna.core.cron_helpers import validate_cron_expression
 
         assert validate_cron_expression("0 0 * * *", timezone="America/New_York") is None
 
@@ -1586,8 +1586,8 @@ class TestCronTimezoneValidation:
         session.execute = AsyncMock(return_value=result)
 
         with (
-            patch("modulo.api.routes.triggers.set_rls_org"),
-            patch("modulo.api.routes.triggers.compute_next_fire") as mock_next,
+            patch("farna.api.routes.triggers.set_rls_org"),
+            patch("farna.api.routes.triggers.compute_next_fire") as mock_next,
         ):
             _override_session(client, session)
             resp = client.patch(
@@ -1608,7 +1608,7 @@ class TestRunRetentionValidation:
         assert resp.status_code == 422
 
     def test_valid_retention_days_accepted_by_validation(self) -> None:
-        from modulo.api.routes.admin import UpdateRetentionRequest
+        from farna.api.routes.admin import UpdateRetentionRequest
 
         for days in (7, 90, 365):
             req = UpdateRetentionRequest(retention_days=days)

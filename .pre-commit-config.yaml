@@ -3,7 +3,7 @@
     rev: 1.8.3
     hooks:
       - id: bandit
-        args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
+        args: [-r, backend/src/, -ll, -x, backend/src/farna/model_backends/stub/]
         files: ^backend/src/
         pass_filenames: false
         stages: [pre-commit]
@@ -57,7 +57,7 @@
         name: check migration number/revision collisions
         entry: uv run --project backend --no-sync --frozen python scripts/run_check_migration_heads.py
         language: system
-        files: ^backend/src/modulo/db/migrations/versions/.*\.py$
+        files: ^backend/src/farna/db/migrations/versions/.*\.py$
         pass_filenames: false
       - id: semgrep
         name: semgrep
@@ -173,7 +173,7 @@
         name: check E2E HTTP calls match live API routes
         entry: uv run --project backend --no-sync --frozen python scripts/run_check_e2e_route_methods.py
         language: system
-        files: ^(frontend/tests/e2e/.*|backend/src/modulo/api/.*|scripts/run_check_e2e_route_methods\.py)$
+        files: ^(frontend/tests/e2e/.*|backend/src/farna/api/.*|scripts/run_check_e2e_route_methods\.py)$
         pass_filenames: false
 
       - id: check-utf8
@@ -226,7 +226,7 @@
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
         entry: uv run --directory backend --no-sync --frozen python ../scripts/validate_pipeline_configs.py
         language: system
-        files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
+        files: ^(backend/src/farna/core/pipeline_engine/node_runner\.py|backend/src/farna/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
       # FAR-263: the docs-validity checker is reachable by no other gate (ruff
       # is scoped to ^backend/), so it could rot silently. --no-urls keeps the
@@ -256,7 +256,7 @@
   - repo: local
     hooks:
       # EXACT `Lint (Backend)` mypy invocation (ci.yml backend-lint job,
-      # working-directory: backend):  uv run --no-build --no-sync mypy src/modulo/
+      # working-directory: backend):  uv run --no-build --no-sync mypy src/farna/
       # NOT `--strict --ignore-missing-imports` — those flags change what mypy
       # reports and mask failures CI doesn't (and vice versa). See the
       # "Diagnose CI failures with the EXACT CI command" lesson.
@@ -264,7 +264,7 @@
       # rewriting backend/uv.lock, and changes nothing about what mypy analyses.
       - id: prepush-mypy
         name: prepush mypy (exact CI Lint Backend command)
-        entry: uv run --project backend --no-sync --frozen python scripts/run_prepush_gated_check.py --pattern "backend/src/modulo/**/*.py" -- uv --directory backend run --no-build --no-sync --frozen mypy src/modulo/
+        entry: uv run --project backend --no-sync --frozen python scripts/run_prepush_gated_check.py --pattern "backend/src/farna/**/*.py" -- uv --directory backend run --no-build --no-sync --frozen mypy src/farna/
         language: system
         files: ^backend/src/
         pass_filenames: false

@@ -10,10 +10,10 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api import trigger_busy
-from modulo.api.routes import analytics, cost_components
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.analytics.service import (
+from farna.api import trigger_busy
+from farna.api.routes import analytics, cost_components
+from farna.auth.jwt import TenantPrincipal
+from farna.core.analytics.service import (
     AnalyticsDatabaseError,
     AnalyticsMigrationRequiredError,
     AnalyticsQueryTimeoutError,
@@ -238,14 +238,14 @@ class TestTriggerBusyCoverage:
 
 class TestRouteDispatchSmoke:
     def test_cost_components_rejects_invalid_payload_through_fastapi(self) -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         client = TestClient(app)
         response = client.post("/api/v1/admin/costs/components", json={"name": "bad name"})
         assert response.status_code in (401, 403, 422)
 
     def test_me_rejects_invalid_hitl_payload_through_fastapi(self) -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         client = TestClient(app)
         response = client.put("/api/v1/me/hitl-email-preferences", json={"default": "yes"})

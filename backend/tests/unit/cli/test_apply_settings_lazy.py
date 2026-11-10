@@ -25,8 +25,8 @@ from types import ModuleType
 import pytest
 from pydantic import ValidationError
 
-import modulo.cli as cli_package
-from modulo.settings import Settings
+import farna.cli as cli_package
+from farna.settings import Settings
 
 #: Every variable that makes ``Settings`` constructible — all absent in the
 #: subprocess, so an eager ``get_settings()`` cannot be satisfied.
@@ -56,8 +56,8 @@ for _name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"):
 assert os.environ.get("MODULO_URL")
 assert os.environ.get("MODULO_API_KEY")
 
-import modulo.cli.main as cli_main
-from modulo.settings import get_settings
+import farna.cli.main as cli_main
+from farna.settings import get_settings
 
 apply_cmd = cli_main.cli.commands.get("apply")
 assert apply_cmd is not None, "apply command is not registered on the group"
@@ -67,7 +67,7 @@ assert isinstance(apply_cmd, click.Command), type(apply_cmd)
 assert get_settings.cache_info().currsize == 0
 
 # ...and the module that builds the async engine at import time must not load.
-assert "modulo.db.session" not in sys.modules
+assert "farna.db.session" not in sys.modules
 
 result = CliRunner().invoke(cli_main.cli, ["apply", "--help"])
 assert result.exit_code == 0, result.output
@@ -134,7 +134,7 @@ def _uncache_lazy_attr(name: str) -> ModuleType:
 
 def test_lazy_getattr_imports_and_caches_on_first_access() -> None:
     """A lazy re-export is imported on first access and then cached flat."""
-    from modulo.cli.migrate_org import build_parser as migrate_org_build_parser
+    from farna.cli.migrate_org import build_parser as migrate_org_build_parser
 
     package = _uncache_lazy_attr("build_parser")
     assert package.build_parser is migrate_org_build_parser

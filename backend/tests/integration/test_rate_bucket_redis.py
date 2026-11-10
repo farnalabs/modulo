@@ -28,12 +28,12 @@ from urllib.parse import urlparse
 import pytest
 import redis.asyncio as aioredis
 
-from modulo.connectors._rate_bucket import (
+from farna.connectors._rate_bucket import (
     PerDestinationRateLimiter,
     RedisTokenBucket,
     SharedBudgetUnavailableError,
 )
-from modulo.core.rate_limiter import RedisSlidingWindowRateLimiter
+from farna.core.rate_limiter import RedisSlidingWindowRateLimiter
 
 pytestmark = pytest.mark.integration
 REDIS_URL = os.environ.get("RATE_LIMIT_REDIS_URL", "redis://localhost:6379")

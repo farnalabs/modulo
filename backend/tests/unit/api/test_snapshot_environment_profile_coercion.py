@@ -20,9 +20,9 @@ import uuid
 
 import pytest
 
-from modulo.api.routes.pipelines import SnapshotResponse
+from farna.api.routes.pipelines import SnapshotResponse
 
-_LOGGER = "modulo.api.routes.pipelines"
+_LOGGER = "farna.api.routes.pipelines"
 
 
 def _response(**overrides: object) -> SnapshotResponse:

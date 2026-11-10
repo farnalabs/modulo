@@ -60,7 +60,7 @@ def pytest_sessionstart(session):
     print("MCP_TYPES_IMPORT_OK", flush=True)
 '''
 
-_COV_SOURCE = "modulo.core.library_service.community"
+_COV_SOURCE = "farna.core.library_service.community"
 
 
 def test_single_module_cov_source_import_does_not_strand_pydantic_root_model(

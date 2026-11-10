@@ -6,9 +6,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total
-from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors._safe_page import safe_paging_total as _paging_total
+from farna.connectors.azure_repos import AzureReposConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "azure_test_token"
 ORG = "myorg"

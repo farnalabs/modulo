@@ -23,9 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.pipelines import _graph_response
-from modulo.db.crud.hitl_review_guard import DiffResult
-from modulo.db.crud.pipeline import (
+from farna.api.routes.pipelines import _graph_response
+from farna.db.crud.hitl_review_guard import DiffResult
+from farna.db.crud.pipeline import (
     ManualNodeOutputSchemaError,
     enforce_manual_node_output_schemas,
 )
@@ -123,9 +123,9 @@ class TestEnforceManualNodeOutputSchemas:
 class TestWiringThroughReplacePipelineGraph:
     """The guard is actually called by replace_pipeline_graph, not just the helper."""
 
-    @patch("modulo.db.crud.pipeline.enforce_guardrail_binding_strip", new_callable=AsyncMock)
-    @patch("modulo.db.crud.pipeline.apply_gated_edge_diff", new_callable=MagicMock)
-    @patch("modulo.db.crud.pipeline.resolve_effective_privilege", new_callable=AsyncMock)
+    @patch("farna.db.crud.pipeline.enforce_guardrail_binding_strip", new_callable=AsyncMock)
+    @patch("farna.db.crud.pipeline.apply_gated_edge_diff", new_callable=MagicMock)
+    @patch("farna.db.crud.pipeline.resolve_effective_privilege", new_callable=AsyncMock)
     async def test_replace_pipeline_graph_rejects_schemaless_manual_node(
         self,
         mock_privilege: AsyncMock,
@@ -134,7 +134,7 @@ class TestWiringThroughReplacePipelineGraph:
     ) -> None:
         """Calling replace_pipeline_graph with a schema-less manual node
         raises ManualNodeOutputSchemaError before any graph write."""
-        from modulo.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
+        from farna.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
 
         mock_privilege.return_value = True
 
@@ -188,7 +188,7 @@ class TestHandleDbErrorsMapsTo422:
     """The ManualNodeOutputSchemaError is surfaced as HTTP 422, not 500."""
 
     def test_translate_maps_manual_node_output_schema_error_to_422(self) -> None:
-        from modulo.api.db_error_handling import _translate_wrapped_exception
+        from farna.api.db_error_handling import _translate_wrapped_exception
 
         exc = ManualNodeOutputSchemaError("node-123")
         with pytest.raises(HTTPException) as exc_info:
@@ -199,7 +199,7 @@ class TestHandleDbErrorsMapsTo422:
 
     async def test_handle_db_errors_decorator_maps_to_422(self) -> None:
         """An endpoint decorated with @handle_db_errors returns 422 for this error."""
-        from modulo.api.db_error_handling import handle_db_errors
+        from farna.api.db_error_handling import handle_db_errors
 
         @handle_db_errors("test_endpoint")
         async def _failing_endpoint() -> None:

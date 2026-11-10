@@ -7,10 +7,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware import rate_limiter as rate_limiter_module
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware, _matches_bypass_token
-from modulo.core.rate_limiter import RateLimiterRegistry
-from modulo.settings import Settings
+from farna.api.middleware import rate_limiter as rate_limiter_module
+from farna.api.middleware.rate_limiter import RateLimitMiddleware, _matches_bypass_token
+from farna.core.rate_limiter import RateLimiterRegistry
+from farna.settings import Settings
 
 
 def _make_settings() -> Settings:

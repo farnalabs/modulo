@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.team_visibility import (
+from farna.core.team_visibility import (
     CONNECTOR_TEAM_MISMATCH,
     MODEL_BACKEND_TEAM_MISMATCH,
     ConnectorTeamMismatch,
@@ -34,8 +34,8 @@ from modulo.core.team_visibility import (
     model_backend_team_mismatch,
     model_backend_team_mismatch_detail,
 )
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.model_backend import ModelBackend
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -373,7 +373,7 @@ async def test_missing_connector_raises_the_named_refusal() -> None:
     carries the same machine-readable ``connector_team_mismatch`` prefix so
     every surface maps it to the same named 409.
     """
-    from modulo.core.team_visibility import ConnectorBindingMissingError
+    from farna.core.team_visibility import ConnectorBindingMissingError
 
     session = _mock_session([])
     missing_id = uuid.uuid4()
@@ -395,7 +395,7 @@ async def test_connector_from_other_org_raises_the_named_refusal() -> None:
     rows it can see, so a binding it cannot see cannot be judged - and an
     unjudged binding must not save.
     """
-    from modulo.core.team_visibility import ConnectorBindingMissingError
+    from farna.core.team_visibility import ConnectorBindingMissingError
 
     conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="other-org")
     conn.organisation_id = uuid.uuid4()
@@ -411,7 +411,7 @@ async def test_a_found_mismatch_takes_precedence_over_a_missing_id() -> None:
     """When BOTH a cross-team violation and an unresolvable id are present the
     real mismatch is returned (the caller refuses with its actionable detail);
     the missing id only raises when it is the SOLE refusal."""
-    from modulo.core.team_visibility import ConnectorBindingMissingError
+    from farna.core.team_visibility import ConnectorBindingMissingError
 
     conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
     bindings = [

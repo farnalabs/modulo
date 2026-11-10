@@ -64,11 +64,11 @@ def delete_team(team_name: str, request, client=None) -> None:
 
     team = _shared_state(request)["teams"].get(team_name)
     if team is None:
-        with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
+        with patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
             resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}")
         _store_response(request, {}, resp)
         return
 
-    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
+    with patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
     _store_response(request, {}, resp)

@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     get_org_config,
     list_feature_flags,
     list_housekeeping,
@@ -48,12 +48,12 @@ class _ParityAuthContext(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         _ctx_is_system_admin.set(False)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         _ctx_is_system_admin.set(False)
         super().teardown_method()
@@ -69,7 +69,7 @@ class _ParityAuthContext(AuthContext):
 class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
     @pytest.fixture(autouse=True)
     def _validate_auth(self) -> Iterator[None]:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
     @pytest.mark.parametrize("role", ["viewer", "runner", "operator", "admin"])
@@ -77,7 +77,7 @@ class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
         # Every org role clears the read-only role leg; the system-admin
         # requirement is the sole discriminator — matching REST, whose
         # ``require_system_permission`` ignores the org role entirely.
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set(role)
         result = await get_org_config()
@@ -85,13 +85,13 @@ class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
         assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="get_org_config")
 
     async def test_system_admin_accepted(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[])),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.db.crud.system_config.list_config", new=AsyncMock(return_value=[])),
         ):
             result = await get_org_config()
 
@@ -107,14 +107,14 @@ class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
 class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
     @pytest.fixture(autouse=True)
     def _validate_auth(self) -> Iterator[None]:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
     @pytest.mark.parametrize("role", ["runner", "operator"])
     async def test_low_role_rejected_by_system_admin_leg(self, role: str) -> None:
         # viewer..admin all clear the read-only role leg; the system-admin
         # requirement is the sole discriminator.
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set(role)
         result = await list_feature_flags()
@@ -122,7 +122,7 @@ class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
         assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="list_feature_flags")
 
     async def test_org_admin_without_system_admin_rejected(self) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
         result = await list_feature_flags()
@@ -130,7 +130,7 @@ class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
         assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="list_feature_flags")
 
     async def test_system_admin_accepted(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         org = MagicMock()
         org.settings_json = {}
@@ -154,15 +154,15 @@ class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
-            patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan_ctx)),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
+            patch("farna.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan_ctx)),
             patch(
-                "modulo.core.feature_flags.FeatureFlagRegistry.from_db",
+                "farna.core.feature_flags.FeatureFlagRegistry.from_db",
                 new=AsyncMock(return_value=registry),
             ),
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.api.mcp_server.get_settings", return_value=settings),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.api.mcp_server.get_settings", return_value=settings),
         ):
             result = await list_feature_flags()
 
@@ -178,12 +178,12 @@ class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
 class TestListHousekeepingSystemAdminParity(_ParityAuthContext):
     @pytest.fixture(autouse=True)
     def _validate_auth(self) -> Iterator[None]:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
     @pytest.mark.parametrize("role", ["runner", "operator"])
     async def test_low_role_rejected_by_org_role_floor(self, role: str) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set(role)
         result = await list_housekeeping()
@@ -191,7 +191,7 @@ class TestListHousekeepingSystemAdminParity(_ParityAuthContext):
         assert "requires 'admin' role" in result["detail"]
 
     async def test_org_admin_without_system_admin_rejected(self) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
         result = await list_housekeeping()
@@ -199,13 +199,13 @@ class TestListHousekeepingSystemAdminParity(_ParityAuthContext):
         assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="list_housekeeping")
 
     async def test_system_admin_accepted(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
-            patch("modulo.core.housekeeping.scan_all", new=AsyncMock(return_value=[])),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
+            patch("farna.core.housekeeping.scan_all", new=AsyncMock(return_value=[])),
         ):
             result = await list_housekeeping()
 
@@ -220,12 +220,12 @@ class TestListHousekeepingSystemAdminParity(_ParityAuthContext):
 class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
     @pytest.fixture(autouse=True)
     def _validate_auth(self) -> Iterator[None]:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
     @pytest.mark.parametrize("role", ["runner", "operator"])
     async def test_low_role_rejected_by_org_role_floor(self, role: str) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set(role)
         result = await perform_housekeeping(items=[])
@@ -233,7 +233,7 @@ class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
         assert "requires 'admin' role" in result["detail"]
 
     async def test_org_admin_without_system_admin_rejected(self) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
         result = await perform_housekeeping(items=[])
@@ -241,11 +241,11 @@ class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
         assert result["detail"] == _SYS_ADMIN_DETAIL.format(tool="perform_housekeeping")
 
     async def test_system_admin_accepted(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
-        with patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())):
+        with patch("farna.api.mcp_server._session", return_value=make_session_context(make_session_scope())):
             result = await perform_housekeeping(items=[])
 
         assert result == {"deleted_count": 0, "errors": []}
@@ -266,7 +266,7 @@ class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
 class TestSystemAdminDenialLogging(_ParityAuthContext):
     @pytest.fixture(autouse=True)
     def _validate_auth(self) -> Iterator[None]:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
     @pytest.mark.parametrize(
@@ -274,7 +274,7 @@ class TestSystemAdminDenialLogging(_ParityAuthContext):
         ["get_org_config", "list_feature_flags", "list_housekeeping", "perform_housekeeping"],
     )
     async def test_denial_logs_exactly_one_canonical_line(self, tool: str, caplog: pytest.LogCaptureFixture) -> None:
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         ms._ctx_role.set("admin")
         with caplog.at_level(logging.WARNING):
@@ -318,8 +318,8 @@ def test_get_org_config_mcp_matches_its_rest_twin() -> None:
     change to either surface (a different REST dependency, or dropping the
     claim from the MCP declaration) fails here, so they cannot drift again.
     """
-    from modulo.api.routes.admin_system_config import admin_list_config
-    from modulo.core.mcp.scope_validator import SYSTEM_ADMIN_TOOLS, resolve_tool_access
+    from farna.api.routes.admin_system_config import admin_list_config
+    from farna.core.mcp.scope_validator import SYSTEM_ADMIN_TOOLS, resolve_tool_access
 
     rest_tag = _rest_permission_tag(admin_list_config, "_current_user")
     assert getattr(rest_tag, "permission_kind", None) == "system"

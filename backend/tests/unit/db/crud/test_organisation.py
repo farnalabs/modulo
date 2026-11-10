@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.organisation import (
+from farna.db.crud.organisation import (
     _SENTINEL_ORG_IDS,
     _seed_evidence_redaction_catch_all,
     create_organisation,
@@ -23,13 +23,13 @@ from modulo.db.crud.organisation import (
     is_login_active_org,
     list_login_active_orgs,
 )
-from modulo.db.models.evidence_redaction_rule import (
+from farna.db.models.evidence_redaction_rule import (
     CATCH_ALL_REDACTED_FIELDS,
     EVIDENCE_REDACTION_CATCH_ALL_PATTERN,
     EVIDENCE_REDACTION_CATCH_ALL_ROLE,
     EvidenceRedactionRule,
 )
-from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID
+from farna.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID
 
 
 def _make_org(
@@ -179,7 +179,7 @@ class TestSeedEvidenceRedactionCatchAll:
         session.add = MagicMock()  # sync call — not awaitable
 
         with patch(
-            "modulo.db.crud.organisation._seed_evidence_redaction_catch_all",
+            "farna.db.crud.organisation._seed_evidence_redaction_catch_all",
             new=AsyncMock(),
         ) as seed:
             await create_organisation(session, name="Fresh Org", slug="fresh-org")
@@ -195,10 +195,10 @@ class TestSeedEvidenceRedactionCatchAll:
 
         with (
             patch(
-                "modulo.db.crud.organisation._seed_evidence_redaction_catch_all",
+                "farna.db.crud.organisation._seed_evidence_redaction_catch_all",
                 new=AsyncMock(side_effect=RuntimeError("seed failed")),
             ),
-            caplog.at_level(logging.WARNING, logger="modulo.db.crud.organisation"),
+            caplog.at_level(logging.WARNING, logger="farna.db.crud.organisation"),
         ):
             org = await create_organisation(session, name="Survivor Org", slug="survivor-org")
 

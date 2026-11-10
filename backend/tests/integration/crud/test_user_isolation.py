@@ -10,9 +10,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.passwords import hash_password, password_entropy_bits, validate_password_strength
-from modulo.db.crud.account import get_account_by_email, get_account_by_id
-from modulo.db.crud.org_membership import get_membership_by_account_and_org, list_memberships_for_org
+from farna.auth.passwords import hash_password, password_entropy_bits, validate_password_strength
+from farna.db.crud.account import get_account_by_email, get_account_by_id
+from farna.db.crud.org_membership import get_membership_by_account_and_org, list_memberships_for_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -214,7 +214,7 @@ def test_hash_and_verify() -> None:
     assert h != pw
     assert h.startswith("$2b$")
 
-    from modulo.auth.passwords import verify_password
+    from farna.auth.passwords import verify_password
 
     assert verify_password(pw, h) is True
     assert verify_password("wrong", h) is False
@@ -222,6 +222,6 @@ def test_hash_and_verify() -> None:
 
 def test_authenticate_db_user_none() -> None:
     """authenticate_db_user must return False for None user."""
-    from modulo.auth.passwords import authenticate_db_user
+    from farna.auth.passwords import authenticate_db_user
 
     assert authenticate_db_user("any", None) is False

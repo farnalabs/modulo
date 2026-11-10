@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 import pytest
 
-from modulo.core.secrets_backend import DEFAULT_TIMEOUT, run_sync
+from farna.core.secrets_backend import DEFAULT_TIMEOUT, run_sync
 
 
 def _blocking_callable() -> tuple[Callable[[], None], threading.Event, threading.Event]:

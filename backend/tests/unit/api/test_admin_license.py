@@ -12,12 +12,12 @@ import pytest
 from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 from fastapi.testclient import TestClient
 
-import modulo.api.routes.admin_license as admin_license
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.license import (
+import farna.api.routes.admin_license as admin_license
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.license import (
     LICENCE_GRACE_DAYS,
     clear_license,
     get_license,
@@ -25,8 +25,8 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -96,8 +96,8 @@ def _reset_license_state(monkeypatch: pytest.MonkeyPatch) -> Generator[None, Non
     clear_license()
     # FAR-2153: the process also tracks the persisted system-licence state.
     # Reset it so a test's install cannot leak into the next test's refresh.
-    monkeypatch.setattr("modulo.core.license._persisted_state", None)
-    monkeypatch.setattr("modulo.core.license._persisted_state_checked_at", 0.0)
+    monkeypatch.setattr("farna.core.license._persisted_state", None)
+    monkeypatch.setattr("farna.core.license._persisted_state_checked_at", 0.0)
     set_public_key(_TEST_PUB)
     yield
     clear_license()
@@ -349,7 +349,7 @@ class TestGetLicense:
 
     def test_returns_no_license_when_none_set(self, client: TestClient) -> None:
         org = _mock_org(settings_json=None)
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
@@ -365,7 +365,7 @@ class TestGetLicense:
         store_license(key, result.license_data)
 
         org = _mock_org(settings_json={})
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
@@ -385,7 +385,7 @@ class TestGetLicense:
     def test_an_org_admin_without_the_system_claim_can_read_the_licence(self, org_admin_client: TestClient) -> None:
         """FAR-2104: the org admin who bought the licence is the read's audience."""
         org = _mock_org(settings_json=None)
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = org_admin_client.get(self.URL)
         assert resp.status_code == 200
         assert resp.json()["tier"] == "community"
@@ -395,12 +395,12 @@ class TestGetLicense:
     ) -> None:
         """The read is system-OR-org admin, matching /auth/permissions' floor."""
         org = _mock_org(settings_json=None)
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = system_admin_operator_client.get(self.URL)
         assert resp.status_code == 200
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
+        with patch("farna.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
             resp = client.get(self.URL)
         assert resp.status_code == 500
 
@@ -538,7 +538,7 @@ class TestDeriveLicenceState:
         assert state == expected_state
 
     def test_unparseable_expiry_is_lapsed_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level("WARNING", logger="modulo.api.routes.admin_license"):
+        with caplog.at_level("WARNING", logger="farna.api.routes.admin_license"):
             days, state = admin_license.derive_licence_state("not-a-date", now=_STATE_NOW)
         assert days is None
         assert state == admin_license.LICENCE_STATE_LAPSED
@@ -614,7 +614,7 @@ class TestGetLicenseRenewalState:
     URL = "/api/v1/admin/license"
 
     def _get(self, client: TestClient, org: Any) -> dict[str, Any]:
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200
         return resp.json()
@@ -718,7 +718,7 @@ class TestUploadLicense:
         assert resp.status_code == 200
 
         org = _mock_org(settings_json={})
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp2 = client.get(self.URL)
         assert resp2.status_code == 200
         data2 = resp2.json()
@@ -742,7 +742,7 @@ class TestUploadLicense:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The customer-facing failure: a real key, no MODULO_LICENSE_PUBLIC_KEY set."""
-        monkeypatch.setattr("modulo.core.license._configured_public_key_hex", None)
+        monkeypatch.setattr("farna.core.license._configured_public_key_hex", None)
         kp = generate_keypair()
         key = _sign_license_payload(_make_valid_payload(), private_key=kp["private_key"])
 
@@ -869,7 +869,7 @@ class TestIssueLicense:
         assert "MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
 
     def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
+        with patch("farna.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
             resp = issue_client.post(self.URL, json={"org_name": "Acme", "email": "bob@acme.com"})
         assert resp.status_code == 201
         mock_email.assert_awaited_once()
@@ -949,7 +949,7 @@ class TestLicenseCacheInvalidationSystemChange:
     def test_system_upload_busts_all_cached_statuses(self, cached_client: tuple[TestClient, FakeRedis]) -> None:
         client, probe = cached_client
         org = _mock_org(settings_json={})
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             first = client.get(self.URL)
         assert first.status_code == 200
         assert first.json()["tier"] == "community"
@@ -972,7 +972,7 @@ class TestLicenseCacheInvalidationSystemChange:
         # Without invalidation the second GET would serve the stale community
         # cache; with it, the fresh team resolution is returned, re-cached
         # under this org's key, and the other org's swept entry is gone.
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             second = client.get(self.URL)
         assert second.status_code == 200
         assert second.json()["tier"] == "team"
@@ -1057,7 +1057,7 @@ class TestRemoveSystemLicense:
         assert get_license() is None
         # ...and the status endpoint the operator reads agrees.
         org = _mock_org(settings_json={})
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             status = client.get(self.URL)
         assert status.status_code == 200
         assert status.json()["has_license"] is False
@@ -1065,7 +1065,7 @@ class TestRemoveSystemLicense:
         assert status.json()["licence_state"] == "none"
 
     def test_removal_is_audited(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.core.audit_coverage import audit_session
+        from farna.core.audit_coverage import audit_session
 
         self._install(client)
         emitted: list[dict[str, Any]] = []
@@ -1073,7 +1073,7 @@ class TestRemoveSystemLicense:
         async def _capture_audit(_session: Any, _principal: Any, **kwargs: Any) -> None:
             emitted.append(kwargs)
 
-        monkeypatch.setattr("modulo.core.audit_coverage.append_audit_event_isolated", _capture_audit)
+        monkeypatch.setattr("farna.core.audit_coverage.append_audit_event_isolated", _capture_audit)
         app.dependency_overrides[audit_session] = lambda: _make_mock_session()
         try:
             resp = client.delete(self.URL)
@@ -1177,7 +1177,7 @@ class TestRemoveSystemLicense:
             client = TestClient(app)
             self._install(client)
             org = _mock_org(settings_json={})
-            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
                 cached = client.get(self.URL)
             assert cached.status_code == 200
             assert cached.json()["tier"] == "team"
@@ -1186,7 +1186,7 @@ class TestRemoveSystemLicense:
 
             assert client.delete(self.URL).status_code == 200
 
-            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
                 after = client.get(self.URL)
             assert after.status_code == 200
             assert after.json()["has_license"] is False
@@ -1204,7 +1204,7 @@ class TestRemoveSystemLicense:
         chain — removal -> empty licence store -> Community plan -> feature
         gate — through the real route and gate rather than a mocked context.
         """
-        from modulo.core.feature_flags import CommunityTier, LicenseKeyTier, PlanContext
+        from farna.core.feature_flags import CommunityTier, LicenseKeyTier, PlanContext
 
         def _plan_from_licence() -> PlanContext:
             licensed = get_license()
@@ -1221,7 +1221,7 @@ class TestRemoveSystemLicense:
             is_system_admin=True,
         )
         app.dependency_overrides[get_plan_context] = _plan_from_licence
-        monkeypatch.setattr("modulo.api.routes.audit.export_chain", AsyncMock(return_value={"events": []}))
+        monkeypatch.setattr("farna.api.routes.audit.export_chain", AsyncMock(return_value={"events": []}))
         try:
             client = TestClient(app)
             self._install(client)
@@ -1302,7 +1302,7 @@ class TestSystemLicencePersistence:
         refresh = AsyncMock(return_value=False)
         monkeypatch.setattr(admin_license, "refresh_persisted_system_license", refresh)
 
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=_mock_org({}))):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=_mock_org({}))):
             resp = client.get(self.URL)
 
         assert resp.status_code == 200
@@ -1325,7 +1325,7 @@ class TestLicenceStartsAtStatus:
     URL = "/api/v1/admin/license"
 
     def _get(self, client: TestClient, org: Any) -> dict[str, Any]:
-        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+        with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200, resp.text
         return resp.json()
@@ -1443,7 +1443,7 @@ class TestLicenceStartsAtStatus:
             def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
                 return start + timedelta(seconds=1) if tz is not None else start.replace(tzinfo=None)
 
-        monkeypatch.setattr("modulo.core.license.datetime", _AtStart)
+        monkeypatch.setattr("farna.core.license.datetime", _AtStart)
 
         data = self._get(client, _mock_org(settings_json={}))
 

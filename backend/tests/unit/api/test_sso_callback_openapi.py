@@ -24,10 +24,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.api.main import app
-from modulo.api.routes import sso
-from modulo.auth.sso import SsoCallbackError, sign_state
-from modulo.settings import Settings
+from farna.api.main import app
+from farna.api.routes import sso
+from farna.auth.sso import SsoCallbackError, sign_state
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _FERNET_KEY = "b" * 32

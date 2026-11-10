@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager.overdue_warning import (
+from farna.core.hitl_manager.overdue_warning import (
     DEFAULT_ESCALATION_HOURS,
     DEFAULT_WARNING_HOURS,
     dispatch_overdue_notifications,
     get_overdue_claims,
 )
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 from tests.unit.api.mock_session import configure_rls_preamble
 
 from .conftest import mock_begin as _mock_begin
@@ -256,7 +256,7 @@ async def _run_dispatch(
 
     factory = MagicMock(side_effect=_factory_side_effect)
 
-    with patch("modulo.core.hitl_manager.overdue_warning.set_rls_org", new=AsyncMock()):
+    with patch("farna.core.hitl_manager.overdue_warning.set_rls_org", new=AsyncMock()):
         dispatched = await dispatch_overdue_notifications(
             factory,
             notifier=notifier,

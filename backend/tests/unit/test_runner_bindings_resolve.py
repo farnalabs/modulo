@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.runner_bindings import (
+from farna.core.runner_bindings import (
     AgentBindingResolutionError,
     LocalProviderBindingsRefusedError,
     resolve_agent_bindings,
@@ -118,11 +118,11 @@ def _settings_patch() -> MagicMock:
 
 def _patch_resolver(hub: _Hub, settings: MagicMock = _settings_patch()) -> list[Any]:
     patchers = [
-        patch("modulo.core.model_backend_hub.ModelBackendHub", return_value=hub),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.core.model_backend_hub.ModelBackendHub", return_value=hub),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.settings.get_settings", return_value=settings),
     ]
     for p in patchers:
         p.start()

@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.auth.sso import sign_state
-from modulo.core.ssrf import PinnedTarget
-from modulo.settings import Settings
+from farna.auth.sso import sign_state
+from farna.core.ssrf import PinnedTarget
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 
@@ -28,7 +28,7 @@ def _no_pinned_ip_dns() -> None:
     construction path alive while removing any environment/CI DNS dependency.
     """
     target = PinnedTarget(scheme="https", host="unit-test.invalid", port=None, ips=("93.184.216.34",))
-    with patch("modulo.core.ssrf.resolve_pinned_ip", new=AsyncMock(return_value=target)):
+    with patch("farna.core.ssrf.resolve_pinned_ip", new=AsyncMock(return_value=target)):
         yield
 
 

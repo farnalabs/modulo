@@ -42,7 +42,7 @@ from collections import Counter
 
 import pytest
 
-from modulo.api.main import app
+from farna.api.main import app
 from tests.unit.api.route_introspection import (
     get_all_apiroutes,
     get_applied_dependency_names,

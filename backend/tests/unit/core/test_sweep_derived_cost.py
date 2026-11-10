@@ -36,12 +36,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_execution import stale_run_recovery_sweep
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
+import farna.core.pipeline_execution as pe
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_execution import stale_run_recovery_sweep
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.db.models.base import Base
+from farna.db.models.run import Run
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000006666")
@@ -175,13 +175,13 @@ def _patch_cost_writes() -> Any:
     """The FAR-2077 finalize internals, mocked at the write boundary."""
     return (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=RATE),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=RATE),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     )
 
 
@@ -381,10 +381,10 @@ class TestSweepBooksDerivedCost:
 
         with (
             patch(
-                "modulo.core.cost_controller.finalize.finalize_worker_lost_run",
+                "farna.core.cost_controller.finalize.finalize_worker_lost_run",
                 new=AsyncMock(side_effect=RuntimeError("booking exploded")),
             ),
-            caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+            caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
         ):
             result, _advanced = await _run_sweep(db_session, db_engine, monkeypatch)
 
@@ -467,9 +467,9 @@ class TestDerivedCostGuards:
             lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
         )
         booking = AsyncMock()
-        monkeypatch.setattr("modulo.core.cost_controller.finalize.finalize_worker_lost_run", booking)
+        monkeypatch.setattr("farna.core.cost_controller.finalize.finalize_worker_lost_run", booking)
 
-        with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_execution"):
+        with caplog.at_level(logging.INFO, logger="farna.core.pipeline_execution"):
             await pe._attribute_swept_run_derived_cost(db_engine, uuid.uuid4(), ORG_ID)
 
         assert "swept_cost_run_missing" in caplog.text
@@ -494,7 +494,7 @@ class TestDerivedCostGuards:
             lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
         )
         booking = AsyncMock()
-        monkeypatch.setattr("modulo.core.cost_controller.finalize.finalize_worker_lost_run", booking)
+        monkeypatch.setattr("farna.core.cost_controller.finalize.finalize_worker_lost_run", booking)
 
         await pe._attribute_swept_run_derived_cost(db_engine, relabelled.id, ORG_ID)
 
@@ -523,7 +523,7 @@ class TestDerivedCostGuards:
             lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
         )
         monkeypatch.setattr(
-            "modulo.core.cost_controller.finalize.finalize_worker_lost_run",
+            "farna.core.cost_controller.finalize.finalize_worker_lost_run",
             AsyncMock(side_effect=asyncio.CancelledError()),
         )
 

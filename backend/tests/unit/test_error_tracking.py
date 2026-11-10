@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.error_tracking as et
+import farna.core.error_tracking as et
 
 ORG = uuid.uuid4()
 
@@ -138,7 +138,7 @@ async def _run_probe(*, cooldown_ok: bool) -> tuple[int, Any]:
         patch.object(et, "AsyncRedis", redis_cls),
         patch.object(et, "_missed_fire_cooldown_ok", new_callable=AsyncMock, return_value=cooldown_ok),
         patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=_FakeFactory(rows)),
-        patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+        patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
         patch.object(et, "create_error_event", new_callable=AsyncMock) as create,
     ):
         emitted = await et.check_missed_fire_alerts(aengine, org_id=ORG)
@@ -180,7 +180,7 @@ class TestMissedFireProbeCooldown:
             patch.object(et, "AsyncRedis", redis_cls),
             patch.object(et._log, "warning") as log_warn,
             patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=_FakeFactory(rows)),
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
             patch.object(et, "create_error_event", new_callable=AsyncMock) as create,
         ):
             emitted = await et.check_missed_fire_alerts(aengine, org_id=ORG)

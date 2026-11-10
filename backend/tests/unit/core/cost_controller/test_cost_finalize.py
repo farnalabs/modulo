@@ -21,16 +21,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller.breakdown.constants import (
+from farna.core.cost_controller.breakdown.constants import (
     COST_COLUMN_CAP,
     MAX_REPORTABLE_BAND_USD,
     TOTAL_CLAMPED_MARKER,
 )
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.params import (
     MAX_REPORTABLE_TOKEN_COUNT,
     REPORTED_TOKEN_CHAIN,
 )
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _REPORTED_TOKEN_FIELD_MAP,
     _attributed_cost_present,
     _derive_total_tokens,
@@ -59,7 +59,7 @@ from modulo.core.cost_controller.finalize import (
     finalize_worker_lost_run,
     salvage_cancelled_run_cost,
 )
-from modulo.db.crud.run_node_outputs import RunBlobs
+from farna.db.crud.run_node_outputs import RunBlobs
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -315,7 +315,7 @@ def test_enrich_union_schema_drift_increment_gated(
     if pin_failed:
         output["pin_failed"] = True
     outputs = {"node-a": {"result": "completed"}}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_counter:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_counter:
         _enrich_union(
             {},
             outputs,
@@ -347,7 +347,7 @@ def test_enrich_union_schema_drift_detected_from_split_telemetry() -> None:
     output_json sub-lookup is gone) — still detected for a split row."""
     outputs = {"node-a": {"summary": "agent summary"}}  # pure return
     telemetry = {"node-a": {"schema_drift": True}}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_counter:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_counter:
         _enrich_union({}, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
     mock_counter.assert_called_once()
 
@@ -722,9 +722,9 @@ def test_fold_token_usage_prove_the_fix_end_to_end() -> None:
     producer output.json ``token_usage`` flows through node_runner envelope
     extraction → the split telemetry view → the union fold → the telemetry
     sum, ending as display-only analytics with server tokens untouched."""
-    from modulo.core.cost_controller.breakdown.params import build_telemetry
-    from modulo.core.node_output_split import split_node_output
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.cost_controller.breakdown.params import build_telemetry
+    from farna.core.node_output_split import split_node_output
+    from farna.core.pipeline_engine.node_runner import (
         _build_sandbox_node_envelope,
         _SandboxNodeOutput,
     )
@@ -820,7 +820,7 @@ def test_legacy_sandbox_cost_de_trusts_cost_estimate_usd() -> None:
     cost_estimate_usd contributes NOTHING (§1.5)."""
     outputs = {"node-a": {"result": "completed"}}
     telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000}}
-    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")):
+    with patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")):
         cost = _legacy_sandbox_cost(outputs, telemetry)
     assert cost == Decimal("0.1332")
 
@@ -865,7 +865,7 @@ async def test_finalize_cost_pre_component_read_writes_zero_total() -> None:
     run = _make_run(started_at=None)
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
-    with patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs:
+    with patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs:
         await finalize_cost(
             session,
             run_id=run.id,
@@ -889,7 +889,7 @@ async def test_finalize_cost_stalled_persists_stalled_status() -> None:
     run = _make_run(started_at=None)
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
-    with patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs:
+    with patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs:
         await finalize_cost(
             session,
             run_id=run.id,
@@ -918,18 +918,18 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.load_live_components",
+            "farna.core.cost_controller.finalize.load_live_components",
             side_effect=RuntimeError("boom"),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
         # This test exercises the fallback cost calc, not the ledger block
         # (covered by test_finalize_cost_fallback_runs_ledger_block).
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -969,16 +969,16 @@ async def test_finalize_cost_fallback_runs_ledger_block() -> None:
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.load_live_components",
+            "farna.core.cost_controller.finalize.load_live_components",
             side_effect=RuntimeError("boom"),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_cost(
             session,
@@ -1023,15 +1023,15 @@ async def test_finalize_cost_sandbox_reported_tokens_populate_run_counters() -> 
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
-        patch("modulo.settings.get_settings", return_value=MagicMock()),
-        patch("modulo.core.cost_controller.finalize._enforce_agent_token_budgets", new=AsyncMock(return_value=None)),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._advance_journeys_on_terminal", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
+        patch("farna.settings.get_settings", return_value=MagicMock()),
+        patch("farna.core.cost_controller.finalize._enforce_agent_token_budgets", new=AsyncMock(return_value=None)),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._advance_journeys_on_terminal", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -1070,7 +1070,7 @@ async def test_finalize_cancelled_run_never_paused_defers_salvage_not_forfeits()
     run = _make_run(node_token_usage=None, outputs_json=None)
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
-    with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+    with patch("farna.core.cost_controller.finalize._log") as mock_log:
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
     logged = [str(c) for c in mock_log.info.call_args_list]
     assert any("cost_components.cancel_salvage_deferred" in line for line in logged)
@@ -1102,10 +1102,10 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
     )
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
     ):
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
     mock_finalize.assert_awaited_once()
@@ -1138,13 +1138,13 @@ async def test_finalize_failed_run_derived_hours_book_run_level_cost() -> None:
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_failed_run(
             session,
@@ -1190,11 +1190,11 @@ async def test_finalize_failed_run_empty_segment_without_derived_hours_invents_n
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             session,
@@ -1234,12 +1234,12 @@ async def test_finalize_failed_run_with_real_segment_ignores_derived_hours() -> 
     )
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch(
-            "modulo.core.cost_controller.finalize._write_derived_deadline_terminal",
+            "farna.core.cost_controller.finalize._write_derived_deadline_terminal",
             new=AsyncMock(),
         ) as mock_derived,
     ):
@@ -1286,13 +1286,13 @@ async def test_finalize_failed_run_threads_supplied_derived_from() -> None:
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_failed_run(
             session,
@@ -1333,13 +1333,13 @@ async def test_finalize_failed_run_clamps_derived_cost_to_the_column_cap() -> No
     session = _empty_derived_session(run)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_failed_run(
             session,
@@ -1364,13 +1364,13 @@ async def test_finalize_failed_run_without_started_at_writes_no_ledger_row() -> 
     session = _empty_derived_session(run)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_failed_run(
             session,
@@ -1391,13 +1391,13 @@ async def test_finalize_failed_run_rereises_cancelled_from_the_ledger_block() ->
     session = _empty_derived_session(run)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
         patch(
-            "modulo.core.cost_controller.finalize._ledger_block",
+            "farna.core.cost_controller.finalize._ledger_block",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -1419,13 +1419,13 @@ async def test_finalize_failed_run_rereises_lock_abort_from_the_ledger_block() -
     session = _empty_derived_session(run)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
         patch(
-            "modulo.core.cost_controller.finalize._ledger_block",
+            "farna.core.cost_controller.finalize._ledger_block",
             new=AsyncMock(side_effect=_SqlstateError("40P01")),
         ),
         pytest.raises(_SqlstateError),
@@ -1448,14 +1448,14 @@ async def test_finalize_failed_run_swallows_non_lock_ledger_error() -> None:
     ledger = AsyncMock(side_effect=RuntimeError("ledger boom"))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=_sandbox_attempt_markers())),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=ledger),
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()) as mock_facts,
+        patch("farna.core.cost_controller.finalize._ledger_block", new=ledger),
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             session,
@@ -1474,9 +1474,9 @@ async def test_finalize_failed_run_missing_run_writes_nothing() -> None:
     """A run row that no longer exists is logged and skipped — no cost write."""
     session = _empty_derived_session(None)
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             session,
@@ -1495,8 +1495,8 @@ async def test_finalize_failed_run_envelope_swallows_non_lock_failure() -> None:
     """The fail-open envelope logs an ordinary failure instead of raising it."""
     failure = AsyncMock(side_effect=RuntimeError("finalize boom"))
     with (
-        patch("modulo.core.cost_controller.finalize._finalize_failed_run", new=failure),
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize._finalize_failed_run", new=failure),
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             AsyncMock(),
@@ -1547,13 +1547,13 @@ async def test_finalize_worker_lost_run_books_elapsed_derived_sandbox_cost() -> 
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_worker_lost_run(
             session,
@@ -1580,8 +1580,8 @@ async def test_finalize_worker_lost_run_never_double_books_an_attributed_run() -
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await finalize_worker_lost_run(
             session,
@@ -1602,8 +1602,8 @@ async def test_finalize_worker_lost_run_never_reprices_a_relabelled_run() -> Non
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await finalize_worker_lost_run(
             session,
@@ -1629,10 +1629,10 @@ async def test_finalize_worker_lost_run_withholds_cost_without_sandbox_evidence(
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await finalize_worker_lost_run(
             session,
@@ -1659,13 +1659,13 @@ async def test_finalize_worker_lost_run_accepts_a_live_dispatch_marker_as_eviden
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_worker_lost_run(
             session,
@@ -1689,10 +1689,10 @@ async def test_finalize_worker_lost_run_rejects_the_hitl_tombstone_as_evidence()
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await finalize_worker_lost_run(
             session,
@@ -1715,7 +1715,7 @@ async def test_finalize_worker_lost_run_returns_early_when_row_is_gone() -> None
     """A row deleted between the terminal write and the booking is left alone."""
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-    with patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs:
+    with patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs:
         await finalize_worker_lost_run(
             session,
             run_id=uuid.uuid4(),
@@ -1737,8 +1737,8 @@ async def test_finalize_worker_lost_run_withholds_when_no_window_and_no_evidence
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await finalize_worker_lost_run(
             session,
@@ -1809,7 +1809,7 @@ def test_dispatch_marker_is_live_classifies_legacy_and_non_object_values() -> No
 
 
 def test_is_exact_zero_true_for_zero() -> None:
-    from modulo.core.cost_controller.finalize import _is_exact_zero
+    from farna.core.cost_controller.finalize import _is_exact_zero
 
     assert _is_exact_zero(0)
     assert _is_exact_zero(0.0)
@@ -1818,7 +1818,7 @@ def test_is_exact_zero_true_for_zero() -> None:
 
 
 def test_is_exact_zero_false_for_nonzero() -> None:
-    from modulo.core.cost_controller.finalize import _is_exact_zero
+    from farna.core.cost_controller.finalize import _is_exact_zero
 
     assert not _is_exact_zero(1)
     assert not _is_exact_zero(-0.01)
@@ -1837,14 +1837,14 @@ def test_is_exact_zero_false_for_nonzero() -> None:
 
 
 def test_is_sub_floor_true_for_positive_below_floor() -> None:
-    from modulo.core.cost_controller.finalize import _is_sub_floor
+    from farna.core.cost_controller.finalize import _is_sub_floor
 
     assert _is_sub_floor(0.0000005)
     assert _is_sub_floor("0.0000005")
 
 
 def test_is_sub_floor_false_for_non_sub_floor_values() -> None:
-    from modulo.core.cost_controller.finalize import _is_sub_floor
+    from farna.core.cost_controller.finalize import _is_sub_floor
 
     # A bool is never a numeric report (exercises the isinstance guard).
     assert not _is_sub_floor(True)
@@ -1868,7 +1868,7 @@ def test_is_sub_floor_false_for_non_sub_floor_values() -> None:
 
 
 def test_is_abort_error_false_for_non_dbapi() -> None:
-    from modulo.core.cost_controller.finalize import _is_abort_error
+    from farna.core.cost_controller.finalize import _is_abort_error
 
     assert not _is_abort_error(RuntimeError("boom"))
     assert not _is_abort_error(ValueError("no"))
@@ -1877,7 +1877,7 @@ def test_is_abort_error_false_for_non_dbapi() -> None:
 def test_is_abort_error_false_for_dbapi_none_orig() -> None:
     from sqlalchemy.exc import DBAPIError
 
-    from modulo.core.cost_controller.finalize import _is_abort_error
+    from farna.core.cost_controller.finalize import _is_abort_error
 
     exc = DBAPIError("stmt", {}, Exception("orig"))
     # Override orig to None
@@ -1888,7 +1888,7 @@ def test_is_abort_error_false_for_dbapi_none_orig() -> None:
 def test_is_abort_error_false_for_unnamed_orig() -> None:
     from sqlalchemy.exc import DBAPIError
 
-    from modulo.core.cost_controller.finalize import _is_abort_error
+    from farna.core.cost_controller.finalize import _is_abort_error
 
     class CustomError(Exception):
         pass
@@ -1903,25 +1903,25 @@ def test_is_abort_error_false_for_unnamed_orig() -> None:
 
 
 def test_is_limit_refused_true() -> None:
-    from modulo.core.cost_controller.finalize import _is_limit_refused
+    from farna.core.cost_controller.finalize import _is_limit_refused
 
     assert _is_limit_refused(False, "daily_limit_exceeded_team_x")
 
 
 def test_is_limit_refused_false_ok() -> None:
-    from modulo.core.cost_controller.finalize import _is_limit_refused
+    from farna.core.cost_controller.finalize import _is_limit_refused
 
     assert not _is_limit_refused(True, "daily_limit_exceeded")
 
 
 def test_is_limit_refused_false_other_reason() -> None:
-    from modulo.core.cost_controller.finalize import _is_limit_refused
+    from farna.core.cost_controller.finalize import _is_limit_refused
 
     assert not _is_limit_refused(False, "write_failure")
 
 
 def test_is_limit_refused_false_none_reason() -> None:
-    from modulo.core.cost_controller.finalize import _is_limit_refused
+    from farna.core.cost_controller.finalize import _is_limit_refused
 
     assert not _is_limit_refused(False, None)
 
@@ -1932,19 +1932,19 @@ def test_is_limit_refused_false_none_reason() -> None:
 
 
 def test_e2b_rate_returns_settings_value() -> None:
-    from modulo.core.cost_controller.finalize import _e2b_rate
+    from farna.core.cost_controller.finalize import _e2b_rate
 
     mock_settings = MagicMock()
     mock_settings.e2b_sandbox_usd_per_hour = 0.5
-    with patch("modulo.settings.get_settings", return_value=mock_settings):
+    with patch("farna.settings.get_settings", return_value=mock_settings):
         assert _e2b_rate() == Decimal("0.5")
 
 
 def test_e2b_rate_fallback_on_exception() -> None:
-    from modulo.core.cost_controller.finalize import _LEGACY_E2B_RATE_DEFAULT, _e2b_rate
+    from farna.core.cost_controller.finalize import _LEGACY_E2B_RATE_DEFAULT, _e2b_rate
 
     with patch(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         side_effect=RuntimeError("settings broken"),
     ):
         assert _e2b_rate() == _LEGACY_E2B_RATE_DEFAULT
@@ -1956,7 +1956,7 @@ def test_e2b_rate_fallback_on_exception() -> None:
 
 
 def test_derive_node_agent_map_reads_agent_ids() -> None:
-    from modulo.core.cost_controller.finalize import derive_node_agent_map
+    from farna.core.cost_controller.finalize import derive_node_agent_map
 
     graph = {
         "nodes": [
@@ -1971,7 +1971,7 @@ def test_derive_node_agent_map_reads_agent_ids() -> None:
 
 
 def test_derive_node_agent_map_not_dict() -> None:
-    from modulo.core.cost_controller.finalize import derive_node_agent_map
+    from farna.core.cost_controller.finalize import derive_node_agent_map
 
     assert not derive_node_agent_map(None)
     assert not derive_node_agent_map("bad")
@@ -1979,7 +1979,7 @@ def test_derive_node_agent_map_not_dict() -> None:
 
 
 def test_derive_node_agent_map_empty_nodes() -> None:
-    from modulo.core.cost_controller.finalize import derive_node_agent_map
+    from farna.core.cost_controller.finalize import derive_node_agent_map
 
     assert not derive_node_agent_map({"nodes": []})
 
@@ -1990,7 +1990,7 @@ def test_derive_node_agent_map_empty_nodes() -> None:
 
 
 def test_accumulate_agent_tokens_basic() -> None:
-    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+    from farna.core.cost_controller.finalize import _accumulate_agent_tokens
 
     usage = {
         "node-a": {"total_tokens": 100},
@@ -2003,7 +2003,7 @@ def test_accumulate_agent_tokens_basic() -> None:
 
 
 def test_accumulate_agent_tokens_fallback_to_input_plus_output() -> None:
-    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+    from farna.core.cost_controller.finalize import _accumulate_agent_tokens
 
     usage = {"node-a": {"input_tokens": 10, "output_tokens": 5}}
     agent_map = {"node-a": "agent-1"}
@@ -2012,7 +2012,7 @@ def test_accumulate_agent_tokens_fallback_to_input_plus_output() -> None:
 
 
 def test_accumulate_agent_tokens_skips_non_dict_entries() -> None:
-    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+    from farna.core.cost_controller.finalize import _accumulate_agent_tokens
 
     usage = {"node-a": "not-a-dict"}
     agent_map = {"node-a": "agent-1"}
@@ -2021,7 +2021,7 @@ def test_accumulate_agent_tokens_skips_non_dict_entries() -> None:
 
 
 def test_accumulate_agent_tokens_empty_usage() -> None:
-    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+    from farna.core.cost_controller.finalize import _accumulate_agent_tokens
 
     assert not _accumulate_agent_tokens(None, {})
 
@@ -2032,7 +2032,7 @@ def test_accumulate_agent_tokens_empty_usage() -> None:
 
 
 def test_trim_duplicate_events_empty() -> None:
-    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+    from farna.core.cost_controller.finalize import _trim_duplicate_events
 
     assert not _trim_duplicate_events([])
 
@@ -2040,7 +2040,7 @@ def test_trim_duplicate_events_empty() -> None:
 def test_trim_duplicate_events_keeps_recent() -> None:
     from datetime import timedelta
 
-    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+    from farna.core.cost_controller.finalize import _trim_duplicate_events
 
     now = datetime.now(UTC)
     events = [{"run_id": str(uuid.uuid4()), "ts": (now - timedelta(seconds=30)).isoformat()}]
@@ -2051,7 +2051,7 @@ def test_trim_duplicate_events_keeps_recent() -> None:
 def test_trim_duplicate_events_drops_stale() -> None:
     from datetime import timedelta
 
-    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+    from farna.core.cost_controller.finalize import _trim_duplicate_events
 
     now = datetime.now(UTC)
     stale = {"run_id": "old", "ts": (now - timedelta(minutes=30)).isoformat()}
@@ -2062,7 +2062,7 @@ def test_trim_duplicate_events_drops_stale() -> None:
 
 
 def test_trim_duplicate_events_keeps_unparseable_timestamp() -> None:
-    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+    from farna.core.cost_controller.finalize import _trim_duplicate_events
 
     events = [{"run_id": "x", "ts": "not-a-date"}]
     kept = _trim_duplicate_events(events)
@@ -2071,7 +2071,7 @@ def test_trim_duplicate_events_keeps_unparseable_timestamp() -> None:
 
 def test_trim_duplicate_events_limits_to_100() -> None:
 
-    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+    from farna.core.cost_controller.finalize import _trim_duplicate_events
 
     now = datetime.now(UTC)
     events = [{"run_id": str(i), "ts": now.isoformat()} for i in range(150)]
@@ -2085,7 +2085,7 @@ def test_trim_duplicate_events_limits_to_100() -> None:
 
 
 def test_apply_cancel_wins_overrides_awaiting_human() -> None:
-    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+    from farna.core.cost_controller.finalize import _apply_cancel_wins
 
     run = MagicMock()
     run.cancellation_requested = True
@@ -2094,7 +2094,7 @@ def test_apply_cancel_wins_overrides_awaiting_human() -> None:
 
 
 def test_apply_cancel_wins_overrides_complete() -> None:
-    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+    from farna.core.cost_controller.finalize import _apply_cancel_wins
 
     run = MagicMock()
     run.cancellation_requested = True
@@ -2103,7 +2103,7 @@ def test_apply_cancel_wins_overrides_complete() -> None:
 
 
 def test_apply_cancel_wins_preserves_running() -> None:
-    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+    from farna.core.cost_controller.finalize import _apply_cancel_wins
 
     run = MagicMock()
     run.cancellation_requested = True
@@ -2112,7 +2112,7 @@ def test_apply_cancel_wins_preserves_running() -> None:
 
 
 def test_apply_cancel_wins_no_cancel_flag() -> None:
-    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+    from farna.core.cost_controller.finalize import _apply_cancel_wins
 
     run = MagicMock()
     run.cancellation_requested = False
@@ -2126,19 +2126,19 @@ def test_apply_cancel_wins_no_cancel_flag() -> None:
 
 
 def test_is_empty_finalize_segment_true() -> None:
-    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+    from farna.core.cost_controller.finalize import _is_empty_finalize_segment
 
     assert _is_empty_finalize_segment({}, {}, {})
 
 
 def test_is_empty_finalize_segment_false_with_usage() -> None:
-    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+    from farna.core.cost_controller.finalize import _is_empty_finalize_segment
 
     assert not _is_empty_finalize_segment({"a": {"input_tokens": 1}}, {}, {})
 
 
 def test_is_empty_finalize_segment_false_with_outputs() -> None:
-    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+    from farna.core.cost_controller.finalize import _is_empty_finalize_segment
 
     assert not _is_empty_finalize_segment({}, {"a": {}}, {})
 
@@ -2149,7 +2149,7 @@ def test_is_empty_finalize_segment_false_with_outputs() -> None:
 
 
 def test_ledger_run_date_terminal_positive_total() -> None:
-    from modulo.core.cost_controller.finalize import _ledger_run_date
+    from farna.core.cost_controller.finalize import _ledger_run_date
 
     run = MagicMock()
     run.started_at = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
@@ -2161,7 +2161,7 @@ def test_ledger_run_date_terminal_positive_total() -> None:
 
 
 def test_ledger_run_date_not_terminal() -> None:
-    from modulo.core.cost_controller.finalize import _ledger_run_date
+    from farna.core.cost_controller.finalize import _ledger_run_date
 
     run = MagicMock()
     run.started_at = datetime(2026, 1, 15, tzinfo=UTC)
@@ -2169,7 +2169,7 @@ def test_ledger_run_date_not_terminal() -> None:
 
 
 def test_ledger_run_date_zero_total() -> None:
-    from modulo.core.cost_controller.finalize import _ledger_run_date
+    from farna.core.cost_controller.finalize import _ledger_run_date
 
     run = MagicMock()
     run.started_at = datetime(2026, 1, 15, tzinfo=UTC)
@@ -2177,7 +2177,7 @@ def test_ledger_run_date_zero_total() -> None:
 
 
 def test_ledger_run_date_no_started_at() -> None:
-    from modulo.core.cost_controller.finalize import _ledger_run_date
+    from farna.core.cost_controller.finalize import _ledger_run_date
 
     run = MagicMock()
     run.started_at = None
@@ -2190,22 +2190,22 @@ def test_ledger_run_date_no_started_at() -> None:
 
 
 def test_log_union_size_guardrail_small_does_not_log() -> None:
-    from modulo.core.cost_controller.finalize import _log_union_size_guardrail
+    from farna.core.cost_controller.finalize import _log_union_size_guardrail
 
     enriched = {"a": {"input_tokens": 10}}
-    with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+    with patch("farna.core.cost_controller.finalize._log") as mock_log:
         _log_union_size_guardrail(enriched, uuid.uuid4())
     mock_log.warning.assert_not_called()
 
 
 def test_log_union_size_guardrail_large_logs_warning() -> None:
-    from modulo.core.cost_controller.finalize import _UNION_SIZE_GUARDRAIL_BYTES, _log_union_size_guardrail
+    from farna.core.cost_controller.finalize import _UNION_SIZE_GUARDRAIL_BYTES, _log_union_size_guardrail
 
     big_dict = {f"x{i:04d}": {"data": "y" * 10000} for i in range(1000)}
     # Verify it's large enough
     size_bytes = len(str(big_dict).encode("utf-8"))
     if size_bytes > _UNION_SIZE_GUARDRAIL_BYTES:
-        with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+        with patch("farna.core.cost_controller.finalize._log") as mock_log:
             _log_union_size_guardrail(big_dict, uuid.uuid4())
         mock_log.warning.assert_called_once()
 
@@ -2216,7 +2216,7 @@ def test_log_union_size_guardrail_large_logs_warning() -> None:
 
 
 def test_entry_amount_basic() -> None:
-    from modulo.core.cost_controller.finalize import _entry_amount
+    from farna.core.cost_controller.finalize import _entry_amount
 
     result = _entry_amount(Decimal("0.123456789"))
     assert isinstance(result, str)
@@ -2230,7 +2230,7 @@ def test_entry_amount_basic() -> None:
 
 
 def test_usage_token_sum_basic() -> None:
-    from modulo.core.cost_controller.finalize import _usage_token_sum
+    from farna.core.cost_controller.finalize import _usage_token_sum
 
     usage = {
         "a": {"input_tokens": 10, "output_tokens": 5},
@@ -2241,14 +2241,14 @@ def test_usage_token_sum_basic() -> None:
 
 
 def test_usage_token_sum_empty() -> None:
-    from modulo.core.cost_controller.finalize import _usage_token_sum
+    from farna.core.cost_controller.finalize import _usage_token_sum
 
     assert _usage_token_sum({}, "input_tokens") == 0
     assert _usage_token_sum(None, "input_tokens") == 0  # type: ignore[arg-type]
 
 
 def test_usage_token_sum_skips_non_dict() -> None:
-    from modulo.core.cost_controller.finalize import _usage_token_sum
+    from farna.core.cost_controller.finalize import _usage_token_sum
 
     usage = {"a": "not-a-dict", "b": {"input_tokens": 10}}
     assert _usage_token_sum(usage, "input_tokens") == 10
@@ -2260,7 +2260,7 @@ def test_usage_token_sum_skips_non_dict() -> None:
 
 
 def test_fallback_wall_hours_basic() -> None:
-    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+    from farna.core.cost_controller.finalize import _fallback_wall_hours
 
     outputs = {"node-a": {}}
     telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000}}
@@ -2268,14 +2268,14 @@ def test_fallback_wall_hours_basic() -> None:
 
 
 def test_fallback_wall_hours_empty() -> None:
-    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+    from farna.core.cost_controller.finalize import _fallback_wall_hours
 
     assert _fallback_wall_hours({}, {}) == 0.0
     assert _fallback_wall_hours(None, None) == 0.0
 
 
 def test_fallback_wall_hours_skips_non_dict_entry() -> None:
-    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+    from farna.core.cost_controller.finalize import _fallback_wall_hours
 
     outputs = {"node-a": "not-a-dict"}
     assert _fallback_wall_hours(outputs, None) == 0.0
@@ -2287,7 +2287,7 @@ def test_fallback_wall_hours_skips_non_dict_entry() -> None:
 
 
 def test_collect_node_emission_sources_basic() -> None:
-    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+    from farna.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {
         "node-a": {
@@ -2304,28 +2304,28 @@ def test_collect_node_emission_sources_basic() -> None:
 
 
 def test_collect_node_emission_sources_skips_non_dict_nodes() -> None:
-    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+    from farna.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": "not-a-dict", "node-b": 42}
     assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_non_dict_output() -> None:
-    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+    from farna.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": {"output": "not-a-dict"}}
     assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_non_list_refs() -> None:
-    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+    from farna.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": {"output": {"work_item_refs": "not-a-list"}}}
     assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_malformed_ref() -> None:
-    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+    from farna.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": {"output": {"work_item_refs": ["garbage", 42, {"kind": "x", "ref": "y"}]}}}
     result = _collect_node_emission_sources(outputs)
@@ -2338,20 +2338,20 @@ def test_collect_node_emission_sources_skips_malformed_ref() -> None:
 
 
 def test_canonical_emission_missing_kind_or_ref_returns_none() -> None:
-    from modulo.core.cost_controller.finalize import _canonical_emission
+    from farna.core.cost_controller.finalize import _canonical_emission
 
     assert _canonical_emission({"kind": None, "ref": "FAR-100"}) is None
     assert _canonical_emission({"kind": "linear"}) is None
 
 
 def test_canonical_emission_uncanonicalisable_value_returns_none() -> None:
-    from modulo.core.cost_controller.finalize import _canonical_emission
+    from farna.core.cost_controller.finalize import _canonical_emission
 
     assert _canonical_emission({"kind": "   ", "ref": "FAR-100"}) is None
 
 
 def test_canonical_emission_valid_returns_tuple() -> None:
-    from modulo.core.cost_controller.finalize import _canonical_emission
+    from farna.core.cost_controller.finalize import _canonical_emission
 
     emission = _canonical_emission({"kind": "issue", "ref": "FAR-100"})
     assert emission is not None
@@ -2373,7 +2373,7 @@ def test_fold_stored_clamped_none_stored() -> None:
 def test_fold_stored_clamped_valid_fold() -> None:
 
     node_dict: dict[str, Any] = {"model_cost_usd": 0.05}
-    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+    with patch("farna.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
         _fold_stored_clamped(node_dict)
     assert node_dict["model_cost_usd"] == pytest.approx(0.05)
 
@@ -2386,8 +2386,8 @@ def test_fold_stored_clamped_rejects_invalid_fold() -> None:
         "model_cost_out_of_band_high": True,
     }
     with (
-        patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=None),
-        patch("modulo.core.cost_controller.finalize._is_exact_zero", return_value=False),
+        patch("farna.core.cost_controller.finalize.clamp_reported", return_value=None),
+        patch("farna.core.cost_controller.finalize._is_exact_zero", return_value=False),
     ):
         _fold_stored_clamped(node_dict)
     assert "model_cost_usd" not in node_dict
@@ -2401,8 +2401,8 @@ def test_fold_stored_clamped_keeps_exact_zero() -> None:
         "model_cost_out_of_band_high": False,
     }
     with (
-        patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=None),
-        patch("modulo.core.cost_controller.finalize._is_exact_zero", return_value=True),
+        patch("farna.core.cost_controller.finalize.clamp_reported", return_value=None),
+        patch("farna.core.cost_controller.finalize._is_exact_zero", return_value=True),
     ):
         _fold_stored_clamped(node_dict)
     assert node_dict["model_cost_usd"] == 0.0
@@ -2437,7 +2437,7 @@ def test_fold_stored_clamped_sub_floor_stamps_rejection_before_pop() -> None:
 def test_record_node_schema_drift_increments_when_sandbox_and_drift() -> None:
 
     output_obj = {"schema_drift": True, "pin_failed": False}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_rec:
         _record_node_schema_drift(output_obj, "sandbox_agent")
     mock_rec.assert_called_once()
 
@@ -2445,7 +2445,7 @@ def test_record_node_schema_drift_increments_when_sandbox_and_drift() -> None:
 def test_record_node_schema_drift_no_increment_when_pin_failed() -> None:
 
     output_obj = {"schema_drift": True, "pin_failed": True}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_rec:
         _record_node_schema_drift(output_obj, "sandbox_agent")
     mock_rec.assert_not_called()
 
@@ -2453,7 +2453,7 @@ def test_record_node_schema_drift_no_increment_when_pin_failed() -> None:
 def test_record_node_schema_drift_no_increment_when_not_sandbox() -> None:
 
     output_obj = {"schema_drift": True}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_rec:
         _record_node_schema_drift(output_obj, "agent")
     mock_rec.assert_not_called()
 
@@ -2461,7 +2461,7 @@ def test_record_node_schema_drift_no_increment_when_not_sandbox() -> None:
 def test_record_node_schema_drift_no_increment_when_no_drift() -> None:
 
     output_obj = {}
-    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+    with patch("farna.core.cost_controller.finalize.record_schema_drift") as mock_rec:
         _record_node_schema_drift(output_obj, "sandbox_agent")
     mock_rec.assert_not_called()
 
@@ -2545,7 +2545,7 @@ def test_seed_union_empty() -> None:
 def test_fold_model_cost_output_none_falls_stored() -> None:
 
     node_dict: dict[str, Any] = {"model_cost_usd": 0.05}
-    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+    with patch("farna.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
         _fold_model_cost(node_dict, None)
     assert node_dict["model_cost_usd"] == pytest.approx(0.05)
 
@@ -2562,7 +2562,7 @@ def test_fold_model_cost_output_with_raw_usd_folded() -> None:
 
     node_dict: dict[str, Any] = {}
     output_obj = {"model_cost_usd": 0.05, "model_cost_raw_usd": 0.06}
-    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.06"), False, False)):
+    with patch("farna.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.06"), False, False)):
         _fold_model_cost(node_dict, output_obj)
     assert node_dict["model_cost_usd"] == pytest.approx(0.06)
     assert node_dict["model_cost_raw_usd"] == pytest.approx(0.06)
@@ -2572,7 +2572,7 @@ def test_fold_model_cost_output_without_raw_pops_raw() -> None:
 
     node_dict: dict[str, Any] = {"model_cost_raw_usd": 0.06}
     output_obj = {"model_cost_usd": 0.05}
-    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+    with patch("farna.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
         _fold_model_cost(node_dict, output_obj)
     assert node_dict["model_cost_usd"] == pytest.approx(0.05)
     assert "model_cost_raw_usd" not in node_dict
@@ -2635,29 +2635,29 @@ def test_legacy_sandbox_cost_non_dict_outputs() -> None:
 
 
 def test_legacy_sandbox_cost_skips_non_dict_entry() -> None:
-    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+    from farna.core.cost_controller.finalize import _legacy_sandbox_cost
 
-    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+    with patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
         result = _legacy_sandbox_cost({"a": "not-a-dict"})
     assert result == Decimal(0)
 
 
 def test_legacy_sandbox_cost_skips_zero_wall_clock() -> None:
-    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+    from farna.core.cost_controller.finalize import _legacy_sandbox_cost
 
     outputs = {"node-a": {}}
     telemetry = {"node-a": {"wall_clock_time_ms": 0}}
-    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+    with patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
         result = _legacy_sandbox_cost(outputs, telemetry)
     assert result == Decimal(0)
 
 
 def test_legacy_sandbox_cost_skips_nan_wall_clock() -> None:
-    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+    from farna.core.cost_controller.finalize import _legacy_sandbox_cost
 
     outputs = {"node-a": {}}
     telemetry = {"node-a": {"wall_clock_time_ms": float("nan")}}
-    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+    with patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
         result = _legacy_sandbox_cost(outputs, telemetry)
     assert result == Decimal(0)
 
@@ -2666,7 +2666,7 @@ async def test_finalize_cost_run_not_found() -> None:
     """finalize_cost returns early when the run row is missing."""
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-    with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+    with patch("farna.core.cost_controller.finalize._log") as mock_log:
         await finalize_cost(
             session,
             run_id=uuid.uuid4(),
@@ -2790,13 +2790,13 @@ async def test_finalize_failed_run_salvages_agent_cost_from_retained_marker() ->
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await finalize_failed_run(
             session,
@@ -2922,10 +2922,10 @@ async def test_salvage_cancelled_run_cost_does_not_write_for_tokens_only_markers
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -2981,13 +2981,13 @@ async def test_finalize_failed_run_marker_without_cost_evidence_keeps_one_entry(
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(raw_output="no events")}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_failed_run(
             session,
@@ -3024,12 +3024,12 @@ async def test_finalize_failed_run_withholds_sandbox_cost_without_sandbox_eviden
     markers = {"terminal-triage:00000000-0000-0000-0000-000000000002": _run_level_triage_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             session,
@@ -3065,12 +3065,12 @@ async def test_finalize_failed_run_withholds_sandbox_cost_when_the_marker_is_for
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None, node_id="n1")}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_failed_run(
             session,
@@ -3103,13 +3103,13 @@ async def test_finalize_failed_run_still_attributes_sandbox_cost_with_attempt_ma
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(cost=None)}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await finalize_failed_run(
             session,
@@ -3152,12 +3152,12 @@ async def test_finalize_cancelled_run_does_not_salvage_on_the_request_path() -> 
     }
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3185,11 +3185,11 @@ async def test_finalize_cancelled_run_without_marker_evidence_forfeits() -> None
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3220,13 +3220,13 @@ async def test_salvage_cancelled_run_cost_attributes_settled_marker_spend() -> N
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()) as mock_block,
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3246,7 +3246,7 @@ async def test_salvage_cancelled_run_cost_skips_when_the_run_is_missing() -> Non
     """A settle race may leave no row to salvage — a quiet no-op, never a raise."""
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-    with patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs:
+    with patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs:
         await salvage_cancelled_run_cost(session, run_id=uuid.uuid4(), org_id=_ORG_ID)
 
     mock_blobs.assert_not_awaited()
@@ -3267,8 +3267,8 @@ async def test_salvage_cancelled_run_cost_skips_when_status_is_not_cancelled() -
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3295,13 +3295,13 @@ async def test_salvage_cancelled_run_cost_attributes_a_zero_total_empty_segment_
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3317,8 +3317,8 @@ async def test_salvage_cancelled_run_cost_skips_when_cost_already_attributed() -
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
-        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3336,11 +3336,11 @@ async def test_salvage_cancelled_run_cost_skips_without_marker_evidence() -> Non
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3373,13 +3373,13 @@ async def test_salvage_cancelled_run_cost_attributes_cost_without_a_liveness_pro
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3448,12 +3448,12 @@ async def test_salvage_cancelled_run_cost_does_not_bill_a_connector_only_run() -
     markers = {"connector:c1": _connector_delivered_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")) as mock_rate,
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3489,11 +3489,11 @@ async def test_salvage_cancelled_run_cost_bounds_the_row_lock_first() -> None:
     session.execute = AsyncMock(side_effect=_execute)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.set_mutation_row_lock_timeout",
+            "farna.core.cost_controller.finalize.set_mutation_row_lock_timeout",
             new=AsyncMock(side_effect=_bound),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
     ):
@@ -3531,16 +3531,16 @@ async def test_salvage_cancelled_run_cost_preserves_the_recorded_terminal_time()
     markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker()}
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=markers)),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.update_run_status",
+            "farna.core.cost_controller.finalize.update_run_status",
             new=AsyncMock(side_effect=_restamping_update),
         ),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
-        patch("modulo.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")),
+        patch("farna.core.cost_controller.finalize._record_terminal_analytics", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=AsyncMock()),
     ):
         await salvage_cancelled_run_cost(session, run_id=run.id, org_id=_ORG_ID)
 
@@ -3594,7 +3594,7 @@ def test_split_merge_persists_new_format_sandbox_output_into_two_columns() -> No
     the PURE return and ``node_telemetry_json`` the flat telemetry. Before the
     fix the splitter nested the telemetry under the return and persisted
     ``outputs=None`` with a ``telemetry`` key inside the telemetry column."""
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.node_runner import (
         _build_sandbox_node_envelope,
         _SandboxNodeOutput,
     )

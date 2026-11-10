@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.auth.permissions import is_delegable
-from modulo.core.principals import (
+from farna.auth.permissions import is_delegable
+from farna.core.principals import (
     KIND_HUMAN,
     KIND_SERVICE,
     SERVICE_ROLE_CEILING,
@@ -51,7 +51,7 @@ class TestServicePermissionAllowed:
     """Consumes FAR-1477's registry flag — never a second exclusion list."""
 
     def test_delegates_to_is_delegable_for_every_registry_key(self) -> None:
-        from modulo.auth.permissions import PERMISSIONS
+        from farna.auth.permissions import PERMISSIONS
 
         for key in PERMISSIONS:
             assert service_permission_allowed(key) == is_delegable(key), key

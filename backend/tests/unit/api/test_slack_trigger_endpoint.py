@@ -23,23 +23,23 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
-from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.trigger_engine import (
+from farna.api.dependencies import _get_engine, get_db_session, get_system_db_session
+from farna.api.main import app
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
     TriggerConfigInvalidError,
     TriggerInactiveError,
     TriggerNotFoundError,
 )
-from modulo.core.trigger_engine.slack_app_mention import (
+from farna.core.trigger_engine.slack_app_mention import (
     SlackAppMentionParseError,
     SlackEventTypeError,
     SlackSignatureError,
     SlackTimestampExpiredError,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.conftest import _ProvisionedSystemSettings, make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
@@ -66,7 +66,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 @pytest.fixture(autouse=True)
@@ -94,7 +94,7 @@ def _system_engine_isolated(monkeypatch: pytest.MonkeyPatch) -> Generator[None, 
     Teardown leaves the globals CLEARED rather than restoring a snapshot: a
     cached fallback engine is exactly the pollution being fixed.
     """
-    from modulo.api import dependencies as _deps
+    from farna.api import dependencies as _deps
 
     _deps._SYSTEM_ASYNC_ENGINE = None
     _deps._SYSTEM_SESSION_FACTORY = None
@@ -200,10 +200,10 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
-    from modulo.api.dependencies import get_current_tenant_user_optional
+    from farna.api.dependencies import get_current_tenant_user_optional
 
     app.dependency_overrides[get_current_tenant_user_optional] = override_optional_principal
-    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
+    with patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -238,7 +238,7 @@ def _headers(ts: str, body: bytes, secret: str = _SECRET) -> dict[str, str]:
 def test_challenge_handshake_returns_challenge(client: TestClient) -> None:
     body = json.dumps({"type": "url_verification", "challenge": _CHALLENGE}).encode()
     ts = str(int(time.time()))
-    with patch("modulo.api.routes.slack.set_rls_org"):
+    with patch("farna.api.routes.slack.set_rls_org"):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
             content=body,
@@ -251,7 +251,7 @@ def test_challenge_handshake_returns_challenge(client: TestClient) -> None:
 def test_challenge_bad_signature_returns_401(client: TestClient) -> None:
     body = json.dumps({"type": "url_verification", "challenge": _CHALLENGE}).encode()
     ts = str(int(time.time()))
-    with patch("modulo.api.routes.slack.set_rls_org"):
+    with patch("farna.api.routes.slack.set_rls_org"):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
             content=body,
@@ -276,14 +276,14 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
     run_mock.execution_origin = None
 
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch(
-            "modulo.api.routes.slack.dispatch_run",
+            "farna.api.routes.slack.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -314,14 +314,14 @@ def test_app_mention_ack_carries_dispatched_execution_origin(client: TestClient)
     run_mock.execution_origin = "dispatched"
 
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch(
-            "modulo.api.routes.slack.dispatch_run",
+            "farna.api.routes.slack.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -341,8 +341,8 @@ def test_app_mention_bad_signature_returns_401(client: TestClient) -> None:
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.set_rls_org"),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
@@ -361,7 +361,7 @@ def test_app_mention_bad_signature_returns_401(client: TestClient) -> None:
 def test_app_mention_missing_signature_returns_401(client: TestClient) -> None:
     body = _event_body()
     ts = str(int(time.time()))
-    with patch("modulo.api.routes.slack.set_rls_org"):
+    with patch("farna.api.routes.slack.set_rls_org"):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
             content=body,
@@ -373,7 +373,7 @@ def test_app_mention_missing_signature_returns_401(client: TestClient) -> None:
 def test_stale_timestamp_returns_400(client: TestClient) -> None:
     body = _event_body()
     stale_ts = str(int(time.time()) - 600)
-    with patch("modulo.api.routes.slack.set_rls_org"):
+    with patch("farna.api.routes.slack.set_rls_org"):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
             content=body,
@@ -386,7 +386,7 @@ def test_stale_timestamp_returns_400(client: TestClient) -> None:
 def test_missing_json_body_returns_400(client: TestClient) -> None:
     ts = str(int(time.time()))
     body = b"not json"
-    with patch("modulo.api.routes.slack.set_rls_org"):
+    with patch("farna.api.routes.slack.set_rls_org"):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
             content=body,
@@ -400,11 +400,11 @@ def test_paused_org_returns_202_paused(client: TestClient) -> None:
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=True),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=True),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
@@ -430,7 +430,7 @@ def test_trigger_not_found_returns_404(client: TestClient) -> None:
 
     app.dependency_overrides[get_system_db_session] = override_system_session
     try:
-        with patch("modulo.api.routes.slack.set_rls_org"):
+        with patch("farna.api.routes.slack.set_rls_org"):
             resp = client.post(
                 f"/api/v1/triggers/{_TRIGGER_ID}/slack",
                 content=body,
@@ -446,12 +446,12 @@ def test_trigger_not_found_returns_404(client: TestClient) -> None:
 def test_app_mention_duplicate_event_returns_400(client: TestClient) -> None:
     body = _event_body()
     ts = str(int(time.time()))
-    from modulo.core.trigger_engine import DuplicateWebhookError
+    from farna.core.trigger_engine import DuplicateWebhookError
 
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -477,7 +477,7 @@ def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) ->
     async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
         yield system_session
 
-    from modulo.api.dependencies import get_current_tenant_user_optional
+    from farna.api.dependencies import get_current_tenant_user_optional
 
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
@@ -487,8 +487,8 @@ def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) ->
     ts = str(int(time.time()))
     try:
         with (
-            patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.slack.set_rls_org"),
+            patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.slack.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/slack",
@@ -508,7 +508,7 @@ def test_receive_slack_event_degraded_system_engine_returns_503(client: TestClie
     """When the modulo_system role is not provisioned the bootstrap would
     silently 404 every delivery. The route must refuse loudly with a 503
     (log code slack.system_bootstrap_degraded) — distinguishable from a 404."""
-    with patch("modulo.api.routes.slack.system_engine_is_fallback", return_value=True):
+    with patch("farna.api.routes.slack.system_engine_is_fallback", return_value=True):
         body = _event_body()
         ts = str(int(time.time()))
         resp = client.post(
@@ -528,18 +528,18 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
     route must RECORD the busy delivery and only then ack 202. Slack
     suppresses retries on 2xx BY DESIGN, so without the recording the
     delivery would be silently lost."""
-    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
-    from modulo.core.trigger_engine import TriggerBusyError
+    from farna.api.trigger_busy import BUSY_ACK_DETAIL
+    from farna.core.trigger_engine import TriggerBusyError
 
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
-        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
+        patch("farna.api.routes.slack.set_rls_org"),
         # FAR-1287: the route snapshots the pipeline before dispatch, and the
         # snapshot's advisory lock is resolved onto a dedicated engine.
-        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+        patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
         resp = client.post(
@@ -573,8 +573,8 @@ def test_app_mention_rate_limited_records_event_then_returns_429(client: TestCli
     unwind, exactly like the webhook receive path. This test runs the REAL
     post-unwind recorder against a fake fresh session and asserts the persisted
     event + payload rows — not merely that a helper was called."""
-    from modulo.db.models.trigger_event import TriggerEvent
-    from modulo.db.models.webhook import WebhookPayload
+    from farna.db.models.trigger_event import TriggerEvent
+    from farna.db.models.webhook import WebhookPayload
 
     fresh_session = AsyncMock()
     fresh_begin_cm = AsyncMock()
@@ -591,15 +591,15 @@ def test_app_mention_rate_limited_records_event_then_returns_429(client: TestCli
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
-        patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
-        patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
-        patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+        patch("farna.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.trigger_busy.get_settings", return_value=_make_settings()),
+        patch("farna.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
         # FAR-1287: the route snapshots the pipeline before dispatch, and the
         # snapshot's advisory lock is resolved onto a dedicated engine.
-        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+        patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
     ):
         m.side_effect = PipelineRateLimitError(uuid.uuid4(), "k", 3, 60)
         resp = client.post(
@@ -636,16 +636,16 @@ def test_app_mention_rate_limited_records_event_then_returns_429(client: TestCli
 def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
     """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
     409 at the create_run choke point - never a generic 500."""
-    from modulo.core.exceptions import PipelineNotRunnableError
+    from farna.core.exceptions import PipelineNotRunnableError
 
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.set_rls_org"),
         # FAR-1287: the route snapshots the pipeline before dispatch, and the
         # snapshot's advisory lock is resolved onto a dedicated engine.
-        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+        patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
     ):
         m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
         resp = client.post(
@@ -662,15 +662,15 @@ def test_app_mention_snapshot_lock_busy_returns_503(client: TestClient) -> None:
     """FAR-527 parity: a busy per-pipeline snapshot advisory lock on the Slack
     app-mention path must surface an honest, retryable 503 — never a generic
     500 (matches the webhook + MCP trigger paths)."""
-    from modulo.core.exceptions import SnapshotLockNotAvailableError
+    from farna.core.exceptions import SnapshotLockNotAvailableError
 
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack.set_rls_org"),
         patch(
-            "modulo.api.routes.slack.create_snapshot_from_live_graph",
+            "farna.api.routes.slack.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             side_effect=SnapshotLockNotAvailableError("busy"),
         ),
@@ -701,7 +701,7 @@ def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None
     body = _event_body()
     ts = str(int(time.time()))
     try:
-        with patch("modulo.api.routes.slack.set_rls_org"):
+        with patch("farna.api.routes.slack.set_rls_org"):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/slack",
                 content=body,
@@ -721,11 +721,11 @@ def test_paused_org_missing_row_skips_event_write(client: TestClient) -> None:
     body = _event_body()
     ts = str(int(time.time()))
     with (
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
-        patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=False),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
+        patch("farna.api.routes.slack.set_rls_org"),
+        patch("farna.api.routes._trigger_events.org_row_exists", new_callable=AsyncMock, return_value=False),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/slack",
@@ -742,7 +742,7 @@ def test_paused_org_missing_row_skips_event_write(client: TestClient) -> None:
 async def test_ack_slack_busy_delivery_unresolvable_org_refuses_429() -> None:
     """Defensive arm (S3776 split, changed-lines coverage): a busy ack with
     no resolved org must refuse with 429 + Retry-After, never a false 2xx."""
-    from modulo.api.routes.slack import _ack_slack_busy_delivery
+    from farna.api.routes.slack import _ack_slack_busy_delivery
 
     with pytest.raises(HTTPException) as exc_info:
         await _ack_slack_busy_delivery(trigger_id=_TRIGGER_ID, org_id=None, raw_body=b"{}")
@@ -761,9 +761,9 @@ async def test_record_slack_rate_limit_refusal_unresolvable_org_skips_recording(
     ``org_id`` is always resolved by the time the engine can raise
     ``PipelineRateLimitError``; the route still raises its unchanged 429 after
     the helper returns — this only pins the helper's defensive arm."""
-    from modulo.api.routes.slack import _record_slack_rate_limit_refusal
+    from farna.api.routes.slack import _record_slack_rate_limit_refusal
 
-    with patch("modulo.api.routes.slack._record_refused_delivery", new_callable=AsyncMock) as record:
+    with patch("farna.api.routes.slack._record_refused_delivery", new_callable=AsyncMock) as record:
         await _record_slack_rate_limit_refusal(
             trigger_id=_TRIGGER_ID,
             org_id=None,
@@ -818,13 +818,13 @@ async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Excep
     (FAR-1916 slack mirror) — see
     ``test_run_slack_pipeline_propagates_rate_limit_for_post_unwind_record``.
     """
-    from modulo.api.routes.slack import _run_slack_pipeline
+    from farna.api.routes.slack import _run_slack_pipeline
 
     session = _make_trigger_session()
     with (
-        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=side_effect),
-        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=side_effect),
+        patch("farna.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -854,14 +854,14 @@ async def test_run_slack_pipeline_propagates_rate_limit_for_post_unwind_record()
     unwind that transaction with the event lost and put the route's outer
     ladder out of reach, so the post-unwind re-record could never run. This
     pins the propagation contract directly."""
-    from modulo.api.routes.slack import _run_slack_pipeline
+    from farna.api.routes.slack import _run_slack_pipeline
 
     session = _make_trigger_session()
     rate_limit_error = PipelineRateLimitError(uuid.uuid4(), None, 1, 60)
     with (
-        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=rate_limit_error),
-        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=rate_limit_error),
+        patch("farna.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -886,11 +886,11 @@ async def test_verify_slack_delivery_maps_inactive_trigger_to_404() -> None:
     ladder's ``TriggerInactiveError`` -> 404, exactly as the original inline
     ladder did (the bootstrap helper and the engine's mid-dispatch re-read can
     both raise it, so both ladders keep the arm)."""
-    from modulo.api.routes.slack import _verify_slack_delivery
+    from farna.api.routes.slack import _verify_slack_delivery
 
     with (
         patch(
-            "modulo.api.routes.slack.load_trigger_and_org_global",
+            "farna.api.routes.slack.load_trigger_and_org_global",
             new_callable=AsyncMock,
             side_effect=TriggerInactiveError(_TRIGGER_ID),
         ),
@@ -917,18 +917,18 @@ async def test_verify_slack_delivery_missing_signing_secret_returns_401() -> Non
     """S3776 split changed-lines coverage: a well-formed config with NO signing
     secret (``{}``, not the invalid non-dict shape) must fail closed with 401
     before any snapshot/dedup work — never reach the engine unauthenticated."""
-    from modulo.api.routes.slack import _verify_slack_delivery
+    from farna.api.routes.slack import _verify_slack_delivery
 
     trigger = MagicMock()
     trigger.config_json = {}
     with (
         patch(
-            "modulo.api.routes.slack.load_trigger_and_org_global",
+            "farna.api.routes.slack.load_trigger_and_org_global",
             new_callable=AsyncMock,
             return_value=(trigger, _ORG_ID),
         ),
-        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
@@ -952,15 +952,15 @@ async def test_create_slack_snapshot_none_returns_500_and_skips_pause_check() ->
     """S3776 split changed-lines coverage: an INACTIVE trigger skips the org
     pause pre-check, and a ``None`` snapshot fails closed with 500 rather than
     dispatching against a missing snapshot."""
-    from modulo.api.routes.slack import _create_slack_snapshot
+    from farna.api.routes.slack import _create_slack_snapshot
 
     trigger = MagicMock()
     trigger.active = False
     trigger.pipeline_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock) as ensure,
+        patch("farna.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock) as ensure,
         patch(
-            "modulo.api.routes.slack.create_snapshot_from_live_graph",
+            "farna.api.routes.slack.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -1002,7 +1002,7 @@ async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None
     never against the raw ciphertext blob."""
     import base64
 
-    from modulo.api.routes.slack import _verify_slack_delivery
+    from farna.api.routes.slack import _verify_slack_delivery
 
     valid_key = base64.urlsafe_b64encode(b"s" * 32).decode()
     token = _fernet_token(_SECRET, valid_key)
@@ -1014,13 +1014,13 @@ async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None
 
     with (
         patch(
-            "modulo.api.routes.slack.load_trigger_and_org_global",
+            "farna.api.routes.slack.load_trigger_and_org_global",
             new_callable=AsyncMock,
             return_value=(trigger, _ORG_ID),
         ),
-        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(valid_key)),
+        patch("farna.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.get_settings", return_value=_fake_settings_with_key(valid_key)),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
             # ``decode_stored_secret_scoped`` re-applies the RLS org on THIS
@@ -1048,7 +1048,7 @@ async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
     REAL decode helper raises ``DecryptionError`` here (no decode mock)."""
     import base64
 
-    from modulo.api.routes.slack import _verify_slack_delivery
+    from farna.api.routes.slack import _verify_slack_delivery
 
     other_key = base64.urlsafe_b64encode(b"x" * 32).decode()
     configured_key = base64.urlsafe_b64encode(b"s" * 32).decode()
@@ -1057,13 +1057,13 @@ async def test_verify_slack_delivery_undecryptable_token_fails_closed() -> None:
     trigger.config_json = {"signing_secret": token}
     with (
         patch(
-            "modulo.api.routes.slack.load_trigger_and_org_global",
+            "farna.api.routes.slack.load_trigger_and_org_global",
             new_callable=AsyncMock,
             return_value=(trigger, _ORG_ID),
         ),
-        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.get_settings", return_value=_fake_settings_with_key(configured_key)),
+        patch("farna.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.get_settings", return_value=_fake_settings_with_key(configured_key)),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _verify_slack_delivery(
@@ -1094,7 +1094,7 @@ async def test_verify_slack_delivery_legacy_plaintext_accepted_with_dated_warnin
     value is returned unchanged by the resolver, it does NOT raise."""
     import logging as _logging
 
-    from modulo.api.routes.slack import _verify_slack_delivery
+    from farna.api.routes.slack import _verify_slack_delivery
 
     trigger = MagicMock()
     trigger.pipeline_id = uuid.uuid4()
@@ -1104,13 +1104,13 @@ async def test_verify_slack_delivery_legacy_plaintext_accepted_with_dated_warnin
 
     with (
         patch(
-            "modulo.api.routes.slack.load_trigger_and_org_global",
+            "farna.api.routes.slack.load_trigger_and_org_global",
             new_callable=AsyncMock,
             return_value=(trigger, _ORG_ID),
         ),
-        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
-        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+        patch("farna.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        caplog.at_level(_logging.WARNING, logger="farna.core.trigger_secrets"),
     ):
         result_trigger, org_id = await _verify_slack_delivery(
             # ``decode_stored_secret_scoped`` re-applies the RLS org on THIS

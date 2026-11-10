@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy import CheckConstraint, MetaData, Table
 
-from modulo.db.models.node import Node
+from farna.db.models.node import Node
 
 
 class TestNodeTemporalFields:

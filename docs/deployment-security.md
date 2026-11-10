@@ -246,7 +246,7 @@ Then use `modulo_migrate` in migration contexts and `modulo_app` for runtime.
 Migrations use PostgreSQL advisory locks to prevent concurrent execution:
 
 ```python
-# backend/src/modulo/db/migrations/env.py (polling loop; key is (72001, 1))
+# backend/src/farna/db/migrations/env.py (polling loop; key is (72001, 1))
 for _ in range(240):
     result = await conn.execute(
         text("SELECT pg_try_advisory_lock(:k1, :k2)"),

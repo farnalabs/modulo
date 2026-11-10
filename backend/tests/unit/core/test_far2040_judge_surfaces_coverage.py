@@ -15,31 +15,31 @@ import pytest
 from langchain_core.messages import AIMessage
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-import modulo.core.pipeline_engine.model_backend_errors as model_backend_errors
-from modulo.api.mcp_server import _tool_exception_error
-from modulo.core.eval_engine import (
+import farna.core.pipeline_engine.llm_judge as llm_judge
+import farna.core.pipeline_engine.model_backend_errors as model_backend_errors
+from farna.api.mcp_server import _tool_exception_error
+from farna.core.eval_engine import (
     EvalDefinition,
     EvalEngine,
     EvalResult,
     EvalType,
     _result_from_judge_dict,
 )
-from modulo.core.eval_engine.execute_suite_run import _case_results
-from modulo.core.eval_engine.suite_run_judge import build_suite_run_model_judge_callable
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.execute_suite_run import _case_results
+from farna.core.eval_engine.suite_run_judge import build_suite_run_model_judge_callable
+from farna.core.eval_engine.typed_judge import (
     JudgeErrorCode,
     JudgeExecutionError,
     JudgeIdentity,
     JudgeOutcome,
     JudgeVerdict,
 )
-from modulo.core.guardrails.correction import (
+from farna.core.guardrails.correction import (
     CorrectionDefinition,
     CorrectionDetectorFamily,
     _run_different_family_revalidation,
 )
-from modulo.core.model_backend_hub import BackendNotFoundError
+from farna.core.model_backend_hub import BackendNotFoundError
 
 
 class _FakeBackend:

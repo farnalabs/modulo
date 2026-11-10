@@ -124,7 +124,7 @@ See [quickstart §3c](./quickstart.md#3c-smoke-check-the-stack).
 
 Every run-level failure is terminal-failed with a named `error_code`, and the
 taxonomy's single source of truth is `ERROR_CODE_REGISTRY` in
-`backend/src/modulo/core/pipeline_engine/error_codes.py` (plus its
+`backend/src/farna/core/pipeline_engine/error_codes.py` (plus its
 `LEGACY_ALIASES` map for pre-taxonomy spellings). This runbook covers the
 **dispatch, harness and recovery codes** - the ones the autonomous pipeline
 (it dispatcher_reconciles every 60s, sweeps stale runs every 5 min, and uses

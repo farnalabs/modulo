@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.github import (
+from farna.connectors.github import (
     REQUIRED_FINE_GRAINED_PERMISSIONS,
     REQUIRED_SCOPES,
     GitHubAuthError,

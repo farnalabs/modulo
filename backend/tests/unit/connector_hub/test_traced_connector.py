@@ -12,7 +12,7 @@ import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -25,9 +25,9 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.ci_runner.base import CIRunnerBase
-from modulo.core.connector_hub import ConnectorHub, _TracedConnector
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.connectors.ci_runner.base import CIRunnerBase
+from farna.core.connector_hub import ConnectorHub, _TracedConnector
+from farna.core.secrets_backend import create_secrets_backend
 
 from .secrets_helpers import SHARED_FERNET_KEY, encrypt_credentials
 
@@ -224,7 +224,7 @@ async def test_post_span_callback_failure_does_not_break_result(
     bad_result = object()
     with (
         patch.object(inner, "health_check", AsyncMock(return_value=bad_result)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        caplog.at_level(logging.WARNING, logger="farna.core.connector_hub"),
     ):
         result = await traced.health_check()
 
@@ -253,7 +253,7 @@ async def test_write_deepcopies_payload(traced: _TracedConnector) -> None:
 
 async def test_write_rejects_injection_payload(inner, tracer) -> None:
     """_TracedConnector.write must run filter_payload_for_injection before the inner write."""
-    from modulo.core.pipeline_engine.output_filter import OutputRejectedError
+    from farna.core.pipeline_engine.output_filter import OutputRejectedError
 
     inner.write = AsyncMock()
     traced = _TracedConnector(inner, tracer=tracer)

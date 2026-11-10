@@ -22,15 +22,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager import deadline_warning as dw
-from modulo.core.hitl_manager.deadline_warning import (
+from farna.core.hitl_manager import deadline_warning as dw
+from farna.core.hitl_manager.deadline_warning import (
     _SWEEP_CADENCE_SECONDS,
     dispatch_deadline_notifications,
     effective_deadline,
     lead_time_seconds,
     review_window_seconds,
 )
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 
 from .conftest import mock_begin as _mock_begin
 
@@ -534,7 +534,7 @@ async def test_webhook_dispatch_failure_keeps_the_email_leg_and_is_logged(
     notifier = _notifier()
     notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("endpoint down"))
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.hitl_manager.deadline_warning"):
         notified, send, _ = await _run_dispatch(
             candidate_rows=[(claim, "My Pipeline")],
             notifier=notifier,
@@ -576,7 +576,7 @@ async def test_subscriber_check_failure_fails_closed_without_burning_the_marker(
     notifier = AsyncMock(name="notifier")
     notifier.has_subscribers = AsyncMock(side_effect=RuntimeError("db blip"))
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.hitl_manager.deadline_warning"):
         notified, send, _ = await _run_dispatch(
             candidate_rows=[(claim, "My Pipeline")],
             recipients=[],
@@ -828,7 +828,7 @@ async def test_dispatch_recipient_resolution_failure_is_logged_and_skipped(
     """A resolution failure skips that entry only (logged, never raised)."""
     now = datetime.now(UTC)
     claim, _ = _approaching_gate(now)
-    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.hitl_manager.deadline_warning"):
         notified, send, _ = await _run_dispatch(
             candidate_rows=[(claim, "P")],
             resolve_side_effect=RuntimeError("db gone"),
@@ -857,7 +857,7 @@ async def test_dispatch_send_failure_is_logged_and_skipped(
     """A send failure is logged and never re-raised into the sweep."""
     now = datetime.now(UTC)
     claim, _ = _approaching_gate(now)
-    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.hitl_manager.deadline_warning"):
         notified, _, _ = await _run_dispatch(
             candidate_rows=[(claim, "P")],
             send_side_effect=RuntimeError("smtp down"),

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.models.error_notification_rule import (
+from farna.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
     ErrorNotificationRuleListResponse,
     ErrorNotificationRuleResponse,

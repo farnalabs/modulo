@@ -35,9 +35,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api import mcp_server as ms
-from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
+from farna.api import mcp_server as ms
+from farna.db.rls import set_rls_org
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 

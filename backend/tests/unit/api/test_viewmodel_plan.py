@@ -27,21 +27,21 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.viewmodel import _org_feature_overrides, _resolve_license_expiry
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlag
-from modulo.core.license import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.viewmodel import _org_feature_overrides, _resolve_license_expiry
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import FeatureFlag
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     LicenseData,
     clear_license,
     set_public_key,
     store_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -193,7 +193,7 @@ def _plan_client_as(
 def _patch_plan_deps(org: MagicMock | None, plan_ctx: MagicMock) -> object:
     """Patch the route's DB seams: org load, plan resolution, RLS setters."""
     return patch.multiple(
-        "modulo.api.routes.viewmodel",
+        "farna.api.routes.viewmodel",
         get_organisation=AsyncMock(return_value=org),
         resolve_plan_context=AsyncMock(return_value=plan_ctx),
         set_rls_org=AsyncMock(),
@@ -278,7 +278,7 @@ def test_plan_bootstrap_ignores_non_bool_and_unknown_overrides() -> None:
 def test_plan_bootstrap_license_block_reports_expiry() -> None:
     """The licence view (expires_at/org_id) rides the same payload so the client
     can drop its admin-only /admin/license call."""
-    from modulo.core.license import LicenseData
+    from farna.core.license import LicenseData
 
     org = _make_org()
     plan_ctx = _plan_context([_flag("eval_system", active=True)], tier="team")
@@ -294,7 +294,7 @@ def test_plan_bootstrap_license_block_reports_expiry() -> None:
     with (
         _plan_client_as(_VIEWER) as client,
         _patch_plan_deps(org, plan_ctx),
-        patch("modulo.core.license.get_license", return_value=licence),
+        patch("farna.core.license.get_license", return_value=licence),
     ):
         resp = client.get("/api/v1/plan")
 
@@ -335,7 +335,7 @@ def test_plan_bootstrap_programming_error_maps_to_501() -> None:
     with (
         _plan_client_as(_VIEWER) as client,
         patch.multiple(
-            "modulo.api.routes.viewmodel",
+            "farna.api.routes.viewmodel",
             get_organisation=AsyncMock(return_value=org),
             resolve_plan_context=AsyncMock(return_value=plan_ctx),
             set_rls_org=AsyncMock(side_effect=ProgrammingError("stmt", "params", "orig")),
@@ -356,7 +356,7 @@ def test_plan_bootstrap_sqlalchemy_error_maps_to_503() -> None:
     with (
         _plan_client_as(_VIEWER) as client,
         patch.multiple(
-            "modulo.api.routes.viewmodel",
+            "farna.api.routes.viewmodel",
             get_organisation=AsyncMock(return_value=org),
             resolve_plan_context=AsyncMock(side_effect=db_error),
             set_rls_org=AsyncMock(),
@@ -389,7 +389,7 @@ def test_plan_bootstrap_unexpected_error_maps_to_500() -> None:
     with (
         _plan_client_as(_VIEWER) as client,
         patch.multiple(
-            "modulo.api.routes.viewmodel",
+            "farna.api.routes.viewmodel",
             get_organisation=AsyncMock(return_value=org),
             resolve_plan_context=AsyncMock(side_effect=RuntimeError("boom")),
             set_rls_org=AsyncMock(),

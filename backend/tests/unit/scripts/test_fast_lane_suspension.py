@@ -49,7 +49,7 @@ class TestParseSuspensionMarker:
             (
                 (
                     "The review found issues in the pipeline engine.\n"
-                    "File: backend/src/modulo/core/pipeline_engine/graph.py\n"
+                    "File: backend/src/farna/core/pipeline_engine/graph.py\n"
                     "Severity: critical\n"
                     "<!-- FAST_LANE_SUSPENSION: critical -->"
                 ),

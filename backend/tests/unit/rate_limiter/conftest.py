@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 import pytest
 from tests.unit.rate_limiter.helpers import make_redis_client
 
-from modulo.api.middleware import rate_limiter as rl_mod
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core import rate_limiter as rl_core
+from farna.api.middleware import rate_limiter as rl_mod
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.core import rate_limiter as rl_core
 
 
 class _FrozenClock:

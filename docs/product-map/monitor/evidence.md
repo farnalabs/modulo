@@ -3,13 +3,13 @@ id: feat-evidence
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/evidence.py
-  - backend/src/modulo/api/routes/compliance.py
-  - backend/src/modulo/core/evidence_redaction.py
-  - backend/src/modulo/compliance/evidence_index.py
-  - backend/src/modulo/compliance/pack.py
-  - backend/src/modulo/db/models/evidence_redaction_rule.py
-  - backend/src/modulo/db/migrations/versions/0320_evidence_redaction_rules.py
+  - backend/src/farna/api/routes/evidence.py
+  - backend/src/farna/api/routes/compliance.py
+  - backend/src/farna/core/evidence_redaction.py
+  - backend/src/farna/compliance/evidence_index.py
+  - backend/src/farna/compliance/pack.py
+  - backend/src/farna/db/models/evidence_redaction_rule.py
+  - backend/src/farna/db/migrations/versions/0320_evidence_redaction_rules.py
   - frontend/src/views/EvidenceView.vue
   - frontend/src/views/ComplianceEvidenceIndexView.vue
   - frontend/src/views/AdminEvidenceRedactionView.vue

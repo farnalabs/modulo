@@ -22,13 +22,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import evidence as evidence_routes
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.evidence_redaction import REDACTED_SENTINEL
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import evidence as evidence_routes
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.evidence_redaction import REDACTED_SENTINEL
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -38,7 +38,7 @@ _RUN_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _EVIDENCE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
-_ROUTES = "modulo.api.routes.evidence"
+_ROUTES = "farna.api.routes.evidence"
 
 
 def _make_settings() -> Settings:

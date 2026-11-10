@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
-import modulo.core.saq_worker as sw
-from modulo.db.models.trigger_event import TriggerEvent
+import farna.core.saq_worker as sw
+from farna.db.models.trigger_event import TriggerEvent
 from tests.unit.cleanup_jobs.helpers import (
     JOB_CASES,
     JobCase,

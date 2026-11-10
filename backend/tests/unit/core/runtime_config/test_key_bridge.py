@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from modulo.core.runtime_config import key_bridge
-from modulo.core.runtime_config.key_bridge import (
+from farna.core.runtime_config import key_bridge
+from farna.core.runtime_config.key_bridge import (
     get_override,
     override_int_or,
     override_or,
 )
-from modulo.core.runtime_config.store import RuntimeConfigStore
+from farna.core.runtime_config.store import RuntimeConfigStore
 
 
 @pytest.fixture(autouse=True)
@@ -30,14 +30,14 @@ class TestGetOverride:
         assert get_override("MODULO_SCIM_TOKEN") is None
 
     def test_returns_override_value(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         get_runtime_config_store().set_override("MODULO_SCIM_TOKEN", "hot-token")
         assert get_override("MODULO_SCIM_TOKEN") == "hot-token"
 
     def test_empty_string_override_is_not_none(self) -> None:
         """Explicitly clearing SCIM to "" must disable it, not fall back."""
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         get_runtime_config_store().set_override("MODULO_SCIM_TOKEN", "")
         value = get_override("MODULO_SCIM_TOKEN")
@@ -76,13 +76,13 @@ class TestOverrideOr:
         assert override_or("MODULO_RATELIMIT_BYPASS_TOKEN", "boot-token") == "boot-token"
 
     def test_override_wins_over_fallback(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         get_runtime_config_store().set_override("MODULO_RATELIMIT_BYPASS_TOKEN", "hot-token")
         assert override_or("MODULO_RATELIMIT_BYPASS_TOKEN", "boot-token") == "hot-token"
 
     def test_clear_reverts_to_fallback(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         store = get_runtime_config_store()
         store.set_override("MODULO_RATELIMIT_BYPASS_TOKEN", "hot-token")
@@ -92,7 +92,7 @@ class TestOverrideOr:
 
 class TestOverrideIntOr:
     def test_parses_integer_override(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         get_runtime_config_store().set_override("MODULO_MAX_LOCAL_CONCURRENCY", "7")
         assert override_int_or("MODULO_MAX_LOCAL_CONCURRENCY", 2) == 7
@@ -101,7 +101,7 @@ class TestOverrideIntOr:
         assert override_int_or("MODULO_MAX_LOCAL_CONCURRENCY", 2) == 2
 
     def test_invalid_override_falls_back(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         get_runtime_config_store().set_override("MODULO_MAX_LOCAL_CONCURRENCY", "not-a-number")
         assert override_int_or("MODULO_MAX_LOCAL_CONCURRENCY", 2) == 2
@@ -109,7 +109,7 @@ class TestOverrideIntOr:
 
 class TestApplyLogLevel:
     def test_apply_sets_root_level_from_override(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         root = logging.getLogger()
         original = root.level
@@ -121,7 +121,7 @@ class TestApplyLogLevel:
             root.setLevel(original)
 
     def test_clear_restores_pre_override_level(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         root = logging.getLogger()
         original = root.level
@@ -137,7 +137,7 @@ class TestApplyLogLevel:
     def test_reapply_keeps_original_boot_level(self) -> None:
         """Changing the override while one is active must not re-capture the
         boot level; the pre-override root level survives to the eventual clear."""
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         root = logging.getLogger()
         original = root.level
@@ -154,13 +154,13 @@ class TestApplyLogLevel:
             root.setLevel(original)
 
     def test_invalid_override_keeps_current_level(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         root = logging.getLogger()
         original = root.level
         try:
             get_runtime_config_store().set_override("MODULO_LOG_LEVEL", "NOT_A_LEVEL")
-            with caplog.at_level(logging.WARNING, logger="modulo.core.runtime_config.key_bridge"):
+            with caplog.at_level(logging.WARNING, logger="farna.core.runtime_config.key_bridge"):
                 key_bridge.apply_log_level()
             assert root.level == original
             assert any("invalid MODULO_LOG_LEVEL" in r.getMessage() for r in caplog.records)
@@ -178,8 +178,8 @@ class TestConsumerWiring:
     """Prove-the-fix: the registered consumers actually read the override."""
 
     def test_local_provider_reads_concurrency_override(self) -> None:
-        from modulo.core.runtime_config.store import get_runtime_config_store
-        from modulo.core.runtime_provider.local import create_local_provider_from_env
+        from farna.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_provider.local import create_local_provider_from_env
 
         get_runtime_config_store().set_override("MODULO_MAX_LOCAL_CONCURRENCY", "5")
         provider = create_local_provider_from_env()
@@ -191,9 +191,9 @@ class TestConsumerWiring:
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
 
-        from modulo.auth.scim_auth import get_scim_principal
-        from modulo.core.runtime_config.store import get_runtime_config_store
-        from modulo.settings import Settings
+        from farna.auth.scim_auth import get_scim_principal
+        from farna.core.runtime_config.store import get_runtime_config_store
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -232,9 +232,9 @@ class TestConsumerWiring:
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
 
-        from modulo.auth.scim_auth import get_scim_principal
-        from modulo.core.runtime_config.store import get_runtime_config_store
-        from modulo.settings import Settings
+        from farna.auth.scim_auth import get_scim_principal
+        from farna.core.runtime_config.store import get_runtime_config_store
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -257,7 +257,7 @@ class TestConsumerWiring:
             store.clear_override("MODULO_SCIM_TOKEN")
 
     def _boot_settings(self, **extra: object) -> Any:
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         values: dict[str, Any] = {
             "database_url": "postgresql+asyncpg://localhost/test",
@@ -270,8 +270,8 @@ class TestConsumerWiring:
     def test_public_url_override_wins_in_frontend_url_resolver(self) -> None:
         """FAR-1159 prove-the-fix: a runtime MODULO_PUBLIC_URL override reaches
         the frontend-URL resolver; clearing it reverts to the boot Settings."""
-        from modulo.api.frontend_url import resolve_frontend_url
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.api.frontend_url import resolve_frontend_url
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         settings = self._boot_settings(modulo_public_url="https://boot.example.com")
         store = get_runtime_config_store()
@@ -287,8 +287,8 @@ class TestConsumerWiring:
         """FAR-1159 prove-the-fix: the HITL email run link honours the override."""
         import uuid
 
-        from modulo.core.hitl_email_alerts import _run_link
-        from modulo.core.runtime_config.store import get_runtime_config_store
+        from farna.core.hitl_email_alerts import _run_link
+        from farna.core.runtime_config.store import get_runtime_config_store
 
         settings = self._boot_settings(modulo_public_url="https://boot.example.com")
         run_id = uuid.uuid4()
@@ -305,9 +305,9 @@ class TestConsumerWiring:
         """FAR-1159 prove-the-fix: the build_hub registration gate resolves
         MODULO_E2B_API_KEY via the bridge — an override registers E2B with no
         env var, and clearing it fails closed (provider not registered)."""
-        from modulo.core.runtime_config.store import get_runtime_config_store
-        from modulo.core.runtime_provider import build_hub
-        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+        from farna.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_provider import build_hub
+        from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
         monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
@@ -328,8 +328,8 @@ class TestConsumerWiring:
     def test_e2b_constructor_reads_override_and_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-1159: the E2B provider constructor resolves the override and
         still refuses (typed ValueError) when no key exists at all."""
-        from modulo.core.runtime_config.store import get_runtime_config_store
-        from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+        from farna.core.runtime_config.store import get_runtime_config_store
+        from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
         store = get_runtime_config_store()

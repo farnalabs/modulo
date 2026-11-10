@@ -4,11 +4,11 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorQuery,
     ConnectorResult,
 )
-from modulo.connectors.slack import SlackConnector
+from farna.connectors.slack import SlackConnector
 
 BOT_TOKEN = "xoxb-test-token"
 
@@ -116,6 +116,6 @@ async def test_health_check_ok_false_no_error_field(connector):
 
 
 def test_connector_type(connector):
-    from modulo.connectors.base import ConnectorType
+    from farna.connectors.base import ConnectorType
 
     assert connector.connector_type == ConnectorType.SLACK

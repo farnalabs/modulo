@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -12,7 +12,7 @@ from modulo.connectors.base import (
     ConnectorQuery,
     ConnectorType,
 )
-from modulo.connectors.teamcity import TeamCityConnector, _parse_teamcity_status
+from farna.connectors.teamcity import TeamCityConnector, _parse_teamcity_status
 
 TOKEN = "tc_test_token"
 _BASE = "http://localhost:8111"

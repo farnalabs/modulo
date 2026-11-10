@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorPayload,
     ConnectorPermissionError,
     ConnectorQuery,
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.shell import ShellConnector, _contains_unquoted_shell_syntax
-from modulo.core.runtime_provider import ProviderNotConfiguredError, WorkspaceSpec
+from farna.connectors.shell import ShellConnector, _contains_unquoted_shell_syntax
+from farna.core.runtime_provider import ProviderNotConfiguredError, WorkspaceSpec
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -781,12 +781,12 @@ def _patch_db(monkeypatch: pytest.MonkeyPatch, db: _RlsAwareDb) -> None:
     # module for it (the function under test imports ``AsyncSessionLocal``
     # lazily at call time, so sys.modules wins). The other two imports resolve
     # against the real modules (both import cleanly without settings).
-    fake_session_mod = types.ModuleType("modulo.db.session")
+    fake_session_mod = types.ModuleType("farna.db.session")
     fake_session_mod.AsyncSessionLocal = _FakeSessionFactory(db.events)
-    monkeypatch.setitem(sys.modules, "modulo.db.session", fake_session_mod)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", db.fake_set_rls_org)
+    monkeypatch.setitem(sys.modules, "farna.db.session", fake_session_mod)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", db.fake_set_rls_org)
     monkeypatch.setattr(
-        "modulo.db.crud.environment_profile.get_environment_profile",
+        "farna.db.crud.environment_profile.get_environment_profile",
         db.fake_get_environment_profile,
     )
 

@@ -26,10 +26,10 @@ from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.api.routes import compliance
-from modulo.api.routes.compliance import (
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.api.routes import compliance
+from farna.api.routes.compliance import (
     _CODE_EVIDENCE_INDEX_READ,
     _EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS,
     _LOG_PREFIX,
@@ -37,16 +37,16 @@ from modulo.api.routes.compliance import (
     _bound_statement_timeout,
     get_evidence_index_endpoint,
 )
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PERMISSIONS, PermissionConfigurationError, resolve_required
-from modulo.compliance.artifacts import INDEXED_ARTIFACT_TYPES
-from modulo.compliance.evidence_index import EvidenceIndex, build_evidence_index
-from modulo.compliance.pack import load_mapping_pack
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import PERMISSIONS, PermissionConfigurationError, resolve_required
+from farna.compliance.artifacts import INDEXED_ARTIFACT_TYPES
+from farna.compliance.evidence_index import EvidenceIndex, build_evidence_index
+from farna.compliance.pack import load_mapping_pack
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
 from tests.unit.api.route_introspection import (
     get_all_apiroutes,
     get_permission_tag,
@@ -119,8 +119,8 @@ class TestRouteWiring:
 
     def test_autonomy_event_constants_match_the_write_site(self) -> None:
         """A rename at the write site must break this test, not empty the index."""
-        from modulo.api.routes import pipelines
-        from modulo.compliance import evidence_index as evidence_index_module
+        from farna.api.routes import pipelines
+        from farna.compliance import evidence_index as evidence_index_module
 
         assert evidence_index_module.AUTONOMY_PROMOTION_EVENT == pipelines.AUTONOMY_PROMOTION_DECIDED_EVENT
         assert evidence_index_module.AUTONOMY_DEMOTION_EVENT == pipelines.AUTONOMY_DEMOTED_EVENT
@@ -578,7 +578,7 @@ class TestStatementTimeoutFailureArm:
             raise _dbapi_error("57014")
 
         monkeypatch.setattr(compliance, "build_evidence_index", _raise_timeout)
-        caplog.set_level(logging.ERROR, logger="modulo.api.db_error_reporting")
+        caplog.set_level(logging.ERROR, logger="farna.api.db_error_reporting")
 
         with pytest.raises(HTTPException) as raised:
             await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
@@ -610,7 +610,7 @@ class TestStatementTimeoutFailureArm:
             raise _dbapi_error("08006")
 
         monkeypatch.setattr(compliance, "build_evidence_index", _raise_unavailable)
-        caplog.set_level(logging.ERROR, logger="modulo.api.db_error_reporting")
+        caplog.set_level(logging.ERROR, logger="farna.api.db_error_reporting")
 
         with pytest.raises(HTTPException) as raised:
             await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))

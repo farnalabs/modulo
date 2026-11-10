@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.mcp_server import _delete_housekeeping_group
-from modulo.db.models.pipeline import Pipeline
+from farna.api.mcp_server import _delete_housekeeping_group
+from farna.db.models.pipeline import Pipeline
 
 
 def _mock_session(savepoint_error: Exception | None = None) -> MagicMock:

@@ -16,8 +16,8 @@ import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import modulo.api.mcp_server as ms
-from modulo.api.mcp_server import (
+import farna.api.mcp_server as ms
+from farna.api.mcp_server import (
     _analytics_deep_link,
     _apply_node_connector_binding,
     _assert_create_eval_definition_params,
@@ -60,7 +60,7 @@ from modulo.api.mcp_server import (
     _validate_sandbox_nodes,
     _validate_trigger_numbers,
 )
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 from tests.unit.mcp.helpers import API_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
 _TEAM = uuid.UUID("00000000-0000-0000-0000-000000000009")
@@ -615,7 +615,7 @@ class TestParseMcpDatetime:
         assert result.hour == 0
 
     def test_invalid(self) -> None:
-        from modulo.core.analytics.service import AnalyticsValidationError
+        from farna.core.analytics.service import AnalyticsValidationError
 
         with pytest.raises(AnalyticsValidationError, match="invalid date"):
             _parse_mcp_datetime("not-a-date", "date_from")
@@ -626,7 +626,7 @@ class TestParseMcpDatetime:
 
 class TestParseAnalyticsEnums:
     def test_valid(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsGroupBy
 
         grp, _tt, _st, _dim, err = _parse_analytics_enums("day", None, None)
         assert grp == AnalyticsGroupBy.DAY
@@ -638,7 +638,7 @@ class TestParseAnalyticsEnums:
         assert err is not None
 
     def test_with_trigger_type(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy, AnalyticsTriggerType
+        from farna.core.analytics.builder import AnalyticsGroupBy, AnalyticsTriggerType
 
         grp, tt, _st, _dim, err = _parse_analytics_enums("day", "cron", None)
         assert grp == AnalyticsGroupBy.DAY
@@ -646,7 +646,7 @@ class TestParseAnalyticsEnums:
         assert err is None
 
     def test_with_dimension(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsDimension, AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsDimension, AnalyticsGroupBy
 
         grp, _tt, _st, dim, err = _parse_analytics_enums("day", None, None, dimension="trigger_type")
         assert grp == AnalyticsGroupBy.DAY
@@ -972,7 +972,7 @@ class TestValidateSandboxNodes:
     def test_sandbox_mode_error(self) -> None:
         nodes = [{"node_type": "sandbox_agent"}]
         with patch(
-            "modulo.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config",
+            "farna.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config",
             side_effect=ValueError("bad mode"),
         ):
             err = _validate_sandbox_nodes(nodes)
@@ -982,9 +982,9 @@ class TestValidateSandboxNodes:
     def test_sandbox_jinja_error(self) -> None:
         nodes = [{"node_type": "sandbox_agent"}]
         with (
-            patch("modulo.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config"),
+            patch("farna.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config"),
             patch(
-                "modulo.core.pipeline_engine.sandbox_mode.validate_sandbox_agent_command_jinja",
+                "farna.core.pipeline_engine.sandbox_mode.validate_sandbox_agent_command_jinja",
                 return_value="bad jinja",
             ),
         ):
@@ -995,10 +995,10 @@ class TestValidateSandboxNodes:
     def test_sandbox_managed_inputs_error(self) -> None:
         nodes = [{"node_type": "sandbox_agent"}]
         with (
-            patch("modulo.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config"),
-            patch("modulo.core.pipeline_engine.sandbox_mode.validate_sandbox_agent_command_jinja", return_value=None),
+            patch("farna.core.pipeline_engine.sandbox_mode._validate_sandbox_mode_config"),
+            patch("farna.core.pipeline_engine.sandbox_mode.validate_sandbox_agent_command_jinja", return_value=None),
             patch(
-                "modulo.core.pipeline_engine.sandbox_mode._validate_sandbox_managed_inputs_config",
+                "farna.core.pipeline_engine.sandbox_mode._validate_sandbox_managed_inputs_config",
                 side_effect=ValueError("bad inputs"),
             ),
         ):
@@ -1461,8 +1461,8 @@ class TestParseEvalRefIds:
 
 class TestAnalyticsDeepLink:
     def test_basic_link(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
-        from modulo.core.analytics.service import AnalyticsParams
+        from farna.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.service import AnalyticsParams
 
         params = AnalyticsParams(
             group_by=AnalyticsGroupBy.DAY,
@@ -1484,8 +1484,8 @@ class TestAnalyticsDeepLink:
         assert "group_by=day" in link
 
     def test_with_filters(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy, AnalyticsStatus, AnalyticsTriggerType
-        from modulo.core.analytics.service import AnalyticsParams
+        from farna.core.analytics.builder import AnalyticsGroupBy, AnalyticsStatus, AnalyticsTriggerType
+        from farna.core.analytics.service import AnalyticsParams
 
         params = AnalyticsParams(
             group_by=AnalyticsGroupBy.DAY,
@@ -1513,7 +1513,7 @@ class TestAnalyticsDeepLink:
 
 class TestBuildAnalyticsParams:
     def test_basic(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsGroupBy
 
         params = _build_analytics_params(
             group_by=AnalyticsGroupBy.DAY,
@@ -1532,7 +1532,7 @@ class TestBuildAnalyticsParams:
         assert params.limit == 100
 
     def test_limit_clamping(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsGroupBy
 
         params = _build_analytics_params(
             group_by=AnalyticsGroupBy.DAY,
@@ -1550,7 +1550,7 @@ class TestBuildAnalyticsParams:
         assert params.limit == 1  # clamped to min
 
     def test_limit_max(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsGroupBy
 
         params = _build_analytics_params(
             group_by=AnalyticsGroupBy.DAY,
@@ -1568,7 +1568,7 @@ class TestBuildAnalyticsParams:
         assert params.limit == 1000  # clamped to max
 
     def test_date_from(self) -> None:
-        from modulo.core.analytics.builder import AnalyticsGroupBy
+        from farna.core.analytics.builder import AnalyticsGroupBy
 
         params = _build_analytics_params(
             group_by=AnalyticsGroupBy.DAY,
@@ -1606,7 +1606,7 @@ class TestValidateTriggerNumbersExtended:
 
 class TestValidatePrincipalLiveSuccess(_Ctx):
     async def test_live_role_applied(self) -> None:
-        from modulo.api.mcp_server import _validate_principal_live
+        from farna.api.mcp_server import _validate_principal_live
 
         principal = MagicMock()
         principal.organisation_id = ORG_ID
@@ -1624,7 +1624,7 @@ class TestCreateManualRun(_Ctx):
         session = _mock_session()
         with (
             patch.object(ms, "_session", return_value=make_session_context(session)),
-            patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=None),
         ):
             run_id, _thread_id, err = await _create_manual_run(
                 session,
@@ -1643,10 +1643,10 @@ class TestCreateManualRun(_Ctx):
         pipeline.owner_team_id = None
         with (
             patch.object(ms, "_session", return_value=make_session_context(session)),
-            patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.mcp_server._team_scoped_key_mismatch", return_value=False),
+            patch("farna.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.mcp_server._team_scoped_key_mismatch", return_value=False),
             patch(
-                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -1669,10 +1669,10 @@ class TestCreateManualRun(_Ctx):
         snapshot.graph_json = {"nodes": []}
         with (
             patch.object(ms, "_session", return_value=make_session_context(session)),
-            patch("modulo.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.mcp_server._team_scoped_key_mismatch", return_value=False),
+            patch("farna.api.mcp_server.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.mcp_server._team_scoped_key_mismatch", return_value=False),
             patch(
-                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=snapshot,
             ),
@@ -1693,7 +1693,7 @@ class TestCreateManualRun(_Ctx):
 
 class TestSanitizeString:
     def test_strips_control_chars(self) -> None:
-        from modulo.api.mcp_server import _sanitize_mcp_string
+        from farna.api.mcp_server import _sanitize_mcp_string
 
         result = _sanitize_mcp_string("hello\x00\x01\x1f world")
         assert "\x00" not in result
@@ -1702,13 +1702,13 @@ class TestSanitizeString:
         assert "world" in result
 
     def test_preserves_tab(self) -> None:
-        from modulo.api.mcp_server import _sanitize_mcp_string
+        from farna.api.mcp_server import _sanitize_mcp_string
 
         result = _sanitize_mcp_string("hello\tworld")
         assert "\t" in result
 
     def test_truncates_at_256(self) -> None:
-        from modulo.api.mcp_server import _sanitize_mcp_string
+        from farna.api.mcp_server import _sanitize_mcp_string
 
         result = _sanitize_mcp_string("x" * 300)
         assert len(result) == 256
@@ -1717,19 +1717,19 @@ class TestSanitizeString:
 class TestClampMcpNumber:
     def test_inf_returns_clamp(self) -> None:
         result = _clamp_mcp_number(float("inf"))
-        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+        from farna.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
 
         assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
 
     def test_nan_returns_clamp(self) -> None:
         result = _clamp_mcp_number(float("nan"))
-        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+        from farna.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
 
         assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
 
     def test_negative_inf_returns_clamp(self) -> None:
         result = _clamp_mcp_number(float("-inf"))
-        from modulo.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
+        from farna.api.mcp_server import RAW_REPORTED_DISPLAY_CLAMP
 
         assert result == float(RAW_REPORTED_DISPLAY_CLAMP)
 
@@ -1899,12 +1899,12 @@ class TestCreateManualRunTeamScope(_Ctx):
         with (
             patch.object(ms, "_session", return_value=make_session_context(session)),
             patch(
-                "modulo.api.mcp_server.get_pipeline",
+                "farna.api.mcp_server.get_pipeline",
                 new_callable=AsyncMock,
                 return_value=pipeline,
             ),
             patch(
-                "modulo.api.mcp_server._team_scoped_key_mismatch",
+                "farna.api.mcp_server._team_scoped_key_mismatch",
                 return_value=True,
             ),
         ):

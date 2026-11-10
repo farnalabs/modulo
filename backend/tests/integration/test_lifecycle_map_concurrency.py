@@ -27,9 +27,9 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
-from modulo.core.lifecycle_map.service import create_lifecycle_map, get_lifecycle_map, save_map_version
-from modulo.db.rls import set_rls_org
+from farna.auth.jwt import create_access_token
+from farna.core.lifecycle_map.service import create_lifecycle_map, get_lifecycle_map, save_map_version
+from farna.db.rls import set_rls_org
 
 _VALID_32 = "a" * 32
 
@@ -166,9 +166,9 @@ def _auth_headers(org_id: uuid.UUID, user_id: uuid.UUID) -> dict[str, str]:
 @pytest_asyncio.fixture
 async def integration_client(db_url: str, db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     """FastAPI AsyncClient bound to the migrated testcontainer database."""
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,

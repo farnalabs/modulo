@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.db.migrations import env as rehearsal_env
+from farna.db.migrations import env as rehearsal_env
 
 
 @pytest.fixture

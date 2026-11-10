@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 
 @pytest.fixture
@@ -37,8 +37,8 @@ def _make_team(**overrides: object) -> MagicMock:
 
 class TestCreateTeam:
     async def test_creates_and_returns_team(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.team.Team", return_value=_make_team()) as mock_team:
-            from modulo.db.crud.team import create_team
+        with patch("farna.db.crud.team.Team", return_value=_make_team()) as mock_team:
+            from farna.db.crud.team import create_team
 
             result = await create_team(
                 mock_session,
@@ -58,8 +58,8 @@ class TestCreateTeam:
             assert result is not None
 
     async def test_creates_with_optional_description(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.team.Team", return_value=_make_team()) as mock_team:
-            from modulo.db.crud.team import create_team
+        with patch("farna.db.crud.team.Team", return_value=_make_team()) as mock_team:
+            from farna.db.crud.team import create_team
 
             result = await create_team(
                 mock_session,
@@ -84,7 +84,7 @@ class TestGetTeam:
         scalar = MagicMock(return_value=team)
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=scalar))
 
-        from modulo.db.crud.team import get_team
+        from farna.db.crud.team import get_team
 
         result = await get_team(mock_session, _TEAM_ID)
         assert result is not None
@@ -93,7 +93,7 @@ class TestGetTeam:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team import get_team
+        from farna.db.crud.team import get_team
 
         result = await get_team(mock_session, uuid.uuid4())
         assert result is None
@@ -116,7 +116,7 @@ class TestListTeams:
             ]
         )
 
-        from modulo.db.crud.team import list_teams
+        from farna.db.crud.team import list_teams
 
         result = await list_teams(mock_session, org_id=_ORG_ID, page=1, page_size=20)
         assert isinstance(result, PageResult)
@@ -131,7 +131,7 @@ class TestUpdateTeam:
         team = _make_team(name="Updated")
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
-        from modulo.db.crud.team import update_team
+        from farna.db.crud.team import update_team
 
         result = await update_team(mock_session, _TEAM_ID, {"name": "Updated"})
         assert result is not None
@@ -141,7 +141,7 @@ class TestUpdateTeam:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team import update_team
+        from farna.db.crud.team import update_team
 
         result = await update_team(mock_session, uuid.uuid4(), {"name": "x"})
         assert result is None
@@ -152,7 +152,7 @@ class TestDeleteTeam:
         team = _make_team()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
-        from modulo.db.crud.team import delete_team
+        from farna.db.crud.team import delete_team
 
         result = await delete_team(mock_session, _TEAM_ID)
         assert result is True
@@ -163,7 +163,7 @@ class TestDeleteTeam:
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team import delete_team
+        from farna.db.crud.team import delete_team
 
         result = await delete_team(mock_session, uuid.uuid4())
         assert result is False
@@ -191,7 +191,7 @@ class TestReassignTeamResourcesToOrg:
 
         mock_session.execute = AsyncMock(side_effect=_execute)
 
-        from modulo.db.crud.team import reassign_team_resources_to_org
+        from farna.db.crud.team import reassign_team_resources_to_org
 
         count, touched = await reassign_team_resources_to_org(
             mock_session,
@@ -216,7 +216,7 @@ class TestReassignTeamResourcesToOrg:
 
         mock_session.execute = AsyncMock(side_effect=_execute)
 
-        from modulo.db.crud.team import reassign_team_resources_to_org
+        from farna.db.crud.team import reassign_team_resources_to_org
 
         count, touched = await reassign_team_resources_to_org(
             mock_session,
@@ -232,7 +232,7 @@ class TestGetTeamByName:
         team = _make_team(name="Unique Team")
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
-        from modulo.db.crud.team import get_team_by_name
+        from farna.db.crud.team import get_team_by_name
 
         result = await get_team_by_name(mock_session, _ORG_ID, "Unique Team")
         assert result is not None
@@ -241,7 +241,7 @@ class TestGetTeamByName:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team import get_team_by_name
+        from farna.db.crud.team import get_team_by_name
 
         result = await get_team_by_name(mock_session, _ORG_ID, "Non Existent")
         assert result is None
@@ -250,7 +250,7 @@ class TestGetTeamByName:
 class TestCountOwnedResources:
     async def test_sums_across_all_four_resource_types(self, mock_session: AsyncMock) -> None:
         """count_owned_resources sums pipelines, connectors, model backends, and library primitives."""
-        from modulo.db.crud.team import count_owned_resources
+        from farna.db.crud.team import count_owned_resources
 
         team_a = uuid.uuid4()
         team_b = uuid.uuid4()
@@ -274,14 +274,14 @@ class TestCountOwnedResources:
         assert counts[team_b] == 5
 
     async def test_returns_empty_dict_for_no_teams(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.team import count_owned_resources
+        from farna.db.crud.team import count_owned_resources
 
         counts = await count_owned_resources(mock_session, team_ids=[])
         assert counts == {}
         mock_session.execute.assert_not_awaited()
 
     async def test_ignores_null_owner_rows(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.team import count_owned_resources
+        from farna.db.crud.team import count_owned_resources
 
         def _result(pairs: list[tuple[uuid.UUID | None, int]]):
             r = MagicMock()
@@ -315,7 +315,7 @@ class TestScimListGroups:
             ]
         )
 
-        from modulo.db.crud.scim import scim_list_groups
+        from farna.db.crud.scim import scim_list_groups
 
         items, total = await scim_list_groups(mock_session, _ORG_ID)
         assert total == 1
@@ -340,7 +340,7 @@ class TestScimListGroups:
             ]
         )
 
-        from modulo.db.crud.scim import scim_list_groups
+        from farna.db.crud.scim import scim_list_groups
 
         items, total = await scim_list_groups(mock_session, _ORG_ID, filter_str="foo")
         assert total == 1

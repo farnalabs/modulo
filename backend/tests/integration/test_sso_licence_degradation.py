@@ -38,11 +38,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_settings, get_system_db_session
-from modulo.api.main import app
-from modulo.core.feature_flags import resolve_plan_context
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings
+from farna.api.dependencies import _get_engine, get_db_session, get_settings, get_system_db_session
+from farna.api.main import app
+from farna.core.feature_flags import resolve_plan_context
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -94,7 +94,7 @@ def _licence_keypair(monkeypatch: pytest.MonkeyPatch) -> None:
     teardown that stamps the built-in key over a caller's configured key leaks
     state into every later test in the session.
     """
-    from modulo.core import license as license_mod
+    from farna.core import license as license_mod
 
     monkeypatch.setattr(license_mod, "_configured_public_key_hex", _TEST_KP["public_key"])
     monkeypatch.setattr(license_mod, "_current_license", None)
@@ -182,7 +182,7 @@ _PASSWORD = "far-2059-password-123"
 
 
 async def _create_account(engine: AsyncEngine, *, email: str) -> uuid.UUID:
-    from modulo.auth.passwords import hash_password
+    from farna.auth.passwords import hash_password
 
     account_id = uuid.uuid4()
     async with engine.begin() as conn:
@@ -281,11 +281,11 @@ async def _assert_login_leg_not_gated(client: AsyncClient, provider_id: str) -> 
 
 async def _post_auth_plan(app_engine: AsyncEngine, org_id: uuid.UUID) -> Any:
     """Resolve the org's plan through the SAME shared ladder the API uses."""
-    from modulo.db.crud.organisation import get_organisation
+    from farna.db.crud.organisation import get_organisation
 
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         org = await get_organisation(session, org_id)
@@ -307,7 +307,7 @@ async def test_expiry_inside_the_delivery_grace_keeps_team_capability(
     charge date and emailed), so an expiry inside it must not downgrade the
     instance.
     """
-    from modulo.core.license import LICENCE_GRACE_DAYS
+    from farna.core.license import LICENCE_GRACE_DAYS
 
     assert LICENCE_GRACE_DAYS == 14
     org_id = uuid.uuid4()
@@ -342,7 +342,7 @@ async def test_expiry_past_the_delivery_grace_degrades_but_does_not_strand(
     so the login page still advertises the provider and the login leg is not
     licence-gated; the org's plan is Community with every Team feature off.
     """
-    from modulo.core.license import LICENCE_GRACE_DAYS
+    from farna.core.license import LICENCE_GRACE_DAYS
 
     org_id = uuid.uuid4()
     past_grace_key = _sign_licence(
@@ -404,7 +404,7 @@ async def test_admin_can_log_in_and_reach_the_licence_screen_past_grace(
     future change makes lapse a lockout — e.g. a licence gate on login or on
     the licence endpoint itself.
     """
-    from modulo.core.license import LICENCE_GRACE_DAYS
+    from farna.core.license import LICENCE_GRACE_DAYS
 
     org_id = uuid.uuid4()
     past_grace_key = _sign_licence(
@@ -436,7 +436,7 @@ async def test_non_admin_past_grace_gets_no_team_capability(sso_client: AsyncCli
     which is the settled non-admin experience (the interstitial/messaging is a
     separate ticket).
     """
-    from modulo.core.license import LICENCE_GRACE_DAYS
+    from farna.core.license import LICENCE_GRACE_DAYS
 
     org_id = uuid.uuid4()
     past_grace_key = _sign_licence(

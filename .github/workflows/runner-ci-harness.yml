@@ -139,7 +139,7 @@ jobs:
             echo "::warning::unrecognised caller event '${EVENT_NAME}' - running Bundled Runner harness unconditionally (fail open)"
             exit 0
           fi
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py backend/tests/docker/test_runner_bundled.py backend/tests/docker/test_watchdog_container.py .github/workflows/runner-ci-harness.yml"
+          PATHS="backend/src/farna/core/runtime_provider/ backend/src/farna/core/bundled_runner/ backend/src/farna/core/pipeline_engine/executor.py backend/src/farna/core/pipeline_engine/node_runner.py backend/src/farna/core/cron_helpers.py backend/src/farna/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py backend/tests/docker/test_runner_bundled.py backend/tests/docker/test_watchdog_container.py .github/workflows/runner-ci-harness.yml"
           # `rc=0; out=$(...)` survives Actions' `bash -e -o pipefail`: a bare
           # `out=$(...)` aborts the step before the failure can be inspected,
           # and swallowing the error into empty output silently SKIPS the

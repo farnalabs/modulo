@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from starlette.exceptions import HTTPException
 
-from modulo.api.models.problem import (
+from farna.api.models.problem import (
     ProblemDetail,
     ProblemException,
     ProblemType,

@@ -8,11 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -107,12 +107,12 @@ class TestViewModelCurrentErrorPaths:
         plan_ctx = _make_mock_plan_context()
 
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=None),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=None),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
 
@@ -124,12 +124,12 @@ class TestViewModelCurrentErrorPaths:
         plan_ctx = _make_mock_plan_context()
 
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=None),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=None),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
 
@@ -142,12 +142,12 @@ class TestViewModelCurrentErrorPaths:
         plan_ctx = _make_mock_plan_context()
 
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             team_id = uuid.uuid4()
             resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")
@@ -196,12 +196,12 @@ class TestViewModelCurrentErrorPaths:
         user = _make_user()
 
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=ProgrammingError("stmt", "params", "orig")),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.list_pipelines", side_effect=ProgrammingError("stmt", "params", "orig")),
         ):
             resp = client.get("/api/v1/viewmodel/current")
 
@@ -213,15 +213,15 @@ class TestViewModelCurrentErrorPaths:
         user = _make_user()
 
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.list_pipelines"),
-            patch("modulo.api.routes.viewmodel.list_runs"),
+            patch("farna.api.routes.viewmodel.set_rls_org"),
+            patch("farna.api.routes.viewmodel.set_rls_user_context"),
+            patch("farna.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("farna.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("farna.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("farna.api.routes.viewmodel.list_pipelines"),
+            patch("farna.api.routes.viewmodel.list_runs"),
             patch(
-                "modulo.api.routes.viewmodel.resolve_plan_context",
+                "farna.api.routes.viewmodel.resolve_plan_context",
                 side_effect=ProgrammingError("stmt", "params", "orig"),
             ),
         ):
@@ -232,7 +232,7 @@ class TestViewModelCurrentErrorPaths:
 
     def test_programming_error_with_view_as_team_501(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.viewmodel.set_rls_org", side_effect=ProgrammingError("stmt", "params", "orig")),
+            patch("farna.api.routes.viewmodel.set_rls_org", side_effect=ProgrammingError("stmt", "params", "orig")),
         ):
             team_id = uuid.uuid4()
             resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")

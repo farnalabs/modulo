@@ -23,13 +23,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import runs as runs_module
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.exceptions import PipelineNotRunnableError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import runs as runs_module
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.exceptions import PipelineNotRunnableError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -249,12 +249,12 @@ def test_rerun_completed_and_failed_sources_return_202(client: TestClient, sourc
     rerun = _make_rerun_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.runs.create_run", return_value=rerun),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock) as dispatch,
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.runs.create_run", return_value=rerun),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock) as dispatch,
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -275,12 +275,12 @@ def test_rerun_pins_source_snapshot_and_copies_payload(client: TestClient) -> No
     rerun = _make_rerun_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()) as get_pipeline_mock,
-        patch("modulo.api.routes.runs.create_run", return_value=rerun) as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()) as get_pipeline_mock,
+        patch("farna.api.routes.runs.create_run", return_value=rerun) as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -308,12 +308,12 @@ def test_rerun_payload_copy_isolated_from_source(client: TestClient) -> None:
     rerun = _make_rerun_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.runs.create_run", return_value=rerun) as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.runs.create_run", return_value=rerun) as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -332,13 +332,13 @@ def test_rerun_bypasses_pipeline_rate_limit(client: TestClient) -> None:
     rerun = _make_rerun_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.runs.create_run", return_value=rerun),
-        patch("modulo.api.routes.runs._enforce_trigger_rate_limit") as rate_limit_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.create_run", return_value=rerun),
+        patch("farna.api.routes.runs._enforce_trigger_rate_limit") as rate_limit_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -351,12 +351,12 @@ def test_rerun_response_carries_lineage(client: TestClient) -> None:
     rerun = _make_rerun_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.runs.create_run", return_value=rerun),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.runs.create_run", return_value=rerun),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -379,10 +379,10 @@ def test_rerun_non_terminal_source_returns_409(client: TestClient, non_terminal_
     source_run = _make_source_run(status=non_terminal_status)
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.create_run") as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.create_run") as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -393,9 +393,9 @@ def test_rerun_non_terminal_source_returns_409(client: TestClient, non_terminal_
 
 def test_rerun_missing_source_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=None),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.get_run", return_value=None),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -406,10 +406,10 @@ def test_rerun_pipeline_missing_returns_404(client: TestClient) -> None:
     source_run = _make_source_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=None),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=None),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -422,10 +422,10 @@ def test_rerun_snapshot_missing_on_source_returns_409(client: TestClient) -> Non
     source_run.snapshot_id = None
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.create_run") as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.create_run") as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -442,11 +442,11 @@ def test_rerun_snapshot_row_missing_returns_409(client: TestClient, mock_session
     mock_session.execute = AsyncMock(return_value=exec_result)
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.runs.create_run") as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.runs.create_run") as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 
@@ -462,14 +462,14 @@ def test_rerun_non_runnable_pipeline_returns_409(client: TestClient, state: str)
     source_run = _make_source_run()
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=source_run),
-        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.runs.get_run", return_value=source_run),
+        patch("farna.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
         patch(
-            "modulo.api.routes.runs.create_run",
+            "farna.api.routes.runs.create_run",
             side_effect=PipelineNotRunnableError(pipeline_id=_PIPELINE_ID, state=state),
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.set_rls_user_context"),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
 

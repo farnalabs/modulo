@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.feedback_manager import (
+from farna.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
     FeedbackRecordNotFoundError,
@@ -15,8 +15,8 @@ from modulo.core.feedback_manager import (
     InvalidTransitionError,
     ValidationError,
 )
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.db.models.feedback_record import FeedbackRecord
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.db.models.feedback_record import FeedbackRecord
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -270,7 +270,7 @@ class TestPaginateUnscopedWarning:
         """Pagination with empty conditions is a tenant-scoping hazard — must log a warning."""
         import logging
 
-        from modulo.core.feedback_manager.queries import paginate_feedback_records
+        from farna.core.feedback_manager.queries import paginate_feedback_records
 
         count_result = MagicMock()
         count_result.scalar.return_value = 0
@@ -278,7 +278,7 @@ class TestPaginateUnscopedWarning:
         rows_result.scalars.return_value.all.return_value = []
         mock_session.execute = AsyncMock(side_effect=[count_result, rows_result])
 
-        with caplog.at_level(logging.WARNING, logger="modulo.core.feedback_manager"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.feedback_manager"):
             rows, total = await paginate_feedback_records(mock_session, [], page=1, page_size=20)
 
         assert rows == []
@@ -298,7 +298,7 @@ class TestPaginatedResponseHasMore:
         return [MagicMock(spec=FeedbackRecord) for _ in range(n)]
 
     def test_eagerly_true_when_a_later_row_exists(self) -> None:
-        from modulo.core.feedback_manager.queries import paginated_response
+        from farna.core.feedback_manager.queries import paginated_response
 
         resp = paginated_response(self._rows(2), total=5, page=1, page_size=2)
 
@@ -310,14 +310,14 @@ class TestPaginatedResponseHasMore:
         assert len(resp["items"]) == 2
 
     def test_false_when_the_last_row_lands_on_this_page(self) -> None:
-        from modulo.core.feedback_manager.queries import paginated_response
+        from farna.core.feedback_manager.queries import paginated_response
 
         resp = paginated_response(self._rows(2), total=4, page=2, page_size=2)
 
         assert resp["has_more"] is False
 
     def test_extra_keys_are_still_merged(self) -> None:
-        from modulo.core.feedback_manager.queries import paginated_response
+        from farna.core.feedback_manager.queries import paginated_response
 
         pipeline_map = {"11111111-1111-1111-1111-111111111111": "Onboarding"}
         resp = paginated_response(self._rows(1), total=1, page=1, page_size=20, extra={"pipeline_map": pipeline_map})
@@ -631,7 +631,7 @@ class TestDetectEvalGap:
         assert sample_record.eval_gap is True
 
     async def _fake_eval_result(self, passed: bool) -> MagicMock:
-        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+        from farna.core.eval_engine.typed_judge import JudgeOutcome
 
         result = MagicMock()
         result.passed = passed
@@ -662,7 +662,7 @@ class TestDetectEvalGap:
         ADR 066 D6/D18: an error is an instrument failure, excluded from the
         decision — neither "the eval caught it" nor "the eval missed it".
         """
-        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+        from farna.core.eval_engine.typed_judge import JudgeOutcome
 
         error_result = MagicMock()
         error_result.outcome = JudgeOutcome.ERROR
@@ -687,7 +687,7 @@ class TestDetectEvalGap:
         This is the discriminating version of the test above — a MagicMock
         result cannot fail, so it could pass with or without the fix.
         """
-        from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+        from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
 
         dto = EvalDefinition(
             id=uuid.uuid4(),
@@ -697,7 +697,7 @@ class TestDetectEvalGap:
             config={"field": "output", "model_backend_id": str(uuid.uuid4())},
         )
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=None,
         ):
             is_gap = await mgr.detect_eval_gap(
@@ -713,8 +713,8 @@ class TestDetectEvalGap:
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:
         """The feedback path uses the SAME resolver as pipeline/suite runs."""
-        from modulo.core.eval_engine import EvalDefinition, EvalType
-        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+        from farna.core.eval_engine import EvalDefinition, EvalType
+        from farna.core.eval_engine.typed_judge import JudgeOutcome
 
         dto = EvalDefinition(
             id=uuid.uuid4(),
@@ -731,7 +731,7 @@ class TestDetectEvalGap:
         sentinel = object()
 
         with patch(
-            "modulo.core.pipeline_engine.llm_judge.resolve_model_judge_callable",
+            "farna.core.pipeline_engine.llm_judge.resolve_model_judge_callable",
             return_value=sentinel,
         ):
             await mgr.detect_eval_gap(
@@ -838,7 +838,7 @@ class TestDetectEvalGap:
     ) -> None:
         """Gap detection exercises the standalone EvalEngine.evaluate() interface against
         the rejected output with real regex eval definitions (PRD 8.20 ¶Eval suite growth)."""
-        from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+        from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
 
         sample_record.rejected_output = {"answer": "the answer is 42"}
         engine = EvalEngine()
@@ -879,8 +879,8 @@ class TestDetectEvalGap:
         detect_eval_gap — EvalEngine.evaluate reads eval_def.config, so the ORM row must
         be normalised to the DTO first, else every eval is swallowed as eval_gap=True
         (FAR-233 review MAJOR-1)."""
-        from modulo.core.eval_engine import EvalEngine
-        from modulo.db.models.eval import Eval
+        from farna.core.eval_engine import EvalEngine
+        from farna.db.models.eval import Eval
 
         sample_record.rejected_output = {"answer": "the answer is 42"}
         engine = EvalEngine()
@@ -946,8 +946,8 @@ class TestSpawnCorrectionRun:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
-            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch("farna.core.feedback_manager.get_run", return_value=original_run),
+            patch("farna.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
             patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)) as _mock_link,
         ):
             run_id = await mgr.spawn_correction_run(sample_record.id)
@@ -980,8 +980,8 @@ class TestSpawnCorrectionRun:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
-            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch("farna.core.feedback_manager.get_run", return_value=original_run),
+            patch("farna.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
             patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
         ):
             run_id = await mgr.spawn_correction_run(
@@ -1029,7 +1029,7 @@ class TestSpawnCorrectionRun:
         sample_record.run_id = uuid.uuid4()
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=None),
+            patch("farna.core.feedback_manager.get_run", return_value=None),
             pytest.raises(FeedbackRecordRunNotFoundError, match=r"Original run .* not found"),
         ):
             await mgr.spawn_correction_run(sample_record.id)
@@ -1046,8 +1046,8 @@ class TestSpawnCorrectionRun:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
-            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch("farna.core.feedback_manager.get_run", return_value=original_run),
+            patch("farna.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
             patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
         ):
             await mgr.spawn_correction_run(sample_record.id)
@@ -1071,8 +1071,8 @@ class TestSpawnCorrectionRun:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=original_run),
-            patch("modulo.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
+            patch("farna.core.feedback_manager.get_run", return_value=original_run),
+            patch("farna.core.feedback_manager.create_run", return_value=new_run) as _mock_create_run,
             patch.object(mgr, "link_correction_run", AsyncMock(return_value=sample_record)),
         ):
             run_id = await mgr.spawn_correction_run(sample_record.id)
@@ -1241,7 +1241,7 @@ class TestRunPostCorrectionEval:
         reassembles from the mocked run's attributes, exactly as the real
         reader serves the reassembled legacy shapes."""
         return patch(
-            "modulo.core.feedback_manager.read_run_blobs",
+            "farna.core.feedback_manager.read_run_blobs",
             new=AsyncMock(
                 return_value=RunBlobs(
                     outputs=run.outputs_json,
@@ -1290,7 +1290,7 @@ class TestRunPostCorrectionEval:
     ) -> None:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=None),
+            patch("farna.core.feedback_manager.get_run", return_value=None),
             pytest.raises(FeedbackRecordNotFoundError, match=r"Correction run .* not found"),
         ):
             await mgr.run_post_correction_eval(correcting_record.id)
@@ -1317,7 +1317,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
@@ -1358,7 +1358,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=correction_run),
             self._blob_patch(correction_run),
         ):
             await mgr.run_post_correction_eval(
@@ -1393,7 +1393,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
@@ -1424,7 +1424,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
@@ -1445,7 +1445,7 @@ class TestRunPostCorrectionEval:
         incomplete_run.status = "pending"
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=incomplete_run),
+            patch("farna.core.feedback_manager.get_run", return_value=incomplete_run),
             pytest.raises(InvalidTransitionError, match="expected 'complete'"),
         ):
             await mgr.run_post_correction_eval(correcting_record.id)
@@ -1468,7 +1468,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=no_output_run),
+            patch("farna.core.feedback_manager.get_run", return_value=no_output_run),
             self._blob_patch(no_output_run),
         ):
             outcome = await mgr.run_post_correction_eval(correcting_record.id)
@@ -1494,7 +1494,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
@@ -1521,7 +1521,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
             pytest.raises(asyncio.CancelledError),
         ):
@@ -1551,7 +1551,7 @@ class TestRunPostCorrectionEval:
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
-            patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            patch("farna.core.feedback_manager.get_run", return_value=completed_correction_run),
             self._blob_patch(completed_correction_run),
             pytest.raises(ConcurrentModificationError, match="status changed concurrently"),
         ):
@@ -1590,9 +1590,9 @@ class TestRejectCorrectionAccountGate:
 
     @pytest.mark.parametrize("account_id", [None, _USER_ID])
     async def test_record_gated_on_account_id(self, account_id: uuid.UUID | None) -> None:
-        from modulo.core.feedback_manager import _get_or_create_feedback_record
+        from farna.core.feedback_manager import _get_or_create_feedback_record
 
-        with patch("modulo.core.feedback_manager.coerce_uuid", return_value=None):
+        with patch("farna.core.feedback_manager.coerce_uuid", return_value=None):
             record = await _get_or_create_feedback_record(
                 self._make_session(),
                 org_id=_ORG_ID,

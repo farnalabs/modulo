@@ -21,17 +21,17 @@ import uvicorn
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     get_anonymous_plan_context,
     get_db_session,
     get_system_db_session,
 )
-from modulo.api.main import app
-from modulo.api.routes import org_login as org_login_routes
-from modulo.api.routes import sso as sso_routes
-from modulo.auth import sso as sso_auth
-from modulo.core.feature_flags import FeatureFlag
-from modulo.settings import get_settings
+from farna.api.main import app
+from farna.api.routes import org_login as org_login_routes
+from farna.api.routes import sso as sso_routes
+from farna.auth import sso as sso_auth
+from farna.core.feature_flags import FeatureFlag
+from farna.settings import get_settings
 
 _LOG = logging.getLogger("e2e.sso_fixture")
 _FIXTURE_PROVIDER = "ci-idp"

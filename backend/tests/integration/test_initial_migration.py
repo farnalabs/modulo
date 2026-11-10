@@ -23,7 +23,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import Session
 
-from modulo.db.models import Base, LibraryPrimitive, Organisation, Run
+from farna.db.models import Base, LibraryPrimitive, Organisation, Run
 from tests.factories import (
     AccountFactory,
     OrganisationFactory,

@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.pipeline_engine.workspace_ssh import (
+from farna.core.pipeline_engine.workspace_ssh import (
     GITHUB_HOST_KEYS,
     PUBLISHED_HOST_KEY_FINGERPRINTS,
     SshHostRefusedError,
@@ -100,7 +100,7 @@ class TestValidateAndPinIp:
     def test_public_ip_accepted(self) -> None:
         """A public IP like 140.82.121.3 (github.com) passes validation."""
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             ips = validate_and_pin_ip("github.com")
@@ -110,7 +110,7 @@ class TestValidateAndPinIp:
         """A private IP (192.168.1.1) is refused — fail closed."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["192.168.1.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -121,7 +121,7 @@ class TestValidateAndPinIp:
         """Loopback (127.0.0.1) is refused without an explicit allowlist."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["127.0.0.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -132,7 +132,7 @@ class TestValidateAndPinIp:
         """Link-local (169.254.x.x) is ALWAYS refused — non-negotiable floor."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["169.254.1.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -143,7 +143,7 @@ class TestValidateAndPinIp:
         """A hostname resolving to no addresses is refused — fail closed."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=[],
             ),
             pytest.raises(SshHostRefusedError, match="resolved to no addresses"),
@@ -154,7 +154,7 @@ class TestValidateAndPinIp:
         """A DNS resolution failure is refused — fail closed."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 side_effect=ValueError("DNS resolution failed for nonexistent"),
             ),
             pytest.raises(SshHostRefusedError, match="DNS resolution failed"),
@@ -165,7 +165,7 @@ class TestValidateAndPinIp:
         """If ANY resolved address is blocked, the entire resolution is refused."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["140.82.121.3", "192.168.1.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -175,7 +175,7 @@ class TestValidateAndPinIp:
     def test_multiple_public_ips_all_accepted(self) -> None:
         """Multiple public IPs all pass validation."""
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3", "140.82.121.4"],
         ):
             ips = validate_and_pin_ip("cdn.example.com")
@@ -407,7 +407,7 @@ class TestBuildSshTransportScript:
 class TestBuildSshTransport:
     def test_returns_ssh_transport_config(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             config = build_ssh_transport("github.com")
@@ -419,7 +419,7 @@ class TestBuildSshTransport:
         targets the exact address the SSRF guard validated."""
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com")
@@ -427,7 +427,7 @@ class TestBuildSshTransport:
 
     def test_hostname_preserved(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             config = build_ssh_transport("github.com")
@@ -437,7 +437,7 @@ class TestBuildSshTransport:
         """GIT_SSH_COMMAND's HostName must be the validated IP, not the hostname."""
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com")
@@ -447,7 +447,7 @@ class TestBuildSshTransport:
     def test_ssh_command_binds_validated_ip(self) -> None:
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com")
@@ -458,7 +458,7 @@ class TestBuildSshTransport:
         """The SSH target must be user@validated_ip, NOT user@hostname."""
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com")
@@ -467,7 +467,7 @@ class TestBuildSshTransport:
 
     def test_known_hosts_content_present(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             config = build_ssh_transport("github.com")
@@ -476,7 +476,7 @@ class TestBuildSshTransport:
 
     def test_script_snippet_exports_git_ssh_command(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             config = build_ssh_transport("github.com")
@@ -484,7 +484,7 @@ class TestBuildSshTransport:
 
     def test_custom_known_hosts_path(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3"],
         ):
             config = build_ssh_transport(
@@ -498,7 +498,7 @@ class TestBuildSshTransport:
         """A hostname resolving to a private IP is refused — the REFUSE-TO-SHIP gate."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["192.168.1.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -509,7 +509,7 @@ class TestBuildSshTransport:
         """Loopback is refused without an explicit allowlist."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["127.0.0.1"],
             ),
             pytest.raises(SshHostRefusedError, match="blocked address"),
@@ -520,7 +520,7 @@ class TestBuildSshTransport:
         """A host without pinned keys is refused — the REFUSE-TO-SHIP gate."""
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+                "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
                 return_value=["93.184.216.34"],
             ),
             pytest.raises(ValueError, match="No published SSH host keys"),
@@ -530,7 +530,7 @@ class TestBuildSshTransport:
     def test_multiple_resolved_ips_first_pinned(self) -> None:
         """When multiple IPs resolve, the first is pinned as the primary."""
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=["140.82.121.3", "140.82.121.4"],
         ):
             config = build_ssh_transport("github.com")
@@ -545,7 +545,7 @@ class TestBuildSshTransport:
         """
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com")
@@ -575,7 +575,7 @@ class TestHostKeyFingerprints:
     def test_every_embedded_key_matches_published_fingerprint(self) -> None:
         """Every pinned key's SHA256 fingerprint equals the published value."""
         for hostname, published in PUBLISHED_HOST_KEY_FINGERPRINTS.items():
-            from modulo.core.pipeline_engine.workspace_ssh import (
+            from farna.core.pipeline_engine.workspace_ssh import (
                 KNOWN_HOSTS_BY_HOSTNAME,
             )
 
@@ -593,7 +593,7 @@ class TestHostKeyFingerprints:
 
     def test_tampered_key_is_refused(self) -> None:
         """A key whose blob does not match the published fingerprint is rejected."""
-        from modulo.core.pipeline_engine.workspace_ssh import (
+        from farna.core.pipeline_engine.workspace_ssh import (
             KNOWN_HOSTS_BY_HOSTNAME,
         )
 
@@ -618,7 +618,7 @@ class TestHostKeyFingerprints:
         ssh_keygen = shutil.which("ssh-keygen")
         if ssh_keygen is None:
             pytest.skip("ssh-keygen not available")
-        from modulo.core.pipeline_engine.workspace_ssh import (
+        from farna.core.pipeline_engine.workspace_ssh import (
             KNOWN_HOSTS_BY_HOSTNAME,
         )
 
@@ -670,7 +670,7 @@ class TestBuildSshCommandUser:
     def test_user_parameter_propagates_to_transport(self) -> None:
         resolved_ip = "140.82.121.3"
         with patch(
-            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            "farna.core.pipeline_engine.workspace_ssh._resolve_all_sync",
             return_value=[resolved_ip],
         ):
             config = build_ssh_transport("github.com", user="custom")

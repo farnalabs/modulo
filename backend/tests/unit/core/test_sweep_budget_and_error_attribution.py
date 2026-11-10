@@ -55,7 +55,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 from tests.unit.api.mock_session import make_session_factory
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ class TestDispatcherReconcileRowBudget:
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
             patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
-            patch("modulo.core.cron_helpers.AsyncRedis"),
+            patch("farna.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
                 _settings=settings,
@@ -193,7 +193,7 @@ class TestDispatcherReconcileRowBudget:
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
             patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
-            patch("modulo.core.cron_helpers.AsyncRedis"),
+            patch("farna.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
                 _settings=settings,
@@ -269,18 +269,18 @@ class TestRunnerSweepsErrorAttribution:
     @pytest.mark.asyncio
     async def test_marker_sweep_error_includes_exception(self) -> None:
         """runner_marker_sweep persists exception type + message in the error."""
-        from modulo.core.runner_capacity import RunnerMarkerSweepError
+        from farna.core.runner_capacity import RunnerMarkerSweepError
 
         with (
-            patch("modulo.core.saq_worker._make_session_factory", return_value=MagicMock()),
+            patch("farna.core.saq_worker._make_session_factory", return_value=MagicMock()),
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 side_effect=RunnerMarkerSweepError(scanned=5, cleared=2, transitioned=1, org_failures=1),
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import runner_marker_sweep
+            from farna.core.saq_worker import runner_marker_sweep
 
             with pytest.raises(RunnerMarkerSweepError):
                 await runner_marker_sweep({})
@@ -297,12 +297,12 @@ class TestRunnerSweepsErrorAttribution:
     @pytest.mark.asyncio
     async def test_workspace_reconcile_error_includes_exception(self) -> None:
         """runner_workspace_reconcile persists exception type + message."""
-        from modulo.core.bundled_runner.runner_reconciler import ReconcilerSweepError
+        from farna.core.bundled_runner.runner_reconciler import ReconcilerSweepError
 
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.bundled_runner.runner_reconciler.reconcile_runner_workspaces",
+                "farna.core.bundled_runner.runner_reconciler.reconcile_runner_workspaces",
                 new_callable=AsyncMock,
                 side_effect=ReconcilerSweepError(
                     "Docker daemon unreachable",
@@ -310,9 +310,9 @@ class TestRunnerSweepsErrorAttribution:
                     destroyed=0,
                 ),
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import runner_workspace_reconcile
+            from farna.core.saq_worker import runner_workspace_reconcile
 
             with pytest.raises(ReconcilerSweepError):
                 await runner_workspace_reconcile({})
@@ -336,15 +336,15 @@ class TestRunnerSweepsErrorAttribution:
             "skipped": "no Docker endpoint configured (MODULO_DOCKER_HOST unset)",
         }
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.bundled_runner.runner_reconciler.reconcile_runner_workspaces",
+                "farna.core.bundled_runner.runner_reconciler.reconcile_runner_workspaces",
                 new_callable=AsyncMock,
                 return_value=skip_envelope,
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import runner_workspace_reconcile
+            from farna.core.saq_worker import runner_workspace_reconcile
 
             result = await runner_workspace_reconcile({})  # no exception -> no SAQ retry
 
@@ -358,18 +358,18 @@ class TestRunnerSweepsErrorAttribution:
     @pytest.mark.asyncio
     async def test_slot_reconciliation_error_includes_exception(self) -> None:
         """slot_reconciliation persists exception type + message."""
-        from modulo.core.run_admission import SlotReconciliationError
+        from farna.core.run_admission import SlotReconciliationError
 
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.run_admission.reconcile_pipeline_slots",
+                "farna.core.run_admission.reconcile_pipeline_slots",
                 new_callable=AsyncMock,
                 side_effect=SlotReconciliationError("lock timeout", released=2, per_pipeline={}),
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import slot_reconciliation
+            from farna.core.saq_worker import slot_reconciliation
 
             with pytest.raises(SlotReconciliationError):
                 await slot_reconciliation({})
@@ -385,18 +385,18 @@ class TestRunnerSweepsErrorAttribution:
     @pytest.mark.asyncio
     async def test_hitl_park_error_includes_exception(self) -> None:
         """hitl_park_sweep persists exception type + message."""
-        from modulo.core.run_admission import HitlParkError
+        from farna.core.run_admission import HitlParkError
 
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.run_admission.park_expired_hitl_runs",
+                "farna.core.run_admission.park_expired_hitl_runs",
                 new_callable=AsyncMock,
                 side_effect=HitlParkError("gate expired", parked=1),
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import hitl_park_sweep
+            from farna.core.saq_worker import hitl_park_sweep
 
             with pytest.raises(HitlParkError):
                 await hitl_park_sweep({})
@@ -423,7 +423,7 @@ class TestHealthCheckSurfacesEnrichedError:
     async def test_enriched_error_shown_in_detail(self) -> None:
         """When the stats blob carries an enriched error, the health check
         shows it in the detail string."""
-        from modulo.api.routes.health import _check_sweep_stats_advisory
+        from farna.api.routes.health import _check_sweep_stats_advisory
 
         enriched_error = "sweep_failed (RunnerMarkerSweepError: org_index failed)"
         stats = {
@@ -437,8 +437,8 @@ class TestHealthCheckSurfacesEnrichedError:
         fake_redis.aclose = AsyncMock()
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=MagicMock(redis_url="redis://localhost")),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake_redis),
+            patch("farna.api.routes.health.get_settings", return_value=MagicMock(redis_url="redis://localhost")),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake_redis),
         ):
             result = await _check_sweep_stats_advisory(
                 "saq:cron:stats:runner_marker_sweep",
@@ -454,7 +454,7 @@ class TestHealthCheckSurfacesEnrichedError:
     @pytest.mark.asyncio
     async def test_legacy_sweep_failed_still_shown(self) -> None:
         """Older stats blobs with plain 'sweep_failed' still display."""
-        from modulo.api.routes.health import _check_sweep_stats_advisory
+        from farna.api.routes.health import _check_sweep_stats_advisory
 
         stats = {
             "last_run_at": datetime.now(UTC).isoformat(),
@@ -466,8 +466,8 @@ class TestHealthCheckSurfacesEnrichedError:
         fake_redis.aclose = AsyncMock()
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=MagicMock(redis_url="redis://localhost")),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake_redis),
+            patch("farna.api.routes.health.get_settings", return_value=MagicMock(redis_url="redis://localhost")),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake_redis),
         ):
             result = await _check_sweep_stats_advisory(
                 "saq:cron:stats:runner_workspace_reconcile",
@@ -492,15 +492,15 @@ class TestRunnerHealthProbeErrorAttribution:
     async def test_probe_error_includes_exception(self) -> None:
         """runner_health_probe persists exception type + message in the error."""
         with (
-            patch("modulo.core.saq_worker._cleanup_session_factory", return_value=MagicMock()),
+            patch("farna.core.saq_worker._cleanup_session_factory", return_value=MagicMock()),
             patch(
-                "modulo.core.bundled_runner.health_probe.run_runner_health_probe",
+                "farna.core.bundled_runner.health_probe.run_runner_health_probe",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("Docker socket unreachable"),
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import runner_health_probe
+            from farna.core.saq_worker import runner_health_probe
 
             with pytest.raises(RuntimeError):
                 await runner_health_probe({})
@@ -526,7 +526,7 @@ class TestStaleRunRecoverySweepErrorAttribution:
     async def test_sweep_error_includes_exception(self) -> None:
         """stale_run_recovery_sweep returns error with exception type + message."""
         with patch(
-            "modulo.core.pipeline_execution.get_settings",
+            "farna.core.pipeline_execution.get_settings",
             return_value=MagicMock(
                 saq_never_dispatched_window=300,
                 saq_worker_lost_window=600,
@@ -535,7 +535,7 @@ class TestStaleRunRecoverySweepErrorAttribution:
                 redis_url="redis://localhost",
             ),
         ):
-            from modulo.core.pipeline_execution import stale_run_recovery_sweep
+            from farna.core.pipeline_execution import stale_run_recovery_sweep
 
             # Build a proper async context manager that raises on __aenter__
             class _FailingConnector:
@@ -574,14 +574,14 @@ class TestStaleRunRecoverySweepErrorAttribution:
         fake_engine.connect = MagicMock(return_value=mock_conn)
 
         with patch(
-            "modulo.core.pipeline_execution.get_settings",
+            "farna.core.pipeline_execution.get_settings",
             return_value=MagicMock(
                 saq_never_dispatched_window=300,
                 saq_worker_lost_window=600,
                 saq_capacity_timeout_ttl_minutes=30,
             ),
         ):
-            from modulo.core.pipeline_execution import stale_run_recovery_sweep
+            from farna.core.pipeline_execution import stale_run_recovery_sweep
 
             result = await stale_run_recovery_sweep(fake_engine)
 
@@ -612,15 +612,15 @@ class TestStaleRunRecoveryWrapperErrorSurfacing:
         }
 
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                "farna.core.pipeline_execution.stale_run_recovery_sweep",
                 new_callable=AsyncMock,
                 return_value=sweep_result,
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import stale_run_recovery
+            from farna.core.saq_worker import stale_run_recovery
 
             await stale_run_recovery({})
 
@@ -637,15 +637,15 @@ class TestStaleRunRecoveryWrapperErrorSurfacing:
     async def test_wrapper_success_has_no_error(self) -> None:
         """On success the wrapper persists recovered count without error."""
         with (
-            patch("modulo.core.saq_worker._get_async_engine", return_value=MagicMock()),
+            patch("farna.core.saq_worker._get_async_engine", return_value=MagicMock()),
             patch(
-                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                "farna.core.pipeline_execution.stale_run_recovery_sweep",
                 new_callable=AsyncMock,
                 return_value=5,
             ),
-            patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+            patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         ):
-            from modulo.core.saq_worker import stale_run_recovery
+            from farna.core.saq_worker import stale_run_recovery
 
             await stale_run_recovery({})
 
@@ -668,15 +668,15 @@ class TestLibrarySyncErrorAttribution:
     async def test_library_sync_error_includes_exception(self) -> None:
         """library_sync returns error with exception type + message when
         sync_library raises (not returns a failure SyncResult)."""
-        from modulo.core.saq_worker import library_sync
+        from farna.core.saq_worker import library_sync
 
         mock_settings = MagicMock()
         mock_settings.modulo_library_endpoint = "https://library.example.com"
         with (
-            patch("modulo.core.saq_worker.get_settings", return_value=mock_settings),
-            patch("modulo.core.saq_worker._make_session_factory", return_value=MagicMock()),
+            patch("farna.core.saq_worker.get_settings", return_value=mock_settings),
+            patch("farna.core.saq_worker._make_session_factory", return_value=MagicMock()),
             patch(
-                "modulo.core.library_sync.sync_library",
+                "farna.core.library_sync.sync_library",
                 new_callable=AsyncMock,
                 side_effect=ConnectionError("Network unreachable"),
             ),
@@ -889,7 +889,7 @@ class TestSingleOrgRowBudget:
             patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
             patch.object(ch, "reconciler_recovery_predicate"),
             patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
-            patch("modulo.core.cron_helpers.AsyncRedis"),
+            patch("farna.core.cron_helpers.AsyncRedis"),
         ):
             await ch._dispatcher_reconcile_body(
                 _settings=_make_settings(dispatcher_reconcile_max_rows_per_tick=500),
@@ -945,7 +945,7 @@ async def _drive_body(
         stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", sweeps))
         fact_writer = record_facts if record_facts is not None else AsyncMock()
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", fact_writer))
-        stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+        stack.enter_context(patch("farna.core.cron_helpers.AsyncRedis"))
         if time_monotonic is not None:
             time_mod = stack.enter_context(patch.object(ch, "time"))
             time_mod.monotonic.side_effect = list(time_monotonic)
@@ -1352,7 +1352,7 @@ class TestRowLoopTimeDeferral:
         org, deferred/processed counts, elapsed, slowest row, slice and the
         adaptive margin — because the tick deliberately stays ``ok``: the
         distinct counter plus this line IS the visibility."""
-        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.WARNING, logger="farna.core.cron_helpers")
         rows = [object() for _ in range(4)]
         clock = _SequenceClock(
             [

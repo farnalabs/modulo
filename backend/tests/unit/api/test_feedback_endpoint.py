@@ -10,20 +10,20 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.feedback import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.feedback import (
     _parse_optional_iso,
     _serialise_record,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.feedback_manager.exceptions import (
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.feedback_manager.exceptions import (
     ConcurrentModificationError,
     InvalidTransitionError,
 )
-from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.settings import Settings, get_settings
+from farna.db.models.feedback_record import FeedbackRecord
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -118,8 +118,8 @@ def unauth_client() -> Generator[TestClient, None, None]:
 class TestCreateFeedback:
     def test_creates_feedback_record(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
         ):
             mock_create.return_value = _make_mock_record()
 
@@ -144,9 +144,9 @@ class TestCreateFeedback:
         audit = AsyncMock(return_value=MagicMock())
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_create.return_value = mock_record
 
@@ -183,9 +183,9 @@ class TestCreateFeedback:
             raise RuntimeError("audit boom")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_create.return_value = _make_mock_record()
 
@@ -206,11 +206,11 @@ class TestCreateFeedback:
         """FAR-1528: an AI feedback handler spawns its correction run through
         the create_run choke point — an archived/soft-deleted pipeline is
         refused with 409 Conflict (state in the detail), not a generic 500."""
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
         ):
             mock_create.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
             resp = client.post(
@@ -229,8 +229,8 @@ class TestCreateFeedback:
 
     def test_returns_404_when_run_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
         ):
             mock_create.side_effect = HTTPException(status_code=404, detail="Run not found")
             resp = client.post(
@@ -264,8 +264,8 @@ class TestListFeedback:
         mock_record = _make_mock_record()
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
         ):
             mock_list.return_value = {
                 "items": [mock_record],
@@ -287,8 +287,8 @@ class TestListFeedback:
 
     def test_exposes_has_more_false_on_last_page(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
         ):
             mock_list.return_value = {
                 "items": [_make_mock_record()],
@@ -305,8 +305,8 @@ class TestListFeedback:
 
     def test_filters_by_status(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records") as mock_list,
         ):
             mock_list.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20, "has_more": False}
 
@@ -324,8 +324,8 @@ class TestGetFeedback:
         mock_record = _make_mock_record()
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
 
@@ -338,8 +338,8 @@ class TestGetFeedback:
 
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = None
 
@@ -353,9 +353,9 @@ class TestUpdateStatus:
         mock_record = _make_mock_record(feedback_status="resolved")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -370,10 +370,10 @@ class TestUpdateStatus:
 
     def test_returns_409_on_invalid_transition(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.update_status",
+                "farna.api.routes.feedback.FeedbackManager.update_status",
                 side_effect=InvalidTransitionError("cannot move from resolved to pending"),
             ),
         ):
@@ -389,10 +389,10 @@ class TestUpdateStatus:
 
     def test_returns_409_on_concurrent_modification(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.update_status",
+                "farna.api.routes.feedback.FeedbackManager.update_status",
                 side_effect=ConcurrentModificationError("record modified concurrently"),
             ),
         ):
@@ -411,10 +411,10 @@ class TestUpdateStatus:
         audit = AsyncMock(return_value=MagicMock())
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -450,10 +450,10 @@ class TestUpdateStatus:
             raise RuntimeError("audit boom")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -469,10 +469,10 @@ class TestUpdateStatus:
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         audit = AsyncMock(return_value=MagicMock())
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = None
             mock_update.return_value = None
@@ -493,8 +493,8 @@ class TestUpdateStatus:
         mock_record = _make_mock_record(feedback_status="dismissed")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_update.return_value = mock_record
 
@@ -510,9 +510,9 @@ class TestUpdateStatus:
 
     def test_returns_404_when_update_returns_none(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record()
             mock_update.return_value = None
@@ -537,9 +537,9 @@ class TestDetectEvalGap:
         mock_record = _make_mock_record(run_id=None)
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.detect_eval_gap") as mock_detect,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.detect_eval_gap") as mock_detect,
         ):
             mock_get.return_value = mock_record
             mock_detect.return_value = True
@@ -551,8 +551,8 @@ class TestDetectEvalGap:
 
     def test_returns_404_when_record_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = None
 
@@ -566,7 +566,7 @@ class TestDetectEvalGap:
         eval_gap=False — before the fix the ORM row raised AttributeError inside
         evaluate(), was swallowed, and every record came back eval_gap=True.
         FAR-1729: the loader reads the live ``evals`` table."""
-        from modulo.db.models.eval import Eval
+        from farna.db.models.eval import Eval
 
         pipeline_id = uuid.uuid4()
         run_mock = MagicMock()
@@ -604,8 +604,8 @@ class TestDetectEvalGap:
 
         mock_record = _make_mock_record()
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
 
@@ -620,8 +620,8 @@ class TestListFeedbackInbox:
         mock_record = _make_mock_record()
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [mock_record],
@@ -642,8 +642,8 @@ class TestListFeedbackInbox:
 
     def test_filters_by_type_and_status(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [],
@@ -662,8 +662,8 @@ class TestListFeedbackInbox:
 
     def test_filters_by_date_range(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox") as mock_inbox,
         ):
             mock_inbox.return_value = {
                 "items": [],
@@ -684,8 +684,8 @@ class TestGetInboxItem:
         mock_record = _make_mock_record(run_id=None)
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
 
@@ -697,8 +697,8 @@ class TestGetInboxItem:
 
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = None
 
@@ -711,9 +711,9 @@ class TestReviewFeedback:
         mock_record = _make_mock_record(feedback_status="resolved")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record()
             mock_update.return_value = mock_record
@@ -731,10 +731,10 @@ class TestReviewFeedback:
         audit = AsyncMock(return_value=MagicMock())
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -762,10 +762,10 @@ class TestReviewFeedback:
         audit = AsyncMock(return_value=MagicMock())
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_spawn.return_value = uuid.uuid4()
@@ -794,10 +794,10 @@ class TestReviewFeedback:
             raise RuntimeError("audit boom")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -814,9 +814,9 @@ class TestReviewFeedback:
         mock_record = _make_mock_record(feedback_status="dismissed")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record()
             mock_update.return_value = mock_record
@@ -836,9 +836,9 @@ class TestReviewFeedback:
         mock_record = _make_mock_record(feedback_status="resolved")
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record()
             mock_update.return_value = mock_record
@@ -861,8 +861,8 @@ class TestReviewFeedback:
 
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = None
 
@@ -874,12 +874,12 @@ class TestReviewFeedback:
 
     def test_create_correction_run_returns_404_when_original_run_missing(self, client: TestClient) -> None:
         """A missing original run is a specific, narrowed 404 — not the broad base-class catch."""
-        from modulo.core.feedback_manager import FeedbackRecordRunNotFoundError
+        from farna.core.feedback_manager import FeedbackRecordRunNotFoundError
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_spawn.side_effect = FeedbackRecordRunNotFoundError("Original run ... not found")
@@ -894,12 +894,12 @@ class TestReviewFeedback:
 
     def test_create_correction_run_validation_error_is_not_collapsed_to_404(self, client: TestClient) -> None:
         """A non-404 FeedbackManager subclass (ValidationError) must not be masked as 404."""
-        from modulo.core.feedback_manager import ValidationError
+        from farna.core.feedback_manager import ValidationError
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_spawn.side_effect = ValidationError("bad handler type")
@@ -915,12 +915,12 @@ class TestReviewFeedback:
         """FAR-1528: the correction run goes through the create_run choke
         point - an archived/soft-deleted pipeline is refused with 409 (state
         in the detail), not a generic 500."""
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_spawn.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
@@ -939,8 +939,8 @@ class TestListEvalProposals:
         mock_record = _make_mock_record(eval_gap=True, run_id=None)
 
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
         ):
             mock_proposals.return_value = {
                 "items": [mock_record],
@@ -960,8 +960,8 @@ class TestListEvalProposals:
 
     def test_returns_empty_when_no_proposals(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_eval_proposals") as mock_proposals,
         ):
             mock_proposals.return_value = {"items": [], "total": 0, "page": 1, "page_size": 20, "has_more": False}
 
@@ -1000,11 +1000,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1042,11 +1042,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1072,11 +1072,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id=str(node_id))
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1099,11 +1099,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="routing")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1148,11 +1148,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id="node-b")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1174,11 +1174,11 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=audit),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.api.routes.feedback.append_audit_event_isolated", new=audit),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1207,8 +1207,8 @@ class TestPublishEvalProposal:
     def test_publish_requires_eval_gap_record(self, client: TestClient) -> None:
         mock_record = _make_mock_record(eval_gap=False, feedback_status="pending")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1220,8 +1220,8 @@ class TestPublishEvalProposal:
     def test_publish_rejects_non_pending_status(self, client: TestClient) -> None:
         mock_record = _make_mock_record(eval_gap=True, feedback_status="resolved")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1232,8 +1232,8 @@ class TestPublishEvalProposal:
 
     def test_publish_returns_404_when_record_missing(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = None
             resp = client.post(
@@ -1249,9 +1249,9 @@ class TestPublishEvalProposal:
 
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id="node-b")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1271,8 +1271,8 @@ class TestPublishEvalProposal:
         """A record with no associated run_id cannot resolve the pipeline (422)."""
         mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", run_id=None)
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1294,9 +1294,9 @@ class TestPublishEvalProposal:
 
         app.dependency_overrides[get_db_session] = override_session
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1309,9 +1309,9 @@ class TestPublishEvalProposal:
 class TestCreateFeedbackDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.create_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1323,9 +1323,9 @@ class TestCreateFeedbackDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.create_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1337,9 +1337,9 @@ class TestCreateFeedbackDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.create_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1351,9 +1351,9 @@ class TestCreateFeedbackDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.create_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.create_feedback_record",
                 side_effect=ValueError("unexpected"),
             ),
         ):
@@ -1367,9 +1367,9 @@ class TestCreateFeedbackDBErrors:
 class TestListFeedbackDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1378,9 +1378,9 @@ class TestListFeedbackDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1389,9 +1389,9 @@ class TestListFeedbackDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1400,9 +1400,9 @@ class TestListFeedbackDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records",
                 side_effect=RuntimeError("unexpected"),
             ),
         ):
@@ -1413,10 +1413,10 @@ class TestListFeedbackDBErrors:
 class TestListFeedbackInboxDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1425,10 +1425,10 @@ class TestListFeedbackInboxDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1437,10 +1437,10 @@ class TestListFeedbackInboxDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1449,10 +1449,10 @@ class TestListFeedbackInboxDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox",
                 side_effect=RuntimeError("unexpected"),
             ),
         ):
@@ -1463,9 +1463,9 @@ class TestListFeedbackInboxDBErrors:
 class TestGetFeedbackDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1474,9 +1474,9 @@ class TestGetFeedbackDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1485,9 +1485,9 @@ class TestGetFeedbackDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1496,9 +1496,9 @@ class TestGetFeedbackDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
@@ -1508,9 +1508,9 @@ class TestGetFeedbackDBErrors:
 class TestUpdateFeedbackStatusDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1519,9 +1519,9 @@ class TestUpdateFeedbackStatusDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1530,9 +1530,9 @@ class TestUpdateFeedbackStatusDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1541,9 +1541,9 @@ class TestUpdateFeedbackStatusDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
@@ -1553,9 +1553,9 @@ class TestUpdateFeedbackStatusDBErrors:
 class TestDetectEvalGapDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1564,9 +1564,9 @@ class TestDetectEvalGapDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1575,9 +1575,9 @@ class TestDetectEvalGapDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1586,9 +1586,9 @@ class TestDetectEvalGapDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
@@ -1598,9 +1598,9 @@ class TestDetectEvalGapDBErrors:
         """A record with no run_id returns eval_gap=True without querying eval suite."""
         mock_record = _make_mock_record(run_id=None)
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.detect_eval_gap") as mock_detect,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.detect_eval_gap") as mock_detect,
         ):
             mock_get.return_value = mock_record
             mock_detect.return_value = True
@@ -1612,10 +1612,10 @@ class TestDetectEvalGapDBErrors:
 class TestGetInboxItemDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1624,10 +1624,10 @@ class TestGetInboxItemDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1636,10 +1636,10 @@ class TestGetInboxItemDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1648,10 +1648,10 @@ class TestGetInboxItemDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
@@ -1661,9 +1661,9 @@ class TestGetInboxItemDBErrors:
 class TestReviewFeedbackDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1675,9 +1675,9 @@ class TestReviewFeedbackDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1689,9 +1689,9 @@ class TestReviewFeedbackDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1703,9 +1703,9 @@ class TestReviewFeedbackDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.post(
@@ -1718,8 +1718,8 @@ class TestReviewFeedbackDBErrors:
         """Correction run without an associated run_id returns 422."""
         mock_record = _make_mock_record(feedback_status="pending", run_id=None)
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
         ):
             mock_get.return_value = mock_record
             resp = client.post(
@@ -1732,10 +1732,10 @@ class TestReviewFeedbackDBErrors:
         """Annotating a review action persists the annotation (line 931)."""
         mock_record = _make_mock_record(feedback_status="resolved")
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
-            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("farna.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = mock_record
@@ -1749,9 +1749,9 @@ class TestReviewFeedbackDBErrors:
 class TestListEvalProposalsDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                "farna.api.routes.feedback.FeedbackManager.get_eval_proposals",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1760,9 +1760,9 @@ class TestListEvalProposalsDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                "farna.api.routes.feedback.FeedbackManager.get_eval_proposals",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1771,9 +1771,9 @@ class TestListEvalProposalsDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals",
+                "farna.api.routes.feedback.FeedbackManager.get_eval_proposals",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1782,9 +1782,9 @@ class TestListEvalProposalsDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_org"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_eval_proposals", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_eval_proposals", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.get("/api/v1/feedback/proposals")
@@ -1794,10 +1794,10 @@ class TestListEvalProposalsDBErrors:
 class TestPublishEvalProposalDBErrors:
     def test_returns_409_on_integrity_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=IntegrityError("mock", "mock", "mock"),
             ),
         ):
@@ -1809,10 +1809,10 @@ class TestPublishEvalProposalDBErrors:
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=ProgrammingError("mock", "mock", "mock"),
             ),
         ):
@@ -1824,10 +1824,10 @@ class TestPublishEvalProposalDBErrors:
 
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 side_effect=SQLAlchemyError("mock", "mock", "mock"),
             ),
         ):
@@ -1839,10 +1839,10 @@ class TestPublishEvalProposalDBErrors:
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.feedback.set_rls_org"),
-            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("farna.api.routes.feedback.set_rls_org"),
+            patch("farna.api.routes.feedback.set_rls_user_context"),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
             ),
         ):
             resp = client.post(
@@ -1901,7 +1901,7 @@ class TestFar1729EvalSuiteLoaderSourcePin:
     async def test_load_eval_suite_compiles_against_evals_table(self) -> None:
         from types import SimpleNamespace
 
-        from modulo.api.routes.feedback import _load_eval_suite
+        from farna.api.routes.feedback import _load_eval_suite
 
         org_id = uuid.uuid4()
         pipeline_id = uuid.uuid4()

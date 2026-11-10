@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.library_service.runnability import compute_runnable
+from farna.core.library_service.runnability import compute_runnable
 
 
 def _install(

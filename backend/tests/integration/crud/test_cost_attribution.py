@@ -12,16 +12,16 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.cost_controller import (
+from farna.core.cost_controller import (
     check_and_record_spend,
     get_cost_report,
 )
-from modulo.db.crud.daily_run_count import (
+from farna.db.crud.daily_run_count import (
     get_daily_run_counts,
     get_org_spend_total,
     upsert_daily_run_count,
 )
-from modulo.db.crud.team import create_team
+from farna.db.crud.team import create_team
 
 pytestmark = [
     pytest.mark.integration,
@@ -519,7 +519,7 @@ async def test_get_cost_report_by_team_resolves_soft_deleted_team_name(
     keep showing the team's name — never degrade to "Unknown". The team-lookup
     SELECT opts out of the global soft-delete filter via ``include_soft_deleted``.
     """
-    from modulo.db.soft_delete import register_soft_delete_filter
+    from farna.db.soft_delete import register_soft_delete_filter
 
     # Idempotent — mirrors production (``db/session.py``) so the SELECT-only
     # filter is active exactly as in a live deployment.

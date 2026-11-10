@@ -20,12 +20,12 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.connector_hub import (
+from farna.core.connector_hub import (
     _HUB_BUILT_TYPE_IDS,
     _build_connector,
     buildable_connector_type_ids,
 )
-from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+from farna.core.plugin_registry import PluginManifest, PluginRegistry
 from tests.unit.connector_hub._fixtures import BUILD_CASES
 
 # ShellConnector is deprecated (ADR 044) and warns on construction.
@@ -101,5 +101,5 @@ def test_buildable_ids_include_plugin_registered_types() -> None:
         lambda config, creds: None,
         PluginManifest(PLUGIN_ID="pkg-buildable-test", display_name="Demo", description="", version="1"),
     )
-    with patch("modulo.core.connector_hub.get_plugin_registry", return_value=registry):
+    with patch("farna.core.connector_hub.get_plugin_registry", return_value=registry):
         assert "my_custom_connector" in buildable_connector_type_ids()

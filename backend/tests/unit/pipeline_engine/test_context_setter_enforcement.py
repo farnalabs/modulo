@@ -12,11 +12,11 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine import (
+from farna.core.pipeline_engine import (
     ContextSetterViolationError,
     cancellable_node,
 )
-from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+from farna.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
 
 _LIVE_STATE: dict[str, Any] = {"run_context": {"cancelled": False}}
 
@@ -218,7 +218,7 @@ class TestAuditHookDispatch:
     async def test_violation_invokes_audit_hook(self):
         """A non-context-setter violation should invoke the audit hook with the payload."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         received: dict[str, Any] = {}
 
@@ -244,7 +244,7 @@ class TestAuditHookDispatch:
     async def test_violation_with_no_role_reports_none_role(self):
         """A node with no role still dispatches the audit hook with role=None."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         received: dict[str, Any] = {}
 
@@ -270,7 +270,7 @@ class TestAuditHookDispatch:
     async def test_violation_attempted_keys_are_preserved(self):
         """The hook receives every attempted key in order."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         received: dict[str, Any] = {}
 
@@ -294,7 +294,7 @@ class TestAuditHookDispatch:
     async def test_context_setter_does_not_invoke_audit_hook(self):
         """A context-setter write must not trigger the audit hook."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         called = False
 
@@ -318,7 +318,7 @@ class TestAuditHookDispatch:
     async def test_audit_hook_failure_does_not_mask_violation(self, caplog):
         """A failing audit hook must not replace the ContextSetterViolationError."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         async def failing_hook(payload: dict[str, Any]) -> None:
             raise ConnectionError("audit DB down")
@@ -341,7 +341,7 @@ class TestAuditHookDispatch:
     async def test_unset_audit_hook_is_noop(self):
         """With no audit hook registered the violation still raises normally."""
 
-        from modulo.core.pipeline_engine.decorator import set_audit_hook
+        from farna.core.pipeline_engine.decorator import set_audit_hook
 
         set_audit_hook(None)
 
@@ -363,7 +363,7 @@ class TestWriteLogKey:
 
     def test_write_log_key_is_defined(self):
         """The write-log key constant should be defined."""
-        from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+        from farna.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
 
         assert _RUN_CONTEXT_WRITE_LOG_KEY == "_run_context_write_log"
 

@@ -13,11 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -107,7 +107,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 def test_list_deliveries_empty(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         ep = _make_mock_endpoint()
         session.get = AsyncMock(return_value=ep)
@@ -142,7 +142,7 @@ def test_list_deliveries_empty(client: TestClient) -> None:
 
 
 def test_list_deliveries_returns_logs(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         ep = _make_mock_endpoint()
         session.get = AsyncMock(return_value=ep)
@@ -182,7 +182,7 @@ def test_list_deliveries_returns_logs(client: TestClient) -> None:
 
 
 def test_list_deliveries_status_filter(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         ep = _make_mock_endpoint()
         session.get = AsyncMock(return_value=ep)
@@ -211,7 +211,7 @@ def test_list_deliveries_status_filter(client: TestClient) -> None:
 
 
 def test_list_deliveries_not_found(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=None)
 
@@ -229,7 +229,7 @@ def test_list_deliveries_not_found(client: TestClient) -> None:
 
 
 def test_list_all_deliveries_global(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         dl = _make_mock_delivery(status="failed", response_code=500, last_error="Server error")
 
@@ -271,7 +271,7 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
     and therefore excluded every delivery recorded during 2026-09-30 itself.
     Both the list and the count path must apply the same bounds.
     """
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
 
         list_result = MagicMock()
@@ -318,7 +318,7 @@ def test_list_all_deliveries_date_filter(client: TestClient) -> None:
 
 def test_parse_delivery_date_normalises_naive_values_to_utc() -> None:
     """An offset-less date/datetime is UTC, never host-local time."""
-    from modulo.api.routes.admin_notifications import _parse_delivery_date
+    from farna.api.routes.admin_notifications import _parse_delivery_date
 
     assert _parse_delivery_date("2026-09-30", "to date") == datetime(2026, 9, 30, tzinfo=UTC)
     assert _parse_delivery_date("2026-09-30T12:00:00", "to date") == datetime(2026, 9, 30, 12, tzinfo=UTC)
@@ -328,7 +328,7 @@ def test_parse_delivery_date_normalises_naive_values_to_utc() -> None:
 
 def test_parse_delivery_upper_bound_treats_bare_date_as_end_of_day() -> None:
     """A bare ``to`` date becomes an exclusive next-day bound."""
-    from modulo.api.routes.admin_notifications import _parse_delivery_upper_bound
+    from farna.api.routes.admin_notifications import _parse_delivery_upper_bound
 
     bound, inclusive = _parse_delivery_upper_bound("2026-09-30", "to date")
     assert bound == datetime(2026, 10, 1, tzinfo=UTC)
@@ -341,7 +341,7 @@ def test_parse_delivery_upper_bound_treats_bare_date_as_end_of_day() -> None:
 
 
 def test_list_all_deliveries_bad_date_returns_422(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -358,7 +358,7 @@ def test_list_all_deliveries_bad_date_returns_422(client: TestClient) -> None:
 
 
 def test_retry_delivery_not_found(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=None)
 
@@ -376,7 +376,7 @@ def test_retry_delivery_not_found(client: TestClient) -> None:
 
 
 def test_retry_delivery_delivery_not_found(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         ep = _make_mock_endpoint()
         session.get = AsyncMock()
@@ -429,18 +429,18 @@ def test_delivery_log_requires_admin_role(client: TestClient) -> None:
 
 def test_run_stalled_is_available_event() -> None:
     """run_stalled must be subscribable for webhooks, like run_failed (FAR-98)."""
-    from modulo.api.routes.admin_notifications import AVAILABLE_EVENTS
+    from farna.api.routes.admin_notifications import AVAILABLE_EVENTS
 
     assert "run_stalled" in AVAILABLE_EVENTS
 
 
 def test_webhook_create_accepts_run_stalled() -> None:
     """An org can subscribe a webhook to run_stalled without a 422."""
-    from modulo.api.routes.admin_notifications import WebhookCreate
+    from farna.api.routes.admin_notifications import WebhookCreate
 
     # The model's URL validator resolves DNS; this test is about the event
     # vocabulary, so stub the SSRF floor for its example host.
-    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+    with patch("farna.api.routes.admin_notifications.validate_outbound_url"):
         model = WebhookCreate(
             url="https://hooks.example.com/notify",
             events=["run_stalled"],

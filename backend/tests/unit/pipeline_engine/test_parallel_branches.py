@@ -30,12 +30,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph
 from langgraph.types import interrupt
 
-from modulo.core.graph_validator import GraphValidator
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer, build_graph_from_json
-from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from farna.core.graph_validator import GraphValidator
+from farna.core.graph_validator._types import ValidationResult
+from farna.core.pipeline_engine.event_broker import RunEventBroker
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.graph_cache import _pipeline_state_reducer, build_graph_from_json
+from farna.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 
 _STATE_SCHEMA: type[Any] = Annotated[dict[str, Any], _pipeline_state_reducer]
 

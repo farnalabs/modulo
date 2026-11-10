@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
-from modulo.core.product_analytics.constants import (
+from farna.core.product_analytics.consent import apply_consent_action, default_consent_state
+from farna.core.product_analytics.constants import (
     DUMP_COUNT_KEY,
     DUMP_WATERMARK_KEY,
     coerce_dump_count,
 )
-from modulo.core.product_analytics.metrics_dump import (
+from farna.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
     _DUMP_EXECUTION_WINDOW_MINUTES,
     _DUMP_WINDOW_MINUTES,
@@ -37,7 +37,7 @@ from modulo.core.product_analytics.metrics_dump import (
     _should_dump_now,
     metrics_dump,
 )
-from modulo.core.product_analytics.vendor_client import (
+from farna.core.product_analytics.vendor_client import (
     MAX_ATTEMPTS,
     RETRY_DELAYS,
     VendorClient,
@@ -58,7 +58,7 @@ def _stub_purge_staging(monkeypatch: pytest.MonkeyPatch) -> None:
     jitter-skip tick — is covered against a real in-memory DB by
     ``tests/unit/product_analytics/test_metrics_staging_consumer.py``.
     """
-    from modulo.core.product_analytics import metrics_dump as md_module
+    from farna.core.product_analytics import metrics_dump as md_module
 
     monkeypatch.setattr(md_module, "_purge_staging", AsyncMock(return_value=0))
 
@@ -298,12 +298,12 @@ class TestShouldDumpNow:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write,
             patch("secrets.randbelow", return_value=3),
@@ -325,12 +325,12 @@ class TestShouldDumpNow:
             factory = _FakeSessionFactory()
             with (
                 patch(
-                    "modulo.core.product_analytics.metrics_dump.read_system_config",
+                    "farna.core.product_analytics.metrics_dump.read_system_config",
                     new_callable=AsyncMock,
                     return_value=None,
                 ),
                 patch(
-                    "modulo.core.product_analytics.metrics_dump.write_system_config",
+                    "farna.core.product_analytics.metrics_dump.write_system_config",
                     new_callable=AsyncMock,
                 ) as write,
                 patch("secrets.randbelow", return_value=draw),
@@ -344,11 +344,11 @@ class TestShouldDumpNow:
         now = datetime(2026, 1, 1, 0, 35, tzinfo=UTC)  # minute 35 in [30, 40)
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="30",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             assert await _should_dump_now(factory, now=now) is True
 
@@ -358,11 +358,11 @@ class TestShouldDumpNow:
         now = datetime(2026, 1, 1, 0, 40, tzinfo=UTC)  # 40 not in [30, 40)
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="30",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             assert await _should_dump_now(factory, now=now) is False
 
@@ -372,11 +372,11 @@ class TestShouldDumpNow:
         now = datetime(2026, 1, 1, 0, 30, tzinfo=UTC)  # exactly offset 30
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="30",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             assert await _should_dump_now(factory, now=now) is True
 
@@ -386,11 +386,11 @@ class TestShouldDumpNow:
         now = datetime(2026, 1, 1, 0, 40, tzinfo=UTC)  # offset + window == 40, excluded
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="30",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             assert await _should_dump_now(factory, now=now) is False
 
@@ -400,11 +400,11 @@ class TestShouldDumpNow:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="350",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             at_slot = datetime(2026, 1, 1, 5, 50, tzinfo=UTC)  # minute 350
             after_slot = datetime(2026, 1, 1, 6, 0, tzinfo=UTC)  # minute 360
@@ -418,12 +418,12 @@ class TestShouldDumpNow:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="37",
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write,
         ):
@@ -444,21 +444,21 @@ class TestMetricsDumpSkipConditions:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(),
             ),
         ):
@@ -471,26 +471,26 @@ class TestMetricsDumpSkipConditions:
 
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(),
             ),
         ):
@@ -504,31 +504,31 @@ class TestMetricsDumpSkipConditions:
 
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="",
                     product_analytics_instance_secret="",
@@ -561,11 +561,11 @@ class TestSystemSessionFactory:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ) as system_factory,
             patch(
-                "modulo.core.saq_worker._make_session_factory",
+                "farna.core.saq_worker._make_session_factory",
                 side_effect=AssertionError(
                     "metrics_dump must use the SYSTEM session factory "
                     "(BYPASSRLS) — the app factory silently returns zero rows "
@@ -573,21 +573,21 @@ class TestSystemSessionFactory:
                 ),
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
 
@@ -605,29 +605,29 @@ class TestSystemSessionFactory:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.core.saq_worker._make_session_factory",
+                "farna.core.saq_worker._make_session_factory",
                 side_effect=AssertionError("metrics_dump swapped to the app session factory"),
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
             ) as get_orgs,
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
 
@@ -644,7 +644,7 @@ class TestVendorClient:
         async def _build(_url: str, **kwargs: object) -> httpx.AsyncClient:
             return httpx.AsyncClient(**kwargs)
 
-        monkeypatch.setattr("modulo.core.product_analytics.vendor_client.pinned_async_client", _build)
+        monkeypatch.setattr("farna.core.product_analytics.vendor_client.pinned_async_client", _build)
 
     def test_retry_delays_count(self) -> None:
         assert len(RETRY_DELAYS) == MAX_ATTEMPTS - 1
@@ -656,7 +656,7 @@ class TestVendorClient:
         async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
             raise ValueError("blocked internal address")
 
-        monkeypatch.setattr("modulo.core.product_analytics.vendor_client.pinned_async_client", _reject)
+        monkeypatch.setattr("farna.core.product_analytics.vendor_client.pinned_async_client", _reject)
         client = VendorClient("http://169.254.169.254", "test-secret")
 
         success, code, error = await client.post_batch(b'{"test":1}', 100.0, 1)
@@ -676,7 +676,7 @@ class TestVendorClient:
         mock_http.is_closed = False
         client._http_client = mock_http
 
-        with patch("modulo.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
+        with patch("farna.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
             success, code, error = await client.post_batch(b'{"test":1}', 100.0, 1)
 
         assert success is False
@@ -746,7 +746,7 @@ class TestVendorClient:
         mock_http.is_closed = False
         client._http_client = mock_http
 
-        with patch("modulo.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
+        with patch("farna.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
             success, code, _error = await client.post_batch(b'{"test":1}', 100.0, 1)
 
         assert success is True
@@ -769,7 +769,7 @@ class TestVendorClient:
         mock_http.is_closed = False
         client._http_client = mock_http
 
-        with patch("modulo.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
+        with patch("farna.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
             success, code, _error = await client.post_batch(b'{"test":1}', 100.0, 1)
 
         assert success is False
@@ -798,11 +798,11 @@ class TestCheckInstanceSwitch:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=MagicMock(value=True),
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch("farna.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is True
 
@@ -813,11 +813,11 @@ class TestCheckInstanceSwitch:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=MagicMock(value="false"),
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch("farna.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is False
 
@@ -828,11 +828,11 @@ class TestCheckInstanceSwitch:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch("farna.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is False
 
@@ -843,11 +843,11 @@ class TestCheckInstanceSwitch:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch("farna.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is True
 
@@ -860,11 +860,11 @@ class TestCheckInstanceSwitch:
         licence.raw_payload = {"product_analytics_required": True}
         with (
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=licence),
+            patch("farna.core.product_analytics.consent.get_license", return_value=licence),
         ):
             assert await _check_instance_switch(factory) is True
 
@@ -882,23 +882,23 @@ class TestEffectiveSwitchGatesDump:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.core.saq_worker._make_system_session_factory", return_value=factory),
+            patch("farna.core.saq_worker._make_system_session_factory", return_value=factory),
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch("farna.core.product_analytics.consent.get_license", return_value=None),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 side_effect=AssertionError("the dump must not collect orgs when the switch is OFF"),
             ) as collect,
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
 
@@ -913,23 +913,23 @@ class TestEffectiveSwitchGatesDump:
         licence.raw_payload = {"product_analytics_required": True}
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.core.saq_worker._make_system_session_factory", return_value=factory),
+            patch("farna.core.saq_worker._make_system_session_factory", return_value=factory),
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.core.product_analytics.consent.get_license", return_value=licence),
+            patch("farna.core.product_analytics.consent.get_license", return_value=licence),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
             ) as collect,
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
 
@@ -946,11 +946,11 @@ class TestShouldDumpNowDefault:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value="0",
             ),
-            patch("modulo.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
+            patch("farna.core.product_analytics.metrics_dump.write_system_config", new_callable=AsyncMock),
         ):
             result = await _should_dump_now(factory, now=None)
         assert isinstance(result, bool)
@@ -966,7 +966,7 @@ class TestResolveStartDate:
         orgs = [{"id": "org-1", "level_changed_at": date(2026, 8, 1)}]
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value="2026-08-05",
         ):
@@ -980,7 +980,7 @@ class TestResolveStartDate:
         orgs = [{"id": "org-1", "level_changed_at": date(2026, 8, 1)}]
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value="2026-08-05",
         ):
@@ -993,7 +993,7 @@ class TestResolveStartDate:
         orgs = [{"id": "org-1", "level_changed_at": date(2026, 8, 1)}]
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1026,7 +1026,7 @@ class TestResolveStartDate:
         factory = _FakeSessionFactory()
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1040,7 +1040,7 @@ class TestResolveStartDate:
         orgs = [{"id": "org-1", "level_changed_at": date(2020, 1, 1)}]
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1054,7 +1054,7 @@ class TestResolveStartDate:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         dump_date = date(2026, 8, 10)
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1072,12 +1072,12 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_payload",
+                "farna.core.product_analytics.metrics_dump._build_payload",
                 new_callable=AsyncMock,
                 return_value={"schema_version": 1},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1100,12 +1100,12 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_payload",
+                "farna.core.product_analytics.metrics_dump._build_payload",
                 new_callable=AsyncMock,
                 return_value={"schema_version": 1},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1128,7 +1128,7 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": date(2026, 8, 15)}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1152,12 +1152,12 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_payload",
+                "farna.core.product_analytics.metrics_dump._build_payload",
                 new_callable=AsyncMock,
                 return_value={"schema_version": 1},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1186,12 +1186,12 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_payload",
+                "farna.core.product_analytics.metrics_dump._build_payload",
                 new_callable=AsyncMock,
                 return_value={"schema_version": 1},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1199,7 +1199,7 @@ class TestDumpDateRange:
             mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
             mock_client_cls.return_value = mock_client
 
-            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+            with caplog.at_level(logging.ERROR, logger="farna.core.product_analytics.metrics_dump"):
                 result = await _dump_date_range(
                     factory,
                     orgs,
@@ -1217,7 +1217,7 @@ class TestDumpDateRange:
             caplog.clear()
             mock_client.post_batch = AsyncMock(return_value=(False, 500, "vendor error"))
 
-            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+            with caplog.at_level(logging.ERROR, logger="farna.core.product_analytics.metrics_dump"):
                 failed = await _dump_date_range(
                     factory,
                     orgs,
@@ -1242,12 +1242,12 @@ class TestDumpDateRange:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_payload",
+                "farna.core.product_analytics.metrics_dump._build_payload",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("payload boom"),
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.VendorClient",
+                "farna.core.product_analytics.metrics_dump.VendorClient",
             ) as mock_client_cls,
         ):
             mock_client = AsyncMock()
@@ -1305,32 +1305,32 @@ class TestBuildPayload:
         with (
             patch.object(mock_session, "begin", new_callable=lambda: asynccontextmanager(lambda: (yield None))),
             patch(
-                "modulo.core.product_analytics.metrics_dump._count_entities",
+                "farna.core.product_analytics.metrics_dump._count_entities",
                 new_callable=AsyncMock,
                 return_value={"pipelines": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._aggregate_run_stats",
+                "farna.core.product_analytics.metrics_dump._aggregate_run_stats",
                 new_callable=AsyncMock,
                 return_value={"total_runs": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._aggregate_error_stats",
+                "farna.core.product_analytics.metrics_dump._aggregate_error_stats",
                 new_callable=AsyncMock,
                 return_value={"total": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_integration_inventory",
+                "farna.core.product_analytics.metrics_dump._build_integration_inventory",
                 new_callable=AsyncMock,
                 return_value={},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_or_create_instance_id",
+                "farna.core.product_analytics.metrics_dump._get_or_create_instance_id",
                 new_callable=AsyncMock,
                 return_value="test-instance-id",
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_instance_metadata",
+                "farna.core.product_analytics.metrics_dump._build_instance_metadata",
                 return_value={"version": "1.0.0"},
             ),
         ):
@@ -1351,12 +1351,12 @@ class TestGetOrCreateInstanceId:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write,
         ):
@@ -1369,7 +1369,7 @@ class TestGetOrCreateInstanceId:
     async def test_returns_existing_id(self) -> None:
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value="existing-id",
         ):
@@ -1384,7 +1384,7 @@ class TestBuildInstanceMetadata:
     def test_metadata_shape(self) -> None:
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.version.get_version",
+            "farna.version.get_version",
             return_value="1.2.3",
         ):
             meta = _build_instance_metadata(factory)
@@ -1404,44 +1404,44 @@ class TestMetricsDumpSuccess:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                "farna.core.product_analytics.metrics_dump._dump_date_range",
                 new_callable=AsyncMock,
                 return_value=[date(2026, 8, 10)],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                "farna.core.product_analytics.metrics_dump.acquire_kv_lock",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write_cfg,
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="https://vendor.example.com",
                     product_analytics_instance_secret="secret",
@@ -1461,16 +1461,16 @@ class TestMetricsDumpSuccess:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(),
             ),
         ):
@@ -1483,31 +1483,31 @@ class TestMetricsDumpSuccess:
         today = datetime.now(UTC).date()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[{"id": "org-1", "level_changed_at": None}],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=today.isoformat(),
             ),
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(),
             ),
         ):
@@ -1520,40 +1520,40 @@ class TestMetricsDumpSuccess:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                "farna.core.product_analytics.metrics_dump._dump_date_range",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write_cfg,
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="https://vendor.example.com",
                     product_analytics_instance_secret="secret",
@@ -1581,44 +1581,44 @@ class TestDumpCount:
         orgs = [{"id": "org-1", "level_changed_at": None}]
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                "farna.core.product_analytics.metrics_dump._dump_date_range",
                 new_callable=AsyncMock,
                 return_value=[date(2026, 8, 10)],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                "farna.core.product_analytics.metrics_dump.acquire_kv_lock",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write_cfg,
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="https://vendor.example.com",
                     product_analytics_instance_secret="secret",
@@ -1641,44 +1641,44 @@ class TestDumpCount:
 
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 side_effect=_read,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                "farna.core.product_analytics.metrics_dump._dump_date_range",
                 new_callable=AsyncMock,
                 return_value=[date(2026, 8, 10)],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                "farna.core.product_analytics.metrics_dump.acquire_kv_lock",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write_cfg,
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="https://vendor.example.com",
                     product_analytics_instance_secret="secret",
@@ -1694,29 +1694,29 @@ class TestDumpCount:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                "farna.core.product_analytics.metrics_dump._check_instance_switch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                "farna.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write_cfg,
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
         assert result["skipped"] == "no_consenting_orgs"
@@ -1759,7 +1759,7 @@ class TestGetOrCreateSystemConfig:
     async def test_existing_value_returned(self) -> None:
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "farna.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value="existing",
         ):
@@ -1771,12 +1771,12 @@ class TestGetOrCreateSystemConfig:
         factory = _FakeSessionFactory()
         with (
             patch(
-                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                "farna.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                "farna.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
             ) as write,
         ):
@@ -1796,7 +1796,7 @@ class TestCountEntities:
     async def test_returns_all_counts(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _count_entities
+        from farna.core.product_analytics.metrics_dump import _count_entities
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
 
@@ -1838,7 +1838,7 @@ class TestAggregateRunStats:
     async def test_returns_run_stats(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _aggregate_run_stats
+        from farna.core.product_analytics.metrics_dump import _aggregate_run_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1867,7 +1867,7 @@ class TestAggregateRunStats:
     async def test_null_values_default_to_zero(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _aggregate_run_stats
+        from farna.core.product_analytics.metrics_dump import _aggregate_run_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1897,7 +1897,7 @@ class TestAggregateErrorStats:
     async def test_returns_error_stats_by_level(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _aggregate_error_stats
+        from farna.core.product_analytics.metrics_dump import _aggregate_error_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1922,7 +1922,7 @@ class TestAggregateErrorStats:
     async def test_empty_error_stats(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _aggregate_error_stats
+        from farna.core.product_analytics.metrics_dump import _aggregate_error_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1944,7 +1944,7 @@ class TestBuildIntegrationInventory:
     async def test_returns_inventory(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _build_integration_inventory
+        from farna.core.product_analytics.metrics_dump import _build_integration_inventory
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1986,7 +1986,7 @@ class TestBuildIntegrationInventory:
     async def test_empty_inventory(self) -> None:
         import uuid
 
-        from modulo.core.product_analytics.metrics_dump import _build_integration_inventory
+        from farna.core.product_analytics.metrics_dump import _build_integration_inventory
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)

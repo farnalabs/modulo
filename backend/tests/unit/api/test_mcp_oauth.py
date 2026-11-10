@@ -9,12 +9,12 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -203,7 +203,7 @@ class TestListOAuthScopes:
 
     def test_offers_only_delegable_registry_keys(self, admin_client: TestClient) -> None:
         """The picker can never offer a scope the registration boundary rejects."""
-        from modulo.auth.permissions import PERMISSIONS, is_delegable
+        from farna.auth.permissions import PERMISSIONS, is_delegable
 
         resp = admin_client.get(self.ENDPOINT)
 
@@ -264,8 +264,8 @@ class TestRegisterOAuthClient:
 
     def test_create_returns_201_with_secret(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_client = MagicMock()
             mock_client.id = uuid.uuid4()
@@ -328,7 +328,7 @@ class TestRegisterOAuthClient:
         assert "must be bound to a team" in resp.json()["detail"]
 
     def test_create_disallows_invalid_scopes(self, admin_client: TestClient) -> None:
-        with patch("modulo.api.routes.mcp_oauth.set_rls_org"):
+        with patch("farna.api.routes.mcp_oauth.set_rls_org"):
             resp = admin_client.post(
                 self.ENDPOINT,
                 json={
@@ -342,8 +342,8 @@ class TestRegisterOAuthClient:
     def test_create_accepts_loopback_http_redirect_uris(self, admin_client: TestClient) -> None:
         """http:// is fine for loopback so local development keeps working."""
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_client = MagicMock()
             mock_client.id = uuid.uuid4()
@@ -364,8 +364,8 @@ class TestRegisterOAuthClient:
     def test_create_stores_valid_redirect_uris_verbatim(self, admin_client: TestClient) -> None:
         """What is validated is exactly what is stored (space-joined, lossless)."""
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_client = MagicMock()
             mock_client.id = uuid.uuid4()
@@ -420,8 +420,8 @@ class TestRegisterOAuthClient:
     def test_create_rejects_invalid_redirect_uris_with_400(self, admin_client: TestClient, uri: str) -> None:
         """Every previously-accepted invalid value is now a structured 400."""
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = admin_client.post(
                 self.ENDPOINT,
@@ -434,8 +434,8 @@ class TestRegisterOAuthClient:
     def test_create_rejects_whitespace_entry_before_storage(self, admin_client: TestClient) -> None:
         """A URI with an internal space would round-trip as TWO URIs — reject it."""
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = admin_client.post(
                 self.ENDPOINT,
@@ -450,7 +450,7 @@ class TestRegisterOAuthClient:
         mock_create.assert_not_called()
 
     def test_create_400_names_every_offending_entry(self, admin_client: TestClient) -> None:
-        with patch("modulo.api.routes.mcp_oauth.set_rls_org"):
+        with patch("farna.api.routes.mcp_oauth.set_rls_org"):
             resp = admin_client.post(
                 self.ENDPOINT,
                 json={
@@ -476,7 +476,7 @@ class TestRegisterOAuthClient:
 
         app.dependency_overrides[get_settings] = _settings_no_url
         try:
-            with patch("modulo.api.routes.mcp_oauth.set_rls_org"):
+            with patch("farna.api.routes.mcp_oauth.set_rls_org"):
                 resp = admin_client.post(
                     self.ENDPOINT,
                     json={
@@ -494,10 +494,10 @@ class TestRegisterOAuthClient:
         """An HTTPException raised by the save path is re-raised unchanged."""
         with (
             patch(
-                "modulo.api.routes.mcp_oauth.create_oauth_client",
+                "farna.api.routes.mcp_oauth.create_oauth_client",
                 side_effect=HTTPException(status_code=409, detail="duplicate"),
             ),
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = admin_client.post(
                 self.ENDPOINT,
@@ -533,8 +533,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_admin_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 mock_client = MagicMock()
                 mock_client.id = uuid.uuid4()
@@ -558,8 +558,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_admin_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 resp = client.post(
                     self.ENDPOINT,
@@ -578,8 +578,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_runner_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 mock_client = MagicMock()
                 mock_client.id = uuid.uuid4()
@@ -603,8 +603,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_runner_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 resp = client.post(
                     self.ENDPOINT,
@@ -623,8 +623,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_runner_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 resp = client.post(self.ENDPOINT, json=dict(_REG_PAYLOAD))
         finally:
@@ -640,8 +640,8 @@ class TestRegisterOAuthClientTeamBinding:
         client = _client_with_session(mock_session, _make_admin_principal)
         try:
             with (
-                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+                patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("farna.api.routes.mcp_oauth.set_rls_org"),
             ):
                 mock_client = MagicMock()
                 mock_client.id = uuid.uuid4()
@@ -667,8 +667,8 @@ class TestListOAuthClients:
 
     def test_list_returns_200(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_list.return_value = [
                 {
@@ -689,8 +689,8 @@ class TestListOAuthClients:
 
     def test_list_empty(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_list.return_value = []
             resp = admin_client.get(self.ENDPOINT)
@@ -708,10 +708,10 @@ class TestListOAuthClients:
         """An HTTPException raised by the query path is re-raised unchanged."""
         with (
             patch(
-                "modulo.api.routes.mcp_oauth.list_oauth_clients",
+                "farna.api.routes.mcp_oauth.list_oauth_clients",
                 side_effect=HTTPException(status_code=409, detail="duplicate"),
             ),
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = admin_client.get(self.ENDPOINT)
 
@@ -729,8 +729,8 @@ class TestDeleteOAuthClient:
 
     def test_delete_returns_200(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_delete.return_value = True
             resp = admin_client.delete(f"{self.ENDPOINT}/myclient123")
@@ -740,8 +740,8 @@ class TestDeleteOAuthClient:
 
     def test_delete_not_found_returns_404(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_delete.return_value = False
             resp = admin_client.delete(f"{self.ENDPOINT}/nonexistent")
@@ -756,10 +756,10 @@ class TestDeleteOAuthClient:
         """An HTTPException raised by the delete path is re-raised unchanged."""
         with (
             patch(
-                "modulo.api.routes.mcp_oauth.delete_oauth_client",
+                "farna.api.routes.mcp_oauth.delete_oauth_client",
                 side_effect=HTTPException(status_code=409, detail="duplicate"),
             ),
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = admin_client.delete(f"{self.ENDPOINT}/myclient123")
 

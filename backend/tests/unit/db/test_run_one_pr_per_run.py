@@ -36,7 +36,7 @@ import pytest
 from sqlalchemy import StaticPool, Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     _PR_SCAN_MAX_URLS,
     NOTIFICATION_CATEGORY_DUPLICATE_PR,
     SINGLE_PR_PER_RUN_FLAG,
@@ -49,11 +49,11 @@ from modulo.db.crud.run import (
     graph_declares_single_pr_per_run,
     update_run_status,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.notification import Notification
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.db.models.base import Base
+from farna.db.models.notification import Notification
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -464,7 +464,7 @@ class TestTerminalWriteEnforcement:
         admin-scoped, error-level notification naming BOTH PR URLs."""
         run_id = uuid.uuid4()
         outputs, telemetry, markers = _far1254_blobs()
-        with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+        with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
             async with session.begin():
                 await _seed_run(session, run_id, outputs=outputs, telemetry=telemetry, markers=markers)
                 updated = await update_run_status(session, run_id, "complete")
@@ -550,7 +550,7 @@ class TestTerminalWriteEnforcement:
         produce NO alert and NO error log, while the run still terminalizes."""
         run_id = uuid.uuid4()
         outputs, telemetry, markers = _far1254_blobs()
-        with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+        with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
             async with session.begin():
                 await _seed_run(
                     session,
@@ -625,7 +625,7 @@ class TestTerminalWriteEnforcement:
         alert: the breach is logged and the helper returns without touching the
         session."""
         run = SimpleNamespace(id=uuid.uuid4(), run_number=7)
-        with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+        with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
             await _record_duplicate_pr_notification(cast(AsyncSession, None), cast(Any, run), [_PR_1, _PR_2])
 
         assert "duplicate_pr_missing_org" in caplog.text
@@ -642,11 +642,11 @@ class TestTerminalWriteEnforcement:
 
         run = SimpleNamespace(id=uuid.uuid4(), organisation_id=_ORG)
         monkeypatch.setattr(
-            "modulo.db.crud.run._run_declares_single_pr_per_run",
+            "farna.db.crud.run._run_declares_single_pr_per_run",
             AsyncMock(return_value=True),
         )
         monkeypatch.setattr(
-            "modulo.db.crud.run.read_run_node_outputs_raw",
+            "farna.db.crud.run.read_run_node_outputs_raw",
             AsyncMock(side_effect=asyncio.CancelledError()),
         )
         with pytest.raises(asyncio.CancelledError):
@@ -721,7 +721,7 @@ class TestTerminalWriteEnforcement:
                 "WHEN NEW.category = 'run.duplicate_pr_delivery' "
                 "BEGIN SELECT RAISE(ABORT, 'simulated db-level alert failure'); END"
             )
-        with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+        with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
             async with session.begin():
                 await _seed_run(session, run_id, outputs=outputs, telemetry=telemetry, markers=markers)
                 updated = await update_run_status(session, run_id, "complete")
@@ -784,7 +784,7 @@ class TestTerminalWriteEnforcement:
         run_id = uuid.uuid4()
         outputs, telemetry, markers = _far1254_blobs()
         monkeypatch.setattr(
-            "modulo.db.crud.run.read_run_node_outputs_raw",
+            "farna.db.crud.run.read_run_node_outputs_raw",
             AsyncMock(side_effect=RuntimeError("store unreachable")),
         )
         async with session.begin():

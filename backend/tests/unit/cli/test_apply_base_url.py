@@ -28,10 +28,10 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.model_backends import ModelBackendCreate, ModelBackendUpdate
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.models import ModelBackendEntity
+from farna.api.routes.model_backends import ModelBackendCreate, ModelBackendUpdate
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.models import ModelBackendEntity
 
 _CONFIG = """
 api_version: modulo.dev/v1

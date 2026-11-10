@@ -9,11 +9,11 @@ regenerate the baseline).
 
 Two surfaces, one baseline:
 
-* **REST routes** — ``backend/src/modulo/api/routes/*.py``. A route is covered
+* **REST routes** — ``backend/src/farna/api/routes/*.py``. A route is covered
   by an ``audited(...)`` / ``audited_system(...)`` call anywhere on its
   decorator list or parameter defaults (the ``dependencies=[Depends(...)]``
   shape or an ``@audited(...)`` decorator both qualify).
-* **MCP tools** — ``backend/src/modulo/api/mcp_server.py``. MCP tools bypass
+* **MCP tools** — ``backend/src/farna/api/mcp_server.py``. MCP tools bypass
   FastAPI entirely, so they carry ``@mcp_audited(...)`` directly under
   ``@mcp.tool(...)``; a tool counts as covered when any decorator (or default)
   calls an accepted audit annotation.
@@ -39,8 +39,8 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-ROUTES_DIR = BACKEND_DIR / "src" / "modulo" / "api" / "routes"
-MCP_SERVER_PATH = BACKEND_DIR / "src" / "modulo" / "api" / "mcp_server.py"
+ROUTES_DIR = BACKEND_DIR / "src" / "farna" / "api" / "routes"
+MCP_SERVER_PATH = BACKEND_DIR / "src" / "farna" / "api" / "mcp_server.py"
 BASELINE_PATH = BACKEND_DIR / "tests" / "architecture" / "audit_coverage_baseline.txt"
 
 #: HTTP methods that mutate state (``GET``/``HEAD``/``OPTIONS`` never do).

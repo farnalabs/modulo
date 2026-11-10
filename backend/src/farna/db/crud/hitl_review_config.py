@@ -1,0 +1,886 @@
+"""Resolve a HITL gate's ``hitl_review_config`` from the gate's actual edge.
+
+Shared by the REST HITL decision routes (``api/routes/hitl.py``) and the MCP
+``review_hitl`` tool (``api/mcp_server.py``). Gate ids are derived from the
+gated edge's topology — ``hitl_review_<source>_<target>`` (see
+``graph_cache._make_review_id``) — so a gate's config is found by matching that
+topology, never by positional edge order.
+
+FAR-610: the MCP human-only check used to select the pipeline's edges with no
+source/target filter and read ``.scalars().first()`` — the FIRST edge in
+arbitrary order. On the PR Reviewer pipeline the first edge carried no
+``hitl_review_config``, so the check passed and API-key clients approved a
+``human_only`` gate 22+ times. This module is the single resolution point so
+both surfaces agree on which edge a gate id refers to.
+
+Resolution order (callers already set the RLS org context; the queries here
+add explicit ``organisation_id`` filters as defence in depth):
+
+0. STAMP (FAR-634) — for parseable gate ids (``hitl_review_<source>_<target>``)
+   the executor stamps the resolved config onto ``hitl_claims.
+   gate_config_json`` at fire time, so a fired gate's config is read in ONE
+   claim-row lookup. Manual-node ids skip the lookup (no claim row exists for
+   them). The walk below remains the fallback for legacy rows (no stamp),
+   gates that never fired, and fire-time stamp failures (NULL config).
+1. PRIMARY — the run's immutable ``PipelineSnapshot``: walk ``graph_json``
+   edges, compute ``hitl_review_{source}_{target}`` for every edge carrying a
+   ``hitl_review_config`` (both ``source``/``target`` and the persisted
+   ``source_node_id``/``target_node_id`` key styles), and return the config of
+   the edge whose derived id equals the gate id. The snapshot is the graph the
+   run actually executes, so it is authoritative for the gate that fired.
+   If no edge matches, walk the snapshot's NODES for a FAR-402 HITL node
+   whose outgoing edges derive the gate id — HITL nodes carry ``hitl_config``
+   on the NODE and the compiler injects it onto edges at build time only, so
+   node-level gates have no edge-level config in the persisted definition.
+2. FALLBACK — snapshot missing or legacy (gate config absent from the
+   snapshot graph): parse source/target out of the gate id and look the edge
+   up in the LIVE ``pipeline_edges`` table, filtered to normal edges — a
+   reject/conditional edge may share the gate's (source, target) topology
+   (``uq_pipeline_edges_path`` includes ``edge_type``) and only normal edges
+   carry gate config. Node ids are UUIDs (hyphens, no
+   underscores), so the gate id splits from the RIGHT into exactly two
+   segments; live edge node-id columns are UUIDs, so non-UUID node ids cannot
+   match and the fallback yields None. If the live edge has no config either,
+   consult the live pipeline's ``graph_nodes_json`` for the FAR-402 HITL-node
+   config (same derivation as the snapshot node walk).
+
+Unresolvable gates return ``None``. Callers enforce the human_only policy
+from the resolved config; for the residual unresolvable case they consult
+:func:`hitl_review_exists_but_unresolved` so a gate that FIRED but whose
+config cannot be located is treated as policy-unverifiable (fail closed)
+rather than silently allowed.
+"""
+
+import uuid
+from collections.abc import Sequence
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.db.crud.run import get_run
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.settings import HITL_CLAIM_TTL_SECONDS, get_settings
+
+REVIEW_ID_PREFIX = "hitl_review_"
+
+# --- FAR-1257: the configurable HITL review window -------------------------
+#
+# The review window is how long a fired review may sit unclaimed/undecided
+# before the dispatcher_reconcile terminalizer cancels the run to release its
+# org concurrency slot. Precedence (resolved ONCE at fire time, then stamped as
+# an absolute ``hitl_claims.terminalize_at``):
+#
+#     pipeline override > org default (settings_json) > instance/env default
+#
+# The SAME envelope — 60s (1 min) .. 604800s (7 days) — is enforced at every
+# layer: this module (resolution), the API Pydantic fields, the org-settings
+# write route, and ``ck_pipelines_hitl_review_window`` (migration 0263).
+
+#: Lower bound of the shipped envelope (1 minute). Matches the API's ``ge=60``.
+HITL_REVIEW_WINDOW_MIN_SECONDS = 60
+#: Upper bound of the shipped envelope (7 days). Matches the API's ``le=604800``.
+HITL_REVIEW_WINDOW_MAX_SECONDS = 604800
+
+#: Key under which the org default lives in ``Organisation.settings_json``.
+ORG_HITL_REVIEW_WINDOW_KEY = "hitl_review_window_seconds"
+
+
+def _clamp_review_window(value: object) -> int | None:
+    """Clamp an int into the shipped envelope; non-int / bool → None.
+
+    ``bool`` is excluded explicitly because ``isinstance(True, int)`` is True —
+    a JSON ``true`` in ``settings_json`` must not silently become a 60s window.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return max(HITL_REVIEW_WINDOW_MIN_SECONDS, min(HITL_REVIEW_WINDOW_MAX_SECONDS, value))
+
+
+def _instance_default_review_window_seconds() -> int:
+    """The instance/env default: claim TTL + the cancel-grace env knob.
+
+    Reproduces the shipped arithmetic EXACTLY — a gate fires with
+    ``expires_at = now + HITL_CLAIM_TTL_SECONDS`` and the legacy terminalizer
+    collects it at ``expires_at + hitl_review_cancel_grace_seconds``, so the
+    fire-time equivalent window is ``HITL_CLAIM_TTL_SECONDS +
+    settings.hitl_review_cancel_grace_seconds`` (= 4500s / 75 min at the
+    shipped defaults). The env default itself is NOT changed by FAR-1257.
+
+    ``HITL_CLAIM_TTL_SECONDS`` is imported from ``modulo.settings``, NOT from
+    ``core.hitl_manager``: this module is in the DB layer, which the
+    import-linter contract ``db-does-not-import-core`` forbids from importing
+    ``modulo.core`` at all. Settings is a near-leaf both layers may read, so
+    the one TTL value still serves ``create_gate``'s ``expires_at`` and this
+    window without any possibility of drift.
+    """
+    return HITL_CLAIM_TTL_SECONDS + int(get_settings().hitl_review_cancel_grace_seconds)
+
+
+def resolve_hitl_review_window_seconds(
+    pipeline_override: int | None,
+    org_default: int | None,
+) -> int:
+    """Resolve the effective HITL review window (seconds) for one gate fire.
+
+    Precedence: ``pipeline_override`` > ``org_default`` > instance/env default.
+    Every candidate that is a usable int is clamped into the 60..604800
+    envelope, so the returned value is ALWAYS in-bounds — there is no "0 =
+    disabled" and no out-of-range window at any layer. Non-int candidates
+    (``None``, a JSON string/bool/dict, a malformed ``settings_json`` entry)
+    fall through to the next layer rather than poisoning the chain.
+
+    The instance default is clamped too: at the shipped grace (3600s) it is
+    4500s, comfortably in-bounds; only a maxed-out ``HITL_REVIEW_CANCEL_GRACE_SECONDS``
+    (604800) plus the 900s claim TTL would exceed 7 days, and clamping keeps
+    the envelope a hard guarantee rather than an aspiration.
+    """
+    for candidate in (pipeline_override, org_default):
+        clamped = _clamp_review_window(candidate)
+        if clamped is not None:
+            return clamped
+    clamped_default = _clamp_review_window(_instance_default_review_window_seconds())
+    if clamped_default is not None:
+        return clamped_default
+    return HITL_REVIEW_WINDOW_MIN_SECONDS
+
+
+def org_hitl_review_window(settings_json: Any) -> int | None:
+    """Read the org default out of ``Organisation.settings_json``, tolerantly.
+
+    Absent key, non-dict ``settings_json``, a bool/string/float/None value, or
+    anything else non-int → ``None`` (the caller falls through to the instance
+    default). In-range enforcement happens in
+    :func:`resolve_hitl_review_window_seconds`, so a hand-edited out-of-range
+    int is clamped rather than rejected.
+    """
+    if not isinstance(settings_json, dict):
+        return None
+    return _clamp_review_window(settings_json.get(ORG_HITL_REVIEW_WINDOW_KEY))
+
+
+async def read_org_hitl_review_window(session: AsyncSession, org_id: uuid.UUID) -> int | None:
+    """Read the org's ``hitl_review_window_seconds`` default (None when unset).
+
+    A projection query (one JSON column, no ORM materialisation). Callers have
+    already set the RLS org context; the explicit ``organisation_id`` filter is
+    defence in depth, matching this module's convention.
+    """
+    settings_json = (
+        await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+    ).scalar_one_or_none()
+    return org_hitl_review_window(settings_json)
+
+
+async def resolve_review_window_for_gate(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> int:
+    """Resolve the full chain (pipeline override > org default > default) once.
+
+    Called by the executor's interrupt handler at gate fire time; the result is
+    stamped as an absolute ``hitl_claims.terminalize_at`` so the sweep never
+    re-reads config. Both reads are single-row projections with explicit
+    ``organisation_id`` filters (defence in depth under the caller's RLS
+    context).
+    """
+    pipeline_override = (
+        await session.execute(
+            select(Pipeline.hitl_review_window_seconds)
+            .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    org_default = await read_org_hitl_review_window(session, org_id)
+    return resolve_hitl_review_window_seconds(pipeline_override, org_default)
+
+
+#: FAR-609: every HITL gate defaults to ``human_only: true`` — fail-safe by
+#: construction, not only the high-risk paths. A gate config that omits the
+#: field is human_only; opting out requires the explicit ``human_only: false``
+#: write (which the gate-removal guard flags as a weakening change). Legacy
+#: stored gates whose config_json lacks the field therefore BECOME human-only
+#: under this default — intended (fail-safe backward compatibility).
+DEFAULT_HUMAN_ONLY = True
+
+
+def human_only_effective(config: dict[str, Any] | None) -> bool:
+    """Return the gate config's ``human_only`` flag with the fail-safe default.
+
+    FAR-609 single-source the default: every enforcement site (the engine's
+    autonomy override in ``node_runner``, the REST/MCP denial verdict, the
+    MCP gate-detail payload) reads the flag through this helper so a missing
+    or non-dict config resolves to :data:`DEFAULT_HUMAN_ONLY` (True), and an
+    explicit ``human_only: false`` opts out.
+    """
+    if not isinstance(config, dict):
+        return DEFAULT_HUMAN_ONLY
+    value = config.get("human_only")
+    return DEFAULT_HUMAN_ONLY if value is None else bool(value)
+
+
+def make_review_id(source: str, target: str) -> str:
+    """Derive a gate id from an edge's topology: ``hitl_review_<source>_<target>``.
+
+    Byte-identical mirror of ``graph_cache._make_review_id`` (the executor stamps
+    gate ids with that format). Single-source the derivation so enforcement
+    surfaces (REST + MCP) and label building construct the same id the
+    executor fired.
+    """
+    return f"{REVIEW_ID_PREFIX}{source}_{target}"
+
+
+def edge_source_or_target(edge: dict[str, Any], key: str) -> str | None:
+    """Resolve an edge's source/target node id (canonical + persisted keys).
+
+    Snapshot graphs store ``source``/``target``; some legacy/persisted shapes
+    use ``source_node_id``/``target_node_id``. Mirrors
+    ``graph_cache._get_edge_val`` but returns None instead of raising when the
+    edge omits the field, so a malformed snapshot edge never breaks resolution.
+    """
+    value = edge.get(key) or edge.get(f"{key}_node_id")
+    return str(value) if value is not None else None
+
+
+def parse_hitl_review_id(review_id: str) -> tuple[str, str] | None:
+    """Split ``hitl_review_<source>_<target>`` into ``(source, target)``.
+
+    Node ids are UUIDs (hyphenated, no underscores), so the remainder splits
+    from the RIGHT into exactly two segments. Returns None for non-gate ids
+    (e.g. manual-node ids), malformed ids, or node ids containing underscores
+    (ambiguous — the snapshot primary path is authoritative for those).
+    """
+    if not review_id.startswith(REVIEW_ID_PREFIX):
+        return None
+    parts = review_id[len(REVIEW_ID_PREFIX) :].rsplit("_", 2)
+    if len(parts) != 2:
+        return None
+    source, target = parts
+    if not source or not target:
+        return None
+    return source, target
+
+
+def config_from_graph(graph_json: dict[str, Any], review_id: str) -> dict[str, Any] | None:
+    """Find the edge whose derived gate id matches ``review_id`` in a snapshot graph.
+
+    Public (FAR-688): the fire-time briefing capture
+    (``hitl_context``) resolves a single gate's config through this walker,
+    so it is part of the module's public surface rather than a private
+    helper imported cross-module.
+    """
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        config = edge.get("hitl_review_config")
+        if not isinstance(config, dict):
+            continue
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
+        if source is not None and target is not None and make_review_id(source, target) == review_id:
+            return config
+    return None
+
+
+def _edge_source_target(edge: Any) -> tuple[str, str] | None:
+    """``(source, target)`` for a dict edge with both endpoints, else None."""
+    if not isinstance(edge, dict):
+        return None
+    source = edge_source_or_target(edge, "source")
+    target = edge_source_or_target(edge, "target")
+    if source is None or target is None:
+        return None
+    return source, target
+
+
+def _edge_hitl_config(edge: Any) -> dict[str, Any] | None:
+    """The edge-level ``hitl_review_config`` dict, or None."""
+    if not isinstance(edge, dict):
+        return None
+    config = edge.get("hitl_review_config")
+    return config if isinstance(config, dict) else None
+
+
+def _hitl_node_gate(node: Any) -> tuple[str, dict[str, Any]] | None:
+    """``(node_id, hitl_config)`` for a HITL node with both present, else None."""
+    if not isinstance(node, dict) or node.get("node_type") != "hitl":
+        return None
+    config = node.get("hitl_config")
+    node_id = node.get("id")
+    if not isinstance(config, dict) or node_id is None:
+        return None
+    return str(node_id), config
+
+
+def _hitl_node_targets(node_id: str, edges: Any) -> list[str]:
+    """Targets of the node's outgoing edges (source == ``node_id``)."""
+    targets: list[str] = []
+    for edge in edges:
+        endpoints = _edge_source_target(edge)
+        if endpoints is not None and endpoints[0] == node_id:
+            targets.append(endpoints[1])
+    return targets
+
+
+def _edge_gate_entries(graph_json: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(review_id, config)`` for every edge-level gate in the graph."""
+    entries: list[tuple[str, dict[str, Any]]] = []
+    for edge in graph_json.get("edges", []):
+        endpoints = _edge_source_target(edge)
+        config = _edge_hitl_config(edge)
+        if endpoints is not None and config is not None:
+            entries.append((make_review_id(*endpoints), config))
+    return entries
+
+
+def _hitl_node_gate_entries(graph_json: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(review_id, config)`` for every FAR-402 node-level gate in the graph.
+
+    Walks each HITL node's outgoing edges, the same derivation the compiler
+    uses. Order is node-major then edge-major, so the first match for a
+    review id is the same gate the single-review walker resolves.
+    """
+    entries: list[tuple[str, dict[str, Any]]] = []
+    edges = graph_json.get("edges", [])
+    for node in graph_json.get("nodes", []):
+        gate = _hitl_node_gate(node)
+        if gate is None:
+            continue
+        node_id, config = gate
+        entries.extend((make_review_id(node_id, target), config) for target in _hitl_node_targets(node_id, edges))
+    return entries
+
+
+def config_from_hitl_nodes(graph_json: dict[str, Any], review_id: str) -> dict[str, Any] | None:
+    """Resolve a FAR-402 HITL-NODE gate's config from a graph's nodes.
+
+    HITL nodes carry ``hitl_config`` on the NODE; the compiler injects
+    ``{**hitl_config, "review_id": ...}`` onto the node's outgoing edges at
+    build time only, so the persisted definition (snapshot ``graph_json`` and
+    live pipeline rows alike) has NO edge-level ``hitl_review_config`` for
+    node-level gates. Mirror the compiler's derivation: a hitl node's gate
+    ids are ``hitl_review_<node_id>_<target>`` over its outgoing edges. Only
+    ``node_type == "hitl"`` nodes are consulted — ``hitl_config`` on any other
+    node type is inert at runtime (the compiler ignores it), so honouring it
+    here could over-block. Public (FAR-688): see :func:`config_from_graph`.
+    """
+    for candidate_id, config in _hitl_node_gate_entries(graph_json):
+        if candidate_id == review_id:
+            return dict(config)
+    return None
+
+
+def snapshot_review_config_map(graph_json: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Map review_id -> gate config for EVERY gate in a snapshot graph.
+
+    Covers both gate shapes: edge-level ``hitl_review_config`` and FAR-402
+    node-level ``hitl_config`` (walked over each HITL node's outgoing edges,
+    the same derivation the compiler uses). The pending-gate endpoints use
+    this to resolve labels and descriptions for a whole run in ONE walk
+    instead of a per-gate config resolution.
+    """
+    configs: dict[str, dict[str, Any]] = dict(_edge_gate_entries(graph_json))
+    for review_id, config in _hitl_node_gate_entries(graph_json):
+        configs.setdefault(review_id, dict(config))
+    return configs
+
+
+def normalize_gate_description(config: dict[str, Any] | None) -> str | None:
+    """The config's human description, or None when unusable (FAR-613).
+
+    Usable = a string whose non-empty trimmed form survives (whitespace-only
+    or non-string values carry no decision context). Both pending endpoints
+    and the MCP gate resource share this normalisation so every surface
+    renders the same "muted no-description fallback" for the same gates.
+    """
+    if not isinstance(config, dict):
+        return None
+    description = config.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return None
+    return description.strip()
+
+
+def resolve_review_description(
+    context_json: dict[str, Any] | None,
+    config: dict[str, Any] | None,
+) -> str | None:
+    """Unified description precedence for every briefing surface (FAR-688).
+
+    CONTEXT-FIRST: the fire-time captured description
+    (``context_json["description"]``) IS the truth the reviewer was shown
+    when the gate fired — it wins. The snapshot config's description is the
+    fallback for gates that fired before fire-time capture existed. Both
+    surfaces (REST pending endpoints via :func:`resolve_review_descriptions`,
+    the MCP gate resource) and the ``context.description`` duplicate on the
+    REST payload therefore agree on ONE description for the same gate.
+
+    NOTE (REST payload duplication, kept deliberately): ``ReviewResponse``
+    carries the description BOTH top-level (the frontend contract — the
+    muted fallback renders from it) and inside ``context.description``.
+    With this precedence the two can only differ when the snapshot was
+    edited after the gate fired; the top-level field is the render source.
+    """
+    captured = normalize_gate_description(context_json)
+    if captured is not None:
+        return captured
+    return normalize_gate_description(config)
+
+
+async def _batch_load_snapshot_graphs(
+    session: AsyncSession,
+    *,
+    run_ids: set[uuid.UUID],
+    org_id: uuid.UUID,
+) -> tuple[dict[uuid.UUID, uuid.UUID], dict[uuid.UUID, dict[str, Any]]]:
+    """Batch-load the pending reviews' runs + snapshot graph JSON (two IN queries).
+
+    Shared by the pending-review resolvers (:func:`resolve_review_descriptions`
+    and :func:`resolve_review_human_only_map`) so a page of reviews costs the same
+    two queries no matter how many fields the surface renders. Returns
+    ``(snapshot_id_by_run, graph_by_snapshot)``; runs without a snapshot or
+    snapshots without a dict ``graph_json`` are simply absent from the maps.
+    """
+    snapshot_id_by_run: dict[uuid.UUID, uuid.UUID] = {}
+    if run_ids:
+        run_rows = await session.execute(
+            select(Run.id, Run.snapshot_id).where(
+                Run.id.in_(run_ids),
+                Run.organisation_id == org_id,
+            )
+        )
+        snapshot_id_by_run = {row[0]: row[1] for row in run_rows.all() if row[1] is not None}
+    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]] = {}
+    if snapshot_id_by_run:
+        snap_rows = await session.execute(
+            select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+                PipelineSnapshot.id.in_(set(snapshot_id_by_run.values())),
+                PipelineSnapshot.organisation_id == org_id,
+            )
+        )
+        for row in snap_rows.all():
+            if isinstance(row[1], dict):
+                graph_by_snapshot[row[0]] = row[1]
+    return snapshot_id_by_run, graph_by_snapshot
+
+
+def _gate_snapshot_config(
+    config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]],
+    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]],
+    snapshot_id: uuid.UUID | None,
+    review_id: str,
+) -> dict[str, Any] | None:
+    """One gate's config from its run's snapshot, memoised per snapshot id.
+
+    The snapshot config map is built at most once per snapshot within a call
+    (several pending reviews often share one run/snapshot — one walk per
+    snapshot, not per review). A missing snapshot leaves the review without a
+    snapshot config (None).
+    """
+    if snapshot_id is None:
+        return None
+    if snapshot_id not in config_map_by_snapshot:
+        graph = graph_by_snapshot.get(snapshot_id)
+        config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
+    return config_map_by_snapshot[snapshot_id].get(review_id)
+
+
+async def resolve_review_descriptions(
+    session: AsyncSession,
+    *,
+    gates: Sequence[HitlClaim],
+    org_id: uuid.UUID,
+) -> dict[tuple[uuid.UUID, str], str | None]:
+    """Resolve each review's description for the pending surfaces (FAR-613/688).
+
+    The org-level pending surfaces (REST ``GET /api/v1/hitl/pending`` and the
+    MCP ``list_pending_hitl`` tool) share this — batched, two IN queries over
+    the pending reviews' runs + snapshots, never a per-review snapshot walk.
+    Keys are ``(run_id, review_id)``. Precedence is context-first
+    (:func:`resolve_review_description`) — the fire-time captured description
+    wins, the snapshot config is the fallback. A review whose snapshot is
+    missing and whose capture carries no usable description maps to None
+    (the UI renders the muted no-description fallback). The snapshot config
+    map is memoised per snapshot id within one call (several pending reviews
+    often share one run/snapshot — one walk per snapshot, not per review).
+    The queries add explicit ``organisation_id`` filters as defence in depth
+    (callers already set the RLS org context).
+    """
+    description_by_review: dict[tuple[uuid.UUID, str], str | None] = {}
+    if not gates:
+        return description_by_review
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
+        session, run_ids={g.run_id for g in gates}, org_id=org_id
+    )
+    config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
+    for gate in gates:
+        # A missing snapshot (or an unlisted run) leaves the review without a
+        # snapshot config — context-first still applies from the claim row.
+        config = _gate_snapshot_config(
+            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
+        )
+        description_by_review[(gate.run_id, gate.review_id)] = resolve_review_description(
+            gate.context_json if isinstance(gate.context_json, dict) else None, config
+        )
+    return description_by_review
+
+
+def _stamped_human_only_map(
+    gates: Sequence[HitlClaim],
+) -> tuple[dict[tuple[uuid.UUID, str], bool], set[uuid.UUID]]:
+    """Split the FAR-634 stamp fast path out of the snapshot walk.
+
+    Returns ``(human_only_by_review, unstamped_run_ids)``: the reviews whose
+    already-loaded claim row carries a stamped ``gate_config_json`` (resolved
+    with zero extra queries), and the run ids still needing the snapshot
+    lookup.
+    """
+    stamped_map: dict[tuple[uuid.UUID, str], bool] = {}
+    unstamped_run_ids: set[uuid.UUID] = set()
+    for gate in gates:
+        stamped = getattr(gate, "gate_config_json", None)
+        if isinstance(stamped, dict):
+            stamped_map[(gate.run_id, gate.review_id)] = human_only_effective(stamped)
+        else:
+            unstamped_run_ids.add(gate.run_id)
+    return stamped_map, unstamped_run_ids
+
+
+async def resolve_review_human_only_map(
+    session: AsyncSession,
+    *,
+    gates: Sequence[HitlClaim],
+    org_id: uuid.UUID,
+) -> dict[tuple[uuid.UUID, str], bool]:
+    """Resolve each pending review's ``human_only`` flag (fail-safe by default).
+
+    The MCP ``list_pending_hitl`` surface uses this to tell an agent client
+    which pending reviews REQUIRE a browser human before it attempts an action
+    (human_only reviews cannot be claimed or decided through MCP — FAR-609 /
+    FAR-610). Keys are ``(run_id, review_id)`` and every review maps to a boolean.
+
+    Resolution order per review:
+
+    0. STAMP (FAR-634) — the executor stamps the fire-time resolved config
+       onto ``hitl_claims.gate_config_json``; that column on the ALREADY-LOADED
+       claim row is authoritative and costs zero extra queries. Read through
+       :func:`human_only_effective`.
+    1. SNAPSHOT — the run's immutable ``PipelineSnapshot`` config map
+       (:func:`snapshot_review_config_map`), batched like
+       :func:`resolve_review_descriptions` so a page of reviews is two IN queries.
+    2. FAIL-SAFE — an unresolvable review maps to :data:`DEFAULT_HUMAN_ONLY`
+       (True), the same default every enforcement surface reads, so the pending
+       surface can never under-report a review as actionable by an agent.
+    """
+    human_only_by_review: dict[tuple[uuid.UUID, str], bool] = {}
+    if not gates:
+        return human_only_by_review
+    stamped_map, unstamped_run_ids = _stamped_human_only_map(gates)
+    human_only_by_review.update(stamped_map)
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
+        session, run_ids=unstamped_run_ids, org_id=org_id
+    )
+    config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
+    for gate in gates:
+        if (gate.run_id, gate.review_id) in human_only_by_review:
+            continue
+        config = _gate_snapshot_config(
+            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
+        )
+        human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(config)
+    return human_only_by_review
+
+
+async def _config_from_live_edges(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    review_id: str,
+) -> dict[str, Any] | None:
+    """Look the review's edge up in the LIVE ``pipeline_edges`` table (fallback)."""
+    parsed = parse_hitl_review_id(review_id)
+    if parsed is None:
+        return None
+    source, target = parsed
+    try:
+        source_uuid = uuid.UUID(source)
+        target_uuid = uuid.UUID(target)
+    except ValueError:
+        # Live pipeline_edges store UUID node ids; a gate id built from
+        # non-UUID node ids cannot match a live edge.
+        return None
+    edge = (
+        await session.execute(
+            select(PipelineEdge).where(
+                PipelineEdge.pipeline_id == pipeline_id,
+                PipelineEdge.organisation_id == org_id,
+                PipelineEdge.source_node_id == source_uuid,
+                PipelineEdge.target_node_id == target_uuid,
+                # Gated edges are always normal edges, and uq_pipeline_edges_path
+                # includes edge_type — a reject/conditional edge may share the
+                # same (source, target) pair, so without this filter two rows
+                # match and scalar_one_or_none raises MultipleResultsFound.
+                PipelineEdge.edge_type == "normal",
+            )
+        )
+    ).scalar_one_or_none()
+    if edge is not None and isinstance(edge.hitl_review_config, dict):
+        return dict(edge.hitl_review_config)
+    return None
+
+
+async def _config_from_live_nodes(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    gate_source: str,
+) -> dict[str, Any] | None:
+    """Look a FAR-402 HITL-node gate's config up in the LIVE pipeline graph.
+
+    The live ``pipelines.graph_nodes_json`` is consulted only after the live
+    edge missed, so this query runs solely on the node-gate fallback path.
+    The pipeline row is matched on id + organisation_id (RLS defence in
+    depth); the source node id was already parsed from the gate id by the
+    caller.
+    """
+    nodes = (
+        await session.execute(
+            select(Pipeline.graph_nodes_json).where(
+                Pipeline.id == pipeline_id,
+                Pipeline.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if (
+            isinstance(node, dict)
+            and node.get("node_type") == "hitl"
+            and node.get("id") is not None
+            and str(node["id"]) == gate_source
+        ):
+            config = node.get("hitl_config")
+            if isinstance(config, dict):
+                return dict(config)
+    return None
+
+
+async def _stamped_gate_config(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """FAR-634 claim-stamped config for a gate (None for manual/unstamped ids).
+
+    The stamp check runs only for parseable gate ids
+    (``hitl_review_<source>_<target>``) — manual-node ids never have a claim
+    row, so they skip the lookup entirely. The org filter is defence in depth
+    (callers already set the RLS org context).
+    """
+    if parse_hitl_review_id(review_id) is None:
+        return None
+    stamped = (
+        await session.execute(
+            select(HitlClaim.gate_config_json).where(
+                HitlClaim.run_id == run_id,
+                HitlClaim.review_id == review_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return dict(stamped) if isinstance(stamped, dict) else None
+
+
+async def _snapshot_gate_config(
+    session: AsyncSession,
+    run: Run,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """The gate's config from its run's immutable snapshot graph (or None).
+
+    Edge-level ``hitl_review_config`` first, then FAR-402 node-level
+    ``hitl_config`` (their config lives on the NODE, not the edge).
+    """
+    snapshot_id = run.snapshot_id
+    if snapshot_id is None:
+        return None
+    snapshot = (
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.id == snapshot_id,
+                PipelineSnapshot.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if snapshot is None or not isinstance(snapshot.graph_json, dict):
+        return None
+    config = config_from_graph(snapshot.graph_json, review_id)
+    if config is None:
+        config = config_from_hitl_nodes(snapshot.graph_json, review_id)
+    return config
+
+
+async def _live_gate_config(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    review_id: str,
+) -> dict[str, Any] | None:
+    """Live-edge fallback, then the live node graph for a node-gate id."""
+    config = await _config_from_live_edges(session, pipeline_id, org_id, review_id)
+    if config is not None:
+        return config
+    parsed = parse_hitl_review_id(review_id)
+    if parsed is None:
+        return None
+    return await _config_from_live_nodes(session, pipeline_id, org_id, parsed[0])
+
+
+async def resolve_hitl_review_config(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    run: Run | None = None,
+) -> dict[str, Any] | None:
+    """Return the gate's ``hitl_review_config`` dict, or None when unresolvable.
+
+    Callers already set ``set_rls_org``; the snapshot and live-edge queries add
+    an explicit ``organisation_id`` filter as defence in depth. Pass the
+    already-loaded ``run`` to skip the redundant run read (the MCP flow loads
+    the run for its team-scope boundary check anyway).
+
+    FAR-634 claim-stamped fast path: the executor's interrupt handler stamps
+    the resolved config onto the ``hitl_claims.gate_config_json`` column at
+    fire time, so for gates that FIRED the config is read in ONE claim-row
+    lookup instead of the snapshot/live walk below. The stamp check runs only
+    for parseable gate ids (``hitl_review_<source>_<target>``) — manual-node ids
+    never have a claim row, so they skip the lookup entirely (submit-manual
+    decisions pay zero extra queries). The snapshot/live walk REMAINS the
+    fallback for legacy rows that fired before the stamp column existed, for
+    gates with no claim row (never fired), and when the stamp is NULL (a
+    fire-time stamp failure is failure-isolated by contract). Unresolvable
+    gates still return None — callers enforce the fail-closed
+    ``hitl_review_exists_but_unresolved`` semantics unchanged.
+    """
+    # FAR-634: claim-stamped config first (O(1) — the row is one indexed
+    # lookup on the unique (run_id, review_id) pair).
+    config = await _stamped_gate_config(session, run_id=run_id, review_id=review_id, org_id=org_id)
+    if config is not None:
+        return config
+
+    if run is None:
+        run = await get_run(session, run_id, organisation_id=org_id)
+        if run is None:
+            return None
+
+    config = await _snapshot_gate_config(session, run, review_id, org_id)
+    if config is not None:
+        return config
+    return await _live_gate_config(session, run.pipeline_id, org_id, review_id)
+
+
+async def hitl_review_exists_but_unresolved(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> bool:
+    """Return True when the gate FIRED but its config could not be resolved.
+
+    Fail-closed signal for decision enforcement (FAR-610 review): a fired
+    gate always has a ``hitl_claims`` row (created by the executor's interrupt
+    handler) and its id is always the topology-derived
+    ``hitl_review_<source>_<target>`` (``graph_cache._make_review_id`` — the
+    compiler stamps it, so user input cannot override). When the resolver
+    returns None for such a gate, the human_only policy cannot be verified
+    and callers deny non-browser decisions instead of allowing them.
+
+    Non-gate ids (manual-node ids on ``submit_manual``/``deliver_manual``)
+    can never have a claim row, so they short-circuit to False and the
+    fail-closed check cannot over-block manual output delivery. Callers
+    already set the RLS org context; the query adds an explicit
+    ``organisation_id`` filter as defence in depth.
+    """
+    if parse_hitl_review_id(review_id) is None:
+        return False
+    row = (
+        await session.execute(
+            select(HitlClaim.id).where(
+                HitlClaim.run_id == run_id,
+                HitlClaim.review_id == review_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+#: FAR-634 review: the audit event type emitted on EVERY human_only denial,
+#: hoisted here (the shared cross-surface home, beside ``MSG_HUMAN_ONLY_DENY``)
+#: so a rename cannot fork the audit stream — the REST warning log, the REST
+#: audit append, the MCP warning log, and the MCP audit append all read this
+#: one constant.
+EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
+MSG_HUMAN_ONLY_DENY = (
+    "human_only gate requires browser authentication; "
+    "non-browser credentials (API keys and programmatic tokens) cannot "
+    "claim or decide this gate"
+)
+MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
+
+
+def human_only_denial(
+    config: dict[str, Any] | None,
+    *,
+    non_browser_credential: bool,
+    gate_fired: bool,
+) -> str | None:
+    """Return the denial message for a human_only gate claim/decision, or None to allow.
+
+    Pure verdict shared by the REST claim + decision routes and the MCP
+    ``review_hitl`` tool (claim, approve, deliver_manual) so every surface
+    enforces the SAME policy with the SAME wording (FAR-610 review: the policy
+    was previously implemented twice with slightly
+    different messages). Callers resolve the gate config first and compute
+    ``gate_fired`` via :func:`hitl_review_exists_but_unresolved` ONLY when the
+    config is None (the claim query is wasted when the config resolved).
+
+    Semantics:
+
+    - ``non_browser_credential`` False → None. Browser credentials are always
+      allowed — the UI is their enforcement surface, checked before any other
+      logic.
+    - ``config`` None → :data:`MSG_HUMAN_ONLY_UNRESOLVED` when ``gate_fired``
+      else None. Fail closed only for gates that actually FIRED (a claim row
+      exists): for those the policy cannot be verified, so non-browser
+      decisions are denied rather than silently allowed. Unfired/non-gate ids
+      stay allowed (manual delivery must not over-block).
+    - ``config`` dict with a truthy ``human_only`` →
+      :data:`MSG_HUMAN_ONLY_DENY` (read through
+      :func:`human_only_effective` — absent from FAR-609 the FAIL-SAFE
+      default is True, not False).
+    - otherwise → None.
+    """
+    if not non_browser_credential:
+        return None
+    if config is None:
+        if gate_fired:
+            return MSG_HUMAN_ONLY_UNRESOLVED
+        return None
+    if human_only_effective(config):
+        return MSG_HUMAN_ONLY_DENY
+    return None

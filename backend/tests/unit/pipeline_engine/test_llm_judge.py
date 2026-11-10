@@ -22,9 +22,9 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+import farna.core.pipeline_engine.llm_judge as llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 
 
 class _FakeBackend:
@@ -158,7 +158,7 @@ def test_resolve_model_judge_returns_none_when_hub_unavailable() -> None:
     )
 
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=None,
     ):
         assert llm_judge.resolve_model_judge_callable(eval_def) is None
@@ -172,7 +172,7 @@ def test_resolve_model_judge_builds_callable_when_hub_present() -> None:
     hub = _FakeHub('{"passed": true, "score": 0.9, "detail": "ok"}')
 
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
         judge = llm_judge.resolve_model_judge_callable(eval_def)
@@ -374,7 +374,7 @@ def test_a_typed_config_builds_the_typed_prompt_and_parses_its_verdict() -> None
 
 
 def test_an_unknown_backend_is_a_configuration_error() -> None:
-    from modulo.core.model_backend_hub import BackendNotFoundError
+    from farna.core.model_backend_hub import BackendNotFoundError
 
     backend_id = uuid.uuid4()
     judge = llm_judge.build_model_judge_callable(_RaisingHub(BackendNotFoundError(backend_id)), str(backend_id))
@@ -425,7 +425,7 @@ def test_classify_provider_exception_reuses_the_run_taxonomy(
     expected: JudgeErrorCode,
 ) -> None:
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
+        "farna.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
         lambda _message: provider_code,
     )
 
@@ -439,7 +439,7 @@ def test_classify_provider_exception_fails_open_when_the_classifier_raises(
         raise RuntimeError("classifier unavailable")
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
+        "farna.core.pipeline_engine.model_backend_errors.non_retryable_provider_code",
         _broken,
     )
 

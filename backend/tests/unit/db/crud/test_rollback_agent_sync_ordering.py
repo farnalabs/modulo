@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000ab")
@@ -94,15 +94,15 @@ def patch_rollback_collaborators() -> Any:
     """Patch the versioning module's DB/audit seams so the real body executes."""
     with (
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
+            "farna.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
             new=AsyncMock(return_value=True),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
+            "farna.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+            "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
             new=Mock(
                 return_value=SimpleNamespace(
                     weakened_edges=(),
@@ -114,15 +114,15 @@ def patch_rollback_collaborators() -> Any:
             ),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.reconcile_graph_policy_gates",
+            "farna.db.crud.pipeline_snapshot_versioning.reconcile_graph_policy_gates",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+            "farna.db.crud.pipeline_snapshot_versioning.append_audit_event",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -154,7 +154,7 @@ async def test_post_lock_gate_runs_before_the_graph_nodes_write(patch_rollback_c
         hook_calls.append((gate_target, locked_pipeline))
 
     with patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot",
+        "farna.db.crud.pipeline_snapshot_versioning.get_snapshot",
         new=AsyncMock(return_value=target),
     ):
         result = await rollback_to_snapshot(
@@ -181,7 +181,7 @@ async def test_no_hook_leaves_only_the_graph_write(patch_rollback_collaborators:
     target = _target_snapshot()
 
     with patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot",
+        "farna.db.crud.pipeline_snapshot_versioning.get_snapshot",
         new=AsyncMock(return_value=target),
     ):
         await rollback_to_snapshot(

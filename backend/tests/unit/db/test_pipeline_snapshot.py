@@ -14,11 +14,11 @@ from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, Program
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.exceptions import SnapshotLockNotAvailableError
-from modulo.core.guardrails import fingerprint_guardrail_pins
-from modulo.core.model_class_registry import ModelClassResolutionError
-from modulo.core.pipeline_engine.node_runner import _connector_inputs
-from modulo.db.crud.pipeline_snapshot import (
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.core.guardrails import fingerprint_guardrail_pins
+from farna.core.model_class_registry import ModelClassResolutionError
+from farna.core.pipeline_engine.node_runner import _connector_inputs
+from farna.db.crud.pipeline_snapshot import (
     SNAPSHOT_LOCK_ATTEMPTS,
     SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS,
     SNAPSHOT_VERSION_ATTEMPTS,
@@ -29,8 +29,8 @@ from modulo.db.crud.pipeline_snapshot import (
     inspect_snapshot_lock,
     terminate_snapshot_lock_holders,
 )
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.sqlstates import is_row_lock_timeout
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.sqlstates import is_row_lock_timeout
 
 
 def _scalar_result(value: object) -> MagicMock:
@@ -72,7 +72,7 @@ def _bind_lock_connection(session: AsyncMock, *attempts: MagicMock) -> Any:
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
+    return patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _lock_attempt_result(acquired: bool) -> MagicMock:
@@ -501,7 +501,7 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
 def test_snapshot_to_dict_serialises_max_autonomy_level() -> None:
     """FAR-1163: the clone/plain-data serializer carries the ceiling so a
     cloned pipeline never silently loses (or invents) a ceiling."""
-    from modulo.db.crud.pipeline import _snapshot_to_dict
+    from farna.db.crud.pipeline import _snapshot_to_dict
 
     snap = PipelineSnapshot(
         organisation_id=uuid.uuid4(),
@@ -568,7 +568,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
 
     with (
         lock_stub,
-        patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch("farna.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
     ):
         snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
     # The stub lock engine's connection (session.bind IS the stubbed engine).
@@ -682,7 +682,7 @@ async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
 
     with (
         lock_stub,
-        patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch("farna.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         pytest.raises(SnapshotLockNotAvailableError, match=f"after {SNAPSHOT_LOCK_ATTEMPTS} attempts"),
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -751,7 +751,7 @@ async def test_lock_connection_comes_from_a_dedicated_engine_not_the_callers_poo
         _scalars_result([]),  # policy gate rows (none bound)
     ]
 
-    with patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=lock_engine) as derive:
+    with patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=lock_engine) as derive:
         snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
@@ -783,8 +783,8 @@ async def test_unavailable_lock_source_fails_fast_as_snapshot_lock_not_available
     hanging_engine.connect = AsyncMock(side_effect=never.wait)
 
     with (
-        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=hanging_engine),
-        patch("modulo.db.crud.pipeline_snapshot._SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.05),
+        patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=hanging_engine),
+        patch("farna.db.crud.pipeline_snapshot._SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.05),
         pytest.raises(SnapshotLockNotAvailableError, match="lock source unavailable"),
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -805,7 +805,7 @@ async def test_lock_source_connect_error_is_relabelled_snapshot_lock_unavailable
     broken_engine.connect = AsyncMock(side_effect=RuntimeError("connection refused"))
 
     with (
-        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=broken_engine),
+        patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=broken_engine),
         pytest.raises(SnapshotLockNotAvailableError, match=r"lock source unavailable \(RuntimeError\)") as excinfo,
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -825,14 +825,14 @@ async def test_dedicated_lock_engine_is_null_pool_and_cached_per_url() -> None:
     ``db.session``'s shared engine. Never connects (engine construction is
     lazy), so this needs no database.
     """
-    from modulo.db.crud.pipeline_snapshot import _dedicated_lock_engine
+    from farna.db.crud.pipeline_snapshot import _dedicated_lock_engine
 
     probe_url = f"postgresql+asyncpg://probe:{uuid.uuid4().hex}@localhost/probe"
     other_url = f"postgresql+asyncpg://probe:{uuid.uuid4().hex}@localhost/other"
     source = create_async_engine(probe_url)
     other_source = create_async_engine(other_url)
     try:
-        with patch("modulo.db.crud.pipeline_snapshot.get_settings") as settings:
+        with patch("farna.db.crud.pipeline_snapshot.get_settings") as settings:
             settings.return_value.database_url = probe_url
             lock_engine = _dedicated_lock_engine(source)
 
@@ -869,7 +869,7 @@ async def test_dispose_lock_connection_reraises_cancellation() -> None:
     """A cancellation must not be swallowed while the dedicated lock connection
     is being disposed: ``asyncio.shield`` lets the dispose run to completion so
     the lock cannot leak, but the cancellation still propagates to the caller."""
-    from modulo.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
+    from farna.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
 
     lock_conn = AsyncMock()
     lock_conn.close.side_effect = asyncio.CancelledError
@@ -886,12 +886,12 @@ async def test_dispose_lock_connection_swallows_and_logs_failure(caplog: pytest.
     caller's own error — the dispose returns normally after logging."""
     import logging
 
-    from modulo.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
+    from farna.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
 
     lock_conn = AsyncMock()
     lock_conn.close.side_effect = RuntimeError("teardown boom")
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline_snapshot"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline_snapshot"):
         await _dispose_snapshot_lock_connection(lock_conn, can_pool=True)
 
     assert any("snapshot_lock_connection_dispose_failed" in record.getMessage() for record in caplog.records)
@@ -905,12 +905,12 @@ async def test_release_lock_invalidates_physical_session_when_unlock_fails(
     teardown) rather than pooled — and the failure is logged."""
     import logging
 
-    from modulo.db.crud.pipeline_snapshot import _release_snapshot_lock
+    from farna.db.crud.pipeline_snapshot import _release_snapshot_lock
 
     lock_conn = AsyncMock()
     lock_conn.execute.side_effect = RuntimeError("transport gone")
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline_snapshot"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline_snapshot"):
         await _release_snapshot_lock(lock_conn, key1=1, key2=2)
 
     lock_conn.invalidate.assert_awaited_once()
@@ -921,12 +921,12 @@ async def test_release_lock_invalidates_physical_session_when_unlock_fails(
 def test_build_lock_engine_non_postgres_skips_postgres_connect_args() -> None:
     """A non-Postgres bind (SQLite/MySQL deployments) takes none of the asyncpg
     knobs — only the shared connect timeout is passed."""
-    from modulo.db.crud.pipeline_snapshot import _build_lock_engine
+    from farna.db.crud.pipeline_snapshot import _build_lock_engine
 
     bind = MagicMock(spec=AsyncEngine)
     bind.url.drivername = "sqlite+aiosqlite"
 
-    with patch("modulo.db.crud.pipeline_snapshot.create_async_engine") as create:
+    with patch("farna.db.crud.pipeline_snapshot.create_async_engine") as create:
         sentinel = object()
         create.return_value = sentinel
         assert _build_lock_engine(bind) is sentinel
@@ -940,14 +940,14 @@ def test_build_lock_engine_skips_ssl_when_settings_url_is_not_postgres() -> None
     ``split_engine_sslmode``; a non-Postgres settings URL resolves to ``None``,
     meaning no ``ssl``/``statement_cache_size`` connect args even for a Postgres
     bind — the non-Postgres arm of the SSL guard."""
-    from modulo.db.crud.pipeline_snapshot import _build_lock_engine
+    from farna.db.crud.pipeline_snapshot import _build_lock_engine
 
     bind = MagicMock(spec=AsyncEngine)
     bind.url.drivername = "postgresql+asyncpg"
 
     with (
-        patch("modulo.db.crud.pipeline_snapshot.get_settings") as settings,
-        patch("modulo.db.crud.pipeline_snapshot.create_async_engine") as create,
+        patch("farna.db.crud.pipeline_snapshot.get_settings") as settings,
+        patch("farna.db.crud.pipeline_snapshot.create_async_engine") as create,
     ):
         settings.return_value.database_url = "sqlite+aiosqlite:///probe.db"
         sentinel = object()
@@ -1063,7 +1063,7 @@ async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly(
 
     with (
         _bind_lock_connection(session, _lock_attempt_result(True)),
-        caplog.at_level("WARNING", logger="modulo.db.crud.pipeline_snapshot"),
+        caplog.at_level("WARNING", logger="farna.db.crud.pipeline_snapshot"),
         pytest.raises(SnapshotVersionAllocationError, match="could not allocate snapshot_version") as excinfo,
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -1173,7 +1173,7 @@ async def test_zero_allocation_attempts_still_fails_loudly() -> None:
 
     with (
         _bind_lock_connection(session, _lock_attempt_result(True)),
-        patch("modulo.db.crud.pipeline_snapshot.SNAPSHOT_VERSION_ATTEMPTS", 0),
+        patch("farna.db.crud.pipeline_snapshot.SNAPSHOT_VERSION_ATTEMPTS", 0),
         pytest.raises(SnapshotVersionAllocationError) as excinfo,
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -1475,7 +1475,7 @@ async def test_mint_bakes_model_class_resolution_for_run_snapshots(
     """Resolution is provably AT MINT: the run snapshot's node metadata carries
     the baked `_resolved_model` + `_model_origin`, so every later render (and
     replay) reads the SNAPSHOT — not the live registry."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     registry_path = _write_model_class_registry(
         tmp_path,
@@ -1502,7 +1502,7 @@ async def test_mint_refuses_run_on_unknown_model_class(tmp_path: Any, monkeypatc
     the refusal raises out of mint BEFORE any snapshot row is inserted, so no
     run can start, no sandbox spins, zero cost. The message names the node and
     the class."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     registry_path = _write_model_class_registry(
         tmp_path,
@@ -1529,7 +1529,7 @@ async def test_mint_refuses_run_when_registry_missing_and_node_opts_in(
 ) -> None:
     """PROVE-THE-FIX (D3): a node that DECLARES model_class with no registry
     configured fails closed — 'missing registry' rejects the run pre-dispatch."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
     session, pipeline_id, node_id = _model_class_mint_setup("builder")
@@ -1552,7 +1552,7 @@ async def test_edit_snapshot_fails_open_when_resolution_is_impossible(
     resolution cannot run, so a missing/broken registry can never lock authors
     out of graph saves. Any run later consuming such a snapshot still fails
     closed at render (the node_runner / runner_dispatch backstop)."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
     session, pipeline_id, _node_id = _model_class_mint_setup("builder")
@@ -1573,7 +1573,7 @@ async def test_edit_snapshot_bakes_when_resolution_succeeds(tmp_path: Any, monke
     """When the registry IS available an edit snapshot bakes too — variant runs
     pin snapshots of any version_kind, so the bake must not be run-kind-only
     on the success path."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     registry_path = _write_model_class_registry(
         tmp_path,
@@ -1601,7 +1601,7 @@ async def test_mint_without_model_class_and_without_registry_leaves_nodes_untouc
 ) -> None:
     """Back-compat at the mint seam: a literal-only pipeline with no registry
     configured resolves nothing — every existing pipeline keeps working."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     monkeypatch.setattr(get_settings(), "model_class_registry_path", None)
     session, pipeline_id, _node_id = _model_class_mint_setup(None)
@@ -1621,7 +1621,7 @@ async def test_mint_does_not_bake_unreferenced_registry_intent(tmp_path: Any, mo
     must NOT receive `_resolved_model` / `_model_origin` — the registry's
     intent is not the model that ran. Before the bake gate the mint baked the
     ``pipelines_default`` class into this literal node."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     registry_path = _write_model_class_registry(
         tmp_path,

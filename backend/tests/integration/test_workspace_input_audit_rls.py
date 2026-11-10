@@ -25,15 +25,15 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from modulo.core.pipeline_engine.workspace_input_audit import (
+from farna.core.pipeline_engine.workspace_input_audit import (
     AUDIT_NODE_ID,
     WorkspaceInputAuditRecord,
     record_drift,
     record_resolved_inputs,
 )
-from modulo.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY
-from modulo.db.models.run_node_outputs import RunNodeOutput
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

@@ -28,8 +28,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult
-from modulo.core.capability_scope import (
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult
+from farna.core.capability_scope import (
     BLANK_CONNECTOR_KIND,
     ScopeViolationError,
     agent_granted_connector_types,
@@ -41,10 +41,10 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_not_blank,
     validate_allowed_connectors_subset,
 )
-from modulo.core.connector_hub import ConnectorHub, ConnectorNotFoundError
-from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
-from modulo.core.pipeline_engine.error_codes import is_retryable, map_legacy_code
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.core.connector_hub import ConnectorHub, ConnectorNotFoundError
+from farna.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from farna.core.pipeline_engine.error_codes import is_retryable, map_legacy_code
+from farna.core.secrets_backend import create_secrets_backend
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -195,7 +195,7 @@ def test_validate_capability_scopes_rejects_blank_entry_on_a_connector_node():
     """Blankness is checked BEFORE the Agent branch, so a connector node (which
     has no Agent, and which the widen check deliberately skips) is still
     refused — the guard is about the list, not about the grants."""
-    from modulo.api.routes.pipelines import PipelineGraphNode, _validate_capability_scopes
+    from farna.api.routes.pipelines import PipelineGraphNode, _validate_capability_scopes
 
     node = PipelineGraphNode.model_validate(
         {
@@ -349,7 +349,7 @@ async def test_initialise_unrestricted_default_fetches_all(tmp_path):
 
 
 def test_scope_violation_is_typed_and_metric_emitting():
-    with patch("modulo.core.capability_scope.record_scope_violation") as mock_metric:
+    with patch("farna.core.capability_scope.record_scope_violation") as mock_metric:
         # The message interpolates the structured context.
         with pytest.raises(ScopeViolationError) as exc_info:
             raise ScopeViolationError(node_id="n1", target="slack", kind="connector")
@@ -420,7 +420,7 @@ def test_check_tool_scope_no_allowed_tools_means_no_narrowing():
 def test_check_tool_scope_narrows_via_request_contextvar():
     # FAR-418: the production run path (McpAuthMiddleware -> check_tool_scope)
     # supplies allowed_tools via the request-scoped ContextVar, not the param.
-    from modulo.core.mcp.scope_validator import (
+    from farna.core.mcp.scope_validator import (
         get_request_allowed_tools,
         set_request_allowed_tools,
     )
@@ -478,7 +478,7 @@ def test_assert_no_secret_objects_rejects_connector_inside_result():
     ``records`` carry the payload. A connector object smuggled inside
     ``ConnectorResult.records`` must be rejected — the guard must descend into
     dataclass fields, not just dict/list/tuple."""
-    from modulo.connectors.base import ConnectorResult
+    from farna.connectors.base import ConnectorResult
 
     class _FakeConnector2:
         connector_type = "github"
@@ -492,7 +492,7 @@ def test_assert_no_secret_objects_rejects_connector_inside_result():
 
 def test_assert_no_secret_objects_allows_plain_result():
     """A ConnectorResult carrying only plain-serializable records is valid."""
-    from modulo.connectors.base import ConnectorResult
+    from farna.connectors.base import ConnectorResult
 
     result = assert_no_secret_objects(ConnectorResult(records=[{"ok": True}]), node_id="n1")
     # The guard is a validator: a clean payload passes without raising AND
@@ -544,7 +544,7 @@ class _FakeAgent:
 
 def _scope_node(agent_id: uuid.UUID, allowed_connectors: list[str] | None):
     """Build a PipelineGraphNode with a capability_scope for save-time tests."""
-    from modulo.api.routes.pipelines import CapabilityScope, PipelineGraphNode
+    from farna.api.routes.pipelines import CapabilityScope, PipelineGraphNode
 
     payload = {
         "id": str(uuid.uuid4()),
@@ -563,7 +563,7 @@ def test_validate_capability_scopes_rejects_widen_at_save_time():
     not granted) must be rejected. The route converts this typed
     ScopeViolationError into HTTP 422 on pipeline save."""
 
-    from modulo.api.routes.pipelines import _validate_capability_scopes
+    from farna.api.routes.pipelines import _validate_capability_scopes
 
     agent_id = uuid.uuid4()
     # Agent granted only 'github'.
@@ -575,7 +575,7 @@ def test_validate_capability_scopes_rejects_widen_at_save_time():
 def test_validate_capability_scopes_accepts_narrow_subset():
     """A node that narrows (a strict subset of the Agent's grants) is accepted."""
 
-    from modulo.api.routes.pipelines import _validate_capability_scopes
+    from farna.api.routes.pipelines import _validate_capability_scopes
 
     agent_id = uuid.uuid4()
     node = _scope_node(agent_id, ["github"])
@@ -588,7 +588,7 @@ def test_validate_capability_scopes_accepts_narrow_subset():
 def test_validate_capability_scopes_unrestricted_node_is_skipped():
     """An UNRESTRICTED node (no scope) is not subject to the widen check."""
 
-    from modulo.api.routes.pipelines import _validate_capability_scopes
+    from farna.api.routes.pipelines import _validate_capability_scopes
 
     agent_id = uuid.uuid4()
     node = _scope_node(agent_id, None)
@@ -605,7 +605,7 @@ def test_validate_capability_scopes_unrestricted_node_is_skipped():
 
 def _scope_node_with_tools(agent_id: uuid.UUID, allowed_tools: list[str] | None):
     """Build a PipelineGraphNode declaring allowed_tools in its scope."""
-    from modulo.api.routes.pipelines import CapabilityScope, PipelineGraphNode
+    from farna.api.routes.pipelines import CapabilityScope, PipelineGraphNode
 
     payload = {
         "id": str(uuid.uuid4()),
@@ -623,7 +623,7 @@ def test_validate_capability_scopes_rejects_self_tool_in_allowed_tools():
     REFUSED at save time - a pipeline node is an org-context principal and can
     never be the caller a ``.self`` tool operates on (FAR-620)."""
 
-    from modulo.api.routes.pipelines import _validate_capability_scopes
+    from farna.api.routes.pipelines import _validate_capability_scopes
 
     agent_id = uuid.uuid4()
     node = _scope_node_with_tools(agent_id, ["get_hitl_email_alerts"])
@@ -635,7 +635,7 @@ def test_validate_capability_scopes_accepts_org_tools_in_allowed_tools():
     """A node naming only org-level tools passes the .self guard (the check is
     suffix-derived from the registry, never a hardcoded list)."""
 
-    from modulo.api.routes.pipelines import _validate_capability_scopes
+    from farna.api.routes.pipelines import _validate_capability_scopes
 
     agent_id = uuid.uuid4()
     node = _scope_node_with_tools(agent_id, ["create_pipeline", "list_runs"])
@@ -646,7 +646,7 @@ def test_validate_capability_scopes_accepts_org_tools_in_allowed_tools():
 def test_validate_no_self_tools_unrestricted_passes_and_self_tool_fails():
     """The pure check: unrestricted (None) passes; a single ``.self`` tool
     fails; the error kind is ``self_tool``."""
-    from modulo.core.capability_scope import validate_no_self_tools
+    from farna.core.capability_scope import validate_no_self_tools
 
     assert validate_no_self_tools(node_id="n1", allowed_tools=None) is None
     assert validate_no_self_tools(node_id="n1", allowed_tools=[]) is None
@@ -660,8 +660,8 @@ def test_self_scoped_tools_derived_from_registry_suffix():
     """The ``.self`` set is DERIVED from TOOL_SCOPE_REQUIREMENTS values - the
     FAR-614 caller-scoped tools appear through their ``hitl_email.self``
     permission keys, with no hardcoded tool list."""
-    from modulo.core.capability_scope import self_scoped_tools
-    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, TOOL_SCOPE_REQUIREMENTS
+    from farna.core.capability_scope import self_scoped_tools
+    from farna.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, TOOL_SCOPE_REQUIREMENTS
 
     derived = self_scoped_tools()
     expected = {tool for tool, key in TOOL_SCOPE_REQUIREMENTS.items() if key.endswith(_CALLER_SCOPED_SUFFIX)}
@@ -729,8 +729,8 @@ class _StubHub:
 async def test_make_connector_fn_scope_exclusion_fails_fast():
     """A connector node whose capability_scope excludes its bound connector fails
     FAST with a typed scope.violation before the hub is ever consulted."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.node_runner import make_connector_fn
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.node_runner import make_connector_fn
 
     inst = uuid.uuid4()
     node_def = {
@@ -755,8 +755,8 @@ async def test_make_connector_fn_scope_exclusion_fails_fast():
 async def test_make_connector_fn_scope_inclusion_proceeds():
     """A connector node whose capability_scope INCLUDES its bound connector
     proceeds normally — the hub is consulted and the query runs."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.node_runner import make_connector_fn
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.node_runner import make_connector_fn
 
     inst = uuid.uuid4()
     node_def = {
@@ -779,8 +779,8 @@ async def test_make_connector_fn_scope_inclusion_proceeds():
 async def test_make_connector_fn_no_scope_uses_any_fetched():
     """No capability_scope (UNRESTRICTED default) — the node may use any
     connector the hub fetched (pre-scope behaviour), so access proceeds."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.node_runner import make_connector_fn
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.node_runner import make_connector_fn
 
     inst = uuid.uuid4()
     node_def = {
@@ -1233,7 +1233,7 @@ def test_non_dict_routed_binding_contributes_nothing(monkeypatch):
     ``.get`` on whatever it found would turn a graph shape into a failed run
     rather than an empty contribution.
     """
-    monkeypatch.setattr("modulo.connectors.base.node_routes_binding_to_connector", lambda node: True)
+    monkeypatch.setattr("farna.connectors.base.node_routes_binding_to_connector", lambda node: True)
     for binding in ("github", "not-a-dict", ["x"], 7):
         graph = {"nodes": [{"id": "conn", "node_type": "connector", "connector_binding": binding}]}
         assert compute_run_fetch_scope(graph) is None
@@ -1275,10 +1275,10 @@ async def test_run_environment_wires_fetch_scope_to_hub(tmp_path, monkeypatch):
     and secrets backend stubbed, the hub confinement logic runs for real)."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.capability_scope import compute_run_fetch_scope
-    from modulo.core.connector_hub import ConnectorNotFoundError
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.capability_scope import compute_run_fetch_scope
+    from farna.core.connector_hub import ConnectorNotFoundError
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     # --- Fake ConnectorInstance rows (no DB needed) ---
     class _CI:
@@ -1302,14 +1302,14 @@ async def test_run_environment_wires_fetch_scope_to_hub(tmp_path, monkeypatch):
         return "{}"
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
     # Declare Redis as genuinely NOT configured so the hub stays on its
     # connector-local bucket (the new FAR-439 fail-closed path raises rather than
     # constructing a shared client). A bare MagicMock makes ``redis_url`` truthy
     # and ``modulo_db.lower()`` a MagicMock, which would send the executor path
     # into ``Redis.from_url(MagicMock)`` and explode.
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
     )
 
@@ -1345,8 +1345,8 @@ async def test_run_environment_wires_fetch_scope_to_hub(tmp_path, monkeypatch):
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = lambda: _FakeSession()
     monkeypatch.setattr(executor, "_init_model_backend_hub", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
 
     org_id = uuid.uuid4()
     graph = {"nodes": [{"capability_scope": {"allowed_connectors": [str(allowed_id)]}}]}
@@ -1382,8 +1382,8 @@ async def test_run_environment_mixed_graph_narrows_to_scoped_union(tmp_path, mon
     unrestricted node loses access to connectors outside the scoped union."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     class _CI:
         def __init__(self, cid: uuid.UUID) -> None:
@@ -1405,9 +1405,9 @@ async def test_run_environment_mixed_graph_narrows_to_scoped_union(tmp_path, mon
         return "{}"
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
     )
 
@@ -1441,8 +1441,8 @@ async def test_run_environment_mixed_graph_narrows_to_scoped_union(tmp_path, mon
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = lambda: _FakeSession()
     monkeypatch.setattr(executor, "_init_model_backend_hub", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
 
     # Mixed graph: one scoped node + one unrestricted node.
     graph = {
@@ -1481,8 +1481,8 @@ async def test_fully_unrestricted_run_fetches_all(tmp_path, monkeypatch):
     is empty → ``None`` → the hub fetches every active connector."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     class _CI:
         def __init__(self, cid: uuid.UUID) -> None:
@@ -1504,9 +1504,9 @@ async def test_fully_unrestricted_run_fetches_all(tmp_path, monkeypatch):
         return "{}"
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
     )
 
@@ -1540,8 +1540,8 @@ async def test_fully_unrestricted_run_fetches_all(tmp_path, monkeypatch):
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = lambda: _FakeSession()
     monkeypatch.setattr(executor, "_init_model_backend_hub", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
 
     # Fully unrestricted run -> run fetch scope is None -> hub fetches all.
     graph = {"nodes": [{"node_type": "transform"}]}
@@ -1578,8 +1578,8 @@ async def test_run_environment_agent_grants_confine_decryption(tmp_path, monkeyp
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     class _CI:
         def __init__(self, cid: uuid.UUID, ctype: str) -> None:
@@ -1602,9 +1602,9 @@ async def test_run_environment_agent_grants_confine_decryption(tmp_path, monkeyp
         return "{}"
 
     monkeypatch.setattr(sb, "get_secret", _get_secret)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda *a, **k: sb)
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(fernet_key=_KEY, redis_url="", modulo_db="sqlite"),
     )
 
@@ -1641,8 +1641,8 @@ async def test_run_environment_agent_grants_confine_decryption(tmp_path, monkeyp
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = lambda: _FakeSession()
     monkeypatch.setattr(executor, "_init_model_backend_hub", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
 
     graph = {"nodes": [{"id": "agent-node", "node_type": "agent", "agent_id": str(agent_id)}]}
     # Sanity: the agent's grants (filesystem, github) become the run scope.
@@ -1678,7 +1678,7 @@ async def test_run_environment_agent_grants_confine_decryption(tmp_path, monkeyp
 
 
 async def _make_fake_connector() -> Any:
-    from modulo.connectors.base import ConnectorBase, ConnectorType, HealthResult
+    from farna.connectors.base import ConnectorBase, ConnectorType, HealthResult
 
     class _FakeConnector(ConnectorBase):
         @property

@@ -28,15 +28,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.routes.pipelines import _sync_agent_row_commands
-from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
-from modulo.db.crud.pipeline_snapshot import _materialize_agent_fields
-from modulo.db.models.account import Account
-from modulo.db.models.agent import Agent
-from modulo.db.models.base import Base
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
+from farna.api.routes.pipelines import _sync_agent_row_commands
+from farna.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
+from farna.db.crud.pipeline_snapshot import _materialize_agent_fields
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.base import Base
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
 
 # Scoped create_all: unrelated models use Postgres-only column types that
 # SQLite cannot render (same rationale as test_pipeline_graph_updated_audit).
@@ -176,7 +176,7 @@ class TestExplicitSaveRecordsEditSnapshot:
         new_nodes = [_node(_NODE_A, agent_commands=["run --v2"])]
 
         with patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new=AsyncMock(return_value=_mock_snapshot()),
         ) as snap_mock:
             result = await _patch_graph(session, new_nodes, [])
@@ -196,7 +196,7 @@ class TestExplicitSaveRecordsEditSnapshot:
         # proves the hook runs INSIDE the function, not after it returns.
         with (
             patch(
-                "modulo.db.crud.pipeline.create_snapshot_edit",
+                "farna.db.crud.pipeline.create_snapshot_edit",
                 new=AsyncMock(return_value=None),
             ),
             pytest.raises(RuntimeError, match="could not record its edit snapshot"),
@@ -250,7 +250,7 @@ class TestEditSnapshotMaterializesPostSyncAgentRow:
             captured["nodes"] = nodes
             return _mock_snapshot()
 
-        with patch("modulo.db.crud.pipeline.create_snapshot_edit", new=_capture):
+        with patch("farna.db.crud.pipeline.create_snapshot_edit", new=_capture):
             # Route order: FAR-488a sync FIRST, then the write mints the snapshot.
             await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=saved, pipeline_id=_PIPELINE_ID)
             await _patch_graph(session, saved, [])
@@ -265,7 +265,7 @@ class TestNoOpSuppression:
         await _seed_graph(session, nodes, with_edge=False)
 
         with patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new=AsyncMock(return_value=_mock_snapshot()),
         ) as snap_mock:
             result = await _patch_graph(session, [dict(n) for n in nodes], [])
@@ -287,7 +287,7 @@ class TestNoOpSuppression:
         ]
 
         with patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new=AsyncMock(return_value=_mock_snapshot()),
         ) as snap_mock:
             result = await _patch_graph(
@@ -313,7 +313,7 @@ class TestNoOpSuppression:
         ]
 
         with patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new=AsyncMock(return_value=_mock_snapshot()),
         ) as snap_mock:
             result = await _patch_graph(
@@ -333,7 +333,7 @@ class TestScaffoldingDefaultStaysOff:
         await _seed_graph(session, [_node(_NODE_A, agent_commands=["run --v1"])], with_edge=False)
 
         with patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new=AsyncMock(return_value=_mock_snapshot()),
         ) as snap_mock:
             result = await _patch_graph(
@@ -360,7 +360,7 @@ class TestFailClosed:
 
         with (
             patch(
-                "modulo.db.crud.pipeline.create_snapshot_edit",
+                "farna.db.crud.pipeline.create_snapshot_edit",
                 new=AsyncMock(side_effect=RuntimeError("snapshot allocation exploded")),
             ),
             pytest.raises(RuntimeError, match="snapshot allocation exploded"),
@@ -392,7 +392,7 @@ class TestSaveSurfaceWiring:
         """Drive the REAL MCP ``update_pipeline_graph`` tool through to the REAL
         CRUD (same pattern as the audit tests) and assert the hook fires — a
         call-arg assertion against a mocked CRUD would prove only the wiring."""
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         agent_id = uuid.UUID("00000000-0000-0000-0000-0000000000a9")
 
@@ -423,14 +423,14 @@ class TestSaveSurfaceWiring:
         ms._ctx_key_scope.set("org")
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server._session", _session_factory),
+                patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+                patch("farna.api.mcp_server._session", _session_factory),
                 patch(
-                    "modulo.core.team_visibility.find_connector_team_mismatches",
+                    "farna.core.team_visibility.find_connector_team_mismatches",
                     new=AsyncMock(return_value=[]),
                 ),
                 patch(
-                    "modulo.db.crud.pipeline.create_snapshot_edit",
+                    "farna.db.crud.pipeline.create_snapshot_edit",
                     new=AsyncMock(return_value=_mock_snapshot()),
                 ) as snap_mock,
             ):
@@ -463,7 +463,7 @@ class TestSaveSurfaceWiring:
         through to the REAL CRUD (no mocked write) and capturing the materialized
         snapshot payload, this fails when the MCP sync is removed.
         """
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         agent_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
         session.add(
@@ -516,13 +516,13 @@ class TestSaveSurfaceWiring:
         ms._ctx_key_scope.set("org")
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server._session", _session_factory),
+                patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+                patch("farna.api.mcp_server._session", _session_factory),
                 patch(
-                    "modulo.core.team_visibility.find_connector_team_mismatches",
+                    "farna.core.team_visibility.find_connector_team_mismatches",
                     new=AsyncMock(return_value=[]),
                 ),
-                patch("modulo.db.crud.pipeline.create_snapshot_edit", new=_capture),
+                patch("farna.db.crud.pipeline.create_snapshot_edit", new=_capture),
             ):
                 result = await ms.update_pipeline_graph(
                     pipeline_id=str(_PIPELINE_ID),
@@ -552,7 +552,7 @@ _VALID_32 = "a" * 32
 
 
 def _make_settings() -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -566,10 +566,10 @@ def _make_settings() -> Any:
 def rest_client() -> Any:
     from fastapi.testclient import TestClient
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
     from tests.unit.api.mock_session import configure_mock_session
 
     mock_session = configure_mock_session(AsyncMock())
@@ -621,13 +621,13 @@ def test_put_graph_endpoint_records_edit_snapshot(rest_client: Any) -> None:
     validation.issues = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as crud_mock,
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as crud_mock,
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = rest_client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",

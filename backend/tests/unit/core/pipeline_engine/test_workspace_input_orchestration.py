@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.pipeline_engine.workspace_input_orchestration import (
+from farna.core.pipeline_engine.workspace_input_orchestration import (
     DriftResult,
     ProvisioningError,
     ResolvedInput,
@@ -33,8 +33,8 @@ from modulo.core.pipeline_engine.workspace_input_orchestration import (
     provision_workspace_inputs_in_sandbox,
     resolve_managed_inputs_host_side,
 )
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.secret import Secret
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.secret import Secret
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,7 +175,7 @@ class TestResolveRefWithRetry:
     @pytest.mark.asyncio
     async def test_branch_resolution(self) -> None:
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+            "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
             new_callable=AsyncMock,
             return_value=_FAKE_LS_REMOTE_OUTPUT,
         ):
@@ -189,11 +189,11 @@ class TestResolveRefWithRetry:
 
     @pytest.mark.asyncio
     async def test_ref_not_found_raises(self) -> None:
-        from modulo.core.pipeline_engine.workspace_inputs import RefResolutionError
+        from farna.core.pipeline_engine.workspace_inputs import RefResolutionError
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
                 new_callable=AsyncMock,
                 return_value=_FAKE_LS_REMOTE_OUTPUT,
             ),
@@ -218,7 +218,7 @@ class TestResolveRefWithRetry:
             return _FAKE_LS_REMOTE_OUTPUT
 
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+            "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
             side_effect=_failing_then_ok,
         ):
             result = await _resolve_ref_with_retry(
@@ -237,7 +237,7 @@ class TestResolveRefWithRetry:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
                 side_effect=_always_failing,
             ),
             pytest.raises(ConnectionError),
@@ -269,7 +269,7 @@ class TestResolveManagedInputsHostSide:
     async def test_branch_resolution(self) -> None:
         inputs = [_make_input(kind="branch", value="main")]
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+            "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
             new_callable=AsyncMock,
             return_value=_FAKE_LS_REMOTE_OUTPUT,
         ):
@@ -282,7 +282,7 @@ class TestResolveManagedInputsHostSide:
         """Annotated tags resolve to the peeled (underlying commit) SHA."""
         inputs = [_make_input(kind="tag", value="v1.0")]
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+            "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
             new_callable=AsyncMock,
             return_value=_FAKE_LS_REMOTE_OUTPUT,
         ):
@@ -294,7 +294,7 @@ class TestResolveManagedInputsHostSide:
         inputs = [_make_input(kind="branch", value="nonexistent")]
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
                 new_callable=AsyncMock,
                 return_value=_FAKE_LS_REMOTE_OUTPUT,
             ),
@@ -309,7 +309,7 @@ class TestResolveManagedInputsHostSide:
         inputs = [_make_input(kind="branch", value="main")]
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
                 new_callable=AsyncMock,
                 side_effect=ConnectionError("network down"),
             ),
@@ -342,7 +342,7 @@ class TestResolveManagedInputsHostSide:
             ),
         ]
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+            "farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
             new_callable=AsyncMock,
             return_value=_FAKE_LS_REMOTE_OUTPUT,
         ):
@@ -599,7 +599,7 @@ async def test_resolve_ref_with_retry_non_transient_raises_immediately(monkeypat
     async def _boom(_url: str) -> str:
         raise ValueError("malformed url")
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", _boom)
+    monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", _boom)
     with pytest.raises(ValueError, match="malformed url"):
         await _resolve_ref_with_retry("https://github.com/o/r.git", "branch", "main")
 
@@ -611,7 +611,7 @@ async def test_resolve_managed_inputs_unexpected_ref_error_is_permanent(monkeypa
     async def _boom(_url: str, _kind: str, _value: str, *, max_retries: int = 2) -> str:
         raise RuntimeError("unexpected git failure")
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry", _boom)
+    monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry", _boom)
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "ref": {"kind": "branch", "value": "main"}}],
@@ -683,20 +683,20 @@ async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatc
     credential scripts are threaded onto the ResolvedInput (FAR-800 lines 286-322)."""
     fake_cred = MagicMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=fake_cred),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("CRED_SETUP", "CRED_TEARDOWN")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     # Stub the read-only assertion to pass (SSH key → auto-accepted).
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        "farna.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
         AsyncMock(),
     )
     factory = _make_factory
@@ -713,18 +713,18 @@ async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatc
 async def test_resolve_managed_inputs_credential_resolution_error_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
     """A CredentialResolutionError during credential resolution maps to a
     permanent (retryable=False) ProvisioningError (FAR-800 lines 298-303)."""
-    from modulo.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
+    from farna.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(side_effect=CredentialResolutionError("no such connector")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("", "")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _make_factory
@@ -741,15 +741,15 @@ async def test_resolve_managed_inputs_credential_resolution_error_permanent(monk
 async def test_resolve_managed_inputs_credential_transient_error_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
     """A transient credential-resolution error classifies as retryable (FAR-800 lines 304-310)."""
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(side_effect=ConnectionError("db down")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("", "")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _make_factory
@@ -767,15 +767,15 @@ async def test_resolve_managed_inputs_credential_unexpected_error_permanent(monk
     """A non-transient, non-CredentialResolution error during credential
     resolution classifies as permanent (FAR-800 lines 311-315)."""
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(side_effect=ValueError("unexpected")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("", "")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _make_factory
@@ -858,12 +858,12 @@ async def test_connector_backed_input_derives_url_from_github_config(
     GitHub connector's stored config (repo + base_url) — FAR-800 follow-up Gap 1."""
     fake_ci = _FakeCi("github", {"repo": "org/repo", "base_url": "https://api.github.com"})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     # Also mock credential resolution (the connector_instance_id triggers it).
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=None),
     )
     factory = _FactoryForUrl(fake_ci)
@@ -888,11 +888,11 @@ async def test_connector_backed_input_strips_trailing_slash(
     """Trailing slash on the repo config key is stripped before appending .git."""
     fake_ci = _FakeCi("github", {"repo": "org/repo/", "base_url": "https://api.github.com"})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=None),
     )
     factory = _FactoryForUrl(fake_ci)
@@ -958,7 +958,7 @@ async def test_connector_backed_input_unsupported_type_raises(
     """A connector type without URL derivation raises ProvisioningError."""
     fake_ci = _FakeCi("slack", {"webhook_url": "https://hooks.slack.com/..."})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _FactoryForUrl(fake_ci)
@@ -982,11 +982,11 @@ async def test_connector_backed_input_derives_url_ghe_base_url(
     """A GitHub Enterprise base_url reuses the same host for the clone URL."""
     fake_ci = _FakeCi("github", {"repo": "acme/widgets", "base_url": "https://ghe.acme.com/api/v3"})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=None),
     )
     factory = _FactoryForUrl(fake_ci)
@@ -1010,7 +1010,7 @@ async def test_connector_backed_input_missing_repo_raises(
     """A github connector without a 'repo' key cannot derive a clone URL."""
     fake_ci = _FakeCi("github", {"base_url": "https://api.github.com"})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _FactoryForUrl(fake_ci)
@@ -1041,20 +1041,20 @@ async def test_read_only_credential_assertion_called_when_http_client_provided(
     fake_cred = MagicMock()
     fake_cred.kind = "ssh"
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=fake_cred),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("SETUP", "TEARDOWN")),
     )
     mock_assert = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        "farna.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
         mock_assert,
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     fake_http = MagicMock()
@@ -1075,20 +1075,20 @@ async def test_read_only_credential_assertion_skipped_without_http_client(
     """When http_client is None, the assertion is NOT called (backward compat)."""
     fake_cred = MagicMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=fake_cred),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("SETUP", "TEARDOWN")),
     )
     mock_assert = AsyncMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        "farna.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
         mock_assert,
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _make_factory
@@ -1106,23 +1106,23 @@ async def test_read_only_credential_assertion_failure_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When the credential assertion fails (push-capable token), raises ProvisioningError."""
-    from modulo.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
+    from farna.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
 
     fake_cred = MagicMock()
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=fake_cred),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        "farna.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
         MagicMock(return_value=("SETUP", "TEARDOWN")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        "farna.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
         AsyncMock(side_effect=CredentialResolutionError("token is push-capable")),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     factory = _make_factory
@@ -1230,11 +1230,11 @@ async def test_connector_tenancy_rejects_cross_org_connector(monkeypatch: pytest
     review finding. The check filters ``ConnectorInstance.organisation_id ==
     org_id`` explicitly rather than relying on caller RLS."""
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=None),
     )
     factory = _TenancyFactory(connector_org="org-other", request_org=_REQUEST_ORG)
@@ -1255,11 +1255,11 @@ async def test_connector_tenancy_rejects_cross_org_connector(monkeypatch: pytest
 async def test_connector_tenancy_allows_same_org_connector(monkeypatch: pytest.MonkeyPatch) -> None:
     """A connector owned by the SAME org passes the tenancy check."""
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         AsyncMock(return_value=None),
     )
     factory = _TenancyFactory(connector_org=_REQUEST_ORG, request_org=_REQUEST_ORG)
@@ -1411,7 +1411,7 @@ async def test_credential_resolves_from_secrets_backend_under_rls_context(
     settings.fernet_key = _VAULT_FERNET_KEY
 
     with patch(
-        "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+        "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
         return_value=settings,
     ):
         resolved = await resolve_managed_inputs_host_side(
@@ -1452,10 +1452,10 @@ async def test_set_rls_org_awaited_on_session_before_clone_credential_resolution
         resolve_sessions.append(session)
         sequence.append("resolve_clone_credential")
 
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", _spy_set_rls_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", _spy_set_rls_execution_context)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", _spy_set_rls_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", _spy_set_rls_execution_context)
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
         _spy_resolve,
     )
 

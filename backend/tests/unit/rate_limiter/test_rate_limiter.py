@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from tests.unit.rate_limiter.helpers import make_redis_client
 
-from modulo.core.rate_limiter import (
+from farna.core.rate_limiter import (
     WINDOW_SECONDS,
     RateLimiterRegistry,
     RateLimitRule,

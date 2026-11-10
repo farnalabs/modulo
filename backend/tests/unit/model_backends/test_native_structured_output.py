@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from modulo.model_backends.base import ModelBackendBase
+from farna.model_backends.base import ModelBackendBase
 
 # ---------------------------------------------------------------------------
 # Reusable test double (FAR-898, reused by FAR-899..902)
@@ -89,12 +89,12 @@ class TestFlagDeclaration:
         assert ModelBackendBase.supports_native_structured_output is False
 
     def test_openai_compatible_backend_flag(self) -> None:
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
         assert OpenAICompatibleBackend.supports_native_structured_output is True
 
     def test_anthropic_backend_flag(self) -> None:
-        from modulo.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.anthropic import AnthropicBackend
 
         assert AnthropicBackend.supports_native_structured_output is True
 
@@ -113,7 +113,7 @@ class TestFlagDeclaration:
         import importlib
         import pkgutil
 
-        import modulo.model_backends as mb_pkg
+        import farna.model_backends as mb_pkg
 
         # Force-import every module in model_backends/ so all subclasses register.
         for _importer, modname, _ispkg in pkgutil.walk_packages(mb_pkg.__path__, prefix=mb_pkg.__name__ + "."):
@@ -123,7 +123,7 @@ class TestFlagDeclaration:
         # declaration. Indirect subclasses (e.g. OpenCodeBackend extends
         # OpenAICompatibleBackend) inherit from their parent and are fine.
         direct = [
-            cls for cls in ModelBackendBase.__subclasses__() if cls.__module__.startswith("modulo.model_backends.")
+            cls for cls in ModelBackendBase.__subclasses__() if cls.__module__.startswith("farna.model_backends.")
         ]
         assert len(direct) > 0, "Expected at least one direct ModelBackendBase subclass"
 
@@ -147,7 +147,7 @@ class TestKwargForwarding:
         """
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
         assert backend.supports_native_structured_output is False
@@ -158,7 +158,7 @@ class TestKwargForwarding:
 
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -175,7 +175,7 @@ class TestKwargForwarding:
         """output_schema_json=None → no kwarg forwarded."""
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
 
@@ -184,7 +184,7 @@ class TestKwargForwarding:
                 return backend
 
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -200,7 +200,7 @@ class TestKwargForwarding:
         """Omitting output_schema_json entirely → no kwarg forwarded."""
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
 
@@ -209,7 +209,7 @@ class TestKwargForwarding:
                 return backend
 
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -224,7 +224,7 @@ class TestKwargForwarding:
         """When flag=True and schema is supplied, the backend sees it."""
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
         backend.supports_native_structured_output = True
@@ -235,7 +235,7 @@ class TestKwargForwarding:
 
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -275,11 +275,11 @@ class TestOpenAIStructuredOutputMechanism:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
@@ -312,9 +312,9 @@ class TestOpenAIStructuredOutputMechanism:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_chat.ainvoke = AsyncMock(return_value=AIMessage(content="{}"))
             mock_chat_cls.return_value = mock_chat
@@ -337,7 +337,7 @@ class TestEmptyDictSchemaGuard:
         """An empty dict {} is treated as 'no schema' — no kwarg forwarded."""
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
         backend.supports_native_structured_output = True
@@ -347,7 +347,7 @@ class TestEmptyDictSchemaGuard:
                 return backend
 
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -373,11 +373,11 @@ class TestHubCapabilityOverride:
         """An ollama provider's backend must have flag=False after _build_backend."""
         from unittest.mock import MagicMock, patch
 
-        from modulo.core.model_backend_hub import _build_backend
+        from farna.core.model_backend_hub import _build_backend
 
         mock_creds = {"api_key": "unused"}
 
-        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+        with patch("farna.model_backends.module.OpenAICompatibleBackend") as mock_backend:
             instance = MagicMock()
             instance.supports_native_structured_output = True
             mock_backend.return_value = instance
@@ -390,11 +390,11 @@ class TestHubCapabilityOverride:
         """An openai provider's backend keeps flag=True after _build_backend."""
         from unittest.mock import MagicMock, patch
 
-        from modulo.core.model_backend_hub import _build_backend
+        from farna.core.model_backend_hub import _build_backend
 
         mock_creds = {"api_key": "sk-test"}
 
-        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+        with patch("farna.model_backends.module.OpenAICompatibleBackend") as mock_backend:
             instance = MagicMock()
             instance.supports_native_structured_output = True
             mock_backend.return_value = instance
@@ -411,11 +411,11 @@ class TestHubCapabilityOverride:
         """Every provider in _NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS gets flag=False."""
         from unittest.mock import MagicMock, patch
 
-        from modulo.core.model_backend_hub import _build_backend
+        from farna.core.model_backend_hub import _build_backend
 
         mock_creds = {"api_key": "unused"}
 
-        with patch("modulo.model_backends.module.OpenAICompatibleBackend") as mock_backend:
+        with patch("farna.model_backends.module.OpenAICompatibleBackend") as mock_backend:
             instance = MagicMock()
             instance.supports_native_structured_output = True
             mock_backend.return_value = instance
@@ -434,7 +434,7 @@ class TestSchemaBounds:
     """FIX 6 (MAJOR): _is_safe_schema rejects invalid schemas before dispatch."""
 
     def test_valid_schema_passes(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         ok, reason = _is_safe_schema(schema)
@@ -442,14 +442,14 @@ class TestSchemaBounds:
         assert reason == ""
 
     def test_non_dict_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         ok, reason = _is_safe_schema("not a dict")  # type: ignore[arg-type]
         assert ok is False
         assert "not a dict" in reason
 
     def test_non_serialisable_schema_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         schema: dict[str, Any] = {"type": "object", "value": object()}
         ok, reason = _is_safe_schema(schema)
@@ -457,7 +457,7 @@ class TestSchemaBounds:
         assert "JSON-serialisable" in reason
 
     def test_circular_schema_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         schema: dict[str, Any] = {"type": "object"}
         schema["self"] = schema
@@ -466,7 +466,7 @@ class TestSchemaBounds:
         assert "JSON-serialisable" in reason
 
     def test_oversized_schema_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         # Build a schema that serialises to > 100 KB
         big_value = "x" * 200_000
@@ -476,7 +476,7 @@ class TestSchemaBounds:
         assert "bytes" in reason
 
     def test_too_deep_schema_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         # Build a schema with nesting depth > 10
         schema: dict[str, Any] = {}
@@ -489,7 +489,7 @@ class TestSchemaBounds:
         assert "depth" in reason
 
     def test_external_ref_rejected(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         schema = {"type": "object", "definitions": {"Foo": {"$ref": "https://example.com/schema.json#/Foo"}}}
         ok, reason = _is_safe_schema(schema)
@@ -497,7 +497,7 @@ class TestSchemaBounds:
         assert "external $ref" in reason
 
     def test_local_ref_allowed(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _is_safe_schema
+        from farna.core.pipeline_engine.node_runner import _is_safe_schema
 
         schema = {"type": "object", "definitions": {"Foo": {"$ref": "#/definitions/Foo"}}}
         ok, _reason = _is_safe_schema(schema)
@@ -507,7 +507,7 @@ class TestSchemaBounds:
         """An oversized schema is caught by bounds check and not sent to provider."""
         from unittest.mock import patch
 
-        from modulo.core.pipeline_engine import node_runner as nr
+        from farna.core.pipeline_engine import node_runner as nr
 
         backend = FakeStructuredOutputBackend()
         backend.supports_native_structured_output = True
@@ -519,7 +519,7 @@ class TestSchemaBounds:
         big_value = "x" * 200_000
         schema: dict[str, Any] = {"type": "object", "data": big_value}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=_FakeHub(),
         ):
             await nr._invoke_node_model(
@@ -542,7 +542,7 @@ class TestSerializeStructuredOutput:
     """serialize_structured_output keeps the json.loads(content) round-trip."""
 
     def test_dict_round_trips(self) -> None:
-        from modulo.model_backends.base import serialize_structured_output
+        from farna.model_backends.base import serialize_structured_output
 
         message = serialize_structured_output({"a": 1, "b": [2, 3]})
         assert json.loads(message.content) == {"a": 1, "b": [2, 3]}
@@ -550,7 +550,7 @@ class TestSerializeStructuredOutput:
     def test_pydantic_model_round_trips(self) -> None:
         from pydantic import BaseModel
 
-        from modulo.model_backends.base import serialize_structured_output
+        from farna.model_backends.base import serialize_structured_output
 
         class _Out(BaseModel):
             name: str
@@ -560,14 +560,14 @@ class TestSerializeStructuredOutput:
         assert json.loads(message.content) == {"name": "x", "count": 2}
 
     def test_list_round_trips(self) -> None:
-        from modulo.model_backends.base import serialize_structured_output
+        from farna.model_backends.base import serialize_structured_output
 
         message = serialize_structured_output([{"a": 1}, {"b": 2}])
         assert json.loads(message.content) == [{"a": 1}, {"b": 2}]
 
     def test_non_dict_fallback_round_trips_as_string(self) -> None:
         """A non-dict/non-BaseModel result is str()-wrapped so loads never raises."""
-        from modulo.model_backends.base import serialize_structured_output
+        from farna.model_backends.base import serialize_structured_output
 
         message = serialize_structured_output(42)
         assert json.loads(message.content) == "42"
@@ -604,9 +604,9 @@ class TestOpenAICompatibleTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice", "age": 30})
@@ -637,13 +637,13 @@ class TestOpenAICompatibleTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
         original_schema = dict(_TITLELESS_SCHEMA)  # shallow copy for safety
         original_schema["properties"] = dict(_TITLELESS_SCHEMA["properties"])
         schema_copy = json.loads(json.dumps(original_schema))
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Bob"})
@@ -669,9 +669,9 @@ class TestOpenAICompatibleTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
@@ -698,9 +698,9 @@ class TestOpenAICompatibleTitleInjection:
 
         from langchain_core.messages import AIMessage, HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             # with_structured_output raises ValueError (simulating the bug)
             mock_chat.with_structured_output = MagicMock(side_effect=ValueError("Unsupported function"))
@@ -727,11 +727,11 @@ class TestOpenAICompatibleTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.module import OpenAICompatibleBackend
 
         schema_with_title = {**_TITLELESS_SCHEMA, "title": "MyCustomTitle"}
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
@@ -760,8 +760,8 @@ class TestOpenAICompatibleTitleInjection:
         from langchain_core.messages import HumanMessage
         from openai import APIStatusError
 
-        from modulo.model_backends.base import ProviderUnavailableError
-        from modulo.model_backends.module import OpenAICompatibleBackend
+        from farna.model_backends.base import ProviderUnavailableError
+        from farna.model_backends.module import OpenAICompatibleBackend
 
         request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
         server_error = APIStatusError(
@@ -770,7 +770,7 @@ class TestOpenAICompatibleTitleInjection:
             body={"error": {"message": "boom"}},
         )
 
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat_cls:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(side_effect=server_error)
@@ -798,9 +798,9 @@ class TestAnthropicTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.anthropic import AnthropicBackend
 
-        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+        with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
@@ -823,11 +823,11 @@ class TestAnthropicTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.anthropic import AnthropicBackend
 
         original_schema = json.loads(json.dumps(_TITLELESS_SCHEMA))
 
-        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+        with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Bob"})
@@ -853,11 +853,11 @@ class TestAnthropicTitleInjection:
 
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.anthropic import AnthropicBackend
 
         schema_with_title = {**_TITLELESS_SCHEMA, "title": "MyCustomTitle"}
 
-        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+        with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(return_value={"name": "Alice"})
@@ -881,9 +881,9 @@ class TestAnthropicTitleInjection:
 
         from langchain_core.messages import AIMessage, HumanMessage
 
-        from modulo.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.anthropic import AnthropicBackend
 
-        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+        with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_chat.with_structured_output = MagicMock(side_effect=ValueError("Unsupported function"))
             mock_chat.ainvoke = AsyncMock(return_value=AIMessage(content="fallback"))
@@ -906,8 +906,8 @@ class TestAnthropicTitleInjection:
         from anthropic import APIStatusError as AnthropicAPIStatusError
         from langchain_core.messages import HumanMessage
 
-        from modulo.model_backends.anthropic import AnthropicBackend
-        from modulo.model_backends.base import ProviderUnavailableError
+        from farna.model_backends.anthropic import AnthropicBackend
+        from farna.model_backends.base import ProviderUnavailableError
 
         request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
         server_error = AnthropicAPIStatusError(
@@ -916,7 +916,7 @@ class TestAnthropicTitleInjection:
             body={"error": {"message": "boom"}},
         )
 
-        with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
+        with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat_cls:
             mock_chat = MagicMock()
             mock_structured = AsyncMock()
             mock_structured.ainvoke = AsyncMock(side_effect=server_error)

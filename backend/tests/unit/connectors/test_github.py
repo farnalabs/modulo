@@ -8,8 +8,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.github import (
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.github import (
     GitHubConnector,
     _parse_rate_limit_reset,
     _rate_limit_detail,

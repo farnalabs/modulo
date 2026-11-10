@@ -26,14 +26,14 @@ from typing import Any, Self
 
 import pytest
 
-from modulo.core.pipeline_execution import (
+from farna.core.pipeline_execution import (
     _SQL_SET_ORG_ID,
     _record_node_deadline_watchdog_firing,
 )
 
 _RUN_ID = "7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f"
 _ORG_ID = "8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-_LOGGER = "modulo.core.pipeline_execution"
+_LOGGER = "farna.core.pipeline_execution"
 
 
 class _FakeResult:

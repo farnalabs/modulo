@@ -10,10 +10,10 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
-from modulo.core.runtime_config.store import RuntimeConfigStore
-from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled, toggle_telemetry
-from modulo.otel_bridge.export import setup_otel
-from modulo.settings import Settings, get_settings
+from farna.core.runtime_config.store import RuntimeConfigStore
+from farna.core.runtime_config.telemetry_bridge import is_telemetry_enabled, toggle_telemetry
+from farna.otel_bridge.export import setup_otel
+from farna.settings import Settings, get_settings
 from tests.unit.otel_bridge.conftest import span_processors
 
 # Minimum env a Settings() instance accepts — hoisted so the settings-based
@@ -57,14 +57,14 @@ class TestTelemetryDefaults:
 
     def test_disabled_stdout_exporter_not_used(self):
         """When disabled, the ConsoleSpanExporter must not be instantiated."""
-        with patch("modulo.otel_bridge.export.ConsoleSpanExporter") as mock_console:
+        with patch("farna.otel_bridge.export.ConsoleSpanExporter") as mock_console:
             setup_otel(telemetry_enabled=False)
         mock_console.assert_not_called()
 
     def test_disabled_otlp_exporter_not_used(self, monkeypatch: pytest.MonkeyPatch):
         """When disabled, OTLP must not be configured even with endpoint set."""
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
+        with patch("farna.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=False)
         mock_otlp.assert_not_called()
 
@@ -90,7 +90,7 @@ class TestTelemetryEnabled:
 
     def test_enabled_instantiates_console_exporter(self):
         """When enabled, the ConsoleSpanExporter should be constructed."""
-        with patch("modulo.otel_bridge.export.ConsoleSpanExporter") as mock_console:
+        with patch("farna.otel_bridge.export.ConsoleSpanExporter") as mock_console:
             setup_otel(telemetry_enabled=True)
         mock_console.assert_called_once()
 
@@ -105,14 +105,14 @@ class TestTelemetryEnabled:
     def test_otlp_not_configured_without_env(self, monkeypatch: pytest.MonkeyPatch):
         """OTLP exporter should not be configured when env var is absent."""
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
+        with patch("farna.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_not_called()
 
     def test_otlp_configured_with_env(self, monkeypatch: pytest.MonkeyPatch):
         """OTLP exporter should be constructed when endpoint env var is set."""
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-        with patch("modulo.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
+        with patch("farna.otel_bridge.export.OTLPSpanExporter") as mock_otlp:
             setup_otel(telemetry_enabled=True)
         mock_otlp.assert_called_once()
 
@@ -155,14 +155,14 @@ class TestIsTelemetryEnabled:
         """When the runtime config store is not initialised, falls back to Settings."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
 
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
+        with patch("farna.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
 
     def test_non_runtime_error_propagates(self):
         """Non-RuntimeError exceptions from the store must propagate (not be swallowed)."""
         with (
             patch(
-                "modulo.core.runtime_config.store.get_runtime_config_store",
+                "farna.core.runtime_config.store.get_runtime_config_store",
                 side_effect=ValueError("bad config"),
             ),
             pytest.raises(ValueError, match="bad config"),
@@ -178,7 +178,7 @@ class TestIsTelemetryEnabled:
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+        with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
     def test_store_false_overrides_env_true(
@@ -190,7 +190,7 @@ class TestIsTelemetryEnabled:
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "false")
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+        with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is False
 
     def test_store_clear_falls_back_to_env(
@@ -203,7 +203,7 @@ class TestIsTelemetryEnabled:
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
         store.clear_override("MODULO_TELEMETRY_ENABLED")
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+        with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
     def test_store_none_value_falls_back_to_settings(
@@ -221,7 +221,7 @@ class TestIsTelemetryEnabled:
         store = RuntimeConfigStore()
         with (
             patch.object(store, "get", return_value=None),
-            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store),
         ):
             assert is_telemetry_enabled() is True
 
@@ -249,9 +249,9 @@ class TestToggleTelemetry:
 
         store = RuntimeConfigStore()
         with (
-            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
-            patch("modulo.otel_bridge.export.setup_otel") as mock_setup,
-            patch("modulo.settings.get_settings") as mock_settings,
+            patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("farna.otel_bridge.export.setup_otel") as mock_setup,
+            patch("farna.settings.get_settings") as mock_settings,
         ):
             mock_settings.return_value.modulo_otel_service_name = "test-svc"
             toggle_telemetry(enabled)
@@ -264,9 +264,9 @@ class TestToggleTelemetry:
 
         store = RuntimeConfigStore()
         with (
-            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
-            patch("modulo.otel_bridge.export.setup_otel"),
-            patch("modulo.settings.get_settings") as mock_settings,
+            patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store),
+            patch("farna.otel_bridge.export.setup_otel"),
+            patch("farna.settings.get_settings") as mock_settings,
         ):
             mock_settings.return_value.modulo_otel_service_name = "test-svc"
             toggle_telemetry(True)

@@ -2,7 +2,7 @@
 
 import uuid
 
-from modulo.core.composite_engine.composite_binding import CompositeBinding
+from farna.core.composite_engine.composite_binding import CompositeBinding
 
 
 class TestCompositeBinding:

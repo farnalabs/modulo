@@ -41,7 +41,7 @@ _EXPECTED_PARAMS = {
 
 
 def _create_pipeline_schema() -> dict[str, Any]:
-    from modulo.api.mcp_server import mcp
+    from farna.api.mcp_server import mcp
 
     return dict(mcp._tool_manager._tools["create_pipeline"].parameters)  # type: ignore[attr-defined]
 

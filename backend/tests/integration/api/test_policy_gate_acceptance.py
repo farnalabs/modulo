@@ -31,7 +31,7 @@ Coverage map (internal spec section 7; criteria numbering only):
 * criterion 18 version bumps 1→2→3 monotonically with pre_version_raw snapshot
 
 White-box facts used below (verified against
-``backend/src/modulo/api/routes/evals.py``): routes mount under ``/api/v1``,
+``backend/src/farna/api/routes/evals.py``): routes mount under ``/api/v1``,
 POST→201, PUT/GET→200, DELETE→204, binding 400 detail =
 ``Policy gate binding is invalid. Check the eval configuration.``
 """
@@ -49,9 +49,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import get_settings
-from modulo.auth.passwords import hash_password
-from modulo.settings import Settings
+from farna.api.dependencies import get_settings
+from farna.auth.passwords import hash_password
+from farna.settings import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -64,7 +64,7 @@ _MSG_EVAL_NOT_FOUND = "Eval definition not found"
 _MSG_GATE_NOT_FOUND = "Policy gate not found for this eval"
 _MSG_BINDING_400 = "Policy gate binding is invalid. Check the eval configuration."
 _VIOLATION_LOG_MSG = "Policy gate binding violation"
-_EVALS_LOGGER = "modulo.api.routes.evals"
+_EVALS_LOGGER = "farna.api.routes.evals"
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +225,8 @@ async def _audit_event_types(engine: AsyncEngine, org_id: uuid.UUID, resource_id
 
 @pytest_asyncio.fixture
 async def client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
 
     settings = Settings(
         database_url=db_url,
@@ -536,7 +536,7 @@ async def test_pg_spec_c10_recreate_after_delete_leaves_single_live_gate(
 
 
 def _principal(env: _Env) -> object:
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.auth.jwt import TenantPrincipal
 
     return TenantPrincipal(
         username="pg6-acceptance-admin",
@@ -559,7 +559,7 @@ async def test_pg_spec_c11_concurrent_creates_serialize_via_advisory_lock(db_eng
     serialises them so each later writer observes the committed live gate and
     is refused with HTTP 409 rather than racing the partial-unique index.
     """
-    from modulo.api.routes import evals as evals_module  # local import; avoid app import at module scope
+    from farna.api.routes import evals as evals_module  # local import; avoid app import at module scope
 
     node_id = uuid.uuid4()
     eval_id = await _seed_eval(
@@ -602,7 +602,7 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without the advisory lock the second writer hits the partial-unique index."""
-    from modulo.api.routes import evals as evals_module
+    from farna.api.routes import evals as evals_module
 
     node_id = uuid.uuid4()
     eval_id = await _seed_eval(
@@ -757,7 +757,7 @@ def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str,
     assertion below fails loudly, naming the fields, if the model gains or
     loses one.
     """
-    from modulo.api.routes.evals import PolicyGateUpdateRequest  # local import; avoid app import at module scope
+    from farna.api.routes.evals import PolicyGateUpdateRequest  # local import; avoid app import at module scope
 
     pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
     model_fields = list(PolicyGateUpdateRequest.model_fields)

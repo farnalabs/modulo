@@ -11,8 +11,8 @@ Two layers of guard:
    ``execution_origin`` (``reported`` for dispatched, ``None`` otherwise).
 
 2. **The surface set** (structural, replacing the hand-enumerated list of
-   surfaces): an AST scan of ``src/modulo/api/**`` and
-   ``src/modulo/core/pipeline_engine/**`` asserts, mechanically rather than by
+   surfaces): an AST scan of ``src/farna/api/**`` and
+   ``src/farna/core/pipeline_engine/**`` asserts, mechanically rather than by
    prose or by a maintained list, that
 
    * no surface hand-writes the ``execution_origin`` key/keyword — every value
@@ -41,11 +41,11 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-from modulo.core.run_provenance import run_provenance_fields
+from farna.core.run_provenance import run_provenance_fields
 from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parents[3]
-_SRC = _BACKEND / "src" / "modulo"
+_SRC = _BACKEND / "src" / "farna"
 
 # The run-rendering layers: every REST/MCP/dashboard/slack/lifecycle surface
 # lives under api/, the run-keyed audit payloads under core/pipeline_engine/.
@@ -184,9 +184,9 @@ def test_the_structural_scan_sees_the_expected_surface_layers() -> None:
     claims to (a silently-empty scope would make both checks vacuous)."""
     scanned = [_rel(p) for p in _scope_files()]
     assert scanned, "structural scan found no source files"
-    assert any(p.startswith("src/modulo/api/routes/") for p in scanned)
-    assert any(p == "src/modulo/api/mcp_server.py" for p in scanned)
-    assert any(p.startswith("src/modulo/core/pipeline_engine/") for p in scanned)
+    assert any(p.startswith("src/farna/api/routes/") for p in scanned)
+    assert any(p == "src/farna/api/mcp_server.py" for p in scanned)
+    assert any(p.startswith("src/farna/core/pipeline_engine/") for p in scanned)
 
 
 # ---------------------------------------------------------------------------

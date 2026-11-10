@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import FastAPI
 
-from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
-from modulo.settings import Settings
+from farna.api.middleware.security_headers import SecurityHeadersMiddleware
+from farna.settings import Settings
 
 
 class TestSecurityHeadersMiddleware:
@@ -21,7 +21,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "*.ingest.sentry.io" in middleware._csp
@@ -35,7 +35,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "false")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "*.ingest.sentry.io" in middleware._csp
@@ -52,7 +52,7 @@ class TestSecurityHeadersMiddleware:
             "https://faro.mycompany.com",
         )
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "https://faro.mycompany.com" in middleware._csp
@@ -67,7 +67,7 @@ class TestSecurityHeadersMiddleware:
             "https://faro.mycompany.com https://sentry.mycompany.com",
         )
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "https://faro.mycompany.com" in middleware._csp
@@ -79,7 +79,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("MODULO_MONITOR_DOMAINS", "")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "https://" not in middleware._csp or middleware._csp.count("https://") == 0
@@ -90,7 +90,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "connect-src" in middleware._csp
@@ -109,7 +109,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "upgrade-insecure-requests" not in middleware._csp
@@ -120,7 +120,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "false")
         settings = Settings()
-        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+        with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()
             middleware = SecurityHeadersMiddleware(app)
             assert "upgrade-insecure-requests" in middleware._csp

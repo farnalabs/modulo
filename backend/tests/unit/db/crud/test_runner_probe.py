@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud.runner_probe import (
+from farna.db.crud.runner_probe import (
     get_runner_probe_cache,
     list_org_image_refs,
     list_orgs_with_runner_profiles,
@@ -22,7 +22,7 @@ from modulo.db.crud.runner_probe import (
     prune_stale_runner_probe_rows,
     upsert_runner_probe_cache,
 )
-from modulo.db.models.runner_probe_cache import RunnerProbeCache
+from farna.db.models.runner_probe_cache import RunnerProbeCache
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")

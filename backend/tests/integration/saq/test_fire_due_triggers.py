@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 pytestmark = [
     pytest.mark.integration,

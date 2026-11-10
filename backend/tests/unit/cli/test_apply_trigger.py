@@ -14,10 +14,10 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.triggers import TriggerCreate, TriggerUpdate
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.trigger_apply import _apply_one_trigger
+from farna.api.routes.triggers import TriggerCreate, TriggerUpdate
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.trigger_apply import _apply_one_trigger
 from tests.unit.cli.test_apply_executor import _mock_current
 
 LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}

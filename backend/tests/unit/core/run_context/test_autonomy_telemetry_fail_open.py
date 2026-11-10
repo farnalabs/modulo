@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.run_context import autonomy_telemetry as at
+from farna.core.run_context import autonomy_telemetry as at
 
 pytestmark = pytest.mark.asyncio
 
@@ -53,13 +53,13 @@ async def test_emit_payload_construction_failure_is_fail_open(monkeypatch: pytes
     f-string summary build would raise out of ``emit_autonomy_telemetry`` and
     into the HITL gate evaluation that called it.
     """
-    import modulo.core.audit_logger as al
-    import modulo.core.audit_logger.labels as labels
+    import farna.core.audit_logger as al
+    import farna.core.audit_logger.labels as labels
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     def _boom_short_id(run_id: object) -> str:
         raise RuntimeError("labels module broken")

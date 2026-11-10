@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.library_service.uninstall import (
+from farna.core.library_service.uninstall import (
     InstallNotFoundError,
     UninstallError,
     _check_unmodified,

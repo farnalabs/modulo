@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-import modulo.core.worker_memory as wm
+import farna.core.worker_memory as wm
 
 # ---------------------------------------------------------------------------
 # /proc/meminfo parsing

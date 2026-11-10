@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.pipeline import (
+from farna.db.crud.pipeline import (
     PipelineHasActiveRunsError,
     _edge_to_plain_dict,
     _preserve_omitted_gate_config,
@@ -178,7 +178,7 @@ class TestListPipelines:
 
     async def test_cursor_path(self) -> None:
         session = _mock_session(MagicMock(items=[], total=0, next_cursor=None, has_more=False))
-        with patch("modulo.db.crud.pipeline.CursorPaginator") as mock_paginator_cls:
+        with patch("farna.db.crud.pipeline.CursorPaginator") as mock_paginator_cls:
             mock_pag = MagicMock()
             mock_paginator_cls.return_value = mock_pag
             mock_pag.paginate = AsyncMock(return_value=MagicMock(items=[], total=0, next_cursor=None, has_more=False))

@@ -23,8 +23,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
-from modulo.core.runner_capacity import RunnerMarkerSweepError
+from farna.core import cron_helpers as ch
+from farna.core.runner_capacity import RunnerMarkerSweepError
 from tests.unit.api.mock_session import make_redis_client, make_session_factory
 
 _PARTIAL_FAILURE_TOKEN = "runner_marker_sweep_partial_failure"
@@ -42,17 +42,17 @@ def _enter_benign_sweeps(stack: ExitStack) -> None:
     stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
-    stack.enter_context(patch("modulo.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
     stack.enter_context(
         patch(
-            "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+            "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
             new_callable=AsyncMock,
             return_value={},
         )
     )
     stack.enter_context(
         patch(
-            "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+            "farna.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
             new_callable=AsyncMock,
             return_value={},
         )
@@ -61,7 +61,7 @@ def _enter_benign_sweeps(stack: ExitStack) -> None:
     # not about it must not reach the (fake) database with a real aggregate.
     stack.enter_context(
         patch(
-            "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+            "farna.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
             new_callable=AsyncMock,
             return_value={},
         )
@@ -83,12 +83,12 @@ async def test_runner_marker_partial_failure_lands_counts_and_zeroes_violations(
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 side_effect=error,
             )
         )
-        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert summary["runner_markers_scanned"] == 5
@@ -109,12 +109,12 @@ async def test_runner_marker_success_records_counters(caplog: pytest.LogCaptureF
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 return_value={"scanned": 9, "cleared": 4, "transitioned": 2, "orgs_failed": 0, "violations": 1},
             )
         )
-        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert summary["runner_markers_scanned"] == 9
@@ -144,30 +144,30 @@ async def test_best_effort_sweeps_swallow_drift_runner_enforcement_failures(
         )
         stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
         stack.enter_context(
-            patch("modulo.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={})
+            patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={})
         )
         stack.enter_context(
             patch(
-                "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+                "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
                 new_callable=AsyncMock,
                 return_value={},
             )
         )
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 side_effect=boom,
             )
         )
         stack.enter_context(
             patch(
-                "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+                "farna.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
                 new_callable=AsyncMock,
                 side_effect=boom,
             )
         )
-        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"))
         # Reaching the assertions at all proves the call returned normally.
         await ch._run_reconcile_sweeps(redis_client, summary)
 
@@ -192,19 +192,19 @@ async def test_capacity_alerts_sweep_lands_counts_and_logs_when_it_dispatches(
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                "farna.core.capacity_alerts.evaluate_capacity_alerts",
                 new_callable=AsyncMock,
                 return_value={"orgs_evaluated": 2, "dispatched": 1, "notify_failed": 0, "org_errors": 0},
             )
         )
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 return_value={},
             )
         )
-        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert summary["capacity_alerts_orgs"] == 2
@@ -223,7 +223,7 @@ async def test_capacity_alerts_sweep_reraises_cancelled() -> None:
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                "farna.core.capacity_alerts.evaluate_capacity_alerts",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             )
@@ -244,19 +244,19 @@ async def test_capacity_alerts_sweep_swallows_a_generic_failure(
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.capacity_alerts.evaluate_capacity_alerts",
+                "farna.core.capacity_alerts.evaluate_capacity_alerts",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             )
         )
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 return_value={},
             )
         )
-        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert "capacity_alerts_dispatched" not in summary
@@ -278,7 +278,7 @@ async def test_pipeline_decay_sweep_lands_counts_and_logs_when_it_alerts(
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                "farna.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
                 new_callable=AsyncMock,
                 return_value={
                     "pipelines_measured": 3,
@@ -290,12 +290,12 @@ async def test_pipeline_decay_sweep_lands_counts_and_logs_when_it_alerts(
         )
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 return_value={},
             )
         )
-        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert summary["pipeline_decay_alerts_measured"] == 3
@@ -315,7 +315,7 @@ async def test_pipeline_decay_sweep_reraises_cancelled() -> None:
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                "farna.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             )
@@ -336,19 +336,19 @@ async def test_pipeline_decay_sweep_swallows_a_generic_failure(
         _enter_benign_sweeps(stack)
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                "farna.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             )
         )
         stack.enter_context(
             patch(
-                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
                 new_callable=AsyncMock,
                 return_value={},
             )
         )
-        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert "pipeline_decay_alerts_raised" not in summary

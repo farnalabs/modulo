@@ -32,11 +32,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.core.pipeline_engine.executor import _seed_state
-from modulo.core.pipeline_engine.node_runner import _hitl_review_autonomy_result
-from modulo.core.run_context.autonomy import AutonomyLevel
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.core.pipeline_engine.executor import _seed_state
+from farna.core.pipeline_engine.node_runner import _hitl_review_autonomy_result
+from farna.core.run_context.autonomy import AutonomyLevel
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 # ---------------------------------------------------------------------------
 # DB-session stubs (house pattern — the session, never a chain link, is the
@@ -77,7 +77,7 @@ def _bind_lock_connection(session: AsyncMock, attempt: MagicMock) -> Any:
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
+    return patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _lock_attempt_result(acquired: bool) -> MagicMock:

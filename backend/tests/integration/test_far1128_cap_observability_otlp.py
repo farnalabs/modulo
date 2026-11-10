@@ -23,7 +23,7 @@ from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util._once import Once
 
-from modulo.otel_bridge.export import setup_otel, shutdown_otel
+from farna.otel_bridge.export import setup_otel, shutdown_otel
 
 pytestmark = pytest.mark.integration
 

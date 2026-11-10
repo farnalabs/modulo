@@ -35,11 +35,11 @@ from unittest.mock import patch
 from sqlalchemy import Index
 from sqlalchemy.dialects import postgresql
 
-from modulo.core.cron_helpers import _sweep_workspace_input_drift_flags
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.core.cron_helpers import _sweep_workspace_input_drift_flags
+from farna.db.models.run import TERMINAL_STATUSES, Run
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"

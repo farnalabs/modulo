@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.model_backends.azure_openai import AzureOpenAIBackend
-from modulo.model_backends.base import HealthResult
+from farna.model_backends.azure_openai import AzureOpenAIBackend
+from farna.model_backends.base import HealthResult
 
 
 @pytest.fixture
 def backend():
-    with patch("modulo.model_backends.azure_openai.ChatOpenAI"):
+    with patch("farna.model_backends.azure_openai.ChatOpenAI"):
         return AzureOpenAIBackend(
             api_key="test-key",
             model_id="gpt-4-deployment",
@@ -23,7 +23,7 @@ def test_default_api_version(backend):
 
 
 def test_custom_api_version():
-    with patch("modulo.model_backends.azure_openai.ChatOpenAI"):
+    with patch("farna.model_backends.azure_openai.ChatOpenAI"):
         backend = AzureOpenAIBackend(
             api_key="test-key",
             model_id="gpt-4",
@@ -34,7 +34,7 @@ def test_custom_api_version():
 
 
 def test_azure_endpoint_strips_trailing_slash():
-    with patch("modulo.model_backends.azure_openai.ChatOpenAI"):
+    with patch("farna.model_backends.azure_openai.ChatOpenAI"):
         backend = AzureOpenAIBackend(
             api_key="test-key",
             model_id="gpt-4",
@@ -44,14 +44,14 @@ def test_azure_endpoint_strips_trailing_slash():
 
 
 async def test_health_check_uses_api_key_header():
-    with patch("modulo.model_backends.azure_openai.ChatOpenAI"):
+    with patch("farna.model_backends.azure_openai.ChatOpenAI"):
         backend = AzureOpenAIBackend(
             api_key="test-key",
             model_id="gpt-4-deployment",
             azure_endpoint="https://my-resource.openai.azure.com/",
         )
     with patch(
-        "modulo.model_backends.azure_openai.openai_compatible_health_check",
+        "farna.model_backends.azure_openai.openai_compatible_health_check",
         new=AsyncMock(return_value=HealthResult(ok=True)),
     ) as mock_health:
         result = await backend.health_check()

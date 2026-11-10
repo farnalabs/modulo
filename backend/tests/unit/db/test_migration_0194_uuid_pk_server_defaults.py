@@ -19,9 +19,9 @@ from types import ModuleType
 from sqlalchemy import Uuid
 from sqlalchemy.dialects.postgresql import UUID as POSTGRES_UUID
 
-from modulo.db.models import Base
+from farna.db.models import Base
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0194_uuid_pk_server_defaults"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 

@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.core.email_service import EmailSendingError
-from modulo.core.watchdog import worker_liveness as wl
-from modulo.settings import Settings
+from farna.core.email_service import EmailSendingError
+from farna.core.watchdog import worker_liveness as wl
+from farna.settings import Settings
 
 
 @pytest.fixture(autouse=True)
@@ -836,7 +836,7 @@ def test_hostname_falls_back_to_socket_hostname(monkeypatch: pytest.MonkeyPatch)
 def test_hostname_defaults_to_unknown_when_socket_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing declared and an empty socket hostname -> the "unknown" last resort."""
     monkeypatch.delenv("HOSTNAME", raising=False)
-    with patch("modulo.settings.socket.gethostname", return_value=""):
+    with patch("farna.settings.socket.gethostname", return_value=""):
         assert wl._hostname() == "unknown"
 
 

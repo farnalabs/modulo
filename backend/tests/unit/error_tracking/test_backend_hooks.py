@@ -33,7 +33,7 @@ class _ErrorRaisingMiddleware(BaseHTTPMiddleware):
 
 
 def _make_app(with_error_middleware: bool = False) -> FastAPI:
-    from modulo.api.middleware.catch_all import CatchAllMiddleware
+    from farna.api.middleware.catch_all import CatchAllMiddleware
 
     app = FastAPI()
     if with_error_middleware:
@@ -52,7 +52,7 @@ def _make_app(with_error_middleware: bool = False) -> FastAPI:
 
 
 class TestCatchAllMiddleware:
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    @patch("farna.api.middleware.catch_all._ingest_unhandled_error")
     def test_returns_500_on_unhandled_exception(self, mock_ingest: Any) -> None:
         app = _make_app()
         with TestClient(app) as client:
@@ -63,7 +63,7 @@ class TestCatchAllMiddleware:
             assert body["title"] == "Internal Error"
             assert body["status"] == 500
 
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    @patch("farna.api.middleware.catch_all._ingest_unhandled_error")
     def test_healthy_route_passes_through(self, mock_ingest: Any) -> None:
         app = _make_app()
         with TestClient(app) as client:
@@ -71,14 +71,14 @@ class TestCatchAllMiddleware:
             assert resp.status_code == 200
             assert resp.json() == {"ok": "yes"}
 
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    @patch("farna.api.middleware.catch_all._ingest_unhandled_error")
     def test_calls_ingest_on_error(self, mock_ingest: Any) -> None:
         app = _make_app()
         with TestClient(app) as client:
             client.get("/crash")
             mock_ingest.assert_awaited_once()
 
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    @patch("farna.api.middleware.catch_all._ingest_unhandled_error")
     def test_crash_in_ingest_does_not_crash_response(self, mock_ingest: Any) -> None:
         mock_ingest.side_effect = RuntimeError("ingest crashed too")
         app = _make_app()
@@ -86,7 +86,7 @@ class TestCatchAllMiddleware:
             resp = client.get("/crash")
             assert resp.status_code == 500
 
-    @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
+    @patch("farna.api.middleware.catch_all._ingest_unhandled_error")
     def test_ingest_receives_request_context(self, mock_ingest: Any) -> None:
         app = _make_app()
         with TestClient(app) as client:
@@ -106,7 +106,7 @@ class TestCatchAllMiddleware:
 class TestErrorTrackingLogHandler:
     @pytest.fixture(autouse=True)
     def _reset_rate_limit_state(self) -> Any:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
+        from farna.core.logging_config import ErrorTrackingLogHandler
 
         ErrorTrackingLogHandler._last_write_time.clear()
         yield
@@ -130,7 +130,7 @@ class TestErrorTrackingLogHandler:
             await asyncio.sleep(0)
 
     def test_skips_below_error(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
+        from farna.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
         with patch.object(ErrorTrackingLogHandler, "_async_emit", new_callable=AsyncMock) as mock_async:
@@ -139,7 +139,7 @@ class TestErrorTrackingLogHandler:
         assert handler._pending_tasks == 0
 
     def test_skips_when_no_org_context(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler
+        from farna.core.logging_config import ErrorTrackingLogHandler
 
         handler = ErrorTrackingLogHandler()
         with patch.object(ErrorTrackingLogHandler, "_async_emit", new_callable=AsyncMock) as mock_async:
@@ -148,7 +148,7 @@ class TestErrorTrackingLogHandler:
         assert handler._pending_tasks == 0
 
     def test_skips_warning_level(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         token = org_id_var.set(str(_ORG_ID))
         try:
@@ -162,7 +162,7 @@ class TestErrorTrackingLogHandler:
         mock_async.assert_not_called()
 
     async def test_captures_error_level(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         record = self._make_record(logging.ERROR, "error msg")
         token = org_id_var.set(str(_ORG_ID))
@@ -178,7 +178,7 @@ class TestErrorTrackingLogHandler:
         assert handler._pending_tasks == 0
 
     async def test_captures_critical_level(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         record = self._make_record(logging.CRITICAL, "critical msg")
         token = org_id_var.set(str(_ORG_ID))
@@ -193,7 +193,7 @@ class TestErrorTrackingLogHandler:
         mock_async.assert_awaited_once_with(record)
 
     async def test_drops_second_emit_during_rate_window(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         first = self._make_record(logging.ERROR, "first")
         second = self._make_record(logging.ERROR, "second")
@@ -211,7 +211,7 @@ class TestErrorTrackingLogHandler:
         mock_async.assert_awaited_once_with(first)
 
     def test_drops_emit_when_backlog_full(self) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         token = org_id_var.set(str(_ORG_ID))
         try:
@@ -247,15 +247,15 @@ class TestAsyncEmitEventData:
         service = AsyncMock()
         set_rls = AsyncMock()
 
-        monkeypatch.setattr("modulo.api.dependencies.get_or_create_engine", MagicMock())
-        monkeypatch.setattr("modulo.api.dependencies.get_or_create_session_factory", MagicMock(return_value=factory))
+        monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", MagicMock())
+        monkeypatch.setattr("farna.api.dependencies.get_or_create_session_factory", MagicMock(return_value=factory))
         monkeypatch.setattr(
-            "modulo.core.error_tracking.ErrorIngestionService",
+            "farna.core.error_tracking.ErrorIngestionService",
             MagicMock(return_value=MagicMock(ingest=service)),
         )
-        monkeypatch.setattr("modulo.db.rls.set_rls_org", set_rls)
-        monkeypatch.setattr("modulo.settings.get_settings", MagicMock())
-        monkeypatch.setattr("modulo.version.get_version", MagicMock(return_value="1.2.3"))
+        monkeypatch.setattr("farna.db.rls.set_rls_org", set_rls)
+        monkeypatch.setattr("farna.settings.get_settings", MagicMock())
+        monkeypatch.setattr("farna.version.get_version", MagicMock(return_value="1.2.3"))
 
         return service, set_rls, session
 
@@ -286,7 +286,7 @@ class TestAsyncEmitEventData:
         level: int,
         expected: str,
     ) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
@@ -307,7 +307,7 @@ class TestAsyncEmitEventData:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Invalid org id in the context var must not reach the DB chain."""
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, set_rls, _session = async_emit_chain
         token = org_id_var.set("not-a-valid-uuid")
@@ -325,7 +325,7 @@ class TestAsyncEmitEventData:
         self,
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
@@ -350,7 +350,7 @@ class TestAsyncEmitEventData:
         self,
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, _set_rls, _session = async_emit_chain
         record = logging.LogRecord(
@@ -377,7 +377,7 @@ class TestAsyncEmitEventData:
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         monkeypatch.setenv("MODULO_ENV", "production")
         service, _set_rls, _session = async_emit_chain
@@ -395,7 +395,7 @@ class TestAsyncEmitEventData:
         self,
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, _set_rls, _session = async_emit_chain
         try:
@@ -425,7 +425,7 @@ class TestAsyncEmitEventData:
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         """exc_text set on the record is used verbatim as the stacktrace."""
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, _set_rls, _session = async_emit_chain
         record = logging.LogRecord(
@@ -453,7 +453,7 @@ class TestAsyncEmitEventData:
         async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
         """A record emitted with no org context never reaches the DB chain."""
-        from modulo.core.logging_config import ErrorTrackingLogHandler
+        from farna.core.logging_config import ErrorTrackingLogHandler
 
         service, set_rls, _session = async_emit_chain
         handler = ErrorTrackingLogHandler()
@@ -468,7 +468,7 @@ class TestAsyncEmitEventData:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A ProgrammingError from the DB chain is logged, not propagated."""
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, _set_rls, _session = async_emit_chain
         service.side_effect = ProgrammingError("select * from error_events", {}, Exception("db down"))
@@ -488,7 +488,7 @@ class TestAsyncEmitEventData:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Any unexpected failure in _async_emit is logged and swallowed."""
-        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+        from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
         service, _set_rls, _session = async_emit_chain
         service.side_effect = RuntimeError("kaboom")
@@ -519,15 +519,15 @@ class TestEnrichment:
         service = AsyncMock()
         set_rls = AsyncMock()
 
-        monkeypatch.setattr("modulo.api.dependencies.get_or_create_engine", MagicMock())
-        monkeypatch.setattr("modulo.api.dependencies.get_or_create_session_factory", MagicMock(return_value=factory))
+        monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", MagicMock())
+        monkeypatch.setattr("farna.api.dependencies.get_or_create_session_factory", MagicMock(return_value=factory))
         monkeypatch.setattr(
-            "modulo.core.error_tracking.ErrorIngestionService",
+            "farna.core.error_tracking.ErrorIngestionService",
             MagicMock(return_value=MagicMock(ingest=service)),
         )
-        monkeypatch.setattr("modulo.db.rls.set_rls_org", set_rls)
-        monkeypatch.setattr("modulo.settings.get_settings", MagicMock())
-        monkeypatch.setattr("modulo.api.middleware.catch_all.get_version", MagicMock(return_value="1.2.3"))
+        monkeypatch.setattr("farna.db.rls.set_rls_org", set_rls)
+        monkeypatch.setattr("farna.settings.get_settings", MagicMock())
+        monkeypatch.setattr("farna.api.middleware.catch_all.get_version", MagicMock(return_value="1.2.3"))
 
         return service, set_rls, session
 
@@ -553,7 +553,7 @@ class TestEnrichment:
         self,
         ingest_chain: tuple[AsyncMock, AsyncMock, MagicMock],
     ) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         service, set_rls, session = ingest_chain
         await _ingest_unhandled_error(self._crash_request())
@@ -575,7 +575,7 @@ class TestEnrichment:
         ingest_chain: tuple[AsyncMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         monkeypatch.setenv("MODULO_ENV", "staging")
         service, _set_rls, _session = ingest_chain

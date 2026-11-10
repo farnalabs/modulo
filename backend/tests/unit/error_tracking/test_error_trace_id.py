@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.error_tracking import _run_trace_id, emit_signal_event
-from modulo.otel_bridge import trace_id_for_thread
+from farna.core.error_tracking import _run_trace_id, emit_signal_event
+from farna.otel_bridge import trace_id_for_thread
 
 
 def test_run_trace_id_matches_api_derivation() -> None:
@@ -43,14 +43,14 @@ async def test_emit_signal_event_context_carries_trace_id() -> None:
     engine.evaluate = AsyncMock(return_value=[])
 
     with (
-        patch("modulo.core.error_tracking._create_signal_event", new=_fake_create_event),
+        patch("farna.core.error_tracking._create_signal_event", new=_fake_create_event),
         patch(
-            "modulo.core.error_tracking.get_error_group_by_fingerprint",
+            "farna.core.error_tracking.get_error_group_by_fingerprint",
             new_callable=AsyncMock,
             return_value=None,
         ),
-        patch("modulo.core.error_tracking.upsert_error_group", new_callable=AsyncMock, return_value=group),
-        patch("modulo.core.error_tracking._get_alert_engine", new_callable=AsyncMock, return_value=engine),
+        patch("farna.core.error_tracking.upsert_error_group", new_callable=AsyncMock, return_value=group),
+        patch("farna.core.error_tracking._get_alert_engine", new_callable=AsyncMock, return_value=engine),
     ):
         await emit_signal_event(
             session,

@@ -51,9 +51,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 from testcontainers.community.postgres import PostgresContainer
 
-from modulo.core.bundled_runner.health_probe import run_runner_health_probe
-from modulo.core.runtime_provider import WorkspaceSpec
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.bundled_runner.health_probe import run_runner_health_probe
+from farna.core.runtime_provider import WorkspaceSpec
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
 pytestmark = [pytest.mark.docker]
 
@@ -91,7 +91,7 @@ def _provide_required_settings_env(
     The ``client`` fixture supplies explicit settings regardless; this only
     lets the app module import cleanly in the harness.
     """
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     session_monkeypatch.setenv("FERNET_KEY", _VALID_32)
     session_monkeypatch.setenv("SECRET_KEY", _VALID_32)
@@ -103,7 +103,7 @@ def _provide_required_settings_env(
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     """Keep settings derived from one test out of the next."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
     yield
@@ -167,7 +167,7 @@ def migrated_db_url(db_url: str) -> str:
 
     config = Config(_BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(_BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(_BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
 
     async def _migrate() -> None:
@@ -369,12 +369,12 @@ async def client(
 ) -> AsyncGenerator[Any, None]:
     from httpx import ASGITransport, AsyncClient
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.core.feature_flags import PlanContext
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_tenant_user, get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.core.feature_flags import PlanContext
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=migrated_db_url,

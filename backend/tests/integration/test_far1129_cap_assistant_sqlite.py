@@ -23,14 +23,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from modulo.core.assistant.skill_loader import SkillLoader
-from modulo.db.models.account import Account
-from modulo.db.models.assistant_context_source import AssistantContextSource
-from modulo.db.models.assistant_skill import AssistantSkill
-from modulo.db.models.base import Base
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.system_config import SystemConfig
+from farna.core.assistant.skill_loader import SkillLoader
+from farna.db.models.account import Account
+from farna.db.models.assistant_context_source import AssistantContextSource
+from farna.db.models.assistant_skill import AssistantSkill
+from farna.db.models.base import Base
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
+from farna.db.models.system_config import SystemConfig
 
 pytestmark = pytest.mark.integration
 

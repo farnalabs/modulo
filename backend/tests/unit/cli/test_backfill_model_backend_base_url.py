@@ -26,13 +26,13 @@ from click.testing import CliRunner
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
-import modulo.cli.backfill_model_backend_base_url as cli_mod
-import modulo.cli.main as cli_main
-import modulo.core.audit_logger as audit_logger
-import modulo.core.model_backend_endpoints as shared_endpoints
-import modulo.core.secrets_backend as secrets_backend_module
-from modulo.api.routes import model_backends as route_module
-from modulo.cli.backfill_model_backend_base_url import (
+import farna.cli.backfill_model_backend_base_url as cli_mod
+import farna.cli.main as cli_main
+import farna.core.audit_logger as audit_logger
+import farna.core.model_backend_endpoints as shared_endpoints
+import farna.core.secrets_backend as secrets_backend_module
+from farna.api.routes import model_backends as route_module
+from farna.cli.backfill_model_backend_base_url import (
     AUDIT_ACTOR_SOURCE,
     AUDIT_EVENT_TYPE,
     BackfillResult,
@@ -743,7 +743,7 @@ async def test_run_backfill_raises_for_an_unknown_org(monkeypatch: pytest.Monkey
 
 
 async def test_run_backfill_resolves_the_default_session_factory(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.db.session as db_session
+    import farna.db.session as db_session
 
     org = SimpleNamespace(id=uuid.uuid4(), slug="acme")
     factory = _FakeFactory(_FakeSession(rows=[org]))

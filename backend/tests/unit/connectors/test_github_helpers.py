@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from modulo.connectors.github import GitHubConnector
+from farna.connectors.github import GitHubConnector
 
 
 def test_network_error_kind_timeout():

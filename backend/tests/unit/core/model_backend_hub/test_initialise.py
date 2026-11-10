@@ -16,12 +16,12 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.model_backend_hub import (
+from farna.core.model_backend_hub import (
     _NO_CREDENTIALS_REQUIRED_PROVIDERS,
     ModelBackendHub,
     _extract_fixture_map,
 )
-from modulo.model_backends.stub import StubModelBackend
+from farna.model_backends.stub import StubModelBackend
 
 
 @pytest.fixture
@@ -185,7 +185,7 @@ async def test_initialise_registers_credential_free_local_backends_without_crede
     ]
     async_client = httpx.AsyncClient()
     missing = frozenset(str(row.id) for row in rows)
-    with patch("modulo.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
+    with patch("farna.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
         await hub.initialise(rows, secrets_backend=_secrets_per_backend({}, missing=missing))
 
     for row in rows:
@@ -262,7 +262,7 @@ async def test_initialise_uses_credentials_ciphertext_when_secret_backend_misses
         default_params={"fixture_map": {"hello": "world"}},
     )
     with patch(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         return_value=SimpleNamespace(fernet_key=fernet_key.decode(), fernet_key_old=""),
     ):
         await hub.initialise([row], secrets_backend=_secrets(error=KeyError("fallthrough to ciphertext")))
@@ -281,7 +281,7 @@ async def test_initialise_skips_when_ciphertext_fails_to_decrypt(
     and the faulty row must be skipped, not crash initialise()."""
     row = _row(credentials_ciphertext=b"this is not a fernet token")
     with patch(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         return_value=SimpleNamespace(fernet_key=Fernet.generate_key().decode(), fernet_key_old=""),
     ):
         await hub.initialise([row], secrets_backend=_secrets(error=KeyError("missing")))
@@ -396,7 +396,7 @@ async def test_initialise_never_logs_credential_values(hub: ModelBackendHub, cap
     traceback) as well as on the aggregate caplog text.
     """
     canary = "sk-CANARY-VALUE-9f3e2a"
-    caplog.set_level(logging.INFO, logger="modulo.core.model_backend_hub")
+    caplog.set_level(logging.INFO, logger="farna.core.model_backend_hub")
 
     good = _row(provider="custom")
     malformed = _row(provider="custom")
@@ -417,7 +417,7 @@ async def test_initialise_never_logs_credential_values(hub: ModelBackendHub, cap
     )
 
     with patch(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         return_value=SimpleNamespace(fernet_key=Fernet.generate_key().decode(), fernet_key_old=""),
     ):
         await hub.initialise(
@@ -455,7 +455,7 @@ async def test_initialise_decrypt_failure_fails_closed_for_that_backend_only(
     )
 
     with patch(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         return_value=SimpleNamespace(fernet_key=Fernet.generate_key().decode(), fernet_key_old=""),
     ):
         await hub.initialise([bad, good], secrets_backend=secrets)

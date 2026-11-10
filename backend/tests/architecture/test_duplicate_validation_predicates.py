@@ -120,7 +120,7 @@ gate ships at 0.90.
 
 Scope
 -----
-``backend/src/modulo/**`` except:
+``backend/src/farna/**`` except:
 
 * ``connectors/**``, ``model_backends/**`` and ``core/error_tracking/forwarders/**``
   — pluggable provider trees. Each provider is deliberately a self-contained
@@ -179,7 +179,7 @@ from pathlib import Path
 from tests.unit._source_scan import iter_source_text
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-SRC_DIR = BACKEND_DIR / "src" / "modulo"
+SRC_DIR = BACKEND_DIR / "src" / "farna"
 BASELINE_PATH = Path(__file__).resolve().parent / "duplicate_validation_predicate_baseline.txt"
 
 #: Trees scanned. The pluggable provider trees are excluded (see the module

@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from modulo.model_backends.watsonx import WATSONX_BASE_URL, WatsonXBackend
+from farna.model_backends.watsonx import WATSONX_BASE_URL, WatsonXBackend
 
 
 def test_base_url_constant():
@@ -10,7 +10,7 @@ def test_base_url_constant():
 
 
 def test_constructor_with_custom_url():
-    with patch("modulo.model_backends.watsonx.ChatWatsonx"):
+    with patch("farna.model_backends.watsonx.ChatWatsonx"):
         backend = WatsonXBackend(
             api_key="key",
             model_id="ibm/granite-13b-instruct",

@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-from modulo.core import guardrails as guardrails_module
-from modulo.core.eval_engine import EvalDefinition, EvalResult, EvalType
-from modulo.core.guardrails import (
+from farna.core import guardrails as guardrails_module
+from farna.core.eval_engine import EvalDefinition, EvalResult, EvalType
+from farna.core.guardrails import (
     GuardrailSkip,
     GuardrailSummary,
     RedactionEntry,
@@ -193,7 +193,7 @@ def test_summary_from_mapping_rejects_malformed() -> None:
 
 
 def test_fired_signature_log_emits_per_pattern(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.INFO, logger="modulo.core.guardrails")
+    caplog.set_level(logging.INFO, logger="farna.core.guardrails")
     regex_def = _def("regex-guard", "block")
     schema_def = _def(
         "schema-guard",
@@ -255,6 +255,6 @@ async def test_alert_unexpected_guardrail_skip_is_best_effort(monkeypatch: pytes
     def _boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("notifier unavailable")
 
-    monkeypatch.setattr("modulo.core.notifier.Notifier", _boom)
+    monkeypatch.setattr("farna.core.notifier.Notifier", _boom)
     # Must not raise, even though the notifier cannot be built.
     await alert_unexpected_guardrail_skip(_ORG, _RUN, GuardrailSkip(name="evaded", reason="cap_evaded"))

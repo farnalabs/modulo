@@ -5,9 +5,9 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.inference import Finding, build_proposal_contract
-from modulo.determination.models import ProposalContract, SourceInventoryItem
+from farna.connectors.base import ConnectorType
+from farna.determination.inference import Finding, build_proposal_contract
+from farna.determination.models import ProposalContract, SourceInventoryItem
 
 from .helpers import make_sample
 

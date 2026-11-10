@@ -21,7 +21,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -118,9 +118,9 @@ async def bindings_org(db_engine: AsyncEngine) -> dict[str, Any]:
 @pytest_asyncio.fixture
 async def bindings_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     """HTTP client against the real app; sessions run under the app role (RLS)."""
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,

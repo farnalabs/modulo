@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import Delete, Select, Update
 
-from modulo.core import cron_helpers as ch
-from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
-from modulo.db.models.pipeline import Pipeline
+from farna.core import cron_helpers as ch
+from farna.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
+from farna.db.models.pipeline import Pipeline
 from tests.unit.api.mock_session import make_redis_client
 from tests.unit.cron_helpers._helpers import _Begin as _MockBegin
 from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result
@@ -348,11 +348,11 @@ async def _run_reconcile(
         )
         if capacity_free is False:
             stack.enter_context(
-                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5)
+                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5)
             )
         else:
             stack.enter_context(
-                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
+                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
             )
         summary = await ch.dispatcher_reconcile()
 
@@ -681,7 +681,7 @@ class TestReconcilePredicateMatrix:
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
             patch.object(ch, "_awaiting_human_has_committed_decision", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock) as record_facts,
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
         ):
             summary = await ch.dispatcher_reconcile()
         assert summary["nodeless_failed"] == 1
@@ -962,7 +962,7 @@ class TestNodelessZombiePredicateCompiled:
     def _compiled_predicate(age_minutes: int = 35) -> tuple[str, dict[str, Any]]:
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._nodeless_zombie_predicate(age_minutes)
         compiled = sa.select(Run.id).where(predicate).compile()
@@ -979,7 +979,7 @@ class TestNodelessZombiePredicateCompiled:
         assert "NOT (EXISTS" in sql
 
     def test_final_attempt_key_is_the_subquery_parameter(self) -> None:
-        from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+        from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
         _sql, params = self._compiled_predicate()
         assert FINAL_ATTEMPT_KEY in params.values(), (
@@ -1329,7 +1329,7 @@ class TestNodelessRedispatchPerTickCap:
         == 2, and the warning logs ONCE per tick (not per capped row)."""
         monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
         rows = self._rows(4)
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, rows)
         assert summary["nodeless_redispatched"] == 2
         assert summary["nodeless_capped"] == 2
@@ -1361,7 +1361,7 @@ class TestNodelessRedispatchPerTickCap:
             claim_count=5,
         )
         rows = [*self._rows(3), exhausted]
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             summary, reenqueue, _, _, _, session = await _run_reconcile(monkeypatch, rows)
         assert summary["nodeless_redispatched"] == 2
         assert summary["nodeless_capped"] == 1
@@ -1377,7 +1377,7 @@ class TestNodelessRedispatchPerTickCap:
         nodeless_capped == 0, no cap warning."""
         monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
         rows = self._rows(2)
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             summary, reenqueue, _, _, _, _ = await _run_reconcile(monkeypatch, rows)
         assert summary["nodeless_redispatched"] == 2
         assert summary["nodeless_capped"] == 0
@@ -1496,7 +1496,7 @@ class TestClaimedButNeverDispatchedCounter:
             dispatched_minutes_ago=40,
             claim_count=5,
         )
-        with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
             summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [exhausted])
         assert summary["claimed_but_never_dispatched"] == 1
         per_run = [r for r in caplog.records if "claimed_but_never_dispatched run=" in r.message]
@@ -1512,7 +1512,7 @@ class TestClaimedButNeverDispatchedCounter:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A quiet tick emits no claimed-but-never-dispatched summary alert."""
-        with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
             summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
         assert summary["claimed_but_never_dispatched"] == 0
         assert not any("claimed_but_never_dispatched" in r.message for r in caplog.records)
@@ -1945,7 +1945,7 @@ class TestAgedNodelessRouting:
         """Ordering: the nodeless router is the FIRST batch terminalizer, so
         a zero-progress row is already ``failed`` when the age gate's UPDATE
         runs — it can never be double-terminalised or mislabelled."""
-        from modulo.core.cron_helpers import _BATCH_TERMINALIZER_SPECS
+        from farna.core.cron_helpers import _BATCH_TERMINALIZER_SPECS
 
         assert _BATCH_TERMINALIZER_SPECS[0].key == "nodeless"
         assert _BATCH_TERMINALIZER_SPECS[0].coroutine_name == "_terminalize_aged_nodeless_zombies"
@@ -2726,7 +2726,7 @@ class TestRunApiKeySweepWiring:
                 return_value=False,
             ),
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
         ]
 
     @pytest.mark.asyncio
@@ -2740,7 +2740,7 @@ class TestRunApiKeySweepWiring:
         sweep mock is asserted awaited once AND the folded summary keys would be
         missing from the summary dict.
         """
-        from modulo.auth import api_key as api_key_module
+        from farna.auth import api_key as api_key_module
 
         sweep_mock = AsyncMock(return_value={"scanned": 3, "revoked": 2, "errors": 0})
         with contextlib.ExitStack() as stack:
@@ -2758,7 +2758,7 @@ class TestRunApiKeySweepWiring:
     async def test_run_api_key_sweep_failure_does_not_fail_reconcile(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A sweep exception is caught and logged (never raised through the
         tick); the reconcile survives and folds the counters to zero."""
-        from modulo.auth import api_key as api_key_module
+        from farna.auth import api_key as api_key_module
 
         sweep_mock = AsyncMock(side_effect=RuntimeError("boom"))
         with contextlib.ExitStack() as stack:
@@ -2791,7 +2791,7 @@ class TestRollbackThresholdsWiring:
         the mock is asserted awaited once AND the folded summary keys would be
         missing from the summary dict.
         """
-        from modulo.core import rollback_thresholds as rt_module
+        from farna.core import rollback_thresholds as rt_module
 
         threshold_mock = AsyncMock(return_value={"orgs_checked": 2, "anomalies_found": 1, "flagged_orgs": ["org-1"]})
         _patch_env(monkeypatch)
@@ -2820,7 +2820,7 @@ class TestRollbackThresholdsWiring:
                 return_value=False,
             ),
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
         ):
             summary = await ch.dispatcher_reconcile()
 
@@ -2832,7 +2832,7 @@ class TestRollbackThresholdsWiring:
     async def test_rollback_thresholds_failure_does_not_fail_reconcile(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A threshold evaluation exception is caught and logged (never raised
         through the tick); the reconcile survives and folds the counters to zero."""
-        from modulo.core import rollback_thresholds as rt_module
+        from farna.core import rollback_thresholds as rt_module
 
         threshold_mock = AsyncMock(side_effect=RuntimeError("boom"))
         _patch_env(monkeypatch)
@@ -2861,7 +2861,7 @@ class TestRollbackThresholdsWiring:
                 return_value=False,
             ),
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
         ):
             summary = await ch.dispatcher_reconcile()
 
@@ -2972,7 +2972,7 @@ class TestTerminalizeExpiredHitlReviews:
     @pytest.mark.asyncio
     async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
         expired = [uuid.uuid4(), uuid.uuid4()]
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             returned, _session = await self._run(expired)
         assert returned == expired
         assert sum("expired-HITL-gate zombie terminalized" in r.message for r in caplog.records) == len(expired)
@@ -3150,7 +3150,7 @@ class TestTerminalizeHitlReviewMissing:
     @pytest.mark.asyncio
     async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
         orphaned = [uuid.uuid4(), uuid.uuid4()]
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             returned, _session = await self._run(orphaned)
         assert returned == orphaned
         zombie_warns = [r for r in caplog.records if "zero-claim awaiting_human zombie terminalized" in r.message]
@@ -3247,11 +3247,11 @@ class TestRecordFactForTerminalizedRun:
             patch.object(ch, "_open_factory", return_value=factory),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.db.crud.run.get_run",
+                "farna.db.crud.run.get_run",
                 new_callable=AsyncMock,
                 return_value=SimpleNamespace(id=run_id, status=status),
             ),
-            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record),
+            patch("farna.core.analytics.record_fact_for_terminal_failed_run", record),
         ):
             await ch._record_fact_for_terminalized_run(run_id, ORG)
         return record
@@ -3728,7 +3728,7 @@ class TestNodelessEarlyDetect:
         """The early-detect re-dispatch log includes the started_at gap for
         diagnosis."""
         run_id = uuid.uuid4()
-        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"):
             summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
                 monkeypatch,
                 [
@@ -3776,7 +3776,7 @@ class TestNodelessEarlyDetect:
         )
         # 20 min: > early_detect (15) and < nodeless_window (35).
         row.started_at = datetime.now(UTC) - timedelta(minutes=20)
-        with caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"):
             summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
                 monkeypatch,
                 [row],
@@ -3814,7 +3814,7 @@ class TestNodelessEarlyDetect:
             )
             row.started_at = datetime.now(UTC) - timedelta(minutes=20)
             rows.append(row)
-        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
             summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
                 monkeypatch,
                 rows,

@@ -14,9 +14,9 @@ import httpx
 import pytest
 import respx
 
-import modulo.connectors.plane as plane_mod
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.plane import PlaneConnector
+import farna.connectors.plane as plane_mod
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.plane import PlaneConnector
 
 BASE = "https://plane.example.com/api/v1"
 WS = f"{BASE}/workspaces/acme"

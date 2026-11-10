@@ -21,7 +21,7 @@ class AuthContext:
     """Set/teardown the MCP ContextVars so tool handlers reach the DB layer."""
 
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_org_id,
@@ -36,7 +36,7 @@ class AuthContext:
         _ctx_user_id.set(USER_ID)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_org_id,

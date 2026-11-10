@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pypi import PyPIConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.pypi import PyPIConnector
 
 TOKEN = "pypi_test_token"
 _BASE = "https://pypi.org/pypi"

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.youtrack import YouTrackConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.youtrack import YouTrackConnector
 
 TOKEN = "yt_perm_token_123"
 _BASE = "https://youtrack.mycompany.com/api"

@@ -29,7 +29,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
@@ -42,7 +42,7 @@ _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: same-named constraint on another table must not satisfy the gate.
 _REGCLASS = "'public.pipeline_snapshots'::regclass"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

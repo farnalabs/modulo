@@ -15,8 +15,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine.eval_definition_write import EvalWriteOptions, create_or_update_eval
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.eval_definition_write import EvalWriteOptions, create_or_update_eval
+from farna.core.eval_engine.typed_judge import (
     CODE_INVALID,
     CODE_LEGACY_READ_ONLY,
     CODE_TYPED_REQUIRED,
@@ -28,9 +28,9 @@ from modulo.core.eval_engine.typed_judge import (
     reject_legacy_judge_write,
     validate_typed_judge_config,
 )
-from modulo.db.models import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models import Base
+from farna.db.models.eval import Eval
+from farna.db.models.model_backend import ModelBackend
 
 _LEGACY_CONFIG = {"field": "output", "model_backend_id": str(uuid.uuid4()), "instructions": "grade it"}
 
@@ -375,7 +375,7 @@ class TestLegacyExecutionCounter:
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import modulo.core.eval_engine.typed_judge.legacy as legacy
+        import farna.core.eval_engine.typed_judge.legacy as legacy
 
         monkeypatch.setattr(legacy, "_get_legacy_counter", lambda: None)
         with caplog.at_level(logging.WARNING):
@@ -608,7 +608,7 @@ class TestTypedShapeValidationEdges:
 
 class TestLegacyCounterArms:
     def test_a_second_execution_reuses_the_cached_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.eval_engine.typed_judge.legacy as legacy
+        import farna.core.eval_engine.typed_judge.legacy as legacy
 
         class _Counter:
             def __init__(self) -> None:
@@ -632,7 +632,7 @@ class TestLegacyCounterArms:
     ) -> None:
         import opentelemetry.metrics as otel_metrics
 
-        import modulo.core.eval_engine.typed_judge.legacy as legacy
+        import farna.core.eval_engine.typed_judge.legacy as legacy
 
         monkeypatch.setattr(legacy, "_legacy_counter", None)
 
@@ -650,7 +650,7 @@ class TestLegacyCounterArms:
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import modulo.core.eval_engine.typed_judge.legacy as legacy
+        import farna.core.eval_engine.typed_judge.legacy as legacy
 
         class _BrokenCounter:
             def add(self, amount: int, attributes: dict[str, str]) -> None:

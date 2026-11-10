@@ -74,8 +74,8 @@ def _non_existent_agent(request) -> None:
 def _get_agents(client, request) -> None:
     page_result = MagicMock(items=[_make_mock_agent()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.agents.list_agents", return_value=page_result),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.list_agents", return_value=page_result),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get("/api/v1/agents")
     request.node._resp = resp
@@ -86,8 +86,8 @@ def _create_agent(client, request, name: str, desc: str) -> None:
     body = {**_AGENT_BODY, "name": name, "description": desc}
     mock_agent = _make_mock_agent(name=name)
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=mock_agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=mock_agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     request.node._resp = resp
@@ -106,8 +106,8 @@ def _create_library_agent(client, request) -> None:
     mock_agent = _make_mock_agent()
     mock_agent.library_id = uuid.UUID(body["library_id"])
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=mock_agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=mock_agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     request.node._resp = resp
@@ -119,8 +119,8 @@ def _get_agent(client, request) -> None:
     nonexistent = getattr(request.node, "_nonexistent", False)
     return_val = None if nonexistent else _make_mock_agent(name="test-agent")
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=return_val),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=return_val),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/agents/{agent_id}")
     request.node._resp = resp
@@ -132,9 +132,9 @@ def _update_agent(client, request, name: str) -> None:
     mock_agent = _make_mock_agent(name=name)
     mock_agent.id = agent_id
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=mock_agent),
-        patch("modulo.api.routes.agents.update_agent", return_value=mock_agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=mock_agent),
+        patch("farna.api.routes.agents.update_agent", return_value=mock_agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(
             f"/api/v1/agents/{agent_id}",
@@ -148,8 +148,8 @@ def _delete_agent(client, request) -> None:
     agent_id = _AGENT_ID or uuid.uuid4()
     nonexistent = getattr(request.node, "_nonexistent", False)
     with (
-        patch("modulo.api.routes.agents.delete_agent", return_value=not nonexistent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.delete_agent", return_value=not nonexistent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/agents/{agent_id}")
     request.node._resp = resp

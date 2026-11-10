@@ -23,12 +23,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import TextClause
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.routes.auth import _consume_break_glass_credential, _enforce_break_glass
-from modulo.api.routes.auth import router as auth_router
-from modulo.auth.passwords import hash_password
-from modulo.db.crud.token_family import consume_break_glass_credential
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.routes.auth import _consume_break_glass_credential, _enforce_break_glass
+from farna.api.routes.auth import router as auth_router
+from farna.auth.passwords import hash_password
+from farna.db.crud.token_family import consume_break_glass_credential
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -54,7 +54,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 class _FakeLimiter:
@@ -166,7 +166,7 @@ async def test_enforce_break_glass_normal_account_zero_queries() -> None:
     predicate — the login fast path is unchanged (zero extra queries)."""
     user = _make_user(is_break_glass=False)
     limiter = _FakeLimiter()
-    with patch("modulo.api.routes.auth.is_break_glass_denied", side_effect=AssertionError("must not be called")):
+    with patch("farna.api.routes.auth.is_break_glass_denied", side_effect=AssertionError("must not be called")):
         decision = await _enforce_break_glass(user, now=_FUTURE, limiter=limiter, ip="1.2.3.4")
     assert decision is False
     assert not limiter.failures
@@ -210,7 +210,7 @@ async def test_enforce_break_glass_hook_error_fail_closed() -> None:
     user = _make_user(is_break_glass=True, expires_at=_FUTURE)
     limiter = _FakeLimiter()
     with (
-        patch("modulo.api.routes.auth.is_break_glass_denied", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.auth.is_break_glass_denied", side_effect=RuntimeError("boom")),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _enforce_break_glass(user, now=_FUTURE, limiter=limiter, ip="1.2.3.4")
@@ -236,7 +236,7 @@ async def test_enforce_break_glass_no_limiter_skips_record_failure() -> None:
 async def test_consume_late_cas_rowcount_1_passes(mock_session: AsyncMock) -> None:
     user = _make_user(is_break_glass=True, expires_at=_FUTURE)
     limiter = _FakeLimiter()
-    with patch("modulo.api.routes.auth.consume_break_glass_credential", new=AsyncMock(return_value=1)) as cas:
+    with patch("farna.api.routes.auth.consume_break_glass_credential", new=AsyncMock(return_value=1)) as cas:
         await _consume_break_glass_credential(mock_session, account=user, limiter=limiter, ip="1.2.3.4")
     cas.assert_awaited_once()
     assert cas.call_args.kwargs["account_id"] == _USER_ID
@@ -249,7 +249,7 @@ async def test_consume_late_cas_rowcount_0_raises_401(mock_session: AsyncMock) -
     user = _make_user(is_break_glass=True, expires_at=_FUTURE)
     limiter = _FakeLimiter()
     with (
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=AsyncMock(return_value=0)),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=AsyncMock(return_value=0)),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _consume_break_glass_credential(mock_session, account=user, limiter=limiter, ip="1.2.3.4")
@@ -266,7 +266,7 @@ async def test_consume_late_cas_error_fail_closed_401_not_503(mock_session: Asyn
     limiter = _FakeLimiter()
     with (
         patch(
-            "modulo.api.routes.auth.consume_break_glass_credential",
+            "farna.api.routes.auth.consume_break_glass_credential",
             new=AsyncMock(side_effect=SQLAlchemyError("db down")),
         ),
         pytest.raises(HTTPException) as exc_info,
@@ -354,12 +354,12 @@ def test_login_live_break_glass_consumes_and_200(client: TestClient) -> None:
     membership = _make_membership()
     cas = AsyncMock(return_value=1)
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "testpass"})
     assert resp.status_code == 200
@@ -377,13 +377,13 @@ def test_login_consumed_break_glass_401_records_failure(client: TestClient) -> N
     membership = _make_membership()
     cas = AsyncMock(return_value=0)
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "testpass"})
     assert resp.status_code == 401
@@ -396,10 +396,10 @@ def test_login_expired_break_glass_401_without_cas(client: TestClient) -> None:
     limiter = _FakeLimiter()
     cas = AsyncMock()
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "testpass"})
     assert resp.status_code == 401
@@ -416,13 +416,13 @@ def test_login_break_glass_cas_error_401_fail_closed(client: TestClient) -> None
     membership = _make_membership()
     cas = AsyncMock(side_effect=SQLAlchemyError("cas ambiguous"))
     with (
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", return_value=limiter),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "testpass"})
     assert resp.status_code == 401
@@ -437,12 +437,12 @@ def test_login_normal_account_never_calls_cas(client: TestClient) -> None:
     membership = _make_membership()
     cas = AsyncMock()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
-        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=family)),
+        patch("farna.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[membership])),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "testpass"})
     assert resp.status_code == 200
@@ -456,9 +456,9 @@ def test_login_wrong_password_break_glass_401(client: TestClient) -> None:
     user = _make_user(is_break_glass=True, expires_at=_FUTURE)
     cas = AsyncMock()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
-        patch("modulo.api.routes.auth.consume_break_glass_credential", new=cas),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=False),
+        patch("farna.api.routes.auth.consume_break_glass_credential", new=cas),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": "bg@example.com", "password": "wrong"})
     assert resp.status_code == 401
@@ -472,7 +472,7 @@ def test_login_wrong_password_break_glass_401(client: TestClient) -> None:
 
 
 def _refresh_token() -> str:
-    from modulo.auth.jwt import create_refresh_token
+    from farna.auth.jwt import create_refresh_token
 
     return create_refresh_token(
         subject="bg@example.com",
@@ -491,8 +491,8 @@ def test_refresh_denied_for_break_glass_no_write(client: TestClient) -> None:
     no longer live — advance_sequence (the only write in the refresh path) is
     never called, so no family mutation happens."""
     with (
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock()) as advance,
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock()) as advance,
     ):
         client.cookies.set("modulo_refresh", _refresh_token())
         client.cookies.set("XSRF-TOKEN", _CSRF_VALUE)

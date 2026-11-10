@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud import run_node_outputs as rno
+from farna.db.crud import run_node_outputs as rno
 
 
 async def _call(pointers: list[dict[str, object]]) -> dict[str, object]:

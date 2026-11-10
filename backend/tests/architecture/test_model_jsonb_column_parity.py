@@ -112,12 +112,12 @@ from types import ModuleType
 from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 
-import modulo.db.models  # noqa: F401  (registers every mapper on Base.metadata)
-from modulo.db.models.base import Base
+import farna.db.models  # noqa: F401  (registers every mapper on Base.metadata)
+from farna.db.models.base import Base
 from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parent.parent.parent
-_SRC = _BACKEND / "src" / "modulo"
+_SRC = _BACKEND / "src" / "farna"
 _MIGRATION_PATH = _SRC / "db" / "migrations" / "versions" / "0147_json_to_jsonb_standardize.py"
 _MIGRATIONS_DIR = _SRC / "db" / "migrations"
 _MIGRATION_VERSIONS_DIR = _MIGRATIONS_DIR / "versions"

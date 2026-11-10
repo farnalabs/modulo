@@ -20,8 +20,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.core.feature_flags import _KNOWN_FLAGS
-from modulo.core.seed_data.catalog import FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS
+from farna.core.seed_data.catalog import FLAGS
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 # Flags the old 0072 sync migration upserted (the FAR-114 sync set). The seed

@@ -21,20 +21,20 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine.author_warnings import (
+from farna.core.eval_engine.author_warnings import (
     AuthorWarning,
     _extract_evidence_keys_from_node,
     _graph_node_uuid,
     _is_producer_downstream,
     check_author_warnings,
 )
-from modulo.db.models import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.evidence import Evidence
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
+from farna.db.models import Base
+from farna.db.models.eval import Eval
+from farna.db.models.evidence import Evidence
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
 
-_AUTHOR_WARNINGS_LOGGER = "modulo.core.eval_engine.author_warnings"
+_AUTHOR_WARNINGS_LOGGER = "farna.core.eval_engine.author_warnings"
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

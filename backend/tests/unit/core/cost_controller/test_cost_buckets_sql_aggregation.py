@@ -34,7 +34,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller import (
+from farna.core.cost_controller import (
     _REPORT_COMPONENT_LIMIT,
     _SQL_COST_COMPONENT_BUCKETS,
     _SQL_EXPORT_MODEL,
@@ -51,7 +51,7 @@ _FROZEN = datetime(2026, 6, 24, 12, 0, 0, tzinfo=UTC)
 
 @pytest.fixture(autouse=True)
 def _freeze_datetime() -> Any:
-    with patch("modulo.core.cost_controller.datetime") as mock_dt:
+    with patch("farna.core.cost_controller.datetime") as mock_dt:
         mock_dt.now.return_value = _FROZEN
         mock_dt.UTC = UTC
         mock_dt.date = date
@@ -93,7 +93,7 @@ def _reference_buckets_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     above the billed money. Excluding them FIRST restores the parity
     invariant (buckets == billed components).
     """
-    from modulo.core.cost_controller import _report_amount
+    from farna.core.cost_controller import _report_amount
 
     team_components: dict[uuid.UUID | None, dict[str, Decimal]] = {}
     legacy_total = Decimal(0)
@@ -659,7 +659,7 @@ async def test_numeric_string_regex_is_embedded_in_the_buckets_sql() -> None:
     inline twice (amount CASE + HAVING). This pins the embedded pattern to the
     documented constant so the SQL cannot drift from the parity semantics.
     """
-    from modulo.core.cost_controller import _NUMERIC_STRING_RE
+    from farna.core.cost_controller import _NUMERIC_STRING_RE
 
     session = _mock_session([], Decimal(0))
     await build_cost_report_buckets(session, org_id=_ORG_ID, period="month")

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pagerduty import PagerDutyConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.pagerduty import PagerDutyConnector
 
 TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"

@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import resource_pipeline_runs
+from farna.api.mcp_server import resource_pipeline_runs
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -99,7 +99,7 @@ def _make_page_result(items: list, total: int) -> MagicMock:
 
 class TestResourcePipelineRunsAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -107,14 +107,14 @@ class TestResourcePipelineRunsAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await resource_pipeline_runs(pipeline_id=str(uuid.uuid4()))
         assert "revoked" in result.lower() or "expired" in result.lower()
@@ -127,7 +127,7 @@ class TestResourcePipelineRunsAuth:
 
 class TestResourcePipelineRunsSuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -135,19 +135,19 @@ class TestResourcePipelineRunsSuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.db.crud.run.list_runs")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.get_run_cost_breakdowns")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_runs_for_pipeline(
         self,
         mock_session: AsyncMock,
@@ -213,12 +213,12 @@ class TestResourcePipelineRunsSuccess:
         mock_get_run_cost_breakdowns.assert_awaited_once()
         assert set(mock_get_run_cost_breakdowns.await_args.args[1]) == {run1.id, run2.id}
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.db.crud.run.list_runs")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.get_run_cost_breakdowns")
+    @patch("farna.api.mcp_server._session")
     async def test_run_without_children_shows_zero_rollup(
         self,
         mock_session: AsyncMock,
@@ -245,12 +245,12 @@ class TestResourcePipelineRunsSuccess:
         assert "aggregate_cost=$0.075000" in result
         mock_get_child_run_rollup.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.db.crud.run.list_runs")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.get_run_cost_breakdowns")
+    @patch("farna.api.mcp_server._session")
     async def test_run_with_cost_breakdown_renders_breakdown(
         self,
         mock_session: AsyncMock,
@@ -278,12 +278,12 @@ class TestResourcePipelineRunsSuccess:
         assert "breakdown={" in result
         assert "- LLM tokens (llm): $0.075 ledger" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
-    @patch("modulo.db.crud.run.get_run_cost_breakdowns")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.db.crud.run.list_runs")
+    @patch("farna.db.crud.run.get_child_run_rollup")
+    @patch("farna.db.crud.run.get_run_cost_breakdowns")
+    @patch("farna.api.mcp_server._session")
     async def test_deferred_cost_breakdown_attribute_is_never_read(
         self,
         mock_session: AsyncMock,
@@ -317,10 +317,10 @@ class TestResourcePipelineRunsSuccess:
         assert "breakdown={" in result
         assert "- LLM tokens (llm): $0.075 ledger" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.db.crud.run.list_runs")
+    @patch("farna.api.mcp_server._session")
     async def test_empty_runs(
         self,
         mock_session: AsyncMock,
@@ -340,9 +340,9 @@ class TestResourcePipelineRunsSuccess:
 
         assert "no runs" in result.lower()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.api.mcp_server._session")
     async def test_pipeline_not_found(
         self,
         mock_session: AsyncMock,
@@ -358,8 +358,8 @@ class TestResourcePipelineRunsSuccess:
 
         assert "not found" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_pipeline_id_returns_error(
         self,
         mock_session: AsyncMock,

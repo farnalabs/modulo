@@ -94,8 +94,8 @@ def delete_team(team_name: str, request, ctx, client=None) -> None:
     _configure_delete_session(mock_session, table_counts=table_counts, team_row=team_row)
 
     with (
-        patch("modulo.api.routes.teams.set_rls_org"),
-        patch("modulo.api.routes.teams.set_rls_user_context"),
+        patch("farna.api.routes.teams.set_rls_org"),
+        patch("farna.api.routes.teams.set_rls_user_context"),
     ):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
     _store_response(request, ctx, resp)

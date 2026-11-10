@@ -13,7 +13,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/cron.feature")
 
-from modulo.db.models.trigger import Trigger
+from farna.db.models.trigger import Trigger
 from tests.bdd.conftest import harden_session_double, make_mock_run, stub_no_duplicate_trigger
 
 
@@ -129,8 +129,8 @@ def _do_create_cron_trigger(client, request, expression, timezone, input_templat
     )
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=now + datetime.timedelta(hours=1)),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.compute_next_fire", return_value=now + datetime.timedelta(hours=1)),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{mock_trigger.pipeline_id}/triggers",
@@ -202,27 +202,27 @@ def fire_cron_trigger(request, client):
 
     mock_factory = MagicMock(return_value=session)
     with (
-        patch("modulo.core.cron_helpers._get_engine"),
-        patch("modulo.core.cron_helpers.async_sessionmaker", return_value=mock_factory),
-        patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.cron_helpers._get_engine"),
+        patch("farna.core.cron_helpers.async_sessionmaker", return_value=mock_factory),
+        patch("farna.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.cron_helpers.org_is_paused",
+            "farna.core.cron_helpers.org_is_paused",
             new_callable=AsyncMock,
             return_value=False,
         ),
         patch(
-            "modulo.core.cron_helpers._count_active_runs",
+            "farna.core.cron_helpers._count_active_runs",
             new_callable=AsyncMock,
             return_value=0,
         ),
-        patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run_mock),
-        patch("modulo.core.cron_helpers._log_event", new_callable=AsyncMock) as mock_event,
+        patch("farna.db.crud.run.create_run", new_callable=AsyncMock, return_value=run_mock),
+        patch("farna.core.cron_helpers._log_event", new_callable=AsyncMock) as mock_event,
     ):
         mock_event.return_value = MagicMock(id=uuid.uuid4())
 
         import asyncio
 
-        from modulo.core.cron_helpers import fire_cron_trigger as fire_fn
+        from farna.core.cron_helpers import fire_cron_trigger as fire_fn
 
         event_loop = asyncio.new_event_loop()
         try:

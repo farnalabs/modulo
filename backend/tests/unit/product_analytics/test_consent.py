@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.core.product_analytics.consent import (
+from farna.core.product_analytics.consent import (
     apply_consent_action,
     coerce_switch_value,
     default_consent_state,
@@ -17,7 +17,7 @@ from modulo.core.product_analytics.consent import (
     partner_license_requires_analytics,
     set_level,
 )
-from modulo.core.product_analytics.constants import (
+from farna.core.product_analytics.constants import (
     DISMISS_COOLDOWN,
     LEVEL_ALL,
     LEVEL_OFF,

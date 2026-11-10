@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from modulo.core.exceptions import (
+from farna.core.exceptions import (
     OrgDeletedError,
     PipelineNotRunnableError,
     SnapshotLockNotAvailableError,

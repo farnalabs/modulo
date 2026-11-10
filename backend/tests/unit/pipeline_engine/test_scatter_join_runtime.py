@@ -21,15 +21,15 @@ from typing import Any
 import pytest
 from langchain_core.messages import BaseMessage
 
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
-from modulo.core.pipeline_engine.scatter_join import (
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
+from farna.core.pipeline_engine.scatter_join import (
     JoinConfigurationError,
     validate_scatter_join_node,
 )
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 
 class _StubAdapter(ModelBackendBase):
@@ -229,7 +229,7 @@ async def test_sandbox_agent_fan_out_honored_and_delivers_item(monkeypatch: pyte
         return _node
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.graph_cache.make_sandbox_agent_fn",
+        "farna.core.pipeline_engine.graph_cache.make_sandbox_agent_fn",
         fake_sandbox_fn,
     )
 

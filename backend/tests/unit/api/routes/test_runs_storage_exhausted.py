@@ -15,12 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.capacity import StorageExhaustedError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.db.capacity import StorageExhaustedError
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -86,17 +86,17 @@ def test_post_runs_returns_503_storage_exhausted(client: TestClient) -> None:
     fake_snapshot.id = _PIPELINE_ID
     fake_snapshot.graph_json = {"nodes": [], "edges": []}
     with (
-        patch("modulo.db.capacity.enforce_capacity_gate", new=AsyncMock(side_effect=StorageExhaustedError("full"))),
+        patch("farna.db.capacity.enforce_capacity_gate", new=AsyncMock(side_effect=StorageExhaustedError("full"))),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=fake_snapshot),
         ),
-        patch("modulo.api.routes.runs.get_pipeline", new=AsyncMock(return_value=MagicMock(id=_PIPELINE_ID))),
-        patch("modulo.api.routes.runs._validate_run_input_basics", new=AsyncMock()),
-        patch("modulo.api.routes.runs._enforce_trigger_rate_limit", new=AsyncMock(return_value=None)),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_user_context", new=AsyncMock()),
-        patch("modulo.db.settings_resolver.resolve_authz_enforce", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.runs.get_pipeline", new=AsyncMock(return_value=MagicMock(id=_PIPELINE_ID))),
+        patch("farna.api.routes.runs._validate_run_input_basics", new=AsyncMock()),
+        patch("farna.api.routes.runs._enforce_trigger_rate_limit", new=AsyncMock(return_value=None)),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_user_context", new=AsyncMock()),
+        patch("farna.db.settings_resolver.resolve_authz_enforce", new=AsyncMock(return_value=False)),
     ):
         resp = client.post(
             "/api/v1/runs",

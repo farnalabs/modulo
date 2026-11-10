@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.core.library_service import (
+from farna.core.library_service import (
     _MODULO_PRIMITIVES,
     _fetch_published_community_from_db,
     copy_to_adapt,
@@ -25,7 +25,7 @@ from modulo.core.library_service import (
     get_primitive_by_slug,
     list_primitives,
 )
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 from .helpers import mock_session
 
@@ -76,8 +76,8 @@ async def test_get_primitive_uses_own_transaction_when_not_in_one():
     prim = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
     ):
         result = await get_primitive(session, org_id, prim.id)
 
@@ -92,9 +92,9 @@ async def test_get_primitive_returns_none_on_programming_error():
     pid = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
         ),
@@ -110,9 +110,9 @@ async def test_get_primitive_raises_on_sqlalchemy_error():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("boom"),
         ),
@@ -132,7 +132,7 @@ async def test_get_primitive_by_slug_found_in_db():
     prim = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(prim)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "test-prim")
@@ -146,7 +146,7 @@ async def test_get_primitive_by_slug_uses_own_transaction_when_not_in_one():
     prim = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(prim)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "test-prim")
@@ -161,7 +161,7 @@ async def test_get_primitive_by_slug_falls_back_to_modulo():
     native = _MODULO_PRIMITIVES[0]
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
     ):
         result = await get_primitive_by_slug(session, org_id, native.primitive_type, native.slug)
@@ -176,7 +176,7 @@ async def test_get_primitive_by_slug_version_mismatch_on_registry_fallback():
     native = _MODULO_PRIMITIVES[0]
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
     ):
         result = await get_primitive_by_slug(session, org_id, native.primitive_type, native.slug, version="999.0")
@@ -189,7 +189,7 @@ async def test_get_primitive_by_slug_returns_none_when_unmatched():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(session, "execute", new_callable=AsyncMock, return_value=_scalars_first_result(None)),
     ):
         result = await get_primitive_by_slug(session, org_id, "schema", "zzz-no-such-slug")
@@ -202,7 +202,7 @@ async def test_get_primitive_by_slug_returns_none_on_programming_error():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(
             session,
             "execute",
@@ -220,7 +220,7 @@ async def test_get_primitive_by_slug_raises_on_sqlalchemy_error():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch.object(
             session,
             "execute",
@@ -245,10 +245,10 @@ async def test_copy_to_adapt_sets_user_context_when_created_by_provided():
     copied = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.set_rls_user_context", new_callable=AsyncMock) as set_user,
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_user_context", new_callable=AsyncMock) as set_user,
+        patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
+        patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
     ):
         result = await copy_to_adapt(session, org_id, source.id, created_by=created_by, org_role="member")
 
@@ -263,10 +263,10 @@ async def test_copy_to_adapt_does_not_set_user_context_without_created_by():
     copied = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.set_rls_user_context", new_callable=AsyncMock) as set_user,
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_user_context", new_callable=AsyncMock) as set_user,
+        patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
+        patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -281,9 +281,9 @@ async def test_copy_to_adapt_raises_when_source_disappears_after_refresh():
 
     # First call (pre-transaction) finds it; in-transaction re-read finds nothing.
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -301,10 +301,10 @@ async def test_copy_to_adapt_raises_when_in_transaction_reread_is_missing():
     source = _fake_primitive(pid=pid, visibility="org")
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_primitive", new_callable=AsyncMock, return_value=source),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.get_primitive", new_callable=AsyncMock, return_value=source),
         patch(
-            "modulo.core.library_service.get_library_primitive",
+            "farna.core.library_service.get_library_primitive",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -322,9 +322,9 @@ async def test_copy_to_adapt_increments_download_count_for_registry_source():
     copied = _fake_primitive()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=registry_prim),
-        patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=registry_prim),
+        patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=copied),
     ):
         await copy_to_adapt(session, org_id, registry_prim.id)
 
@@ -340,10 +340,10 @@ async def test_copy_to_adapt_programming_error_propagates():
     prim = _fake_primitive(visibility="org")
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.core.library_service.create_library_primitive",
+            "farna.core.library_service.create_library_primitive",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
         ),
@@ -363,9 +363,9 @@ async def test_list_primitives_degrades_on_programming_error():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.list_library_primitives",
+            "farna.core.library_service.list_library_primitives",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
         ),
@@ -382,9 +382,9 @@ async def test_list_primitives_degrades_on_generic_error():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.list_library_primitives",
+            "farna.core.library_service.list_library_primitives",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ),
@@ -400,9 +400,9 @@ async def test_list_primitives_propagates_cancellation():
     org_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.list_library_primitives",
+            "farna.core.library_service.list_library_primitives",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError(),
         ),
@@ -417,17 +417,17 @@ async def test_list_primitives_dedupes_db_community_against_in_memory():
     org_id = uuid.uuid4()
     org_page: PageResult = PageResult(items=[], total=0, page=1, page_size=20)
 
-    from modulo.core.library_service import _COMMUNITY_PRIMITIVES
+    from farna.core.library_service import _COMMUNITY_PRIMITIVES
 
     first = _COMMUNITY_PRIMITIVES[0]
     duplicate = _fake_primitive(pid=first.id, visibility="community")
     extra = _fake_primitive(visibility="community")
 
     with (
-        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
+        patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page),
         patch(
-            "modulo.core.library_service._fetch_published_community_from_db",
+            "farna.core.library_service._fetch_published_community_from_db",
             new_callable=AsyncMock,
             return_value=[duplicate, extra],
         ),
@@ -452,7 +452,7 @@ async def test_fetch_published_community_applies_search_filter():
     captured_stmt = None
 
     async def _execute(stmt, *args: object, **kwargs: object) -> MagicMock:
-        from modulo.core.library_service import _COMMUNITY_PRIMITIVES
+        from farna.core.library_service import _COMMUNITY_PRIMITIVES
 
         nonlocal captured_stmt
         captured_stmt = stmt
@@ -462,7 +462,7 @@ async def test_fetch_published_community_applies_search_filter():
 
     result = await _fetch_published_community_from_db(session, org_id, search="  French  ")
 
-    from modulo.core.library_service import _COMMUNITY_PRIMITIVES as EXPECTED
+    from farna.core.library_service import _COMMUNITY_PRIMITIVES as EXPECTED
 
     assert captured_stmt is not None
     compiled = str(captured_stmt.compile(compile_kwargs={"literal_binds": True}))

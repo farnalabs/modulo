@@ -12,8 +12,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
 
-from modulo.core.audit_logger import _apply_filters
-from modulo.db.models.audit_event import AuditEvent
+from farna.core.audit_logger import _apply_filters
+from farna.db.models.audit_event import AuditEvent
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

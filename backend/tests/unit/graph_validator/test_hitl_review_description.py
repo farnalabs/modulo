@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graph_validator import (
+from farna.core.graph_validator import (
     HITL_DESCRIPTION_MIN_LENGTH,
     GraphValidator,
     check_hitl_review_descriptions,

@@ -29,10 +29,10 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.feedback_manager import FeedbackManager
-from modulo.core.guardrails.correction import CorrectionDefinition, CorrectionDetectorFamily, CorrectionVerdict
-from modulo.db.rls import set_rls_org
-from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+from farna.core.feedback_manager import FeedbackManager
+from farna.core.guardrails.correction import CorrectionDefinition, CorrectionDetectorFamily, CorrectionVerdict
+from farna.db.rls import set_rls_org
+from farna.model_backends.stub.backend import StubModelBackend, normalize_input
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration
@@ -190,7 +190,7 @@ async def _create_feedback_record(
     same counter production uses makes the fixture order-independent, and stays
     collision-free against pre-existing runs.
     """
-    from modulo.db.crud.run import _allocate_run_number
+    from farna.db.crud.run import _allocate_run_number
 
     record_id = uuid.uuid4()
     run_id = run_id or uuid.uuid4()
@@ -264,14 +264,14 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval import Eval
+            from farna.db.models.eval import Eval
 
             guardrail_row = (
                 await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
-        from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
-        from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
+        from farna.core.eval_engine import EvalDefinition as EvalDefDTO
+        from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
 
         guardrail_dto = EvalDefDTO(
             id=guardrail_row.id,
@@ -288,7 +288,7 @@ class TestSingleNodeCorrectionPersistsResolved:
         redacted_input = {"body": "\u2022\u2022\u2022"}
         backend = _StubCorrectionBackend({_fixture_key(correction, redacted_input): json.dumps({"body": "safe now"})})
 
-        with patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()):
+        with patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()):
             async with factory() as session, session.begin():
                 await set_rls_org(session, test_org)
                 mgr = FeedbackManager(session, test_org)
@@ -325,14 +325,14 @@ class TestSingleNodeCorrectionPersistsResolved:
             await set_rls_org(session, test_org)
             from sqlalchemy import select
 
-            from modulo.db.models.eval import Eval
+            from farna.db.models.eval import Eval
 
             guardrail_row = (
                 await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
             ).scalar_one()
 
-        from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
-        from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
+        from farna.core.eval_engine import EvalDefinition as EvalDefDTO
+        from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
 
         guardrail_dto = EvalDefDTO(
             id=guardrail_row.id,
@@ -376,7 +376,7 @@ class TestCorrectionRunRetryExclusion:
         correction_rig: dict[str, uuid.UUID | str],
     ) -> None:
         """A correction run is never re-dispatched by the pipeline retry policy."""
-        from modulo.core.pipeline_engine.executor import _retry_after_policy
+        from farna.core.pipeline_engine.executor import _retry_after_policy
 
         policy = {"on": ["failure"], "max_retries": 2}
         # A correction run's terminal outcome must NOT be retried: the policy
@@ -397,9 +397,9 @@ class TestOrgWideConcurrentCap:
         test_user: uuid.UUID,
         correction_rig: dict[str, uuid.UUID | str],
     ) -> None:
-        from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
-        from modulo.core.guardrails.correction import CorrectionCapExceededError
-        from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
+        from farna.core.eval_engine import EvalDefinition as EvalDefDTO
+        from farna.core.guardrails.correction import CorrectionCapExceededError
+        from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         # THREE records in 'correcting': two OTHER in-flight corrections (cap=2
@@ -463,8 +463,8 @@ class TestOrgWideConcurrentCap:
         """
         from sqlalchemy import text
 
-        from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
-        from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
+        from farna.core.eval_engine import EvalDefinition as EvalDefDTO
+        from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with db_engine.connect() as conn:

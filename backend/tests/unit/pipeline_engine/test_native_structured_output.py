@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from modulo.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine import node_runner as nr
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,7 +57,7 @@ class TestInvokeNodeModelSchemaThreading:
         hub = _FakeHub(backend)
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             result = await nr._invoke_node_model(
@@ -75,7 +75,7 @@ class TestInvokeNodeModelSchemaThreading:
         hub = _FakeHub(backend)
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -92,7 +92,7 @@ class TestInvokeNodeModelSchemaThreading:
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -107,7 +107,7 @@ class TestInvokeNodeModelSchemaThreading:
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -123,7 +123,7 @@ class TestInvokeNodeModelSchemaThreading:
         backend = _RecordingBackend(supports_native=True)
         hub = _FakeHub(backend)
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             result = await nr._invoke_node_model(
@@ -155,7 +155,7 @@ class TestInvokeNodeModelSchemaThreading:
         flag = [False]
         with (
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
             patch.object(nr, "_is_safe_schema", side_effect=[(True, ""), (False, "too large")]),

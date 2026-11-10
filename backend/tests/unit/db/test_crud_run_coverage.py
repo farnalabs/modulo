@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     _SANDBOX_CONCURRENCY_DEFAULT,
     _SANDBOX_CONCURRENCY_KEY,
     _SANDBOX_CONCURRENCY_MAX,
@@ -52,7 +52,7 @@ from modulo.db.crud.run import (
     run_idempotency_key,
     run_idempotency_ref,
 )
-from modulo.db.models.run import (
+from farna.db.models.run import (
     TERMINAL_STATUSES,
 )
 
@@ -238,7 +238,7 @@ class TestCanonicaliseRefEntries:
 
     def test_force_source_counts_unknown(self):
         entries = [{"kind": "issue", "ref": "FAR-1", "source": "wrong"}]
-        with patch("modulo.db.crud.run.notify_refs_event") as mock_notify:
+        with patch("farna.db.crud.run.notify_refs_event") as mock_notify:
             _canonicalise_ref_entries(entries, force_source="derived")
             # Should have called notify for unknown_source
             assert mock_notify.call_count >= 1
@@ -804,8 +804,8 @@ class TestAllocateRunNumber:
         mock_result.scalar_one.return_value = 5
         session.execute = AsyncMock(return_value=mock_result)
 
-        with patch("modulo.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="postgresql"):
-            from modulo.db.crud.run import _allocate_run_number
+        with patch("farna.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="postgresql"):
+            from farna.db.crud.run import _allocate_run_number
 
             result = await _allocate_run_number(session, uuid.uuid4())
         assert result == 5
@@ -817,8 +817,8 @@ class TestAllocateRunNumber:
         mock_result.scalar_one.return_value = 3
         session.execute = AsyncMock(return_value=mock_result)
 
-        with patch("modulo.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="sqlite"):
-            from modulo.db.crud.run import _allocate_run_number
+        with patch("farna.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="sqlite"):
+            from farna.db.crud.run import _allocate_run_number
 
             result = await _allocate_run_number(session, uuid.uuid4())
         assert result == 3
@@ -830,8 +830,8 @@ class TestAllocateRunNumber:
         mock_result.scalar_one.return_value = None
         session.execute = AsyncMock(return_value=mock_result)
 
-        with patch("modulo.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="postgresql"):
-            from modulo.db.crud.run import _allocate_run_number
+        with patch("farna.db.crud.run._get_dialect_name", new_callable=AsyncMock, return_value="postgresql"):
+            from farna.db.crud.run import _allocate_run_number
 
             result = await _allocate_run_number(session, uuid.uuid4())
         assert result == 1
@@ -850,8 +850,8 @@ class TestEnsureOrgNotDeleted:
         mock_result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=mock_result)
 
-        from modulo.core.exceptions import OrgDeletedError
-        from modulo.db.crud.run import _ensure_org_not_deleted
+        from farna.core.exceptions import OrgDeletedError
+        from farna.db.crud.run import _ensure_org_not_deleted
 
         with pytest.raises(OrgDeletedError):
             await _ensure_org_not_deleted(session, uuid.uuid4())
@@ -863,8 +863,8 @@ class TestEnsureOrgNotDeleted:
         mock_result.scalar_one_or_none.return_value = "deleted"
         session.execute = AsyncMock(return_value=mock_result)
 
-        from modulo.core.exceptions import OrgDeletedError
-        from modulo.db.crud.run import _ensure_org_not_deleted
+        from farna.core.exceptions import OrgDeletedError
+        from farna.db.crud.run import _ensure_org_not_deleted
 
         with pytest.raises(OrgDeletedError):
             await _ensure_org_not_deleted(session, uuid.uuid4())
@@ -876,7 +876,7 @@ class TestEnsureOrgNotDeleted:
         mock_result.scalar_one_or_none.return_value = "active"
         session.execute = AsyncMock(return_value=mock_result)
 
-        from modulo.db.crud.run import _ensure_org_not_deleted
+        from farna.db.crud.run import _ensure_org_not_deleted
 
         await _ensure_org_not_deleted(session, uuid.uuid4())
         # If no exception was raised, the org status check passed.
@@ -896,7 +896,7 @@ class TestReadGuardrailsKillSwitch:
         mock_result.scalar_one_or_none.return_value = True
         session.execute = AsyncMock(return_value=mock_result)
 
-        from modulo.db.crud.run import _read_guardrails_kill_switch
+        from farna.db.crud.run import _read_guardrails_kill_switch
 
         assert await _read_guardrails_kill_switch(session, uuid.uuid4()) is True
 
@@ -907,7 +907,7 @@ class TestReadGuardrailsKillSwitch:
         mock_result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=mock_result)
 
-        from modulo.db.crud.run import _read_guardrails_kill_switch
+        from farna.db.crud.run import _read_guardrails_kill_switch
 
         assert await _read_guardrails_kill_switch(session, uuid.uuid4()) is False
 
@@ -918,7 +918,7 @@ class TestReadGuardrailsKillSwitch:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db boom"))
 
-        from modulo.db.crud.run import _read_guardrails_kill_switch
+        from farna.db.crud.run import _read_guardrails_kill_switch
 
         assert await _read_guardrails_kill_switch(session, uuid.uuid4()) is False
 
@@ -936,7 +936,7 @@ class TestGetDialectName:
         bind.dialect.name = "postgresql"
         session.get_bind = AsyncMock(return_value=bind)
 
-        from modulo.db.crud.run import _get_dialect_name
+        from farna.db.crud.run import _get_dialect_name
 
         assert await _get_dialect_name(session) == "postgresql"
 
@@ -950,7 +950,7 @@ class TestApplyRunClaimFields:
     def test_sets_started_at_when_running(self):
         run = SimpleNamespace(status="running", started_at=None, claimed_by=None, completed_at=None)
         update = SimpleNamespace(claimed_by=None)
-        from modulo.db.crud.run import _apply_run_claim_fields
+        from farna.db.crud.run import _apply_run_claim_fields
 
         _apply_run_claim_fields(run, "running", update)
         assert run.started_at is not None
@@ -959,7 +959,7 @@ class TestApplyRunClaimFields:
         existing = datetime.now(UTC)
         run = SimpleNamespace(status="running", started_at=existing, claimed_by=None, completed_at=None)
         update = SimpleNamespace(claimed_by=None)
-        from modulo.db.crud.run import _apply_run_claim_fields
+        from farna.db.crud.run import _apply_run_claim_fields
 
         _apply_run_claim_fields(run, "running", update)
         assert run.started_at == existing
@@ -967,7 +967,7 @@ class TestApplyRunClaimFields:
     def test_sets_claimed_by(self):
         run = SimpleNamespace(status="running", started_at=None, claimed_by=None, completed_at=None)
         update = SimpleNamespace(claimed_by="executor-1")
-        from modulo.db.crud.run import _apply_run_claim_fields
+        from farna.db.crud.run import _apply_run_claim_fields
 
         _apply_run_claim_fields(run, "running", update)
         assert run.claimed_by == "executor-1"
@@ -975,7 +975,7 @@ class TestApplyRunClaimFields:
     def test_sets_completed_at_for_terminal(self):
         run = SimpleNamespace(status="complete", started_at=None, claimed_by=None, completed_at=None)
         update = SimpleNamespace(claimed_by=None)
-        from modulo.db.crud.run import _apply_run_claim_fields
+        from farna.db.crud.run import _apply_run_claim_fields
 
         _apply_run_claim_fields(run, "complete", update)
         assert run.completed_at is not None
@@ -985,7 +985,7 @@ class TestApplyRunErrorFields:
     def test_sets_error_code(self):
         run = SimpleNamespace(error_code=None, error_detail=None)
         update = SimpleNamespace(clear_error_code=False, error_code="timeout", error_detail="timed out")
-        from modulo.db.crud.run import _apply_run_error_fields
+        from farna.db.crud.run import _apply_run_error_fields
 
         _apply_run_error_fields(run, update)
         assert run.error_code == "timeout"
@@ -994,7 +994,7 @@ class TestApplyRunErrorFields:
     def test_clears_error_code(self):
         run = SimpleNamespace(error_code="old", error_detail="old detail")
         update = SimpleNamespace(clear_error_code=True, error_code=None, error_detail=None)
-        from modulo.db.crud.run import _apply_run_error_fields
+        from farna.db.crud.run import _apply_run_error_fields
 
         _apply_run_error_fields(run, update)
         assert run.error_code is None
@@ -1003,7 +1003,7 @@ class TestApplyRunErrorFields:
     def test_no_change_when_none(self):
         run = SimpleNamespace(error_code="keep", error_detail="keep")
         update = SimpleNamespace(clear_error_code=False, error_code=None, error_detail=None)
-        from modulo.db.crud.run import _apply_run_error_fields
+        from farna.db.crud.run import _apply_run_error_fields
 
         _apply_run_error_fields(run, update)
         assert run.error_code == "keep"
@@ -1013,7 +1013,7 @@ class TestApplyRunCostFields:
     def test_sets_total_tokens(self):
         run = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown="old")
         update = SimpleNamespace(total_tokens=100, total_cost_usd=None, cost_breakdown=SimpleNamespace)
-        from modulo.db.crud.run import _apply_run_cost_fields
+        from farna.db.crud.run import _apply_run_cost_fields
 
         _apply_run_cost_fields(run, update)
         assert run.total_tokens == 100
@@ -1021,17 +1021,17 @@ class TestApplyRunCostFields:
     def test_sets_cost_breakdown(self):
         run = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown="old")
         update = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown={"new": True})
-        from modulo.db.crud.run import _apply_run_cost_fields
+        from farna.db.crud.run import _apply_run_cost_fields
 
         _apply_run_cost_fields(run, update)
         assert run.cost_breakdown == {"new": True}
 
     def test_sentinel_leaves_cost_breakdown_alone(self):
-        from modulo.db.crud.run import _COST_BREAKDOWN_SENTINEL
+        from farna.db.crud.run import _COST_BREAKDOWN_SENTINEL
 
         run = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown="keep")
         update = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown=_COST_BREAKDOWN_SENTINEL)
-        from modulo.db.crud.run import _apply_run_cost_fields
+        from farna.db.crud.run import _apply_run_cost_fields
 
         _apply_run_cost_fields(run, update)
         assert run.cost_breakdown == "keep"
@@ -1039,7 +1039,7 @@ class TestApplyRunCostFields:
     def test_none_sets_null(self):
         run = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown="old")
         update = SimpleNamespace(total_tokens=None, total_cost_usd=None, cost_breakdown=None)
-        from modulo.db.crud.run import _apply_run_cost_fields
+        from farna.db.crud.run import _apply_run_cost_fields
 
         _apply_run_cost_fields(run, update)
         assert run.cost_breakdown is None
@@ -1049,7 +1049,7 @@ class TestApplyRunOutputFields:
     def test_sets_node_token_usage(self):
         run = SimpleNamespace(node_token_usage=None)
         update = SimpleNamespace(node_token_usage={"node1": 100})
-        from modulo.db.crud.run import _apply_run_output_fields
+        from farna.db.crud.run import _apply_run_output_fields
 
         _apply_run_output_fields(run, update)
         assert run.node_token_usage == {"node1": 100}
@@ -1057,7 +1057,7 @@ class TestApplyRunOutputFields:
     def test_none_leaves_alone(self):
         run = SimpleNamespace(node_token_usage={"keep": True})
         update = SimpleNamespace(node_token_usage=None)
-        from modulo.db.crud.run import _apply_run_output_fields
+        from farna.db.crud.run import _apply_run_output_fields
 
         _apply_run_output_fields(run, update)
         assert run.node_token_usage == {"keep": True}

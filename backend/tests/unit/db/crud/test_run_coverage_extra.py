@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.db.crud.run import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.db.crud.run import (
     COALESCE_KEY_FIELD,
     WorkItemRefsRequiredError,
     _canonicalise_ref_entries,
@@ -40,7 +40,7 @@ from modulo.db.crud.run import (
     run_idempotency_key,
     run_idempotency_ref,
 )
-from modulo.db.lifecycle_refs import REFS_EVENT_MALFORMED, set_refs_counter_hook
+from farna.db.lifecycle_refs import REFS_EVENT_MALFORMED, set_refs_counter_hook
 
 _ORG_ID = uuid.uuid4()
 
@@ -148,7 +148,7 @@ def test_input_hash_handles_non_stringable_values() -> None:
 
 
 def test_strip_reserved_keys_removes_system_keys() -> None:
-    from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY
+    from farna.db.lifecycle_refs import WORK_ITEM_REFS_KEY
 
     payload = {
         "user_key": "keep",
@@ -166,7 +166,7 @@ def test_strip_reserved_keys_removes_system_keys() -> None:
 
 
 def test_strip_reserved_keys_preserves_work_item_refs() -> None:
-    from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY
+    from farna.db.lifecycle_refs import WORK_ITEM_REFS_KEY
 
     refs = [{"kind": "issue", "ref": "ABC"}]
     payload = {WORK_ITEM_REFS_KEY: refs, "_coalesce_key": "gone"}
@@ -221,7 +221,7 @@ def test_canonicalise_ref_entries_drops_malformed_with_force_source() -> None:
 
 
 def test_harvest_wire_refs_prefers_system_carrier() -> None:
-    from modulo.db.lifecycle_refs import WIRE_REFS_ALIAS_KEY, WORK_ITEM_REFS_KEY
+    from farna.db.lifecycle_refs import WIRE_REFS_ALIAS_KEY, WORK_ITEM_REFS_KEY
 
     refs = [{"kind": "issue", "ref": "1"}]
     payload = {
@@ -232,7 +232,7 @@ def test_harvest_wire_refs_prefers_system_carrier() -> None:
 
 
 def test_harvest_wire_refs_falls_back_to_wire_alias() -> None:
-    from modulo.db.lifecycle_refs import WIRE_REFS_ALIAS_KEY
+    from farna.db.lifecycle_refs import WIRE_REFS_ALIAS_KEY
 
     refs = [{"kind": "issue", "ref": "3"}]
     payload = {WIRE_REFS_ALIAS_KEY: refs}
@@ -244,7 +244,7 @@ def test_harvest_wire_refs_returns_none_when_absent() -> None:
 
 
 def test_harvest_wire_refs_ignores_non_list() -> None:
-    from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY
+    from farna.db.lifecycle_refs import WORK_ITEM_REFS_KEY
 
     assert _harvest_wire_refs({WORK_ITEM_REFS_KEY: "not-a-list"}) is None
 
@@ -499,7 +499,7 @@ def test_work_item_refs_required_error_message() -> None:
 def test_select_guardrail_definitions_no_pins_uses_live_rows() -> None:
     """FAR-209 Track B: live-row conversion keeps the returned defs, excluding
     only the output-point interception defs (an input-point def survives)."""
-    from modulo.db.crud.run import _select_guardrail_definitions
+    from farna.db.crud.run import _select_guardrail_definitions
 
     # Input-point default: survives the seam filter.
     input_def = EvalDefinition(
@@ -519,11 +519,11 @@ def test_select_guardrail_definitions_no_pins_uses_live_rows() -> None:
         failure_behaviour="block",
     )
     mock_row = MagicMock()
-    with patch("modulo.core.guardrails.to_engine_definition", side_effect=[input_def]):
+    with patch("farna.core.guardrails.to_engine_definition", side_effect=[input_def]):
         result = _select_guardrail_definitions([mock_row], [], None, None)
     assert result == [input_def]
     # Output-point: excluded from the guarded eval-loop selection.
-    with patch("modulo.core.guardrails.to_engine_definition", side_effect=[output_def]):
+    with patch("farna.core.guardrails.to_engine_definition", side_effect=[output_def]):
         result_output = _select_guardrail_definitions([mock_row], [], None, None)
     assert result_output == []
 
@@ -531,7 +531,7 @@ def test_select_guardrail_definitions_no_pins_uses_live_rows() -> None:
 def test_select_guardrail_definitions_with_pins_returns_pinned() -> None:
     """Pinned defs are returned verbatim (FAR-209 Track B: the seam excludes
     only output-point interception defs — an input-point pinned def survives)."""
-    from modulo.db.crud.run import _select_guardrail_definitions
+    from farna.db.crud.run import _select_guardrail_definitions
 
     input_def = EvalDefinition(
         id=uuid.uuid4(),
@@ -629,7 +629,7 @@ async def test_store_run_outputs_with_retry_enters_the_second_attempt() -> None:
     session.begin_nested = MagicMock(return_value=savepoint)
     replace = AsyncMock(side_effect=[_statement_timeout_error(), None])
 
-    with patch("modulo.db.crud.run.replace_run_node_outputs", replace):
+    with patch("farna.db.crud.run.replace_run_node_outputs", replace):
         await _store_run_outputs_with_retry(
             session,
             run_id=uuid.uuid4(),

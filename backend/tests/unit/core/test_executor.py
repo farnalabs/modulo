@@ -7,7 +7,7 @@ budget owned by the correction path itself; the pipeline retry policy must never
 re-dispatch a correction run (no chained corrections).
 """
 
-from modulo.core.pipeline_engine.executor import _retry_after_policy
+from farna.core.pipeline_engine.executor import _retry_after_policy
 
 
 def _correction_run_guard(trigger_type: str) -> bool:

@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.schema_registry.rendering import (
+from farna.core.schema_registry.rendering import (
     _MAX_REF_DEPTH,
     _is_abstract_schema,
     _render_cache,
@@ -193,7 +193,7 @@ class TestProviderStrict:
 
     def test_per_provider_sets_differ(self) -> None:
         """Verify that OpenAI and Anthropic have different unsupported sets."""
-        from modulo.core.schema_registry.rendering import _PROVIDER_UNSUPPORTED
+        from farna.core.schema_registry.rendering import _PROVIDER_UNSUPPORTED
 
         openai_set = _PROVIDER_UNSUPPORTED.get("openai", frozenset())
         anthropic_set = _PROVIDER_UNSUPPORTED.get("anthropic", frozenset())
@@ -332,7 +332,7 @@ class TestFlattenRefList:
     """The array flattener descends dict items and passes scalars through."""
 
     def test_flattens_dict_items_and_keeps_scalar_items(self) -> None:
-        from modulo.core.schema_registry.rendering import _flatten_refs
+        from farna.core.schema_registry.rendering import _flatten_refs
 
         schema: dict[str, Any] = {
             "type": "array",
@@ -369,7 +369,7 @@ class TestFallback:
         """Simulate an internal error during translation — should fall back to verbatim."""
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         # Patch _translate to raise
-        import modulo.core.schema_registry.rendering as mod
+        import farna.core.schema_registry.rendering as mod
 
         original_translate = mod._translate
 
@@ -460,7 +460,7 @@ class TestSchemaProfileRoundTrip:
         """PipelineGraphNode accepts schema_profile as a Literal."""
         import uuid
 
-        from modulo.api.routes.pipelines import GraphPosition, PipelineGraphNode
+        from farna.api.routes.pipelines import GraphPosition, PipelineGraphNode
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -474,7 +474,7 @@ class TestSchemaProfileRoundTrip:
         """Absent schema_profile defaults to None (verbatim)."""
         import uuid
 
-        from modulo.api.routes.pipelines import GraphPosition, PipelineGraphNode
+        from farna.api.routes.pipelines import GraphPosition, PipelineGraphNode
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -489,7 +489,7 @@ class TestSchemaProfileRoundTrip:
 
         from pydantic import ValidationError
 
-        from modulo.api.routes.pipelines import GraphPosition, PipelineGraphNode
+        from farna.api.routes.pipelines import GraphPosition, PipelineGraphNode
 
         with pytest.raises(ValidationError):
             PipelineGraphNode(
@@ -503,7 +503,7 @@ class TestSchemaProfileRoundTrip:
         """schema_profile survives model_dump → model_validate round-trip."""
         import uuid
 
-        from modulo.api.routes.pipelines import GraphPosition, PipelineGraphNode
+        from farna.api.routes.pipelines import GraphPosition, PipelineGraphNode
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -540,7 +540,7 @@ class TestSchemaProfileRoundTrip:
 class TestCompositeExpanderPropagation:
     def test_propagate_schema_profile_to_exit_nodes(self) -> None:
         """schema_profile from composite node propagates to exit sub-nodes."""
-        from modulo.core.composite_engine.expander import _propagate_output_schema
+        from farna.core.composite_engine.expander import _propagate_output_schema
 
         composite_node = {
             "id": "composite-1",
@@ -563,7 +563,7 @@ class TestCompositeExpanderPropagation:
 
     def test_no_schema_profile_no_propagation(self) -> None:
         """When composite has no schema_profile, nothing is propagated."""
-        from modulo.core.composite_engine.expander import _propagate_output_schema
+        from farna.core.composite_engine.expander import _propagate_output_schema
 
         composite_node = {"id": "composite-1", "output_schema_json": {"type": "object"}}
         flat_nodes = [{"id": "exit-1"}]
@@ -625,7 +625,7 @@ class TestPreviewStripWarnings:
 class TestAgentModelSchemaProfile:
     def test_agent_model_has_schema_profile(self) -> None:
         """Verify the Agent model declares schema_profile."""
-        from modulo.db.models.agent import Agent
+        from farna.db.models.agent import Agent
 
         assert hasattr(Agent, "schema_profile")
 
@@ -633,7 +633,7 @@ class TestAgentModelSchemaProfile:
         """Verify AgentCreate accepts schema_profile."""
         import uuid
 
-        from modulo.api.routes.agents import AgentCreate
+        from farna.api.routes.agents import AgentCreate
 
         agent = AgentCreate(
             name="test-agent",
@@ -652,7 +652,7 @@ class TestAgentModelSchemaProfile:
         import uuid
         from datetime import UTC, datetime
 
-        from modulo.api.routes.agents import AgentResponse
+        from farna.api.routes.agents import AgentResponse
 
         resp = AgentResponse(
             id=uuid.uuid4(),
@@ -785,7 +785,7 @@ class TestSchemaProfileSourceOfTruth:
     def test_schema_profile_values_matches_literal_args(self) -> None:
         from typing import get_args
 
-        from modulo.core.schema_registry.rendering import SCHEMA_PROFILE_VALUES, SchemaProfile
+        from farna.core.schema_registry.rendering import SCHEMA_PROFILE_VALUES, SchemaProfile
 
         expected = set(get_args(SchemaProfile))
         assert set(SCHEMA_PROFILE_VALUES) == expected
@@ -793,8 +793,8 @@ class TestSchemaProfileSourceOfTruth:
     def test_valid_schema_profiles_matches_literal_args(self) -> None:
         from typing import get_args
 
-        from modulo.core.pipeline_engine.node_runner import _VALID_SCHEMA_PROFILES
-        from modulo.core.schema_registry.rendering import SchemaProfile
+        from farna.core.pipeline_engine.node_runner import _VALID_SCHEMA_PROFILES
+        from farna.core.schema_registry.rendering import SchemaProfile
 
         expected = frozenset(get_args(SchemaProfile))
         assert expected == _VALID_SCHEMA_PROFILES
@@ -805,8 +805,8 @@ class TestSchemaProfileSourceOfTruth:
         import re
         from typing import get_args
 
-        from modulo.core.schema_registry.rendering import SchemaProfile
-        from modulo.db.models.agent import Agent
+        from farna.core.schema_registry.rendering import SchemaProfile
+        from farna.db.models.agent import Agent
 
         # Extract the CHECK constraint text from table_args
         check_constraints = [arg for arg in Agent.__table_args__ if hasattr(arg, "sqltext")]
@@ -832,8 +832,8 @@ class TestSchemaProfileSourceOfTruth:
         import-linter contract (db must not import core)."""
         from typing import get_args
 
-        import modulo.db.models.agent as _agent_mod
-        from modulo.core.schema_registry.rendering import SchemaProfile
+        import farna.db.models.agent as _agent_mod
+        from farna.core.schema_registry.rendering import SchemaProfile
 
         expected = get_args(SchemaProfile)
         db_profiles = _agent_mod._VALID_SCHEMA_PROFILES
@@ -852,7 +852,7 @@ class TestSchemaTranslationReportGating:
     unless include_schema_warnings=true."""
 
     def test_graph_response_empty_report_by_default(self) -> None:
-        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+        from farna.api.routes.pipelines import PipelineGraphNode, _graph_response
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -870,7 +870,7 @@ class TestSchemaTranslationReportGating:
         assert not resp.schema_translation_report
 
     def test_graph_response_populated_report_when_opted_in(self) -> None:
-        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+        from farna.api.routes.pipelines import PipelineGraphNode, _graph_response
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -890,7 +890,7 @@ class TestSchemaTranslationReportGating:
     def test_graph_response_uses_provider_specific_strips(self) -> None:
         """A resolved provider makes provider-specific keywords (OpenAI's
         ``pattern``) appear in the report, not just advisory keywords."""
-        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+        from farna.api.routes.pipelines import PipelineGraphNode, _graph_response
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -914,7 +914,7 @@ class TestSchemaTranslationReportGating:
     def test_graph_response_without_provider_omits_provider_specific_strips(self) -> None:
         """Without a resolved provider, only always-advisory keywords are
         reported — ``pattern`` is provider-specific and must be absent."""
-        from modulo.api.routes.pipelines import PipelineGraphNode, _graph_response
+        from farna.api.routes.pipelines import PipelineGraphNode, _graph_response
 
         node = PipelineGraphNode(
             id=uuid.uuid4(),
@@ -937,7 +937,7 @@ class TestSchemaTranslationReportGating:
 
     async def test_resolve_node_providers_maps_agent_backend(self) -> None:
         """_resolve_node_providers resolves node → agent → backend provider."""
-        from modulo.api.routes.pipelines import _resolve_node_providers
+        from farna.api.routes.pipelines import _resolve_node_providers
 
         agent_id = uuid.uuid4()
         backend_id = uuid.uuid4()
@@ -1012,7 +1012,7 @@ class TestRefMemoization:
     def test_single_ref_counted_once(self) -> None:
         """A single definition referenced from 50 sites should produce a
         reasonable node count (well under the 10k limit)."""
-        from modulo.core.schema_registry.rendering import _flatten_refs
+        from farna.core.schema_registry.rendering import _flatten_refs
 
         num_refs = 50
         schema: dict[str, Any] = {

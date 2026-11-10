@@ -19,7 +19,7 @@ import httpx
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core import ssrf
+from farna.core import ssrf
 
 scenarios("../features/security/ssrf_guard.feature")
 

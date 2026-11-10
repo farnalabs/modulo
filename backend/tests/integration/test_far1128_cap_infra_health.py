@@ -22,8 +22,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.api.routes.health import _check_database, _check_redis
-from modulo.settings import get_settings
+from farna.api.routes.health import _check_database, _check_redis
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 

@@ -3,23 +3,23 @@ id: feat-environments
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/environment_profiles.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/db/crud/environment_profile.py
-  - backend/src/modulo/db/models/environment_profile.py
-  - backend/src/modulo/db/crud/pipeline_snapshot.py
-  - backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py
-  - backend/src/modulo/db/migrations/versions/0338_environment_profile_max_node_seconds.py
-  - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/core/runtime_provider
-  - backend/src/modulo/core/team_visibility.py
-  - backend/src/modulo/core/bundled_runner/runner_dispatch.py
-  - backend/src/modulo/core/pipeline_engine/node_runner.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/cli/apply/models.py
-  - backend/src/modulo/cli/apply/plan.py
-  - backend/src/modulo/cli/apply/pipeline_apply.py
-  - backend/src/modulo/api/routes/admin.py
+  - backend/src/farna/api/routes/environment_profiles.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/db/crud/environment_profile.py
+  - backend/src/farna/db/models/environment_profile.py
+  - backend/src/farna/db/crud/pipeline_snapshot.py
+  - backend/src/farna/db/migrations/versions/0289_pipelines_environment_profile.py
+  - backend/src/farna/db/migrations/versions/0338_environment_profile_max_node_seconds.py
+  - backend/src/farna/core/graph_validator/__init__.py
+  - backend/src/farna/core/runtime_provider
+  - backend/src/farna/core/team_visibility.py
+  - backend/src/farna/core/bundled_runner/runner_dispatch.py
+  - backend/src/farna/core/pipeline_engine/node_runner.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/cli/apply/models.py
+  - backend/src/farna/cli/apply/plan.py
+  - backend/src/farna/cli/apply/pipeline_apply.py
+  - backend/src/farna/api/routes/admin.py
   - frontend/src/views/runners
   - frontend/src/views/environment-profiles
   - frontend/src/views/PipelineEditorView.vue
@@ -62,7 +62,7 @@ into the Runners page as redirects.)
 - [x] A profile is createable with a name, description, provider_type, image_ref,
       capabilities, network_policy, initialisation_strategy, secret_refs,
       persistence_policy, owner_team_id and visibility
-      (`backend/src/modulo/api/routes/environment_profiles.py#create_profile`,
+      (`backend/src/farna/api/routes/environment_profiles.py#create_profile`,
       `backend/tests/integration/crud/test_environment_profiles.py`)
 - [x] Profiles are listed paginated (page / page_size capped 1..100) and fetchable by
       id; a missing profile resolves 404 with message "Environment profile not found"
@@ -95,10 +95,10 @@ into the Runners page as redirects.)
       3300-second provisioning default; an unbound pipeline keeps that E2B
       default. A non-integer `timeout_seconds` still raises the existing
       `SANDBOX_TIMEOUT_INVALID` issue and is never compared against the cap
-      (`backend/src/modulo/api/routes/environment_profiles.py`,
-      `backend/src/modulo/core/graph_validator/__init__.py`,
-      `backend/src/modulo/core/pipeline_engine/node_runner.py`,
-      `backend/src/modulo/core/bundled_runner/runner_dispatch.py`;
+      (`backend/src/farna/api/routes/environment_profiles.py`,
+      `backend/src/farna/core/graph_validator/__init__.py`,
+      `backend/src/farna/core/pipeline_engine/node_runner.py`,
+      `backend/src/farna/core/bundled_runner/runner_dispatch.py`;
       `test_environment_capabilities.py`, `test_dispatch_route.py`,
       `EnvironmentProfileForm.spec.ts`)
 - [x] Profiles resolve against the RuntimeProviderHub by capabilities / provider hint;
@@ -117,7 +117,7 @@ into the Runners page as redirects.)
 - [x] Admin org sandbox concurrency is viewable/updatable on
       `GET/PUT /api/v1/admin/org/sandbox-concurrency` (value clamped 1..100), writing
       an `org.sandbox_concurrency_updated` audit event on success
-      (`backend/src/modulo/api/routes/admin.py`)
+      (`backend/src/farna/api/routes/admin.py`)
 - [x] The frontend surfaces the whole lifecycle on the Runners page (FAR-591 D5):
       profiles tab (`/admin/runners/profiles`) with list + search + per-card
       "Test connection" (SSE) and new/edit form (`/admin/runners/profiles/new`,
@@ -135,7 +135,7 @@ into the Runners page as redirects.)
       kubernetes}`, FAR-595) with the provider-is-required validation and tier
       hint preserved (`frontend/src/views/environment-profiles/
       EnvironmentProfileForm.vue`, `frontend/src/__tests__/environment-profiles/
-      EnvironmentProfileForm.spec.ts`, `backend/src/modulo/core/runtime_provider/
+      EnvironmentProfileForm.spec.ts`, `backend/src/farna/core/runtime_provider/
       k8s.py`)
 - [x] The pipeline to environment-profile binding is settable per pipeline
       (FAR-1558): `PATCH /api/v1/pipelines/{pipeline_id}` accepts
@@ -162,10 +162,10 @@ into the Runners page as redirects.)
       only while the `environment_profiles` plan feature is on, labels each
       option with its provider tier, sends nothing for an untouched select, and
       reverts on a refused/failed write with an alert region
-      (`backend/src/modulo/api/routes/pipelines.py`,
-      `backend/src/modulo/api/routes/environment_profiles.py`,
-      `backend/src/modulo/core/team_visibility.py`,
-      `backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py`,
+      (`backend/src/farna/api/routes/pipelines.py`,
+      `backend/src/farna/api/routes/environment_profiles.py`,
+      `backend/src/farna/core/team_visibility.py`,
+      `backend/src/farna/db/migrations/versions/0289_pipelines_environment_profile.py`,
       `frontend/src/views/PipelineEditorView.vue`;
       `unit-tests: test_pipeline_environment_profile_binding.py,
       test_environment_profiles_routes.py,
@@ -192,8 +192,8 @@ into the Runners page as redirects.)
       cannot see the team-private profile), then the typed refusal with no
       provider selected, then the same-team mirror resolving the e2b route - the
       test fails if the dispatch enforcement is removed
-      (`backend/src/modulo/core/bundled_runner/runner_dispatch.py`,
-      `backend/src/modulo/core/pipeline_engine/node_runner.py`;
+      (`backend/src/farna/core/bundled_runner/runner_dispatch.py`,
+      `backend/src/farna/core/pipeline_engine/node_runner.py`;
       `unit-tests: test_dispatch_team_scope_backstop.py,
       test_dispatch_route.py`)
 - [x] The binding is exposed on the read and non-REST surfaces (FAR-1599):
@@ -207,8 +207,8 @@ into the Runners page as redirects.)
       UUID-string id-space so `--diff` reports drift, and an explicit null clears
       back to the default route), with a created pipeline's binding riding the
       follow-up PATCH because `PipelineCreate` cannot carry the field
-      (`backend/src/modulo/api/mcp_server.py`,
-      `backend/src/modulo/cli/apply/{models,plan,pipeline_apply}.py`;
+      (`backend/src/farna/api/mcp_server.py`,
+      `backend/src/farna/cli/apply/{models,plan,pipeline_apply}.py`;
       `unit-tests: test_apply_environment_profile.py,
       test_mcp_update_pipeline.py,
       test_snapshot_environment_profile_coercion.py`)

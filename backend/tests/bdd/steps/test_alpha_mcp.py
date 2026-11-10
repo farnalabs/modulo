@@ -24,7 +24,7 @@ _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 def _set_mcp_ctx(role: str = "runner", *, node_allowed_tools: list[str] | None = None) -> None:
     """Populate the request-scoped MCP ContextVars a tool handler reads."""
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_key_id,
@@ -48,7 +48,7 @@ def _set_mcp_ctx(role: str = "runner", *, node_allowed_tools: list[str] | None =
 
 
 def _clear_mcp_ctx() -> None:
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_key_id,
@@ -90,7 +90,7 @@ def _call_trigger(
     """Drive the real ``trigger_pipeline`` tool with DB/dispatch seams patched."""
     import asyncio
 
-    from modulo.api.mcp_server import trigger_pipeline
+    from farna.api.mcp_server import trigger_pipeline
 
     pid = str(getattr(request.node, "_pipeline_id", None) or uuid.uuid4())
     mock_get_pipeline_ret = None if pipeline_missing else MagicMock(owner_team_id=None)
@@ -99,15 +99,15 @@ def _call_trigger(
     session = _make_session_context(AsyncMock())
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-        patch("modulo.api.mcp_server.get_pipeline", return_value=mock_get_pipeline_ret) as mock_get_pipeline,
+        patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+        patch("farna.api.mcp_server.get_pipeline", return_value=mock_get_pipeline_ret) as mock_get_pipeline,
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             return_value=mock_snapshot,
         ),
-        patch("modulo.db.crud.run.create_run", return_value=mock_run) as mock_create_run,
-        patch("modulo.api.mcp_server._session", return_value=session),
-        patch("modulo.api.mcp_server.dispatch_run", new_callable=AsyncMock),
+        patch("farna.db.crud.run.create_run", return_value=mock_run) as mock_create_run,
+        patch("farna.api.mcp_server._session", return_value=session),
+        patch("farna.api.mcp_server.dispatch_run", new_callable=AsyncMock),
     ):
         _set_mcp_ctx("runner")
         try:
@@ -123,9 +123,9 @@ def _call_review_hitl(request, action: str) -> dict:
     """Drive the real ``review_hitl`` tool up to its scope gate (runner role)."""
     import asyncio
 
-    from modulo.api.mcp_server import review_hitl
+    from farna.api.mcp_server import review_hitl
 
-    with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+    with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
         _set_mcp_ctx("runner")
         try:
             result = asyncio.run(
@@ -157,7 +157,7 @@ def _call_review_hitl_tool(
     """
     import asyncio
 
-    from modulo.api.mcp_server import review_hitl
+    from farna.api.mcp_server import review_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
     review_id = getattr(request.node, "_review_id", "pre-deploy")
@@ -166,14 +166,14 @@ def _call_review_hitl_tool(
     session = _make_session_context(AsyncMock())
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-        patch("modulo.api.mcp_server.get_run", return_value=mock_run),
-        patch("modulo.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.mcp_server._session", return_value=session),
-        patch("modulo.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.mcp_server._validate_mcp_choice_answer", new_callable=AsyncMock, return_value=(None, None)),
-        patch("modulo.api.mcp_server.HITLManager.approve", new_callable=AsyncMock) as mock_approve,
-        patch("modulo.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
+        patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+        patch("farna.api.mcp_server.get_run", return_value=mock_run),
+        patch("farna.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.mcp_server._session", return_value=session),
+        patch("farna.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.mcp_server._validate_mcp_choice_answer", new_callable=AsyncMock, return_value=(None, None)),
+        patch("farna.api.mcp_server.HITLManager.approve", new_callable=AsyncMock) as mock_approve,
+        patch("farna.api.mcp_server.HITLManager.reject", new_callable=AsyncMock),
     ):
         _set_mcp_ctx(role)
         try:
@@ -202,7 +202,7 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, review_
     """
     import asyncio
 
-    from modulo.api.mcp_server import list_pending_hitl
+    from farna.api.mcp_server import list_pending_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
     review_id = (
@@ -223,20 +223,20 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, review_
     session = _make_session_context(AsyncMock())
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-        patch("modulo.api.mcp_server._session", return_value=session),
+        patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+        patch("farna.api.mcp_server._session", return_value=session),
         patch(
-            "modulo.api.mcp_server._load_pending_hitl_reviews",
+            "farna.api.mcp_server._load_pending_hitl_reviews",
             new_callable=AsyncMock,
             return_value=([claim], 1),
         ),
         patch(
-            "modulo.db.crud.hitl_review_config.resolve_review_descriptions",
+            "farna.db.crud.hitl_review_config.resolve_review_descriptions",
             new_callable=AsyncMock,
             return_value={(run_id, review_id): "Approve the pre-deploy gate"},
         ),
         patch(
-            "modulo.db.crud.hitl_review_config._batch_load_snapshot_graphs",
+            "farna.db.crud.hitl_review_config._batch_load_snapshot_graphs",
             new_callable=AsyncMock,
             return_value=({}, {}),
         ),
@@ -263,7 +263,7 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
     """
     import asyncio
 
-    from modulo.api.mcp_server import review_hitl
+    from farna.api.mcp_server import review_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
     review_id = (
@@ -273,17 +273,17 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
     session = _make_session_context(AsyncMock())
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-        patch("modulo.api.mcp_server.get_run", return_value=mock_run),
-        patch("modulo.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.mcp_server._session", return_value=session),
+        patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+        patch("farna.api.mcp_server.get_run", return_value=mock_run),
+        patch("farna.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.mcp_server._session", return_value=session),
         patch(
-            "modulo.db.crud.hitl_review_config.resolve_hitl_review_config",
+            "farna.db.crud.hitl_review_config.resolve_hitl_review_config",
             new_callable=AsyncMock,
             return_value={"human_only": True},
         ),
         patch(
-            "modulo.api.mcp_server._append_hitl_human_only_denied_audit",
+            "farna.api.mcp_server._append_hitl_human_only_denied_audit",
             new_callable=AsyncMock,
         ) as mock_denial_audit,
     ):
@@ -311,8 +311,8 @@ def _browser_principal_client_type() -> str:
     ``"browser"`` audit stamp. Constructing the frozen ``TenantPrincipal`` and
     running the real function exercises the only browser attribution path.
     """
-    from modulo.api.routes.hitl import _client_type
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.api.routes.hitl import _client_type
+    from farna.auth.jwt import TenantPrincipal
 
     principal = TenantPrincipal(
         username="alice",
@@ -406,8 +406,8 @@ def unauth_reaches_mcp_server(request):
     async def call_next(_req):
         return JSONResponse({})
 
-    with patch("modulo.api.mcp_server.get_settings", return_value=make_settings()):
-        from modulo.api.mcp_server import McpAuthMiddleware
+    with patch("farna.api.mcp_server.get_settings", return_value=make_settings()):
+        from farna.api.mcp_server import McpAuthMiddleware
 
         middleware = McpAuthMiddleware(app=MagicMock())
         status = asyncio.run(middleware.dispatch(_make_mcp_request(), call_next)).status_code
@@ -488,9 +488,9 @@ def mcp_key_scope(scope: str, request):
 @when(parsers.parse('the MCP client sends a tools/call request for "{tool}"'))
 def mcp_tool_call_generic(tool: str, client, request):
     with (
-        patch("modulo.api.mcp_server.set_rls_org"),
+        patch("farna.api.mcp_server.set_rls_org"),
         patch(
-            "modulo.api.mcp_server.get_pipeline_by_name",
+            "farna.api.mcp_server.get_pipeline_by_name",
             return_value=make_mock_pipeline(name="test"),
         ),
     ):
@@ -599,7 +599,7 @@ def mcp_approve_human_only_gate(request):
 
 @then(parsers.parse('the denial appends a "hitl.human_only_denied" audit event'))
 def denial_audit_appended(request):
-    from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY
+    from farna.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY
 
     mock_denial_audit = getattr(request.node, "_denial_audit", None)
     assert mock_denial_audit is not None, "denial audit seam was not captured"
@@ -642,8 +642,8 @@ def _call_search_library(request, *, search: str | None = None, deny_node_tools:
     """
     import asyncio
 
-    from modulo.api.mcp_server import search_library
-    from modulo.db.crud.base import PageResult
+    from farna.api.mcp_server import search_library
+    from farna.db.crud.base import PageResult
 
     primitives = getattr(request.node, "_primitives", [])
     session = _make_session_context(AsyncMock())
@@ -663,10 +663,10 @@ def _call_search_library(request, *, search: str | None = None, deny_node_tools:
         )
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-        patch("modulo.api.mcp_server._session", return_value=session),
-        patch("modulo.api.mcp_server.list_primitives", side_effect=_list_side_effect) as mock_list,
-        patch("modulo.api.mcp_server.library_copy_to_adapt", new_callable=AsyncMock) as mock_copy,
+        patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+        patch("farna.api.mcp_server._session", return_value=session),
+        patch("farna.api.mcp_server.list_primitives", side_effect=_list_side_effect) as mock_list,
+        patch("farna.api.mcp_server.library_copy_to_adapt", new_callable=AsyncMock) as mock_copy,
     ):
         _set_mcp_ctx("viewer", node_allowed_tools=deny_node_tools)
         try:
@@ -730,7 +730,7 @@ def response_read_only(request):
     data = _mcp_response_payload(request)
     assert isinstance(data.get("items"), list), data
     # The browse surface is on the read-only allowlist, statically pinned.
-    from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS
+    from farna.core.mcp.scope_validator import READ_ONLY_TOOLS
 
     assert "search_library" in READ_ONLY_TOOLS
 

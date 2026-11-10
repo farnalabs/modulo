@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.errors import ResumeClaimSupersededError
+from farna.core.pipeline_engine.executor import (
     PipelineExecutor,
     SandboxCapacityExceededError,
     _claim_resume_for_executor,
@@ -109,7 +109,7 @@ class TestResumeClaimForExecutor:
         assert "awaiting_human" not in params.values()
 
     async def test_cas_match_but_row_vanishes_raises_run_not_found(self) -> None:
-        from modulo.core.pipeline_engine.executor import RunNotFoundError
+        from farna.core.pipeline_engine.executor import RunNotFoundError
 
         run_id = uuid.uuid4()
         claim_result = MagicMock()
@@ -148,16 +148,16 @@ class TestResumeClaimArm:
         denied = SandboxCapacityExceededError(_ORG_ID)
 
         with (
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
             patch(
-                "modulo.core.pipeline_engine.executor._claim_resume_for_executor",
+                "farna.core.pipeline_engine.executor._claim_resume_for_executor",
                 new_callable=AsyncMock,
                 return_value=run,
             ) as claim,
-            patch("modulo.core.pipeline_engine.executor.update_run_status", new_callable=AsyncMock) as legacy_write,
+            patch("farna.core.pipeline_engine.executor.update_run_status", new_callable=AsyncMock) as legacy_write,
             patch.object(executor, "_enforce_resume_sandbox_capacity", new=AsyncMock(side_effect=denied)),
             pytest.raises(SandboxCapacityExceededError),
         ):
@@ -180,12 +180,12 @@ class TestResumeClaimArm:
         run = MagicMock()
 
         with (
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
             patch(
-                "modulo.core.pipeline_engine.executor._claim_resume_for_executor",
+                "farna.core.pipeline_engine.executor._claim_resume_for_executor",
                 new_callable=AsyncMock,
             ) as claim,
             pytest.raises(ValueError, match="requires claim_token"),
@@ -206,15 +206,15 @@ class TestResumeClaimArm:
         denied = SandboxCapacityExceededError(_ORG_ID)
 
         with (
-            patch("modulo.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.core.pipeline_engine.executor.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            patch("farna.core.pipeline_engine.executor.get_run", new_callable=AsyncMock, return_value=run),
             patch(
-                "modulo.core.pipeline_engine.executor._claim_resume_for_executor",
+                "farna.core.pipeline_engine.executor._claim_resume_for_executor",
                 new_callable=AsyncMock,
             ) as fenced_claim,
-            patch("modulo.core.pipeline_engine.executor.update_run_status", new_callable=AsyncMock) as legacy_write,
+            patch("farna.core.pipeline_engine.executor.update_run_status", new_callable=AsyncMock) as legacy_write,
             patch.object(executor, "_enforce_resume_sandbox_capacity", new=AsyncMock(side_effect=denied)),
             pytest.raises(SandboxCapacityExceededError),
         ):

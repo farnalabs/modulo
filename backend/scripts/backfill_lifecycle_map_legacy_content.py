@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from psycopg.types.json import Jsonb
 from sqlalchemy import create_engine, text
 
-from modulo.core.lifecycle_map.validation import (
+from farna.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     clean_legacy_content,
     normalize_content,

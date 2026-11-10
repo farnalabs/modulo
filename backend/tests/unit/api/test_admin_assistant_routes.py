@@ -15,12 +15,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.assistant_skill import AssistantSkill
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.assistant_skill import AssistantSkill
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -262,7 +262,7 @@ def test_list_org_skills_empty(client: TestClient) -> None:
 
 
 def test_list_org_skills_db_error_returns_503(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock, side_effect=SQLAlchemyError()):
+    with patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock, side_effect=SQLAlchemyError()):
         resp = client.get("/api/v1/admin/assistant/skills")
     assert resp.status_code == 503
 
@@ -280,8 +280,8 @@ def test_create_org_skill_returns_201(client: TestClient) -> None:
 
 def test_create_org_skill_db_error_returns_503(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_assistant.AssistantSkill", side_effect=SQLAlchemyError("insert failed")),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.AssistantSkill", side_effect=SQLAlchemyError("insert failed")),
     ):
         resp = client.post("/api/v1/admin/assistant/skills", json={"name": "X", "body": "b"})
     assert resp.status_code == 503
@@ -336,7 +336,7 @@ def _patch_context_source_service(org_defaults: dict[str, str]) -> Any:
     service = MagicMock()
     service.get_org_defaults = AsyncMock(return_value=org_defaults)
     service.set_org_default = AsyncMock()
-    return patch("modulo.core.assistant.context_source_service.AssistantContextSourceService", return_value=service)
+    return patch("farna.core.assistant.context_source_service.AssistantContextSourceService", return_value=service)
 
 
 def test_get_org_context_sources_merges_builtin_and_org(client: TestClient) -> None:
@@ -441,7 +441,7 @@ def test_update_config_mixed_fields(client: TestClient) -> None:
 
 def test_list_org_skills_programming_error_returns_501(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -451,7 +451,7 @@ def test_list_org_skills_programming_error_returns_501(client: TestClient) -> No
 
 def test_list_org_skills_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -461,7 +461,7 @@ def test_list_org_skills_unexpected_error_returns_500(client: TestClient) -> Non
 
 def test_create_org_skill_programming_error_returns_501(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -471,7 +471,7 @@ def test_create_org_skill_programming_error_returns_501(client: TestClient) -> N
 
 def test_create_org_skill_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -483,7 +483,7 @@ def test_update_org_skill_programming_error_returns_501(client: TestClient) -> N
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -495,7 +495,7 @@ def test_update_org_skill_unexpected_error_returns_500(client: TestClient) -> No
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -507,7 +507,7 @@ def test_update_org_skill_sqlalchemy_error_returns_503(client: TestClient) -> No
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("boom"),
     ):
@@ -519,7 +519,7 @@ def test_delete_org_skill_programming_error_returns_501(client: TestClient) -> N
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -531,7 +531,7 @@ def test_delete_org_skill_unexpected_error_returns_500(client: TestClient) -> No
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -543,7 +543,7 @@ def test_delete_org_skill_sqlalchemy_error_returns_503(client: TestClient) -> No
     skill = _make_skill()
     client.mock_session.get = AsyncMock(return_value=skill)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("boom"),
     ):
@@ -555,7 +555,7 @@ def test_get_org_context_sources_programming_error_returns_501(client: TestClien
     service = MagicMock()
     service.get_org_defaults = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table")))
     with patch(
-        "modulo.core.assistant.context_source_service.AssistantContextSourceService",
+        "farna.core.assistant.context_source_service.AssistantContextSourceService",
         return_value=service,
     ):
         resp = client.get("/api/v1/admin/assistant/context-sources")
@@ -564,7 +564,7 @@ def test_get_org_context_sources_programming_error_returns_501(client: TestClien
 
 def test_get_org_context_sources_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -576,7 +576,7 @@ def test_set_org_context_source_programming_error_returns_501(client: TestClient
     service = MagicMock()
     service.set_org_default = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table")))
     with patch(
-        "modulo.core.assistant.context_source_service.AssistantContextSourceService",
+        "farna.core.assistant.context_source_service.AssistantContextSourceService",
         return_value=service,
     ):
         resp = client.put(
@@ -588,7 +588,7 @@ def test_set_org_context_source_programming_error_returns_501(client: TestClient
 
 def test_set_org_context_source_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin_assistant.set_rls_org",
+        "farna.api.routes.admin_assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -631,7 +631,7 @@ def test_available_providers_includes_label_lookup(client: TestClient) -> None:
 
 
 def test_get_user_skills_returns_matching_skills() -> None:
-    from modulo.api.routes.admin_assistant import get_user_skills
+    from farna.api.routes.admin_assistant import get_user_skills
 
     skill = _make_skill()
     result = MagicMock()
@@ -643,7 +643,7 @@ def test_get_user_skills_returns_matching_skills() -> None:
 
 
 def test_get_user_skill_or_404_raises_on_missing() -> None:
-    from modulo.api.routes.admin_assistant import get_user_skill_or_404
+    from farna.api.routes.admin_assistant import get_user_skill_or_404
 
     db = AsyncMock()
     db.get = AsyncMock(return_value=None)
@@ -653,7 +653,7 @@ def test_get_user_skill_or_404_raises_on_missing() -> None:
 
 
 def test_get_user_skill_or_404_raises_on_wrong_account() -> None:
-    from modulo.api.routes.admin_assistant import get_user_skill_or_404
+    from farna.api.routes.admin_assistant import get_user_skill_or_404
 
     skill = _make_skill(account_id=uuid.uuid4())
     db = AsyncMock()
@@ -687,7 +687,7 @@ def test_get_org_context_sources_db_error_returns_503(client: TestClient) -> Non
     service = MagicMock()
     service.get_org_defaults = AsyncMock(side_effect=SQLAlchemyError("boom"))
     with patch(
-        "modulo.core.assistant.context_source_service.AssistantContextSourceService",
+        "farna.core.assistant.context_source_service.AssistantContextSourceService",
         return_value=service,
     ):
         resp = client.get("/api/v1/admin/assistant/context-sources")
@@ -698,7 +698,7 @@ def test_set_org_context_source_db_error_returns_503(client: TestClient) -> None
     service = MagicMock()
     service.set_org_default = AsyncMock(side_effect=SQLAlchemyError("boom"))
     with patch(
-        "modulo.core.assistant.context_source_service.AssistantContextSourceService",
+        "farna.core.assistant.context_source_service.AssistantContextSourceService",
         return_value=service,
     ):
         resp = client.put(

@@ -6,9 +6,9 @@ adr:
   - ADR 011 (remy-context-sources)
   - ADR 014 (remy-mcp-api-key-jwt)
 code:
-  - backend/src/modulo/api/routes/assistant.py
-  - backend/src/modulo/api/routes/admin_assistant.py
-  - backend/src/modulo/core/assistant
+  - backend/src/farna/api/routes/assistant.py
+  - backend/src/farna/api/routes/admin_assistant.py
+  - backend/src/farna/core/assistant
 unit-tests:
   - backend/tests/unit/api/test_me_assistant_skills.py
   - backend/tests/unit/api/test_assistant_routes.py

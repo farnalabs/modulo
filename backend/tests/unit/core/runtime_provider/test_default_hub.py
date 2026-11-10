@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     ProviderNotConfiguredError,
     RuntimeProvider,
@@ -14,10 +14,10 @@ from modulo.core.runtime_provider import (
     build_hub,
     create_default_hub,
 )
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 
 class _MinimalProvider(RuntimeProvider):
@@ -132,7 +132,7 @@ class TestBuildHub:
         real_import = cast(Any, __import__)
 
         def _fake_import(name: str, *args: object, **kwargs: object) -> object:
-            if name == "modulo.core.runtime_provider.e2b":
+            if name == "farna.core.runtime_provider.e2b":
                 raise ImportError("e2b not installed")
             return real_import(name, *args, **kwargs)
 
@@ -149,7 +149,7 @@ class TestBuildHub:
         real_import = cast(Any, __import__)
 
         def _fake_import(name: str, *args: object, **kwargs: object) -> object:
-            if name == "modulo.core.runtime_provider.docker":
+            if name == "farna.core.runtime_provider.docker":
                 raise ImportError("docker not installed")
             return real_import(name, *args, **kwargs)
 
@@ -303,7 +303,7 @@ class TestUnknownProviderType:
 
     def test_unknown_type_error_message_lists_valid_types(self) -> None:
         """The error message includes the valid vocabulary for remediation."""
-        from modulo.db.models.environment_profile import PROVIDER_TYPES
+        from farna.db.models.environment_profile import PROVIDER_TYPES
 
         err = UnknownProviderTypeError("kubernetes", PROVIDER_TYPES)
         msg = str(err)

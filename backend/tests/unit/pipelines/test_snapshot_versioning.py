@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud.pipeline_snapshot_versioning import (
+from farna.db.crud.pipeline_snapshot_versioning import (
     _compute_edge_changes,
     _compute_node_changes,
     _rebuild_graph,

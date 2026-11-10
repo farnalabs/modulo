@@ -33,7 +33,7 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     COALESCE_KEY_FIELD,
     WorkItemRefsRequiredError,
     _hydrate_journeys,
@@ -41,7 +41,7 @@ from modulo.db.crud.run import (
     coalesce_pending_run,
     create_run,
 )
-from modulo.db.lifecycle_refs import (
+from farna.db.lifecycle_refs import (
     REFS_EVENT_ASSIGNED_SOURCE,
     REFS_EVENT_MALFORMED,
     REFS_EVENT_SHADOW_STRIP_HIT,
@@ -54,16 +54,16 @@ from modulo.db.lifecycle_refs import (
     sort_canonical_refs,
     validate_ref_entry,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.variant_group import VariantGroup
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -585,8 +585,8 @@ class TestAgentMintFlagHydration:
 
     @pytest.fixture(autouse=True)
     def _clear_flag_caches(self) -> Generator[None]:
-        import modulo.db.crud.run as run_mod
-        from modulo.core.runtime_config import org_flags as org_flags_mod
+        import farna.db.crud.run as run_mod
+        from farna.core.runtime_config import org_flags as org_flags_mod
 
         self.run_mod = run_mod
         self.org_flags_mod = org_flags_mod

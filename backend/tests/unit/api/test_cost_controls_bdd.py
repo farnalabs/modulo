@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -166,14 +166,14 @@ class TestCheckAndRecordSpendSteps:
         mock_session = _make_mock_session()
         with (
             patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
+                "farna.core.cost_controller.get_or_create_daily_count",
                 side_effect=[mock_org_count, mock_team_count] if team else [mock_org_count],
             ),
             patch.object(mock_session, "execute", side_effect=sums),
         ):
             import asyncio
 
-            from modulo.core.cost_controller import check_and_record_spend
+            from farna.core.cost_controller import check_and_record_spend
 
             loop = asyncio.new_event_loop()
             try:
@@ -246,7 +246,7 @@ class TestCheckAndRecordSpendSteps:
 
         with (
             patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
+                "farna.core.cost_controller.get_or_create_daily_count",
                 side_effect=[mock_org_count, mock_team_count],
             ),
             patch.object(
@@ -262,7 +262,7 @@ class TestCheckAndRecordSpendSteps:
         ):
             import asyncio
 
-            from modulo.core.cost_controller import check_and_record_spend
+            from farna.core.cost_controller import check_and_record_spend
 
             loop = asyncio.new_event_loop()
             try:
@@ -313,8 +313,8 @@ class TestAdminSetOrgSpendLimit:
         org.daily_spend_limit = None
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 250.0})
 
@@ -327,8 +327,8 @@ class TestAdminSetOrgSpendLimit:
         org.daily_spend_limit = Decimal("100.00")
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": None})
 
@@ -352,8 +352,8 @@ class TestAdminSetTeamSpendLimit:
         team.daily_spend_limit = None
 
         with (
-            patch("modulo.api.routes.costs.get_team", return_value=team),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_team", return_value=team),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 75.0})
 
@@ -371,8 +371,8 @@ class TestAdminGetCostsReport:
 
     def test_returns_cost_report(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=self.ROWS),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_report", return_value=self.ROWS),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -385,8 +385,8 @@ class TestAdminGetCostsReport:
 
     def test_default_params(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=self.ROWS),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_report", return_value=self.ROWS),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -403,8 +403,8 @@ class TestAdminGetCostsReport:
             {"entity_id": str(_ORG_ID), "entity_name": "Acme Corp", "total_spend_usd": 500.0, "total_runs": 25},
         ]
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=org_rows),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_report", return_value=org_rows),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs?group_by=org&period=week")
 
@@ -438,9 +438,9 @@ class TestAdminGetSpendLimits:
         page_result = MagicMock(items=[team], total=1, page=1, page_size=1000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -475,11 +475,11 @@ class TestAdminGetCostControls:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
             # No cost-state row yet -> get_org_cost_state returns None (defaults).
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -493,10 +493,10 @@ class TestAdminGetCostControls:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=None),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.costs.get_organisation", return_value=None),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -526,10 +526,10 @@ class TestAdminGetCostControls:
         state = _cost_state(max_run_cost_cents=1234, spend_ceiling_cents=10000, org_cumulative_spend_cents=4000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -552,10 +552,10 @@ class TestAdminGetCostControls:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=None)),
         ):
             resp = client.get(self.ENDPOINT)
 

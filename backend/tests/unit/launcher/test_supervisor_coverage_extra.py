@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher import supervisor as supervisor_module
-from modulo.launcher.secrets_file import LauncherSecrets
-from modulo.launcher.state import LauncherState, save_state
-from modulo.launcher.supervisor import (
+from farna.launcher import supervisor as supervisor_module
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import LauncherState, save_state
+from farna.launcher.supervisor import (
     DEGRADED_FILENAME,
     RUNTIME_FILENAME,
     _component_remediation,
@@ -218,13 +218,13 @@ def test_pid_alive_bounds():
 
 
 def test_read_lock_holder_missing_file(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import _read_lock_holder
+    from farna.launcher.supervisor import _read_lock_holder
 
     assert _read_lock_holder(tmp_path / "nope.lock") is None
 
 
 def test_read_lock_holder_corrupt_json(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import _read_lock_holder
+    from farna.launcher.supervisor import _read_lock_holder
 
     path = tmp_path / "bad.lock"
     path.write_text("not json", encoding="utf-8")
@@ -232,7 +232,7 @@ def test_read_lock_holder_corrupt_json(tmp_path: Path) -> None:
 
 
 def test_read_lock_holder_wrong_types(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import _read_lock_holder
+    from farna.launcher.supervisor import _read_lock_holder
 
     path = tmp_path / "wrong.lock"
     path.write_text(json.dumps({"pid": "not-int", "mode": 123}), encoding="utf-8")
@@ -240,7 +240,7 @@ def test_read_lock_holder_wrong_types(tmp_path: Path) -> None:
 
 
 def test_read_lock_holder_missing_optional_starttime(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import _read_lock_holder
+    from farna.launcher.supervisor import _read_lock_holder
 
     path = tmp_path / "legacy.lock"
     path.write_text(json.dumps({"pid": 1, "mode": "serve", "acquired_at": 1.0}), encoding="utf-8")
@@ -255,13 +255,13 @@ def test_read_lock_holder_missing_optional_starttime(tmp_path: Path) -> None:
 
 
 def test_child_stderr_tail_with_none_process() -> None:
-    from modulo.launcher.supervisor import _child_stderr_tail
+    from farna.launcher.supervisor import _child_stderr_tail
 
     assert _child_stderr_tail(None) is None
 
 
 def test_child_stderr_tail_with_no_stderr_tail_method() -> None:
-    from modulo.launcher.supervisor import _child_stderr_tail
+    from farna.launcher.supervisor import _child_stderr_tail
 
     class PlainProc:
         pid = 1
@@ -273,7 +273,7 @@ def test_child_stderr_tail_with_no_stderr_tail_method() -> None:
 
 
 def test_child_stderr_tail_with_exception() -> None:
-    from modulo.launcher.supervisor import _child_stderr_tail
+    from farna.launcher.supervisor import _child_stderr_tail
 
     class ExplodingProc:
         pid = 1
@@ -285,7 +285,7 @@ def test_child_stderr_tail_with_exception() -> None:
 
 
 def test_child_stderr_tail_with_non_string_return() -> None:
-    from modulo.launcher.supervisor import _child_stderr_tail
+    from farna.launcher.supervisor import _child_stderr_tail
 
     class WeirdProc:
         pid = 1
@@ -302,7 +302,7 @@ def test_child_stderr_tail_with_non_string_return() -> None:
 
 
 def test_record_runtime_locked_oserror_is_swallowed(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     path = tmp_path / "runtime.json"
     supervisor = Supervisor(SupervisorKnobs(), runtime_path=path)
@@ -360,7 +360,7 @@ class FakeProc:
 
 
 def test_degrade_locked_calls_pause_hook() -> None:
-    from modulo.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, ChildSpec, Supervisor, SupervisorKnobs
 
     pause_calls: list[str] = []
     supervisor = Supervisor(
@@ -381,7 +381,7 @@ def test_degrade_locked_calls_pause_hook() -> None:
 
 
 def test_persist_degraded_context_exception_does_not_mask_degrade(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     degraded_path = tmp_path / "degraded.json"
     supervisor = Supervisor(
@@ -398,7 +398,7 @@ def test_persist_degraded_context_exception_does_not_mask_degrade(tmp_path: Path
 
 
 def test_persist_degraded_oserror_does_not_mask_degrade(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     degraded_path = tmp_path / "data" / "degraded.json"
     degraded_path.parent.mkdir()
@@ -428,7 +428,7 @@ def test_persist_degraded_oserror_does_not_mask_degrade(tmp_path: Path) -> None:
 
 
 def test_terminate_locked_with_no_process() -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs, _Child
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs, _Child
 
     supervisor = Supervisor(SupervisorKnobs())
     child = _Child(spec=ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
@@ -466,7 +466,7 @@ def deterministic_signal_group(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_teardown_child_escalation_after_grace(deterministic_signal_group: None) -> None:
     """Escalation happens when process ignores first signal and grace elapses."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
 
@@ -514,7 +514,7 @@ def test_teardown_child_escalation_after_grace(deterministic_signal_group: None)
 
 
 def test_signal_group_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     monkeypatch.setattr(supervisor_module.sys, "platform", "win32")
     terminated: list[int] = []
@@ -534,7 +534,7 @@ def test_signal_group_non_group_leader(monkeypatch: pytest.MonkeyPatch) -> None:
     """Process is not a group leader → terminate + os.kill(pid, signum)."""
     if sys.platform == "win32":
         pytest.skip("os.getpgid not available on Windows")
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     terminated: list[int] = []
     killed: list[tuple[int, int]] = []
@@ -576,7 +576,7 @@ def test_collect_status_with_lock_holder_and_degraded_reason(tmp_path: Path) -> 
     _write_state_secrets(tmp_path)
     data_dir = tmp_path
     # Write a lock holder at the correct location (data_dir.parent / data_dir.name.lock)
-    from modulo.launcher.supervisor import LOCK_SUFFIX
+    from farna.launcher.supervisor import LOCK_SUFFIX
 
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     lock_path.write_text(
@@ -695,7 +695,7 @@ def test_read_degraded_record_no_reason(tmp_path: Path) -> None:
 
 
 def test_clear_degraded_record_removes_file(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import clear_degraded_record
+    from farna.launcher.supervisor import clear_degraded_record
 
     path = tmp_path / "degraded.json"
     write_degraded_record(path, {"reason": "x"})
@@ -709,14 +709,14 @@ def test_clear_degraded_record_removes_file(tmp_path: Path) -> None:
 
 
 def test_resolve_bundled_postgres_version_no_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher import entry as entry_module
+    from farna.launcher import entry as entry_module
 
     monkeypatch.setattr(entry_module, "resolve_bin_dir", lambda: tmp_path)
     assert supervisor_module._resolve_bundled_postgres_version() is None
 
 
 def test_resolve_bundled_postgres_version_bad_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher import entry as entry_module
+    from farna.launcher import entry as entry_module
 
     fake_bin = tmp_path / "postgres"
     fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -882,7 +882,7 @@ def test_postmaster_is_stale_unparseable_pidfile(tmp_path: Path) -> None:
 
 
 def test_postmaster_is_stale_dead_pid(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import POSTMASTER_PIDFILE
+    from farna.launcher.supervisor import POSTMASTER_PIDFILE
 
     pgdata = tmp_path / "pgdata"
     pgdata.mkdir()
@@ -898,7 +898,7 @@ def test_postmaster_is_stale_dead_pid(tmp_path: Path) -> None:
 
 def test_on_exit_locked_resets_backoff_when_zero() -> None:
     """When child.backoff is <= 0, it should be reset to initial then doubled."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     clock = FakeClock()
     harness_spawns: list[FakeProc] = []
@@ -928,7 +928,7 @@ def test_on_exit_locked_resets_backoff_when_zero() -> None:
 
 
 def test_on_exit_locked_resets_backoff_when_negative() -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(
         SupervisorKnobs(restart_backoff_initial=0.1, crash_window_seconds=1000, crash_cap=100),
@@ -954,7 +954,7 @@ def test_on_exit_locked_resets_backoff_when_negative() -> None:
 
 def test_tick_child_unhealthy_terminating_past_grace_kills() -> None:
     """Once terminating_since is set and grace elapses, the child is killed."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     clock = FakeClock()
     kill_calls: list[int] = []
@@ -1020,7 +1020,7 @@ def test_tick_child_unhealthy_terminating_past_grace_kills() -> None:
 
 def test_ready_to_spawn_condition_exception() -> None:
     """An exception in the start_condition returns False."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     def broken_condition():
         raise RuntimeError("condition check failed")
@@ -1038,7 +1038,7 @@ def test_ready_to_spawn_condition_exception() -> None:
 
 
 def test_run_probe_none_probe_returns_unhealthy() -> None:
-    from modulo.launcher.supervisor import ChildSpec, ProbeOutcome, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, ProbeOutcome, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(SupervisorKnobs())
     supervisor.add(ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
@@ -1055,7 +1055,7 @@ def test_run_probe_none_probe_returns_unhealthy() -> None:
 
 def test_degrade_locked_without_runtime_path() -> None:
     """When runtime_path is None, _record_runtime_locked returns early."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(
         SupervisorKnobs(),
@@ -1072,7 +1072,7 @@ def test_degrade_locked_without_runtime_path() -> None:
 
 
 def test_persist_degraded_includes_launcher_log_if_exists(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import LAUNCHER_LOG_FILENAME, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import LAUNCHER_LOG_FILENAME, Supervisor, SupervisorKnobs
 
     degraded_path = tmp_path / "degraded.json"
     launcher_log = tmp_path / LAUNCHER_LOG_FILENAME
@@ -1098,7 +1098,7 @@ def test_pause_at_active_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """When MODULO_TEST_PAUSE_AT matches the gate, it writes PAUSED to stderr."""
     import io
 
-    from modulo.launcher.supervisor import _PAUSE_ENV_VAR, GATE_SUPERVISOR_PRE_TEARDOWN
+    from farna.launcher.supervisor import _PAUSE_ENV_VAR, GATE_SUPERVISOR_PRE_TEARDOWN
 
     monkeypatch.setenv(_PAUSE_ENV_VAR, GATE_SUPERVISOR_PRE_TEARDOWN)
     # _pause_at reads stdin, so we need to mock that
@@ -1117,7 +1117,7 @@ def test_pause_at_inactive_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """When MODULO_TEST_PAUSE_AT doesn't match, _pause_at is a no-op."""
     import io
 
-    from modulo.launcher.supervisor import _PAUSE_ENV_VAR
+    from farna.launcher.supervisor import _PAUSE_ENV_VAR
 
     monkeypatch.setenv(_PAUSE_ENV_VAR, "some_other_gate")
     # Should not raise or block
@@ -1143,7 +1143,7 @@ def test_pause_at_inactive_gate(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_stderr_tail_text_empty() -> None:
     import io
 
-    from modulo.launcher.supervisor import _StderrTail
+    from farna.launcher.supervisor import _StderrTail
 
     stream = io.BytesIO(b"")
     tail = _StderrTail(stream)
@@ -1155,7 +1155,7 @@ def test_stderr_tail_text_empty() -> None:
 def test_stderr_tail_text_with_data() -> None:
     import io
 
-    from modulo.launcher.supervisor import _StderrTail
+    from farna.launcher.supervisor import _StderrTail
 
     stream = io.BytesIO(b"hello world\n")
     tail = _StderrTail(stream)
@@ -1168,7 +1168,7 @@ def test_stderr_tail_text_with_data() -> None:
 def test_tail_process_with_none_stderr() -> None:
     import subprocess
 
-    from modulo.launcher.supervisor import _TailProcess
+    from farna.launcher.supervisor import _TailProcess
 
     # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST match.
     _popen = subprocess.__dict__["Popen"]
@@ -1193,7 +1193,7 @@ def test_tail_process_with_none_stderr() -> None:
 def test_tail_process_with_stderr() -> None:
     import subprocess
 
-    from modulo.launcher.supervisor import _TailProcess
+    from farna.launcher.supervisor import _TailProcess
 
     # Use __dict__ to avoid the test-style scanner's subprocess.Popen AST match.
     _popen = subprocess.__dict__["Popen"]
@@ -1232,7 +1232,7 @@ def test_tail_process_with_stderr() -> None:
     reason="traceback.format_exc triggers linecache.checkcache hang on Windows",
 )
 def test_monitor_loop_exception_degrades() -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     degraded_reasons: list[str] = []
 
@@ -1264,7 +1264,7 @@ def test_monitor_loop_exception_degrades() -> None:
     import logging
     import traceback
 
-    logger = logging.getLogger("modulo.launcher.supervisor")
+    logger = logging.getLogger("farna.launcher.supervisor")
     old_level = logger.level
     logger.setLevel(logging.CRITICAL)
     old_format_exc = traceback.format_exc
@@ -1286,7 +1286,7 @@ def test_monitor_loop_exception_degrades() -> None:
 
 def test_enforce_startup_deadline_no_spawned_at() -> None:
     """When spawned_at is None, _enforce_startup_deadline returns early."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs, _Child
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs, _Child
 
     supervisor = Supervisor(SupervisorKnobs())
     child = _Child(spec=ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
@@ -1300,7 +1300,7 @@ def test_enforce_startup_deadline_no_spawned_at() -> None:
 
 def test_enforce_startup_deadline_within_timeout() -> None:
     """When within the timeout, returns early without killing."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(SupervisorKnobs(health_check_timeout=10.0))
     supervisor.add(ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
@@ -1314,7 +1314,7 @@ def test_enforce_startup_deadline_within_timeout() -> None:
 
 def test_enforce_startup_deadline_no_probe_presumed_live() -> None:
     """When probe is None and deadline passed, child is presumed live."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(SupervisorKnobs(health_check_timeout=1.0))
     supervisor.add(ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
@@ -1328,7 +1328,7 @@ def test_enforce_startup_deadline_no_probe_presumed_live() -> None:
 
 def test_enforce_startup_deadline_probe_process_none() -> None:
     """When process is None but probe exists and deadline passed, returns early."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(SupervisorKnobs(health_check_timeout=1.0))
     supervisor.add(ChildSpec(name="pg", argv_builder=lambda: ["pg"], probe=lambda: True))
@@ -1346,7 +1346,7 @@ def test_enforce_startup_deadline_probe_process_none() -> None:
 
 
 def test_teardown_child_escalation_wait_none_then_kill(deterministic_signal_group: None) -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
 
@@ -1395,7 +1395,7 @@ def test_teardown_child_escalation_wait_none_then_kill(deterministic_signal_grou
 
 def test_collect_status_file_not_found(tmp_path: Path) -> None:
     """When secrets file exists but state file doesn't, FileNotFoundError is caught."""
-    from modulo.launcher.secrets_file import LauncherSecrets
+    from farna.launcher.secrets_file import LauncherSecrets
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1427,7 +1427,7 @@ def test_collect_status_file_not_found(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="default_spawner uses child_shim which is Linux-only")
 def test_default_spawner_creates_tail_process() -> None:
-    from modulo.launcher.supervisor import _default_spawner, _TailProcess
+    from farna.launcher.supervisor import _default_spawner, _TailProcess
 
     proc = _default_spawner([sys.executable, "-c", "print('hello')"], None)
     assert isinstance(proc, _TailProcess)
@@ -1446,7 +1446,7 @@ def test_resolve_bundled_postgres_version_token_parsing(tmp_path: Path, monkeypa
     fake_bin = tmp_path / ("postgres.exe" if sys.platform == "win32" else "postgres")
     fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
 
-    import modulo.launcher.entry as entry_mod
+    import farna.launcher.entry as entry_mod
 
     monkeypatch.setattr(entry_mod, "resolve_bin_dir", lambda: tmp_path)
 
@@ -1469,7 +1469,7 @@ def test_resolve_bundled_postgres_version_no_version_token(tmp_path: Path, monke
     fake_bin = tmp_path / ("postgres.exe" if sys.platform == "win32" else "postgres")
     fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
 
-    import modulo.launcher.entry as entry_mod
+    import farna.launcher.entry as entry_mod
 
     monkeypatch.setattr(entry_mod, "resolve_bin_dir", lambda: tmp_path)
 
@@ -1491,7 +1491,7 @@ def test_resolve_bundled_postgres_version_no_version_token(tmp_path: Path, monke
 
 
 def test_record_runtime_locked_minimal(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     path = tmp_path / "runtime.json"
     supervisor = Supervisor(SupervisorKnobs(), runtime_path=path)
@@ -1531,7 +1531,7 @@ def test_serve_watch_normal_flow() -> None:
     force = RecordingForceEvent()
     # Set stop before starting the thread so it doesn't block
     stop.set()
-    import modulo.launcher.entry as _entry
+    import farna.launcher.entry as _entry
 
     _entry._serve_watch(server, stop, force)
     assert server.should_exit is True
@@ -1546,7 +1546,7 @@ def test_serve_watch_normal_flow() -> None:
 
 
 def test_degrade_locked_with_context_provider(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     degraded_path = tmp_path / "degraded.json"
     supervisor = Supervisor(
@@ -1567,7 +1567,7 @@ def test_degrade_locked_with_context_provider(tmp_path: Path) -> None:
 
 
 def test_teardown_child_no_escalate_signal_goes_to_kill(deterministic_signal_group: None) -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
 
@@ -1612,7 +1612,7 @@ def test_teardown_child_no_escalate_signal_goes_to_kill(deterministic_signal_gro
 
 
 def test_teardown_child_kill_wait_failed_logs(deterministic_signal_group: None) -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     class StubbornProc:
         pid = 7773
@@ -1653,7 +1653,7 @@ def test_teardown_child_kill_wait_failed_logs(deterministic_signal_group: None) 
 
 
 def test_teardown_child_first_signal_wait_succeeds(deterministic_signal_group: None) -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     events: list[str] = []
 
@@ -1692,7 +1692,7 @@ def test_teardown_child_first_signal_wait_succeeds(deterministic_signal_group: N
 
 
 def test_tick_returns_immediately_when_degraded() -> None:
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     spawned: list[list[str]] = []
     supervisor = Supervisor(
@@ -1712,7 +1712,7 @@ def test_tick_returns_immediately_when_degraded() -> None:
 
 
 def test_supervisor_request_stop_sets_event() -> None:
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     supervisor = Supervisor(SupervisorKnobs())
     assert not supervisor._stop_event.is_set()
@@ -1726,7 +1726,7 @@ def test_supervisor_request_stop_sets_event() -> None:
 
 
 def test_degrade_locked_with_pause_hook_and_runtime(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, Supervisor, SupervisorKnobs
 
     pause_calls: list[str] = []
     runtime_path = tmp_path / "runtime.json"
@@ -1858,7 +1858,7 @@ def test_load_status_state_missing_state_file_is_honest_unknown(
     def _raise_file_not_found(_path: Path, _hmac_key: bytes) -> object:
         raise FileNotFoundError("state.json raced away")
 
-    from modulo.launcher import state as state_module
+    from farna.launcher import state as state_module
 
     monkeypatch.setattr(state_module, "load_state", _raise_file_not_found)
 

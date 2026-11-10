@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher.doctor_report import (
+from farna.launcher.doctor_report import (
     REDACTED,
     build_report,
     redact_text,
@@ -171,7 +171,7 @@ def test_build_failure_secrets_unreadable_still_redacts_structurally(tmp_path: P
 def test_tail_budget_brings_back_few_bytes(tmp_path: Path, bytes_budget: int) -> None:
     path = tmp_path / "log"
     path.write_text("a" * 1_000_000, encoding="utf-8")
-    from modulo.launcher.supervisor import read_log_tail
+    from farna.launcher.supervisor import read_log_tail
 
     tail = read_log_tail(path, max_bytes=bytes_budget)
     assert len(tail) == bytes_budget
@@ -180,7 +180,7 @@ def test_tail_budget_brings_back_few_bytes(tmp_path: Path, bytes_budget: int) ->
 @pytest.mark.asyncio
 async def test_run_coroutine_from_within_a_running_loop() -> None:
     """``build_report`` is safe to call from a thread with a live event loop."""
-    from modulo.launcher.doctor_report import _run_coroutine
+    from farna.launcher.doctor_report import _run_coroutine
 
     async def _value() -> int:
         return 42

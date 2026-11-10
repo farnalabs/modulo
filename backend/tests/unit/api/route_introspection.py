@@ -207,6 +207,6 @@ def get_applied_dependency_names(route) -> set[str]:
 
 def get_resolved_min_role(permission: str) -> str:
     """Resolve the minimum org role for a permission key from the registry."""
-    from modulo.auth.permissions import resolve_required
+    from farna.auth.permissions import resolve_required
 
     return resolve_required(permission)

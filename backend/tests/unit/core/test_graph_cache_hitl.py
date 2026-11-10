@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
 
 def _gate_fn(correction_target: str | None = None, *, org_id: uuid.UUID | None = None):
@@ -47,7 +47,7 @@ async def test_reject_with_correction_target_dispatches_correction():
     target = str(uuid.uuid4())
     gate = _gate_fn(correction_target=target)
     with patch(
-        "modulo.core.feedback_manager.dispatch_reject_correction",
+        "farna.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(return_value={"verdict": "resolved"}),
     ) as dispatch:
         result = await gate(_state())
@@ -66,7 +66,7 @@ async def test_reject_without_correction_target_does_not_dispatch():
     """A rejected gate WITHOUT a ``correction_target`` never dispatches a correction."""
     gate = _gate_fn(correction_target=None)
     with patch(
-        "modulo.core.feedback_manager.dispatch_reject_correction",
+        "farna.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(return_value=None),
     ) as dispatch:
         result = await gate(_state())
@@ -80,7 +80,7 @@ async def test_approve_with_correction_target_does_not_dispatch():
     """Approving a gate (even with a ``correction_target``) never dispatches a correction."""
     gate = _gate_fn(correction_target=str(uuid.uuid4()))
     with patch(
-        "modulo.core.feedback_manager.dispatch_reject_correction",
+        "farna.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(return_value=None),
     ) as dispatch:
         result = await gate(_state(_hitl_decision={"action": "approved", "review_id": "hitl_review_a_b"}))
@@ -94,7 +94,7 @@ async def test_correction_dispatch_failure_does_not_crash_reject_path():
     """A correction dispatch failure is failure-isolated — the reject path survives."""
     gate = _gate_fn(correction_target=str(uuid.uuid4()))
     with patch(
-        "modulo.core.feedback_manager.dispatch_reject_correction",
+        "farna.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
         result = await gate(_state())

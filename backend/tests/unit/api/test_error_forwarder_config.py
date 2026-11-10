@@ -12,12 +12,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.error_forwarder_config import _is_configured, validate_forwarder_config
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.error_forwarder_config import _is_configured, validate_forwarder_config
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, make_empty_execute_result
 
 _ORG_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -254,7 +254,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -274,7 +274,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -293,7 +293,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -310,7 +310,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -324,7 +324,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -338,7 +338,7 @@ class TestListForwarders:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.get("/api/v1/errors/forwarders")
 
@@ -371,9 +371,9 @@ class TestConfigureForwarder:
             yield mock_session
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
             patch(
-                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                "farna.api.routes.error_forwarder_config.validate_outbound_url_async",
                 new_callable=AsyncMock,
             ),
         ):
@@ -400,7 +400,7 @@ class TestConfigureForwarder:
             yield mock_session
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
@@ -462,7 +462,7 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/sentry",
@@ -485,7 +485,7 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/sentry",
@@ -511,9 +511,9 @@ class TestConfigureForwarder:
             yield mock_session
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
             patch(
-                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                "farna.api.routes.error_forwarder_config.validate_outbound_url_async",
                 new_callable=AsyncMock,
             ),
         ):
@@ -534,9 +534,9 @@ class TestConfigureForwarder:
             yield mock_session
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
             patch(
-                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                "farna.api.routes.error_forwarder_config.validate_outbound_url_async",
                 new_callable=AsyncMock,
             ),
         ):
@@ -573,7 +573,7 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/loki",
@@ -594,7 +594,7 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/sentry",
@@ -615,7 +615,7 @@ class TestConfigureForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.put(
                 "/api/v1/errors/forwarders/loki",
@@ -645,8 +645,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=True)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -672,8 +672,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=False)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -702,8 +702,8 @@ class TestTestForwarder:
         mock_fwd.forward = _timeout_forward
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -729,8 +729,8 @@ class TestTestForwarder:
         mock_fwd.forward = AsyncMock(side_effect=RuntimeError("network error"))
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -753,8 +753,8 @@ class TestTestForwarder:
             yield mock_session
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=None),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=None),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -788,8 +788,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=True)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -815,8 +815,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=True)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -855,8 +855,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=True)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -884,8 +884,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=True)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -909,8 +909,8 @@ class TestTestForwarder:
         mock_fwd = _make_mock_forwarder(ok=False)
 
         with (
-            patch("modulo.api.routes.error_forwarder_config.set_rls_org"),
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
+            patch("farna.api.routes.error_forwarder_config.set_rls_org"),
+            patch("farna.api.routes.error_forwarder_config.get_forwarder", return_value=mock_fwd),
         ):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post(
@@ -941,7 +941,7 @@ class TestDeleteForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.delete("/api/v1/errors/forwarders/sentry")
 
@@ -956,7 +956,7 @@ class TestDeleteForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.delete("/api/v1/errors/forwarders/sentry")
 
@@ -995,7 +995,7 @@ class TestRestoreForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post("/api/v1/errors/forwarders/sentry/restore")
 
@@ -1013,7 +1013,7 @@ class TestRestoreForwarder:
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
 
-        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+        with patch("farna.api.routes.error_forwarder_config.set_rls_org"):
             client.app.dependency_overrides[get_db_session] = override_session
             resp = client.post("/api/v1/errors/forwarders/sentry/restore")
 

@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import pytest
 
-from modulo.core.eval_engine.discovery_eval import (
+from farna.core.eval_engine.discovery_eval import (
     DISCOVERY_CONTRACT_VERSION,
     DISCOVERY_EVALUATOR_VERSION,
     DiscoveryEvalError,
@@ -14,7 +14,7 @@ from modulo.core.eval_engine.discovery_eval import (
     normalise_discovery_output,
     parse_discovery_input,
 )
-from modulo.core.system_maps_discovery import discover_draft
+from farna.core.system_maps_discovery import discover_draft
 
 _HAND_AUTHORED_EXPECTED_GRAPH = {
     "nodes": [

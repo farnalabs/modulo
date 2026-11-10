@@ -18,8 +18,8 @@ import uuid
 
 import pytest
 
-from modulo.core.trigger_engine import _apply_payload_mapping
-from modulo.db.lifecycle_refs import (
+from farna.core.trigger_engine import _apply_payload_mapping
+from farna.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
     canonicalise_kind,

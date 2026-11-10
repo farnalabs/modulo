@@ -26,7 +26,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from modulo.core.graph_validator import GraphValidator
+from farna.core.graph_validator import GraphValidator
 from tests.unit.graph_validator._helpers import (
     codes_of as _codes,
 )

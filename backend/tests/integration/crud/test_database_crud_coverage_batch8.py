@@ -7,65 +7,65 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     create_schema as create_parameter_schema,
 )
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     delete_schema as delete_parameter_schema,
 )
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     get_schema_references,
     soft_delete_schema,
 )
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     list_schemas as list_parameter_schemas,
 )
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     restore_schema as restore_parameter_schema,
 )
-from modulo.db.crud.parameter_schema import (
+from farna.db.crud.parameter_schema import (
     update_schema as update_parameter_schema,
 )
-from modulo.db.crud.parameter_set import create_set
-from modulo.db.crud.pipeline import create_pipeline
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.parameter_set import create_set
+from farna.db.crud.pipeline import create_pipeline
+from farna.db.crud.pipeline_folder import (
     create_folder as create_pipeline_folder,
 )
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.pipeline_folder import (
     delete_folder as delete_pipeline_folder,
 )
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.pipeline_folder import (
     get_folder as get_pipeline_folder,
 )
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.pipeline_folder import (
     list_folders as list_pipeline_folders,
 )
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.pipeline_folder import (
     move_pipeline_to_folder,
 )
-from modulo.db.crud.pipeline_folder import (
+from farna.db.crud.pipeline_folder import (
     update_folder as update_pipeline_folder,
 )
-from modulo.db.crud.schema import create_schema
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema import create_schema
+from farna.db.crud.schema_folder import (
     create_folder as create_schema_folder,
 )
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema_folder import (
     delete_folder as delete_schema_folder,
 )
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema_folder import (
     get_folder as get_schema_folder,
 )
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema_folder import (
     list_folders as list_schema_folders,
 )
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema_folder import (
     move_schema_to_folder,
 )
-from modulo.db.crud.schema_folder import (
+from farna.db.crud.schema_folder import (
     update_folder as update_schema_folder,
 )
-from modulo.db.crud.tier_catalog import get_feature_flag, list_feature_flags, list_tiers
+from farna.db.crud.tier_catalog import get_feature_flag, list_feature_flags, list_tiers
 
 pytestmark = pytest.mark.integration
 
@@ -198,6 +198,6 @@ async def test_tier_catalog_reads_real_seeded_catalog(rls_session: AsyncSession)
 
 
 def test_evidence_repository_placeholder_imports() -> None:
-    import modulo.db.repositories.evidence as evidence_repository
+    import farna.db.repositories.evidence as evidence_repository
 
     assert evidence_repository.__doc__ is not None

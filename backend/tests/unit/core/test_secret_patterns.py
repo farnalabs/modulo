@@ -17,7 +17,7 @@ Indirect callers (runs masking, error-code sanitisation, the API-layer
 would silently leak secrets on every read surface.
 """
 
-from modulo.core.secret_patterns import (
+from farna.core.secret_patterns import (
     CONNECTION_STRING_PATTERN,
     PRIVATE_KEY_PATTERN,
     SECRET_VALUE_PATTERNS,

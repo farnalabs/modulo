@@ -25,13 +25,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _build_log_tail_provider,
     _read_log_tail_via_provider,
     make_sandbox_agent_fn,
 )
-from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from farna.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
 from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -154,7 +154,7 @@ def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
     the provider object (no E2B API call).  Every call-site test injects a
     fake builder, so this is the only test that executes the real body.
     """
-    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
     provider = _build_log_tail_provider("test-key")
     assert isinstance(provider, E2BRuntimeProvider)
@@ -164,7 +164,7 @@ def test_build_log_tail_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hub/config failure is swallowed and surfaces as ``None`` (never raises)."""
-    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
 
     def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
@@ -182,7 +182,7 @@ async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.Monk
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"provider-fixed-tail")
     builder = MagicMock(return_value=fake)
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     # urlopen must never fire on the provider path (the hostname lives only in e2b.py).
     monkeypatch.setattr("urllib.request.urlopen", AsyncMock(side_effect=AssertionError("urlopen must not run")))
 
@@ -230,7 +230,7 @@ async def test_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"timeout-tail")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=fake),
     )
 
@@ -271,7 +271,7 @@ async def test_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch
     fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
     fake = FakeRuntimeProvider(b"schema-tail")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=fake),
     )
 
@@ -301,7 +301,7 @@ async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPa
     fake_file_io.write_error = RuntimeError("e2b file write exploded")
     fake = FakeRuntimeProvider(b"exc-tail")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=fake),
     )
 
@@ -333,14 +333,14 @@ async def test_helper_returns_empty_without_key(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     assert not await _read_log_tail_via_provider("sbx-1")
     builder.assert_not_called()
 
 
 async def test_helper_returns_empty_on_invalid_ref(monkeypatch: pytest.MonkeyPatch) -> None:
     builder = MagicMock()
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     assert not await _read_log_tail_via_provider(None)
     assert not await _read_log_tail_via_provider("")
     builder.assert_not_called()
@@ -349,7 +349,7 @@ async def test_helper_returns_empty_on_invalid_ref(monkeypatch: pytest.MonkeyPat
 async def test_helper_returns_empty_when_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=None),
     )
     assert not await _read_log_tail_via_provider("sbx-1")
@@ -360,7 +360,7 @@ async def test_helper_returns_empty_on_provider_exception(monkeypatch: pytest.Mo
     exploding = MagicMock()
     exploding.read_log_tail = AsyncMock(side_effect=RuntimeError("provider backend down"))
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=exploding),
     )
     assert not await _read_log_tail_via_provider("sbx-1")
@@ -370,7 +370,7 @@ async def test_helper_decodes_provider_bytes(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider("héllo tail".encode())
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=fake),
     )
     assert await _read_log_tail_via_provider("sbx-1", max_bytes=128) == "héllo tail"

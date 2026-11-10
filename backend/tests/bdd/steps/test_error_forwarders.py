@@ -67,11 +67,11 @@ def _seed_mock_session(ctx):
 def _build_app(ctx):
     """Build a ``TestClient`` wired to the forwarder config router with mocked deps driven by
     ``ctx``.  Supports no-org, viewer role, feature gating, and missing-DB-table scenarios."""
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.api.routes.error_forwarder_config import router as fwd_router
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.api.routes.error_forwarder_config import router as fwd_router
+    from farna.auth.dependencies import get_current_tenant_user, get_current_user
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import Settings, get_settings
 
     app = FastAPI()
     app.include_router(fwd_router)
@@ -82,7 +82,7 @@ def _build_app(ctx):
 
     def _user():
         if org_id is None or org_role is None:
-            from modulo.auth.dependencies import OrganisationMembershipRequired
+            from farna.auth.dependencies import OrganisationMembershipRequired
 
             raise OrganisationMembershipRequired
         return TenantPrincipal(
@@ -235,7 +235,7 @@ def _when_post_path(path: str, body_json: str, ctx: dict, request) -> None:
     fwd_hangs = ctx.get("_forwarder_hangs")
 
     if fwd_ok is not None or fwd_hangs:
-        with patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get:
+        with patch("farna.api.routes.error_forwarder_config.get_forwarder") as mock_get:
             fwd_instance = AsyncMock()
             if fwd_hangs:
 

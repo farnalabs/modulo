@@ -1,0 +1,1487 @@
+"""Capacity alerting sweep (FAR-1344).
+
+An operator learns that capacity is saturating **from a notification, before
+work starts failing**, and can act without reading logs. This module owns the
+alert decision only — the numbers come from FAR-1343's capacity reader
+(``core/analytics/capacity.py``), which is the single source of truth for
+pending depth, oldest-pending age, the binding limit and the stall/leak signal.
+The per-pipeline trend is read from that report's own interval series (depth +
+oldest-pending age per bucket) rather than re-derived from the run table.
+
+Three alert families, all dispatched through the shared ``Notifier`` (so the
+org/team webhook subscriptions and the per-category in-app opt-out both apply):
+
+* **queue pressure** — an escalating ladder per pipeline. Notice at a low
+  watermark (a queue is building), warning when the oldest pending run crosses
+  a wait duration, critical when the queue is still climbing while its head
+  ages (nothing draining).
+* **backpressure engaged** — the FAR-604 dispatch gate is already refusing new
+  fires for a pipeline. Evaluated with the canonical ``evaluate_backpressure``
+  rather than re-derived, so the alert and the gate can never disagree.
+* **capacity saturation** — an ORG-level limit (org run concurrency or org
+  sandbox concurrency) has been fully held, with work queued, for longer than
+  the sustain threshold.
+* **Redis pressure** (FAR-2002) — the Redis store backing the SAQ queue is at
+  its configured ``maxmemory`` bound. The shipped Compose default is now
+  bounded and evicting (``volatile-lru`` over the TTL-bearing job hashes only),
+  so this alert fires while there is still headroom to act rather than after
+  enqueues start failing. It is attached to every org with pending work at
+  risk — the fix is an operator/deployment change, not a pipeline fix.
+
+The org layer is **signal + alert, never a refusal**: nothing here gates
+admission. The alert fires whether or not ``queue_timeout`` is configured — it
+is the escalation path for the queue-forever default.
+
+Noise control (the point of this module):
+
+* **One open alert per subject.** A subject is a pipeline (queue /
+  backpressure) or the org (saturation). The open alert's high-water rung is
+  held in Redis with a TTL, and a per-org Redis SET tracks which subjects are
+  currently open so a subject that disappears from the report is cleared rather
+  than left open forever.
+* **Re-notify only on escalation.** A rung at or below the stored one is
+  suppressed — a climbing queue emits one notice, one warning, one critical,
+  not one per tick.
+* **Auto-clear when draining resumes.** The rung falls to 0, the state is
+  deleted, and (when the cleared alert was warning-or-worse) a
+  ``capacity_recovered`` event closes the loop. A cleared NOTICE is retired
+  silently — it is the lowest rung and its closure carries no action.
+
+Failure posture: the sweep never raises (it runs inside ``dispatcher_reconcile``,
+whose other sweeps must not be broken by it). If the Redis state store is
+unavailable the sweep **skips dispatch** rather than risk storming the notifier
+— dedup is the noise guard, so without it the safe direction is silence, and it
+is reported (WARNING log + a ``state_unavailable`` count in the summary) rather
+than swallowed.
+
+The ``factory`` this sweep is given must be a **system-capable** session factory
+(the ``modulo_system`` role): the org enumeration reads ``runs`` across every
+tenant, which an org-RLS-scoped app role would silently reduce to zero rows.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+from redis.asyncio import Redis as AsyncRedis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from farna.core.alert_dispatch import build_notifier, read_alert_state
+from farna.core.analytics.capacity import CapacityParams, read_capacity_report
+from farna.core.notifier import (
+    EVENT_CAPACITY_BACKPRESSURE,
+    EVENT_CAPACITY_RECOVERED,
+    EVENT_CAPACITY_REDIS_PRESSURE,
+    EVENT_CAPACITY_SATURATION,
+    EVENT_QUEUE_PRESSURE_CRITICAL,
+    EVENT_QUEUE_PRESSURE_NOTICE,
+    EVENT_QUEUE_PRESSURE_WARNING,
+)
+from farna.db.models.run import Run
+from farna.db.rls import set_rls_org
+from farna.settings import Settings, get_settings
+
+_log = logging.getLogger(__name__)
+
+__all__ = [
+    "BACKPRESSURE_RUNG",
+    "CRITICAL_RUNG",
+    "NOTICE_RUNG",
+    "SATURATION_RUNG",
+    "UNHEALTHY_SUSTAIN_SECONDS",
+    "WARNING_RUNG",
+    "build_candidates",
+    "evaluate_capacity_alerts",
+    "pipeline_trend",
+    "queue_pressure_rung",
+    "redis_memory_rung",
+    "resolve_alert_action",
+    "saturation_rung",
+]
+
+# ---------------------------------------------------------------------------
+# The ladder
+# ---------------------------------------------------------------------------
+
+# Rungs are a total order so escalation is an integer comparison. 0 = clear.
+CLEAR_RUNG = 0
+NOTICE_RUNG = 1
+WARNING_RUNG = 2
+CRITICAL_RUNG = 3
+
+# Subject kinds — the alert's identity for dedup. One open alert per subject.
+_SUBJECT_QUEUE = "queue"
+_SUBJECT_BACKPRESSURE = "backpressure"
+_SUBJECT_SATURATION = "saturation"
+# FAR-2002 — the SAQ queue's Redis store, evaluated once per tick from
+# ``INFO memory`` and attached to every org with pending work at risk.
+_SUBJECT_REDIS = "redis"
+
+# Rung → event type. The in-app severity of each rung comes from the EVENT's
+# own render config (event_mapper), which is why the rungs are distinct events.
+_RUNG_EVENTS: dict[int, str] = {
+    NOTICE_RUNG: EVENT_QUEUE_PRESSURE_NOTICE,
+    WARNING_RUNG: EVENT_QUEUE_PRESSURE_WARNING,
+    CRITICAL_RUNG: EVENT_QUEUE_PRESSURE_CRITICAL,
+}
+_RUNG_LEVELS: dict[int, str] = {NOTICE_RUNG: "notice", WARNING_RUNG: "warning", CRITICAL_RUNG: "critical"}
+
+# Backpressure and saturation reuse the ladder's rung integers so the state
+# machine is single-sourced: both are a WARNING-class condition (rung 2).
+BACKPRESSURE_RUNG = WARNING_RUNG
+SATURATION_RUNG = WARNING_RUNG
+
+# Critical additionally requires a real queue, not a single stuck run.
+CRITICAL_MIN_DEPTH = 3
+# Warning fires once the oldest pending run has waited this long.
+WARNING_OLDEST_PENDING_SECONDS = 600
+# Queue/backpressure warnings are unhealthy signals, not instantaneous failures.
+# Require one sustained window (five 60-second reconcile ticks) before the first
+# warning-class notification, so a transient health bounce does not produce a
+# warning followed by a recovery notification. Escalations after an alert opens
+# remain immediate, and the existing saturation sustain clock is unchanged.
+UNHEALTHY_SUSTAIN_SECONDS = 300
+# A notice requires at least this much depth (the low watermark).
+NOTICE_MIN_DEPTH = 1
+# Saturation must be continuously held this long before it alerts — a momentary
+# full cap during a healthy burst is not saturation.
+SATURATION_SUSTAIN_SECONDS = 300
+# FAR-2002 — Redis memory watermark. Alert while there is still headroom to act
+# (and while ``volatile-lru`` can still shed cleanly); a Redis already past this
+# bound is one host-OOM away from refusing every enqueue, which is precisely the
+# failure FAR-2002 removes from the shipped Compose default.
+REDIS_MEMORY_WARNING_PCT = 85.0
+
+# Sweep bounds. The sweep shares the 60s ``dispatcher_reconcile`` slot with the
+# other compensating sweeps, so it is wall-clock bounded and per-org bounded.
+_DEFAULT_BUDGET_SECONDS = 45.0
+# Slack above the graceful per-org budget before the hard ceiling cancels the
+# sweep: enough for the in-flight org read to finish on a merely-slow DB, not
+# enough to overrun the next 60s reconcile tick.
+_HARD_TIMEOUT_SLACK_SECONDS = 15.0
+MAX_ORGS_PER_TICK = 200
+# Pipelines whose queue is checked against the canonical backpressure gate.
+MAX_BACKPRESSURE_CHECKS_PER_ORG = 25
+# Bound on one notifier dispatch (a webhook endpoint can retry with backoff).
+_NOTIFY_TIMEOUT_SECONDS = 10.0
+
+# Redis state: one JSON blob per subject, holding the high-water rung, the label
+# and when it was first reached. The TTL is the hard backstop — even if the
+# auto-clear path is never reached (e.g. the subject disappears while the sweep
+# is down), the alert cannot stay open forever.
+_STATE_KEY_PREFIX = "modulo:capacity_alert"
+_STATE_TTL_SECONDS = 7 * 24 * 60 * 60
+# Separate marker for the saturation sustain clock: it must survive while the
+# condition is merely "held but not yet sustained", whereas the alert state
+# itself must not exist until the alert fires.
+_SATURATION_MARKER = "saturation_marker"
+# Queue-pressure warnings need a sustained unhealthy episode before opening.
+_QUEUE_UNHEALTHY_MARKER = "queue_unhealthy_marker"
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One subject's current evaluation: its rung and what to send if it fires."""
+
+    subject: str
+    rung: int
+    event_type: str | None
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
+def pipeline_trend(report: dict[str, Any], pipeline_id: Any) -> tuple[int | None, float | None]:
+    """Per-pipeline ``(depth_change, oldest_age_change)`` from the reader series.
+
+    The FAR-1343 report's ``series`` carries per-bucket ``by_pipeline`` rows
+    (depth + oldest-pending age). A pipeline absent from a bucket has depth 0
+    there (the reader omits empty rows), so the first→last delta of each series
+    is the pipeline's growth over the window — the "still climbing?" signal the
+    ladder needs, measured per pipeline rather than org-wide.
+
+    Returns ``(None, None)`` when the report has fewer than two buckets, so the
+    caller falls back to the org-level signal rather than guessing.
+    """
+    depths: list[int] = []
+    ages: list[float] = []
+    for bucket in report.get("series") or []:
+        row = _bucket_row(bucket, pipeline_id)
+        if row is None:
+            depths.append(0)
+            ages.append(0.0)
+        else:
+            depths.append(int(row.get("pending_depth") or 0))
+            ages.append(float(row.get("oldest_pending_age_seconds") or 0.0))
+    if len(depths) < 2:
+        return None, None
+    return depths[-1] - depths[0], ages[-1] - ages[0]
+
+
+def _bucket_row(bucket: dict[str, Any], pipeline_id: Any) -> dict[str, Any] | None:
+    for row in bucket.get("by_pipeline") or []:
+        if str(row.get("pipeline_id")) == str(pipeline_id):
+            found: dict[str, Any] = row
+            return found
+    return None
+
+
+def queue_pressure_rung(
+    *,
+    depth: int,
+    oldest_pending_age_seconds: float | None,
+    depth_change: int | None,
+    oldest_age_change: float | None,
+    drain_ratio: float | None,
+    stall_suspected: bool,
+) -> int:
+    """The queue-pressure rung for one pipeline.
+
+    Escalation order (highest wins):
+
+    * **critical** — the reader's org-level stall/leak signature fired (the org
+      cap is held by *executing* runs with ~zero completions), OR the pipeline
+      still has ``CRITICAL_MIN_DEPTH`` or more queued with a genuine NO-DRAIN
+      signal: FAR-1343's drain rate is zero (runs were created in the window
+      and none started) and the queue is not shrinking. The window deltas are
+      deliberately NOT used here: ``depth_change``/``oldest_age_change`` are
+      first-bucket-vs-last-bucket deltas, so both are positive for ANY burst
+      that appeared inside the window — even a healthy one whose runs start
+      immediately — and a merely busy queue must never page as critical.
+    * **warning** — the oldest pending run has waited at least
+      ``WARNING_OLDEST_PENDING_SECONDS``.
+    * **notice** — a queue exists and is growing (depth or head age rising).
+    * **clear** — nothing queued, or the queue is draining.
+
+    ``drain_ratio`` is the rate the FAR-1343 report publishes as
+    ``drain.ratio`` (started/created over the window); ``None`` means there is
+    no data to establish a no-drain verdict, so critical is not claimed — the
+    warning rung (oldest age) still covers a stuck backlog.
+
+    The notice rung is deliberately per-EPISODE, not forever-deduped: while a
+    queue keeps building the stored state holds at the same rung, so one notice
+    is emitted per build-up, never per tick. When the queue drains the notice
+    state is retired silently (its closure carries no action), so the next
+    build-up emits a fresh notice. Suppressing that repeat would make a
+    genuinely new build-up invisible; notice is the lowest severity and one
+    event per episode is the intended low-watermark signal.
+    """
+    if depth < NOTICE_MIN_DEPTH:
+        return CLEAR_RUNG
+    if stall_suspected and depth >= CRITICAL_MIN_DEPTH:
+        return CRITICAL_RUNG
+    if depth >= CRITICAL_MIN_DEPTH and drain_ratio is not None and drain_ratio <= 0 and (depth_change or 0) >= 0:
+        return CRITICAL_RUNG
+    if oldest_pending_age_seconds is not None and float(oldest_pending_age_seconds) >= WARNING_OLDEST_PENDING_SECONDS:
+        return WARNING_RUNG
+    if (depth_change or 0) > 0 or (oldest_age_change or 0) > 0:
+        return NOTICE_RUNG
+    return CLEAR_RUNG
+
+
+def _org_limit_fully_held(report: dict[str, Any]) -> dict[str, Any] | None:
+    """The org-level binding limit when it is fully held, else ``None``.
+
+    Only the ORG-wide scopes count as saturation — ``pipeline`` is the queue
+    ladder's territory and ``none`` means nothing binds.
+    """
+    binding = report.get("binding") or {}
+    scope = binding.get("scope")
+    if scope not in ("org_run", "sandbox"):
+        return None
+    if binding.get("headroom") not in (0, None):
+        return None
+    return binding
+
+
+def saturation_rung(report: dict[str, Any], *, bound_since: datetime | None, now: datetime) -> int:
+    """The saturation rung for an org whose ORG-level limit is fully held.
+
+    Returns ``CLEAR_RUNG`` while the condition has not yet been *continuously*
+    held for ``SATURATION_SUSTAIN_SECONDS`` — the caller keeps a separate
+    sustain marker so the clock starts at first observation.
+    """
+    binding = _org_limit_fully_held(report)
+    if binding is None:
+        return CLEAR_RUNG
+    # Work must actually be blocked on it; a fully-held cap with an empty queue
+    # is a leak/stall problem, not a saturation alert (that is run_stalled's
+    # territory, and alerting here would page on a healthy idle instance).
+    if int(binding.get("pending_blocked") or 0) <= 0 and int((report.get("pending") or {}).get("total") or 0) <= 0:
+        return CLEAR_RUNG
+    if bound_since is None or (now - bound_since).total_seconds() < SATURATION_SUSTAIN_SECONDS:
+        return CLEAR_RUNG
+    return SATURATION_RUNG
+
+
+def redis_memory_rung(info: dict[str, Any] | None) -> int:
+    """The Redis pressure rung from ``INFO memory`` (FAR-2002).
+
+    ``maxmemory == 0`` means Redis is unbounded — the deployment is not using
+    the shipped bound (an externally-managed Redis, or a hand-written compose).
+    There is no percentage to compare, and a managed instance may report 0
+    while enforcing its own server-side eviction, so treating it as pressure
+    would be pure noise. The shipped Compose files set the bound instead, and
+    ``docs/configuration-reference.md`` documents it. So: clear.
+
+    A bounded Redis at/over :data:`REDIS_MEMORY_WARNING_PCT` is a WARNING — the
+    queue is already shedding (``volatile-lru`` evicts queued job hashes) or, on
+    ``noeviction``, about to refuse every enqueue.
+    """
+    if not info:
+        return CLEAR_RUNG
+    try:
+        used = int(info.get("used_memory") or 0)
+        maximum = int(info.get("maxmemory") or 0)
+    except (TypeError, ValueError):
+        return CLEAR_RUNG
+    if used <= 0 or maximum <= 0:
+        return CLEAR_RUNG
+    if used * 100 >= maximum * REDIS_MEMORY_WARNING_PCT:
+        return WARNING_RUNG
+    return CLEAR_RUNG
+
+
+def _bytes_label(value: int) -> str:
+    """Humanise a byte count for the alert body (``256 MB`` / ``900 B``)."""
+    size = float(max(value, 0))
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units[:-1]:
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} {units[-1]}"
+
+
+def resolve_alert_action(prev_rung: int | None, rung: int) -> tuple[str, int | None]:
+    """The dedup / escalation / auto-clear decision for one subject.
+
+    Returns ``(action, stored_rung)`` where *action* is one of:
+
+    * ``"notify"`` — the rung is new or has escalated; dispatch and store it.
+    * ``"recover"`` — an open warning-or-worse alert cleared; dispatch the
+      closure and drop the state.
+    * ``"hold"`` — nothing to do (no alert, or the rung is at/below the stored
+      high-water mark). *stored_rung* is what to persist (``None`` = delete).
+
+    The high-water mark is deliberately NOT lowered on a dip: once an operator
+    has been told "critical", silence until recovery is the quiet behaviour, and
+    a later re-climb re-notifies from notice once the state has cleared.
+    """
+    if rung == CLEAR_RUNG:
+        if prev_rung is None:
+            return "hold", None
+        if prev_rung >= WARNING_RUNG:
+            return "recover", None
+        # A cleared notice is retired silently: its closure carries no action.
+        return "hold", None
+    if prev_rung is None or rung > prev_rung:
+        return "notify", rung
+    return "hold", prev_rung
+
+
+# ---------------------------------------------------------------------------
+# Redis state
+# ---------------------------------------------------------------------------
+
+
+def _state_key(org_id: uuid.UUID, subject: str) -> str:
+    return f"{_STATE_KEY_PREFIX}:{org_id}:{subject}"
+
+
+def _open_key(org_id: uuid.UUID) -> str:
+    return f"{_STATE_KEY_PREFIX}:{org_id}:open"
+
+
+def _subject_for(kind: str, *, pipeline_id: uuid.UUID | None = None) -> str:
+    if kind == _SUBJECT_SATURATION:
+        return _SUBJECT_SATURATION
+    return f"{kind}:{pipeline_id}"
+
+
+def _decode(raw: Any) -> str:
+    return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+
+
+async def _read_state(redis_client: AsyncRedis, key: str) -> dict[str, Any] | None:
+    # FAR-2116: the state read is shared with the pipeline-decay sweep so the
+    # "corrupt blob means absent" decision cannot drift between the two.
+    return await read_alert_state(
+        redis_client,
+        key,
+        logger=_log,
+        event="capacity_alerts",
+    )
+
+
+async def _write_state(redis_client: AsyncRedis, key: str, *, rung: int, label: str, now: datetime) -> None:
+    body = json.dumps({"rung": rung, "label": label, "at": now.isoformat()})
+    await redis_client.set(key, body, ex=_STATE_TTL_SECONDS)
+
+
+async def _delete_state(redis_client: AsyncRedis, key: str) -> None:
+    await redis_client.delete(key)
+
+
+def _state_rung(state: dict[str, Any] | None) -> int | None:
+    if state is None:
+        return None
+    try:
+        return int(state.get("rung"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _state_at(state: dict[str, Any] | None) -> datetime | None:
+    if state is None:
+        return None
+    raw = state.get("at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _state_label(state: dict[str, Any] | None, fallback: str) -> str:
+    if state is not None:
+        label = state.get("label")
+        if isinstance(label, str) and label:
+            return label
+    return fallback
+
+
+# ---------------------------------------------------------------------------
+# Payloads
+# ---------------------------------------------------------------------------
+
+_LIMIT_LABELS: dict[str, str] = {
+    "pipeline": "pipeline concurrency limit",
+    "org_run": "org run concurrency limit",
+    "sandbox": "org sandbox concurrency limit",
+    "none": "queue drain rate",
+}
+
+_SUGGESTED_ACTIONS: dict[str, str] = {
+    "pipeline": "Raise the pipeline's max concurrent runs, or investigate the runs holding its slots.",
+    "org_run": "Raise the org run concurrency limit, or investigate the runs holding org slots.",
+    "sandbox": "Raise the org sandbox concurrency limit, or free the runner slots in use.",
+    "none": "Investigate the oldest queued run, and which pipelines are holding capacity.",
+}
+
+
+def _limit_label(scope: str | None) -> str:
+    return _LIMIT_LABELS.get(scope or "none", "queue drain rate")
+
+
+def _suggested_action(scope: str | None) -> str:
+    return _SUGGESTED_ACTIONS.get(scope or "none", _SUGGESTED_ACTIONS["none"])
+
+
+def _oldest_minutes(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return str(int(float(value) // 60))
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _binding_display(value: Any) -> str:
+    """Render one binding number for a notification body.
+
+    ``None`` is the normal state while a queue builds and no cap is held
+    (``scope: "none"``), so it must read as "not applicable" — never as the
+    Python literal ``None`` — matching the neighbouring ``_oldest_minutes``
+    convention.
+    """
+    return "n/a" if value is None else str(value)
+
+
+def _binding_fields(report: dict[str, Any]) -> dict[str, Any]:
+    binding = report.get("binding") or {}
+    scope = binding.get("scope")
+    return {
+        "limit_label": _limit_label(scope),
+        "limit_value": _binding_display(binding.get("limit")),
+        "current_value": _binding_display(binding.get("in_use")),
+        "suggested_action": _suggested_action(scope),
+        "binding_scope": scope,
+        "binding_limit": binding.get("limit"),
+        "binding_in_use": binding.get("in_use"),
+        "binding_headroom": binding.get("headroom"),
+    }
+
+
+def _queue_payload(
+    *,
+    pipeline: dict[str, Any],
+    report: dict[str, Any],
+    rung: int,
+    trend: tuple[int | None, float | None],
+) -> dict[str, Any]:
+    """Payload for one queue-pressure rung.
+
+    Every placeholder used by that rung's body template is present, so the
+    render never falls back to ``[unknown]``.
+    """
+    return {
+        "pipeline_id": pipeline.get("pipeline_id"),
+        "pipeline_name": pipeline.get("pipeline_name") or pipeline.get("pipeline_id"),
+        "pending_depth": int(pipeline.get("pending_count") or 0),
+        "oldest_pending_age_seconds": pipeline.get("oldest_pending_age_seconds"),
+        "oldest_pending_age_minutes": _oldest_minutes(pipeline.get("oldest_pending_age_seconds")),
+        "depth_change": trend[0],
+        "oldest_age_change_seconds": trend[1],
+        "rung": _RUNG_LEVELS.get(rung, "notice"),
+        **_binding_fields(report),
+    }
+
+
+def _backpressure_reason_label(reason: str) -> str:
+    """Humanise the canonical reason token from ``evaluate_backpressure``.
+
+    The token is a stable machine form (``queue_depth=8 limit=5`` /
+    ``oldest_age=900s limit=3600s``); the label says what it means. An
+    unrecognised token is passed through unchanged rather than described wrongly.
+    """
+    if reason.startswith("queue_depth"):
+        return f"queue depth is over the pipeline's limit ({reason})"
+    if reason.startswith("oldest_age"):
+        return f"the oldest queued run has waited too long ({reason})"
+    return reason or "backpressure"
+
+
+def _backpressure_payload(*, pipeline: dict[str, Any], report: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "pipeline_id": pipeline.get("pipeline_id"),
+        "pipeline_name": pipeline.get("pipeline_name") or pipeline.get("pipeline_id"),
+        "pending_depth": int(pipeline.get("pending_count") or 0),
+        "backpressure_reason": reason,
+        "reason_label": _backpressure_reason_label(reason),
+        **_binding_fields(report),
+    }
+
+
+def _saturation_payload(*, report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "pending_depth": int((report.get("pending") or {}).get("total") or 0),
+        "sustained_minutes": SATURATION_SUSTAIN_SECONDS // 60,
+        **_binding_fields(report),
+    }
+
+
+def _redis_pressure_payload(info: dict[str, Any]) -> dict[str, Any]:
+    """Payload for the FAR-2002 Redis-pressure alert.
+
+    Every placeholder the render templates use is present, so the notification
+    never falls back to ``[unknown]``.
+    """
+    used = int(info.get("used_memory") or 0)
+    maximum = int(info.get("maxmemory") or 0)
+    used_percent = round(used * 100 / maximum, 1) if maximum else 0.0
+    return {
+        "used_memory_bytes": used,
+        "maxmemory_bytes": maximum,
+        "used_memory_label": _bytes_label(used),
+        "maxmemory_label": _bytes_label(maximum),
+        "used_percent": used_percent,
+        "policy": str(info.get("maxmemory_policy") or "unknown"),
+    }
+
+
+def _recovered_payload(*, subject_label: str, previous_rung: int) -> dict[str, Any]:
+    return {
+        "subject_label": subject_label,
+        "previous_level": _RUNG_LEVELS.get(previous_rung, "capacity"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sweep
+# ---------------------------------------------------------------------------
+
+
+def _build_notifier(settings: Settings) -> Any:
+    """Build the shared Notifier (one definition, shared with decay alerts)."""
+    return build_notifier(settings)
+
+
+async def _dispatch(
+    notifier: Any,
+    *,
+    org_id: uuid.UUID,
+    event_type: str,
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    """Dispatch one alert, bounded and never raising into the sweep."""
+    try:
+        await asyncio.wait_for(notifier.dispatch_event(org_id, event_type, payload), timeout=_NOTIFY_TIMEOUT_SECONDS)
+        summary["dispatched"] += 1
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
+        summary["notify_failed"] += 1
+        _log.warning("capacity_alerts.notify_timeout event=%s org=%s", event_type, org_id)
+    except Exception:
+        summary["notify_failed"] += 1
+        _log.warning("capacity_alerts.notify_failed event=%s org=%s", event_type, org_id, exc_info=True)
+
+
+def _candidate_label(candidate: Candidate, subject: str) -> str:
+    payload = candidate.payload
+    for key in ("pipeline_name", "subject_label"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return subject
+
+
+def _needs_unhealthy_sustain(candidate: Candidate) -> bool:
+    """Whether a candidate is a queue/backpressure unhealthy episode."""
+    return candidate.rung >= WARNING_RUNG and candidate.subject.startswith(
+        (f"{_SUBJECT_QUEUE}:", f"{_SUBJECT_BACKPRESSURE}:")
+    )
+
+
+async def _invalidate_unhealthy_markers(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    subject_prefix: str | None = None,
+    subjects: set[str] | None = None,
+) -> None:
+    """Drop sustain markers for observations that were not evaluated.
+
+    A marker proves continuity only across successful evaluations of the same
+    subject. Report failures, skipped orgs, and unevaluated subject subsets
+    therefore invalidate the marker without touching the open alert state.
+    """
+    if subjects is not None:
+        for subject in subjects:
+            await _delete_state(redis_client, _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}"))
+        return
+
+    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
+    match = f"{marker_prefix}{subject_prefix or '*'}"
+    async for raw_marker_key in redis_client.scan_iter(match=match):
+        await _delete_state(redis_client, _decode(raw_marker_key))
+
+
+async def _hold_unsustained_unhealthy_candidates(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+    now: datetime,
+) -> set[str]:
+    """Suppress first unhealthy notifications until the episode is sustained.
+
+    Existing warning/critical alerts remain actionable immediately: only a
+    subject without an already-open warning-or-worse state starts a sustain
+    clock. This leaves notice events and recovery/escalation semantics intact.
+
+    The returned subjects were observed as unhealthy but suppressed while their
+    warning sustain clock runs. They remain evaluated for this tick: a pending
+    warning must not make an existing NOTICE alert look recovered.
+    """
+    held_subjects: set[str] = set()
+    for subject, candidate in list(candidates.items()):
+        if not _needs_unhealthy_sustain(candidate):
+            continue
+        alert_state = await _read_state(redis_client, _state_key(org_id, subject))
+        if (_state_rung(alert_state) or CLEAR_RUNG) >= WARNING_RUNG:
+            await _delete_state(redis_client, _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}"))
+            continue
+        marker_key = _state_key(org_id, f"{_QUEUE_UNHEALTHY_MARKER}:{subject}")
+        marker = await _read_state(redis_client, marker_key)
+        started = _state_at(marker)
+        if started is None:
+            await _write_state(redis_client, marker_key, rung=CLEAR_RUNG, label=subject, now=now)
+            candidates.pop(subject)
+            held_subjects.add(subject)
+            continue
+        if (now - started).total_seconds() < UNHEALTHY_SUSTAIN_SECONDS:
+            candidates.pop(subject)
+            held_subjects.add(subject)
+            continue
+        await _delete_state(redis_client, marker_key)
+    return held_subjects
+
+
+async def _apply_subject(
+    redis_client: AsyncRedis,
+    notifier: Any,
+    *,
+    org_id: uuid.UUID,
+    candidate: Candidate,
+    summary: dict[str, Any],
+    now: datetime,
+) -> str:
+    """Run the dedup/escalation/auto-clear machine for one subject.
+
+    Returns the action taken (``"notify"`` / ``"recover"`` / ``"hold"``).
+    """
+    key = _state_key(org_id, candidate.subject)
+    state = await _read_state(redis_client, key)
+    prev_rung = _state_rung(state)
+    action, stored = resolve_alert_action(prev_rung, candidate.rung)
+
+    if action == "notify" and candidate.event_type is not None:
+        await _write_state(
+            redis_client,
+            key,
+            rung=candidate.rung,
+            label=_candidate_label(candidate, candidate.subject),
+            now=now,
+        )
+        await _dispatch(
+            notifier,
+            org_id=org_id,
+            event_type=candidate.event_type,
+            payload=candidate.payload,
+            summary=summary,
+        )
+        return "notify"
+    if action == "recover":
+        await _delete_state(redis_client, key)
+        await _dispatch(
+            notifier,
+            org_id=org_id,
+            event_type=EVENT_CAPACITY_RECOVERED,
+            payload=_recovered_payload(
+                subject_label=_state_label(state, candidate.subject),
+                previous_rung=prev_rung if prev_rung is not None else WARNING_RUNG,
+            ),
+            summary=summary,
+        )
+        return "recover"
+    if stored is None and prev_rung is not None:
+        # A cleared notice — drop the state silently.
+        await _delete_state(redis_client, key)
+    return "hold"
+
+
+async def _prune_unhealthy_markers(
+    redis_client: AsyncRedis,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+) -> None:
+    """Drop sustain markers for subjects that are absent or no longer unhealthy.
+
+    A marker only asserts continuity for a subject this tick still observes as
+    warning-or-worse; anything else must restart its sustain clock.
+    """
+    marker_prefix = f"{_state_key(org_id, _QUEUE_UNHEALTHY_MARKER)}:"
+    async for raw_marker_key in redis_client.scan_iter(match=f"{marker_prefix}*"):
+        marker_key = _decode(raw_marker_key)
+        marked_subject = marker_key[len(marker_prefix) :]
+        candidate = candidates.get(marked_subject)
+        if candidate is None or not _needs_unhealthy_sustain(candidate):
+            await _delete_state(redis_client, marker_key)
+
+
+async def _apply_present_candidates(
+    redis_client: AsyncRedis,
+    notifier: Any,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+    summary: dict[str, Any],
+    now: datetime,
+    open_key: str,
+) -> None:
+    """Apply the state machine to this tick's candidates and track open subjects."""
+    for subject, candidate in sorted(candidates.items()):
+        action = await _apply_subject(
+            redis_client, notifier, org_id=org_id, candidate=candidate, summary=summary, now=now
+        )
+        if action == "notify":
+            await redis_client.sadd(open_key, subject)
+            await redis_client.expire(open_key, _STATE_TTL_SECONDS)
+        elif action == "recover":
+            await redis_client.srem(open_key, subject)
+
+
+async def _apply_org_candidates(
+    redis_client: AsyncRedis,
+    notifier: Any,
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+    summary: dict[str, Any],
+    now: datetime,
+    unverified_kinds: set[str] | None = None,
+    unverified_subjects: set[str] | None = None,
+) -> None:
+    """Apply the state machine to this org's subjects and clear the absent ones.
+
+    The per-org open SET is what makes auto-clear complete: a subject that was
+    being alerted and has since vanished from the report (its queue drained, its
+    backpressure lifted) is re-evaluated at rung 0 — which recovers a
+    warning-or-worse alert — because it is never lost, only absent from the
+    current candidate map.
+
+    Absence means "evaluated clear" ONLY for a subject that was actually
+    evaluated this tick. *unverified_kinds* names subject kinds whose whole
+    evaluation failed (their absence is UNKNOWN, not clear) and
+    *unverified_subjects* names individual subjects that were not evaluated
+    (e.g. a backpressure subject truncated out by the per-org check cap). Those
+    are skipped rather than auto-cleared, so a failed or truncated read can
+    never emit a spurious ``capacity_recovered`` followed by a re-alert.
+    """
+    open_key = _open_key(org_id)
+    open_subjects = {_decode(raw) for raw in await redis_client.smembers(open_key)}
+    current = set(candidates)
+    await _prune_unhealthy_markers(redis_client, org_id=org_id, candidates=candidates)
+
+    held_subjects = await _hold_unsustained_unhealthy_candidates(
+        redis_client,
+        org_id=org_id,
+        candidates=candidates,
+        now=now,
+    )
+    current = set(candidates) | held_subjects
+
+    for subject in sorted(open_subjects - current):
+        kind = subject.split(":", 1)[0]
+        if unverified_kinds and kind in unverified_kinds:
+            continue
+        if unverified_subjects and subject in unverified_subjects:
+            continue
+        action = await _apply_subject(
+            redis_client,
+            notifier,
+            org_id=org_id,
+            candidate=Candidate(subject=subject, rung=CLEAR_RUNG, event_type=None),
+            summary=summary,
+            now=now,
+        )
+        if action != "notify":
+            await redis_client.srem(open_key, subject)
+
+    await _apply_present_candidates(
+        redis_client,
+        notifier,
+        org_id=org_id,
+        candidates=candidates,
+        summary=summary,
+        now=now,
+        open_key=open_key,
+    )
+
+
+def build_candidates(
+    report: dict[str, Any],
+    *,
+    bound_since: datetime | None,
+    now: datetime,
+) -> dict[str, Candidate]:
+    """Every non-clear capacity candidate for one org, keyed by subject."""
+    out: dict[str, Candidate] = {}
+
+    for pipeline in (report.get("pending") or {}).get("by_pipeline") or []:
+        pipeline_id = _pipeline_id_or_none(pipeline.get("pipeline_id"))
+        if pipeline_id is None:
+            continue
+        trend = pipeline_trend(report, pipeline.get("pipeline_id"))
+        rung = queue_pressure_rung(
+            depth=int(pipeline.get("pending_count") or 0),
+            oldest_pending_age_seconds=pipeline.get("oldest_pending_age_seconds"),
+            depth_change=trend[0],
+            oldest_age_change=trend[1],
+            drain_ratio=(report.get("drain") or {}).get("ratio"),
+            stall_suspected=bool((report.get("active_health") or {}).get("stall_suspected")),
+        )
+        if rung == CLEAR_RUNG:
+            continue
+        subject = _subject_for(_SUBJECT_QUEUE, pipeline_id=pipeline_id)
+        out[subject] = Candidate(
+            subject=subject,
+            rung=rung,
+            event_type=_RUNG_EVENTS.get(rung),
+            payload=_queue_payload(pipeline=pipeline, report=report, rung=rung, trend=trend),
+        )
+
+    rung = saturation_rung(report, bound_since=bound_since, now=now)
+    if rung != CLEAR_RUNG:
+        out[_SUBJECT_SATURATION] = Candidate(
+            subject=_SUBJECT_SATURATION,
+            rung=rung,
+            event_type=EVENT_CAPACITY_SATURATION,
+            payload=_saturation_payload(report=report),
+        )
+    return out
+
+
+async def _add_backpressure_candidates(
+    factory: async_sessionmaker[AsyncSession],
+    report: dict[str, Any],
+    *,
+    org_id: uuid.UUID,
+    candidates: dict[str, Candidate],
+) -> set[str]:
+    """Add the canonical backpressure hits for one org to the candidate map.
+
+    Returns the subjects that could NOT be evaluated this tick (queued in the
+    report but beyond ``MAX_BACKPRESSURE_CHECKS_PER_ORG``). Their absence from
+    the candidate map means "unknown", not "clear", so the caller must not
+    auto-clear an alert on them.
+    """
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        hits, unevaluated = await _backpressure_hits(session, report)
+        for pipeline, reason in hits:
+            pipeline_id = _pipeline_id_or_none(pipeline.get("pipeline_id"))
+            if pipeline_id is None:
+                continue
+            subject = _subject_for(_SUBJECT_BACKPRESSURE, pipeline_id=pipeline_id)
+            candidates[subject] = Candidate(
+                subject=subject,
+                rung=BACKPRESSURE_RUNG,
+                event_type=EVENT_CAPACITY_BACKPRESSURE,
+                payload=_backpressure_payload(pipeline=pipeline, report=report, reason=reason),
+            )
+    return unevaluated
+
+
+async def _backpressure_hits(
+    session: AsyncSession,
+    report: dict[str, Any],
+) -> tuple[list[tuple[dict[str, Any], str]], set[str]]:
+    """Pipelines currently refused by the canonical backpressure gate.
+
+    Uses ``evaluate_backpressure`` itself (never a re-derivation) so the alert
+    and the gate can never disagree about which pipelines are backpressured.
+    Bounded to the pipelines with the deepest queues.
+
+    Returns ``(hits, unevaluated_subjects)``: a queued pipeline beyond the
+    per-org check cap was never checked, so it is reported as unverified rather
+    than silently treated as clear by the auto-clear pass.
+    """
+    from farna.core.run_admission import evaluate_backpressure
+
+    hits: list[tuple[dict[str, Any], str]] = []
+    by_pipeline = (report.get("pending") or {}).get("by_pipeline") or []
+    queued = [p for p in by_pipeline if int(p.get("pending_count") or 0) > 0]
+    checked = queued[:MAX_BACKPRESSURE_CHECKS_PER_ORG]
+    unevaluated: set[str] = set()
+    for pipeline in queued[MAX_BACKPRESSURE_CHECKS_PER_ORG:]:
+        pipeline_id = _pipeline_id_or_none(pipeline.get("pipeline_id"))
+        if pipeline_id is not None:
+            unevaluated.add(_subject_for(_SUBJECT_BACKPRESSURE, pipeline_id=pipeline_id))
+    for pipeline in checked:
+        pipeline_id = _pipeline_id_or_none(pipeline.get("pipeline_id"))
+        if pipeline_id is None:
+            continue
+        backpressured, reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+        if backpressured:
+            hits.append((pipeline, reason))
+    return hits, unevaluated
+
+
+def _pipeline_id_or_none(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _org_ids_with_pending(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
+    """Orgs that currently have an unstarted pending run.
+
+    The sweep only has work to do where work is queued; an idle instance must
+    cost one cheap read, not a full capacity scan per org. Requires a
+    system-capable (BYPASSRLS) factory — an org-RLS-scoped app role would
+    silently return zero rows here.
+    """
+    async with factory() as session, session.begin():
+        result = await session.execute(
+            select(Run.organisation_id)
+            .where(Run.status == "pending", Run.cancellation_requested.is_(False))
+            .group_by(Run.organisation_id)
+            .limit(MAX_ORGS_PER_TICK)
+        )
+        return list(result.scalars())
+
+
+def _org_from_open_key(raw: str) -> uuid.UUID | None:
+    """Parse the org id out of a per-org open-subject SET key, else ``None``."""
+    prefix = f"{_STATE_KEY_PREFIX}:"
+    suffix = ":open"
+    if not (raw.startswith(prefix) and raw.endswith(suffix)):
+        return None
+    try:
+        return uuid.UUID(raw[len(prefix) : -len(suffix)])
+    except (TypeError, ValueError):
+        return None
+
+
+def _org_from_unhealthy_marker_key(raw: str) -> uuid.UUID | None:
+    """Parse the org id out of a queue unhealthy sustain marker key."""
+    prefix = f"{_STATE_KEY_PREFIX}:"
+    marker = f":{_QUEUE_UNHEALTHY_MARKER}:"
+    if not (raw.startswith(prefix) and marker in raw):
+        return None
+    org_text = raw[len(prefix) : raw.index(marker)]
+    try:
+        return uuid.UUID(org_text)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _org_ids_with_unhealthy_markers(  # NOSONAR S7503 - async Redis scan seam
+    redis_client: AsyncRedis,
+) -> list[uuid.UUID]:
+    """Return every org represented by a pre-alert sustain marker in Redis."""
+    found: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:{_QUEUE_UNHEALTHY_MARKER}:*"):
+        org_id = _org_from_unhealthy_marker_key(_decode(raw))
+        if org_id is not None and org_id not in seen:
+            seen.add(org_id)
+            found.append(org_id)
+    return found
+
+
+async def _org_ids_with_open_alerts(redis_client: AsyncRedis) -> list[uuid.UUID]:
+    """Orgs holding open alerts or pending queue unhealthy sustain markers.
+
+    The pending-run scan alone is not enough. An org whose queue fully drains
+    (its last pending run starts or is cancelled) drops out of that scan, so
+    with only that set the org is never evaluated again: ``_apply_org_candidates``
+    never runs, the open subject SET is never consulted, and the alert state
+    lives out the 7-day TTL. The same discovery gap applies to a pre-alert
+    sustain marker: if the queue disappears before the warning opens, the
+    marker would otherwise survive until its TTL and make a reintroduced queue
+    look continuously unhealthy. Unioning both Redis state sources lets the
+    sweep clear stale alerts and markers without scanning every org.
+    """
+    found: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    async for raw in redis_client.scan_iter(match=f"{_STATE_KEY_PREFIX}:*:open"):
+        org_id = _org_from_open_key(_decode(raw))
+        if org_id is not None and org_id not in seen:
+            seen.add(org_id)
+            found.append(org_id)
+    for org_id in await _org_ids_with_unhealthy_markers(redis_client):
+        if org_id not in seen:
+            seen.add(org_id)
+            found.append(org_id)
+    return found
+
+
+def _merge_org_sources(open_alert_orgs: list[uuid.UUID], pending_orgs: list[uuid.UUID]) -> list[uuid.UUID]:
+    """Deduplicate the two org sources, open-alert orgs ordered first.
+
+    The union is required for closure: a fully-drained org has no pending runs
+    but may still hold an open alert that must be re-evaluated. Open-alert orgs
+    go first so the per-tick cap cannot starve a closure.
+    """
+    merged: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for org_id in [*open_alert_orgs, *pending_orgs]:
+        if org_id not in seen:
+            seen.add(org_id)
+            merged.append(org_id)
+    return merged
+
+
+async def _read_redis_memory(redis_client: AsyncRedis, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """Read ``INFO memory`` once per tick (FAR-2002).
+
+    Returns ``None`` when the read fails — the caller must treat that as
+    UNKNOWN (never auto-clear an open Redis alert on a failed read) and says so
+    in the summary + a WARNING log. The read is deliberately separate from the
+    dedup state store: ``INFO`` still answers on a Redis that is refusing
+    writes at ``maxmemory``, which is exactly when the signal matters.
+    """
+    try:
+        info = await redis_client.info("memory")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["redis_memory_unavailable"] = 1
+        _log.warning("capacity_alerts.redis_memory_read_failed", exc_info=True)
+        return None
+    if not isinstance(info, dict):
+        summary["redis_memory_unavailable"] = 1
+        _log.warning("capacity_alerts.redis_memory_unreadable type=%s", type(info).__name__)
+        return None
+    return info
+
+
+async def _read_report_or_none(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    settings: Settings,
+    redis_client: AsyncRedis,
+    now: datetime,
+    summary: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Read one org's capacity report, invalidating markers on failure.
+
+    Cancellation is not caught here: it propagates to the caller, which owns
+    the same invalidation for the org as a whole.
+    """
+    try:
+        return await read_capacity_report(
+            org_id=org_id,
+            params=CapacityParams(),
+            factory=factory,
+            settings=settings,
+            now=now,
+        )
+    except Exception:
+        summary["org_errors"] += 1
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        _log.warning("capacity_alerts.report_failed org=%s", org_id, exc_info=True)
+        return None
+
+
+def _redis_pressure_candidates(
+    report: dict[str, Any],
+    redis_memory: dict[str, Any] | None,
+) -> tuple[dict[str, Candidate], set[str]]:
+    """Redis-bound candidate (if any) and unverified subject kinds for one org.
+
+    FAR-2002 — the Redis bound is instance-wide, but it is attached per org only
+    when that org has pending work at risk (an empty queue has nothing to shed).
+    A failed INFO read is UNKNOWN, never "clear".
+    """
+    if redis_memory is None:
+        return {}, {_SUBJECT_REDIS}
+    if int((report.get("pending") or {}).get("total") or 0) <= 0:
+        return {}, set()
+    rung = redis_memory_rung(redis_memory)
+    if rung == CLEAR_RUNG:
+        return {}, set()
+    return (
+        {
+            _SUBJECT_REDIS: Candidate(
+                subject=_SUBJECT_REDIS,
+                rung=rung,
+                event_type=EVENT_CAPACITY_REDIS_PRESSURE,
+                payload=_redis_pressure_payload(redis_memory),
+            )
+        },
+        set(),
+    )
+
+
+async def _sweep_org_impl(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    settings: Settings,
+    redis_client: AsyncRedis,
+    notifier: Any,
+    now: datetime,
+    summary: dict[str, Any],
+    redis_memory: dict[str, Any] | None = None,
+) -> bool:
+    """Evaluate one org's ladder and act on it. Isolated — never raises.
+
+    Returns ``True`` only after every marker and candidate operation completes.
+    A report read by itself is not a completed evaluation: cancellation or a
+    later failure must invalidate pre-alert markers so they cannot assert
+    continuity on the next tick.
+    """
+    report = await _read_report_or_none(
+        factory=factory,
+        org_id=org_id,
+        settings=settings,
+        redis_client=redis_client,
+        now=now,
+        summary=summary,
+    )
+    if report is None:
+        return False
+
+    # Saturation sustain clock: start/extend the marker while the org limit is
+    # fully held, drop it when it frees. The alert state is separate, so a held
+    # -but-not-yet-sustained condition never looks like an open alert.
+    marker_key = _state_key(org_id, _SATURATION_MARKER)
+    held = _org_limit_fully_held(report) is not None
+    if held:
+        if _state_at(await _read_state(redis_client, marker_key)) is None:
+            await _write_state(redis_client, marker_key, rung=CLEAR_RUNG, label=_SUBJECT_SATURATION, now=now)
+    else:
+        await _delete_state(redis_client, marker_key)
+    bound_since = _state_at(await _read_state(redis_client, marker_key))
+
+    candidates = build_candidates(report, bound_since=bound_since, now=now)
+    unverified_subjects: set[str] = set()
+    redis_candidates, unverified_kinds = _redis_pressure_candidates(report, redis_memory)
+    candidates.update(redis_candidates)
+    try:
+        unverified_subjects = await _add_backpressure_candidates(factory, report, org_id=org_id, candidates=candidates)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["org_errors"] += 1
+        _log.warning("capacity_alerts.backpressure_failed org=%s", org_id, exc_info=True)
+        # The evaluation never ran, so EVERY open backpressure subject is
+        # unverified this tick: absence from the candidate map must not be read
+        # as "backpressure lifted" (that would emit a spurious recovery and
+        # then re-alert on the next successful tick).
+        unverified_kinds.add(_SUBJECT_BACKPRESSURE)
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+    else:
+        await _invalidate_unhealthy_markers(
+            redis_client,
+            org_id=org_id,
+            subjects=unverified_subjects,
+        )
+
+    try:
+        await _apply_org_candidates(
+            redis_client,
+            notifier,
+            org_id=org_id,
+            candidates=candidates,
+            summary=summary,
+            now=now,
+            unverified_kinds=unverified_kinds,
+            unverified_subjects=unverified_subjects,
+        )
+    except asyncio.CancelledError:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    except Exception:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    return True
+
+
+async def _sweep_org(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    settings: Settings,
+    redis_client: AsyncRedis,
+    notifier: Any,
+    now: datetime,
+    summary: dict[str, Any],
+    redis_memory: dict[str, Any] | None = None,
+) -> bool:
+    """Run one org sweep and count it only after all state work succeeds."""
+    try:
+        completed = await _sweep_org_impl(
+            factory=factory,
+            org_id=org_id,
+            settings=settings,
+            redis_client=redis_client,
+            notifier=notifier,
+            now=now,
+            summary=summary,
+            redis_memory=redis_memory,
+        )
+    except asyncio.CancelledError:
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        raise
+    except Exception:
+        summary["org_errors"] += 1
+        await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+        _log.warning("capacity_alerts.org_sweep_failed org=%s", org_id, exc_info=True)
+        return False
+    if completed:
+        summary["orgs_evaluated"] += 1
+    return completed
+
+
+async def _run_orgs(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_ids: list[uuid.UUID],
+    settings: Settings,
+    redis_client: AsyncRedis,
+    notifier: Any,
+    now: datetime,
+    summary: dict[str, Any],
+    budget_seconds: float,
+    redis_memory: dict[str, Any] | None = None,
+    evaluated_org_ids: set[uuid.UUID] | None = None,
+) -> None:
+    """Evaluate every candidate org, checking the wall-clock budget between orgs."""
+    started = time.monotonic()
+    evaluated_org_ids = evaluated_org_ids if evaluated_org_ids is not None else set()
+    for index, org_id in enumerate(org_ids):
+        if time.monotonic() - started >= budget_seconds:
+            summary["budget_exhausted"] = True
+            for skipped_org_id in org_ids[index:]:
+                await _invalidate_unhealthy_markers(redis_client, org_id=skipped_org_id)
+            _log.info("capacity_alerts.budget_exhausted evaluated=%d", summary["orgs_evaluated"])
+            break
+        try:
+            completed = await _sweep_org(
+                factory=factory,
+                org_id=org_id,
+                settings=settings,
+                redis_client=redis_client,
+                notifier=notifier,
+                now=now,
+                summary=summary,
+                redis_memory=redis_memory,
+            )
+            if completed:
+                evaluated_org_ids.add(org_id)
+        except asyncio.CancelledError:
+            await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+            raise
+        except Exception:
+            summary["org_errors"] += 1
+            await _invalidate_unhealthy_markers(redis_client, org_id=org_id)
+            _log.warning("capacity_alerts.org_sweep_failed org=%s", org_id, exc_info=True)
+
+
+async def _discover_candidate_orgs(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    redis_client: AsyncRedis,
+    org_ids: list[uuid.UUID] | None,
+) -> tuple[list[uuid.UUID], list[uuid.UUID]] | None:
+    """Return ``(candidate orgs, marker orgs)`` for this tick, or ``None``.
+
+    Candidates are the requested slice or the union of orgs with queued work and
+    orgs holding an open alert (see :func:`_merge_org_sources` for why both are
+    needed). Marker orgs are reported separately so a marker outside the slice
+    can be invalidated. A scan failure yields ``None``.
+    """
+    if org_ids is not None:
+        return list(org_ids), []
+    try:
+        marker_orgs = await _org_ids_with_unhealthy_markers(redis_client)
+        candidates = _merge_org_sources(
+            await _org_ids_with_open_alerts(redis_client),
+            await _org_ids_with_pending(factory),
+        )[:MAX_ORGS_PER_TICK]
+    except Exception:
+        _log.warning("capacity_alerts.org_scan_failed", exc_info=True)
+        return None
+    return candidates, marker_orgs
+
+
+def _log_redis_pressure(redis_memory: dict[str, Any] | None) -> None:
+    """Emit one alert-grade log per tick when the queue store is under pressure."""
+    if redis_memory is not None and redis_memory_rung(redis_memory) >= WARNING_RUNG:
+        _log.warning(
+            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is "
+            "shedding/at risk of refusing enqueues (FAR-2002)",
+            redis_memory.get("used_memory"),
+            redis_memory.get("maxmemory"),
+            redis_memory.get("maxmemory_policy"),
+        )
+
+
+async def evaluate_capacity_alerts(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    redis_client: AsyncRedis | None,
+    settings: Settings | None = None,
+    notifier: Any | None = None,
+    now: datetime | None = None,
+    org_ids: list[uuid.UUID] | None = None,
+    budget_seconds: float = _DEFAULT_BUDGET_SECONDS,
+) -> dict[str, Any]:
+    """Run the capacity alerting sweep (FAR-1344). NEVER raises.
+
+    Wired into ``dispatcher_reconcile`` (60s), so the sweep is wall-clock
+    bounded and per-org isolated: one org's failure is a WARNING and an error
+    count, never an abort of the whole sweep (or of the reconcile tick).
+
+    The budget is enforced in two places because either alone is insufficient:
+    a per-org check between orgs (cheap, graceful) and a hard
+    ``asyncio.wait_for`` ceiling on the whole run — a single org's report read
+    can block on a slow DB, and the between-org check never fires while that is
+    happening. The ceiling is what keeps a degraded DB from overrunning the
+    reconcile tick.
+    """
+    summary: dict[str, Any] = {
+        "orgs_considered": 0,
+        "orgs_evaluated": 0,
+        "dispatched": 0,
+        "notify_failed": 0,
+        "org_errors": 0,
+        "state_unavailable": 0,
+        "redis_memory_unavailable": 0,
+        "budget_exhausted": False,
+    }
+    if redis_client is None:
+        # Dedup is the noise guard; without state we cannot guarantee one alert
+        # per subject, so the safe direction is silence (reported, not silent).
+        summary["state_unavailable"] = 1
+        _log.warning("capacity_alerts.skipped_no_redis (dedup state unavailable)")
+        return summary
+
+    settings = settings or get_settings()
+    now = now or datetime.now(UTC)
+    notifier = notifier or _build_notifier(settings)
+    # FAR-2002 — read the queue store's memory bound once per tick. A failed
+    # read is UNKNOWN (see _read_redis_memory), never "clear".
+    redis_memory = await _read_redis_memory(redis_client, summary)
+    # One alert-grade log per tick in addition to the (deduped) notification, so
+    # the condition is visible even when no org is evaluated this tick.
+    _log_redis_pressure(redis_memory)
+
+    discovered = await _discover_candidate_orgs(
+        factory=factory,
+        redis_client=redis_client,
+        org_ids=org_ids,
+    )
+    if discovered is None:
+        return summary
+    candidates, marker_orgs = discovered
+
+    summary["orgs_considered"] = len(candidates)
+    evaluated_org_ids: set[uuid.UUID] = set()
+    marker_orgs_outside_slice = set(marker_orgs) - set(candidates)
+    for marker_org_id in marker_orgs_outside_slice:
+        await _invalidate_unhealthy_markers(redis_client, org_id=marker_org_id)
+    try:
+        await asyncio.wait_for(
+            _run_orgs(
+                factory=factory,
+                org_ids=candidates,
+                settings=settings,
+                redis_client=redis_client,
+                notifier=notifier,
+                now=now,
+                summary=summary,
+                budget_seconds=budget_seconds,
+                redis_memory=redis_memory,
+                evaluated_org_ids=evaluated_org_ids,
+            ),
+            timeout=budget_seconds + _HARD_TIMEOUT_SLACK_SECONDS,
+        )
+    except TimeoutError:
+        summary["budget_exhausted"] = True
+        for skipped_org_id in candidates:
+            if skipped_org_id not in evaluated_org_ids:
+                await _invalidate_unhealthy_markers(redis_client, org_id=skipped_org_id)
+        _log.warning(
+            "capacity_alerts.hard_timeout evaluated=%d (bound=%ss)",
+            summary["orgs_evaluated"],
+            budget_seconds + _HARD_TIMEOUT_SLACK_SECONDS,
+        )
+
+    if summary["dispatched"] or summary["orgs_evaluated"]:
+        _log.info(
+            "capacity_alerts.sweep orgs=%d dispatched=%d failed=%d errors=%d",
+            summary["orgs_evaluated"],
+            summary["dispatched"],
+            summary["notify_failed"],
+            summary["org_errors"],
+        )
+    return summary

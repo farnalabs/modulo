@@ -11,15 +11,15 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.agent import (
+from farna.db.crud.agent import (
     create_agent,
     delete_agent,
     get_agent,
     list_agents,
     update_agent,
 )
-from modulo.db.crud.model_backend import create_model_backend
-from modulo.db.crud.schema import create_schema, create_schema_version
+from farna.db.crud.model_backend import create_model_backend
+from farna.db.crud.schema import create_schema, create_schema_version
 
 pytestmark = pytest.mark.integration
 

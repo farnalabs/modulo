@@ -26,13 +26,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.api.mcp_server as ms
-from modulo.api.mcp_server import (
+import farna.api.mcp_server as ms
+from farna.api.mcp_server import (
     _finalize_oauth_principal,
     _validate_oauth_live,
 )
-from modulo.auth.oauth import OAuthAccessTokenClaims
-from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
+from farna.auth.oauth import OAuthAccessTokenClaims
+from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -220,7 +220,7 @@ class TestOauthTeamFeedsExistingGuard:
         try:
             with (
                 patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_A)),
-                patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
+                patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
             ):
                 result = await ms.set_pipeline_owners(
                     pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None
@@ -236,7 +236,7 @@ class TestOauthTeamFeedsExistingGuard:
         pipeline.reliability_owner_id = None
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_B)),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
         ):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None

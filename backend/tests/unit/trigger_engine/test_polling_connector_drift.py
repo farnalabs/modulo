@@ -7,13 +7,13 @@ will fail and force an explicit decision.
 import ast
 import inspect
 
-from modulo.connectors.base import ConnectorBase
-from modulo.core.trigger_engine.polling import _build_polling_connector
+from farna.connectors.base import ConnectorBase
+from farna.core.trigger_engine.polling import _build_polling_connector
 
 
 def _get_hub_connector_types() -> set[str]:
     """Parse _build_connector's match/case arms to extract type strings."""
-    from modulo.core.connector_hub import _build_connector
+    from farna.core.connector_hub import _build_connector
 
     source = inspect.getsource(_build_connector)
     tree = ast.parse(source)

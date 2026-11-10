@@ -108,7 +108,7 @@ async def test_set_rls_org_bounds_visibility_and_cross_org_isolation_holds(
     the sibling org's provider invisible.
     """
     _org_a, _org_b, slug_a, _slug_b, provider_oidc_a, provider_saml_b = await _seed_two_orgs_with_providers(db_engine)
-    from modulo.db.rls import set_rls_org
+    from farna.db.rls import set_rls_org
 
     org_a = await _org_id_by_slug(app_engine, slug_a)
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
@@ -138,7 +138,7 @@ async def test_org_bootstrap_works_then_binding_reveals_only_own_provider(
         providers = (await session.execute(sql_text("SELECT provider_id FROM sso_providers"))).all()
         assert not providers, "pre-binding app session must see zero providers"
         org_b = await _org_id_by_slug(app_engine, slug_b)
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_b)
         saml_row = (

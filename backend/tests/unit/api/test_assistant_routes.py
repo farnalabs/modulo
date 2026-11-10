@@ -22,13 +22,13 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import assistant as assistant_routes
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.models.assistant_message import ChatMessage
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import assistant as assistant_routes
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.models.assistant_message import ChatMessage
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _MSG_SESSION_NOT_FOUND = "Session not found"
@@ -158,8 +158,8 @@ def test_list_sessions_returns_paged_items(client: TestClient) -> None:
     _queue_executes(client.mock_session, total_result, list_result, count_rows)  # type: ignore[attr-defined]
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/assistant/sessions")
 
@@ -177,7 +177,7 @@ def test_list_sessions_db_error_returns_503(client: TestClient) -> None:
     _queue_executes(client.mock_session)  # type: ignore[attr-defined]
     with (
         patch(
-            "modulo.api.routes.assistant.set_rls_org",
+            "farna.api.routes.assistant.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("boom"),
         ),
@@ -191,7 +191,7 @@ def test_list_sessions_missing_table_returns_501(client: TestClient) -> None:
     programming_error = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with (
         patch(
-            "modulo.api.routes.assistant.set_rls_org",
+            "farna.api.routes.assistant.set_rls_org",
             new_callable=AsyncMock,
             side_effect=programming_error,
         ),
@@ -203,7 +203,7 @@ def test_list_sessions_missing_table_returns_501(client: TestClient) -> None:
 def test_list_sessions_unexpected_error_returns_500(client: TestClient) -> None:
     _queue_executes(client.mock_session)  # type: ignore[attr-defined]
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")),
     ):
         resp = client.get("/api/v1/assistant/sessions")
     assert resp.status_code == 500
@@ -226,7 +226,7 @@ def test_get_session_returns_serialised_session(client: TestClient) -> None:
     count_result.scalar.return_value = 4
     _queue_executes(client.mock_session, count_result)  # type: ignore[attr-defined]
 
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
 
     assert resp.status_code == 200, resp.text
@@ -240,7 +240,7 @@ def test_rename_session_returns_serialised_session(client: TestClient) -> None:
     chat_session = _owned_chat_session()
     _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
 
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.patch(
             f"/api/v1/assistant/sessions/{chat_session.id}",
             json={"name": "Renamed"},
@@ -257,8 +257,8 @@ def test_delete_session_returns_deleted_status(client: TestClient) -> None:
     _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant._get_registry", return_value=None),
     ):
         resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
 
@@ -286,7 +286,7 @@ def test_list_messages_returns_serialised_items(client: TestClient) -> None:
     list_result.scalars.return_value.all.return_value = [msg]
     _queue_executes(client.mock_session, total_result, list_result)  # type: ignore[attr-defined]
 
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}/messages")
 
     assert resp.status_code == 200, resp.text
@@ -301,7 +301,7 @@ def test_append_message_returns_201(client: TestClient) -> None:
     chat_session = _owned_chat_session()
     _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
 
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.post(
             f"/api/v1/assistant/sessions/{chat_session.id}/messages",
             json={"role": "user", "content": "hi there"},
@@ -328,7 +328,7 @@ def test_append_message_invalid_role_rejected(client: TestClient) -> None:
 
 def test_stream_db_error_returns_503(client: TestClient) -> None:
     client.mock_session.get = AsyncMock(side_effect=SQLAlchemyError("boom"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.post(
             f"/api/v1/assistant/sessions/{uuid.uuid4()}/stream",
             json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
@@ -347,9 +347,9 @@ def test_stream_returns_sse_error_event_when_init_fails(client: TestClient) -> N
     fake_db = AsyncMock()
     init = assistant_routes._StreamInit(error_detail="No active openai API key configured")
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
-        patch("modulo.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
+        patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
     ):
         resp = client.post(
             f"/api/v1/assistant/sessions/{chat_session.id}/stream",
@@ -372,10 +372,10 @@ def test_stream_emits_done_event_with_message_id(client: TestClient) -> None:
         yield 'event: token\ndata: {"token": "hi"}\n\n'
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
-        patch("modulo.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
-        patch("modulo.api.routes.assistant._run_stream_loop", fake_loop),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
+        patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
+        patch("farna.api.routes.assistant._run_stream_loop", fake_loop),
     ):
         resp = client.post(
             f"/api/v1/assistant/sessions/{chat_session.id}/stream",
@@ -489,8 +489,8 @@ def test_resolve_stream_api_key_error_when_no_backend_configured() -> None:
     _queue_executes(mock_session, no_row)
     ctx = assistant_routes._StreamContext(mock_session, principal, uuid.uuid4(), req, _make_settings(), MagicMock())
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
     ):
         api_key, error = asyncio.run(assistant_routes._resolve_stream_api_key(ctx))
     assert api_key is None
@@ -568,7 +568,7 @@ def test_build_backend_supported_provider_uses_lazy_import() -> None:
     fake_module = MagicMock()
     fake_backend_cls = MagicMock()
     fake_module.OpenAIBackend = fake_backend_cls
-    with patch("modulo.api.routes.assistant.importlib.import_module", return_value=fake_module):
+    with patch("farna.api.routes.assistant.importlib.import_module", return_value=fake_module):
         backend = assistant_routes._build_backend("openai", "gpt-4o", "sk")
     assert backend is fake_backend_cls.return_value
     fake_backend_cls.assert_called_once_with(api_key="sk", model_id="gpt-4o")
@@ -580,7 +580,7 @@ def test_resolve_api_key_decrypts_stored_credentials() -> None:
     row.scalar_one_or_none.return_value = MagicMock(credentials_ciphertext=b"cipher")
     ctx_session.execute = AsyncMock(return_value=row)
     with patch(
-        "modulo.api.routes.assistant.decode_stored_secret_scoped",
+        "farna.api.routes.assistant.decode_stored_secret_scoped",
         new_callable=AsyncMock,
         return_value="decrypted-key",
     ):
@@ -594,7 +594,7 @@ def test_resolve_api_key_decrypt_failure_returns_none() -> None:
     row.scalar_one_or_none.return_value = MagicMock(credentials_ciphertext=b"cipher")
     ctx_session.execute = AsyncMock(return_value=row)
     with patch(
-        "modulo.api.routes.assistant.decode_stored_secret_scoped",
+        "farna.api.routes.assistant.decode_stored_secret_scoped",
         new_callable=AsyncMock,
         side_effect=ValueError("bad cipher"),
     ):
@@ -608,7 +608,7 @@ def test_call_mcp_tool_success() -> None:
     resp.status_code = 200
     resp.json.return_value = {"ok": True}
     client_cm.__aenter__.return_value.post = AsyncMock(return_value=resp)
-    with patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm):
+    with patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm):
         result = asyncio.run(assistant_routes._call_mcp_tool("click", {"selector": "#a"}, "mcp-key", "http://base"))
     assert result == {"ok": True}
 
@@ -623,8 +623,8 @@ def test_call_mcp_tool_retries_on_429_then_succeeds() -> None:
     resp_ok.json.return_value = {"ok": True}
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=[resp_429, resp_ok])
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
-        patch("modulo.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
     ):
         result = asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
     assert result == {"ok": True}
@@ -634,8 +634,8 @@ def test_call_mcp_tool_exhausts_retries_on_timeouts() -> None:
     client_cm = AsyncMock()
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
-        patch("modulo.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
         pytest.raises(HTTPException) as exc_info,
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
@@ -649,7 +649,7 @@ def test_call_mcp_tool_rejects_non_object_response() -> None:
     resp.json.return_value = ["not-an-object"]
     client_cm.__aenter__.return_value.post = AsyncMock(return_value=resp)
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
         pytest.raises(ValueError, match="non-object"),
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
@@ -682,14 +682,14 @@ def test_run_mcp_tool_calls_with_key_executes_and_reports_failures() -> None:
     req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", mcp_api_key="mcp-key")
     calls = [{"id": "t1", "name": "search", "args": {}}]
     with patch(
-        "modulo.api.routes.assistant._call_mcp_tool",
+        "farna.api.routes.assistant._call_mcp_tool",
         new_callable=AsyncMock,
         return_value={"result": "found"},
     ):
         events = _collect(assistant_routes._run_mcp_tool_calls(calls, req, "http://base"))
     assert events[0]["success"] is True
 
-    with patch("modulo.api.routes.assistant._call_mcp_tool", new_callable=AsyncMock, side_effect=RuntimeError("down")):
+    with patch("farna.api.routes.assistant._call_mcp_tool", new_callable=AsyncMock, side_effect=RuntimeError("down")):
         events = _collect(assistant_routes._run_mcp_tool_calls(calls, req, "http://base"))
     assert events[0]["success"] is False
     assert "RuntimeError" in events[0]["error"]
@@ -700,7 +700,7 @@ def test_run_mcp_tool_calls_reraises_http_exception() -> None:
     calls = [{"id": "t1", "name": "search", "args": {}}]
     with (
         patch(
-            "modulo.api.routes.assistant._call_mcp_tool",
+            "farna.api.routes.assistant._call_mcp_tool",
             new_callable=AsyncMock,
             side_effect=HTTPException(status_code=502, detail="gateway"),
         ),
@@ -715,7 +715,7 @@ def test_run_manifest_calls_without_path_returns_full_manifest() -> None:
         "elements": {"/a": [{"testid": "create"}]},
         "sidebar_groups": {"g": {}},
     }
-    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+    with patch("farna.core.manifest.get_manifest", return_value=manifest):
         events = _collect(assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {}}]))
     assert events[0]["tool_call_id"] == "t1"
     assert events[0]["tool_name"] == "get_manifest"
@@ -726,7 +726,7 @@ def test_run_manifest_calls_without_path_returns_full_manifest() -> None:
 
 def test_run_manifest_calls_with_path_returns_single_route() -> None:
     manifest = {"routes": {"/a": {"name": "A"}}, "elements": {"/a": [{"testid": "create"}]}, "sidebar_groups": {}}
-    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+    with patch("farna.core.manifest.get_manifest", return_value=manifest):
         events = _collect(
             assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {"path": "/a"}}])
         )
@@ -736,7 +736,7 @@ def test_run_manifest_calls_with_path_returns_single_route() -> None:
 
 def test_get_all_tool_definitions_includes_navigation_by_default() -> None:
     mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
-    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+    with patch("farna.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
         tools = assistant_routes._get_all_tool_definitions()
 
     names = [tool["function"]["name"] for tool in tools]
@@ -747,7 +747,7 @@ def test_get_all_tool_definitions_includes_navigation_by_default() -> None:
 
 def test_get_all_tool_definitions_excludes_navigation_when_disabled() -> None:
     mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
-    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+    with patch("farna.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
         tools = assistant_routes._get_all_tool_definitions(include_navigation=False)
 
     assert [tool["function"]["name"] for tool in tools] == ["mcp_tool"]
@@ -761,7 +761,7 @@ def test_stream_tool_events_splits_navigation_from_mcp() -> None:
         {"id": "m1", "name": "search", "args": {}},
     ]
     results: list[dict[str, Any]] = []
-    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+    with patch("farna.core.manifest.get_manifest", return_value=manifest):
         events = _collect(assistant_routes._stream_tool_events(tool_calls, ctx, results))
     assert len(events) == 2
     assert len(results) == 2
@@ -788,7 +788,7 @@ def test_build_stream_system_prompt_uses_skill_loader() -> None:
     ctx = _stream_ctx()
     loader = MagicMock()
     loader.build_system_prompt = AsyncMock(return_value="System prompt text")
-    with patch("modulo.api.routes.assistant.SkillLoader", return_value=loader):
+    with patch("farna.api.routes.assistant.SkillLoader", return_value=loader):
         prompt = asyncio.run(assistant_routes._build_stream_system_prompt(ctx))
     assert prompt == "System prompt text"
     loader.build_system_prompt.assert_awaited_once_with(
@@ -822,9 +822,9 @@ def test_initialise_stream_full_flow() -> None:
     loader.build_system_prompt = AsyncMock(return_value="SP")
 
     with (
-        patch("modulo.api.routes.assistant._build_backend", return_value=stub_backend),
-        patch("modulo.api.routes.assistant.SkillLoader", return_value=loader),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant._build_backend", return_value=stub_backend),
+        patch("farna.api.routes.assistant.SkillLoader", return_value=loader),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         init = asyncio.run(assistant_routes._initialise_stream(ctx))
 
@@ -840,7 +840,7 @@ def test_initialise_stream_reports_key_error() -> None:
     ctx = _stream_ctx()
     ctx.req.api_key = None
     with patch(
-        "modulo.api.routes.assistant._resolve_stream_api_key",
+        "farna.api.routes.assistant._resolve_stream_api_key",
         new_callable=AsyncMock,
         return_value=(None, "No active openai API key configured."),
     ):
@@ -851,9 +851,9 @@ def test_initialise_stream_reports_key_error() -> None:
 def test_initialise_stream_reports_backend_error() -> None:
     ctx = _stream_ctx()
     with (
-        patch("modulo.api.routes.assistant._resolve_stream_api_key", new_callable=AsyncMock, return_value=("sk", None)),
+        patch("farna.api.routes.assistant._resolve_stream_api_key", new_callable=AsyncMock, return_value=("sk", None)),
         patch(
-            "modulo.api.routes.assistant._build_stream_backend",
+            "farna.api.routes.assistant._build_stream_backend",
             return_value=(None, "Failed to initialize backend: boom"),
         ),
     ):
@@ -930,9 +930,9 @@ def test_run_stream_loop_finalises_when_no_tool_calls() -> None:
         "last_ping_at": time.monotonic(),
     }
     with (
-        patch("modulo.api.routes.assistant._build_stream_tools_param", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.assistant._stream_backend_tokens", _token_gen),
-        patch("modulo.api.routes.assistant._finalise_stream_assistant_message", finalise),
+        patch("farna.api.routes.assistant._build_stream_tools_param", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.assistant._stream_backend_tokens", _token_gen),
+        patch("farna.api.routes.assistant._finalise_stream_assistant_message", finalise),
     ):
         events = _collect(assistant_routes._run_stream_loop(ctx, MagicMock(), MagicMock(), [], None, state))
     assert len(events) == 1
@@ -961,12 +961,12 @@ def test_run_stream_loop_executes_tools_then_finalises() -> None:
     }
     tool_calls = [{"id": "t1", "name": "search", "args": {}}]
     with (
-        patch("modulo.api.routes.assistant._build_stream_tools_param", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.assistant._stream_backend_tokens", _token_gen),
-        patch("modulo.api.routes.assistant._reconstruct_tool_calls", side_effect=[tool_calls, []]),
-        patch("modulo.api.routes.assistant._stream_tool_events", _tool_gen),
-        patch("modulo.api.routes.assistant._persist_assistant_and_tool_messages", persist),
-        patch("modulo.api.routes.assistant._finalise_stream_assistant_message", finalise),
+        patch("farna.api.routes.assistant._build_stream_tools_param", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.assistant._stream_backend_tokens", _token_gen),
+        patch("farna.api.routes.assistant._reconstruct_tool_calls", side_effect=[tool_calls, []]),
+        patch("farna.api.routes.assistant._stream_tool_events", _tool_gen),
+        patch("farna.api.routes.assistant._persist_assistant_and_tool_messages", persist),
+        patch("farna.api.routes.assistant._finalise_stream_assistant_message", finalise),
     ):
         events = _collect(assistant_routes._run_stream_loop(ctx, MagicMock(), MagicMock(), [], None, state))
     assert len(events) == 6
@@ -981,8 +981,8 @@ def test_stream_event_generator_error_handlers() -> None:
 
     async def _scenario(side_effect: Exception) -> list[str]:
         with (
-            patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
-            patch("modulo.api.routes.assistant._initialise_stream", new_callable=AsyncMock, side_effect=side_effect),
+            patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
+            patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, side_effect=side_effect),
         ):
             events: list[str] = []
             gen = assistant_routes._stream_event_generator(
@@ -1024,7 +1024,7 @@ def _failing_executes(session: AsyncMock, exc: Exception) -> None:
 
 
 def test_get_registry_returns_none_when_no_redis_url() -> None:
-    with patch("modulo.api.routes.assistant.get_settings") as settings_cls:
+    with patch("farna.api.routes.assistant.get_settings") as settings_cls:
         settings_cls.return_value = MagicMock(redis_url="")
         assistant_routes._redis_registry = None
         result = assistant_routes._get_registry()
@@ -1037,7 +1037,7 @@ def test_stream_chat_programming_error_returns_501(client: TestClient) -> None:
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     programming_error = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=programming_error,
     ):
@@ -1052,7 +1052,7 @@ def test_list_messages_programming_error_returns_501(client: TestClient) -> None
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -1064,7 +1064,7 @@ def test_append_message_programming_error_returns_501(client: TestClient) -> Non
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
     ):
@@ -1079,7 +1079,7 @@ def test_append_message_unexpected_error_returns_500(client: TestClient) -> None
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1134,9 +1134,9 @@ def test_stream_event_generator_http_exception_from_init() -> None:
 
     async def _scenario() -> list[str]:
         with (
-            patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
+            patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
             patch(
-                "modulo.api.routes.assistant._initialise_stream",
+                "farna.api.routes.assistant._initialise_stream",
                 new_callable=AsyncMock,
                 side_effect=HTTPException(status_code=400, detail="bad request"),
             ),
@@ -1160,9 +1160,9 @@ def test_stream_event_generator_programming_error() -> None:
 
     async def _scenario() -> list[str]:
         with (
-            patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
+            patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
             patch(
-                "modulo.api.routes.assistant._initialise_stream",
+                "farna.api.routes.assistant._initialise_stream",
                 new_callable=AsyncMock,
                 side_effect=programming_error,
             ),
@@ -1186,8 +1186,8 @@ def test_stream_event_generator_backend_none_emits_error() -> None:
 
     async def _scenario() -> list[str]:
         with (
-            patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db),
-            patch("modulo.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
+            patch("farna.api.routes.assistant.AsyncSession", return_value=fake_db),
+            patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
         ):
             events: list[str] = []
             gen = assistant_routes._stream_event_generator(
@@ -1211,8 +1211,8 @@ def test_call_mcp_tool_retries_on_502_then_succeeds() -> None:
     resp_ok.json.return_value = {"ok": True}
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=[http_error, resp_ok])
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
-        patch("modulo.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
     ):
         result = asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
     assert result == {"ok": True}
@@ -1225,8 +1225,8 @@ def test_call_mcp_tool_exhausts_retries_on_503() -> None:
     http_error = httpx.HTTPStatusError("service unavailable", request=MagicMock(), response=resp_503)
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=http_error)
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
-        patch("modulo.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
         pytest.raises(HTTPException) as exc_info,
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
@@ -1237,8 +1237,8 @@ def test_call_mcp_tool_request_error_retries_then_fails() -> None:
     client_cm = AsyncMock()
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=httpx.RequestError("connection refused"))
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
-        patch("modulo.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.asyncio.sleep", new_callable=AsyncMock),
         pytest.raises(HTTPException) as exc_info,
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
@@ -1252,7 +1252,7 @@ def test_call_mcp_tool_non_retriable_400_raises_immediately() -> None:
     http_error = httpx.HTTPStatusError("bad request", request=MagicMock(), response=resp_400)
     client_cm.__aenter__.return_value.post = AsyncMock(side_effect=http_error)
     with (
-        patch("modulo.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
+        patch("farna.api.routes.assistant.pinned_async_client", new_callable=AsyncMock, return_value=client_cm),
         pytest.raises(httpx.HTTPStatusError),
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
@@ -1279,10 +1279,10 @@ def test_run_mcp_tool_calls_with_key_empty_calls() -> None:
 
 def test_get_registry_returns_registry_when_redis_url_set() -> None:
     """_get_registry creates and returns registry when redis_url is configured."""
-    with patch("modulo.api.routes.assistant.get_settings") as settings_cls:
+    with patch("farna.api.routes.assistant.get_settings") as settings_cls:
         settings_cls.return_value = MagicMock(redis_url="redis://localhost:6379")
         assistant_routes._redis_registry = None
-        with patch("modulo.core.assistant.redis_registry.AssistantRedisRegistry") as registry_cls:
+        with patch("farna.core.assistant.redis_registry.AssistantRedisRegistry") as registry_cls:
             mock_registry = MagicMock()
             registry_cls.return_value = mock_registry
             result = assistant_routes._get_registry()
@@ -1304,8 +1304,8 @@ def test_message_to_langchain_assistant_with_tool_calls() -> None:
 def test_build_backend_entry_none_raises() -> None:
     """_build_backend raises 400 when provider not in _BACKEND_IMPORTS."""
     with (
-        patch("modulo.api.routes.assistant.SUPPORTED_PROVIDERS", frozenset({"custom"})),
-        patch("modulo.api.routes.assistant._BACKEND_IMPORTS", {}),
+        patch("farna.api.routes.assistant.SUPPORTED_PROVIDERS", frozenset({"custom"})),
+        patch("farna.api.routes.assistant._BACKEND_IMPORTS", {}),
         pytest.raises(HTTPException) as exc_info,
     ):
         assistant_routes._build_backend("custom", "model", "key")
@@ -1357,10 +1357,10 @@ def test_resolve_stream_api_key_returns_resolved_when_found() -> None:
     _queue_executes(mock_session, row)
     ctx = assistant_routes._StreamContext(mock_session, principal, uuid.uuid4(), req, _make_settings(), MagicMock())
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.assistant.decode_stored_secret_scoped",
+            "farna.api.routes.assistant.decode_stored_secret_scoped",
             new_callable=AsyncMock,
             return_value="decrypted",
         ),
@@ -1380,10 +1380,10 @@ def test_resolve_stream_api_key_exception_returns_error() -> None:
     _queue_executes(mock_session, row)
     ctx = assistant_routes._StreamContext(mock_session, principal, uuid.uuid4(), req, _make_settings(), MagicMock())
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.assistant.decode_stored_secret_scoped",
+            "farna.api.routes.assistant.decode_stored_secret_scoped",
             new_callable=AsyncMock,
             side_effect=ValueError("bad"),
         ),
@@ -1410,8 +1410,8 @@ def test_build_stream_tools_param_returns_tools_when_supported() -> None:
     ctx = _stream_ctx()
     mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
     with (
-        patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools),
+        patch("farna.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools),
     ):
         result = asyncio.run(assistant_routes._build_stream_tools_param(backend, ctx))
     assert result is not None
@@ -1464,7 +1464,7 @@ def test_auto_name_stream_session_first_message() -> None:
     count_result = MagicMock()
     count_result.scalar.return_value = 1
     db_session.execute = AsyncMock(return_value=count_result)
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
     db_session.execute.assert_awaited()
 
@@ -1482,7 +1482,7 @@ def test_auto_name_stream_session_many_messages() -> None:
     count_result_2.scalar.return_value = "First message content here"
     update_result = MagicMock()
     db_session.execute = AsyncMock(side_effect=[count_result, count_result_2, update_result])
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
     assert db_session.execute.await_count == 3
 
@@ -1510,8 +1510,8 @@ def test_auto_name_stream_session_handles_exception() -> None:
     # Make the update statement (2nd execute) raise an exception.
     db_session.execute = AsyncMock(side_effect=[count_result, RuntimeError("db error")])
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.logger.exception") as mock_log,
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.logger.exception") as mock_log,
     ):
         asyncio.run(assistant_routes._auto_name_stream_session(db_session, session_id, req, chat_session))
     mock_log.assert_called_once()
@@ -1523,14 +1523,14 @@ def test_auto_name_stream_session_handles_exception() -> None:
 def test_create_session_programming_error_returns_501(client: TestClient) -> None:
     """POST /sessions returns 501 on ProgrammingError."""
     programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
         resp = client.post("/api/v1/assistant/sessions", json={"context_window_tokens": 200000})
     assert resp.status_code == 501
 
 
 def test_create_session_unexpected_error_returns_500(client: TestClient) -> None:
     """POST /sessions returns 500 on unexpected error."""
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
         resp = client.post("/api/v1/assistant/sessions", json={"context_window_tokens": 200000})
     assert resp.status_code == 500
 
@@ -1540,7 +1540,7 @@ def test_rename_session_programming_error_returns_501(client: TestClient) -> Non
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error):
         resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "New"})
     assert resp.status_code == 501
 
@@ -1549,7 +1549,7 @@ def test_rename_session_unexpected_error_returns_500(client: TestClient) -> None
     """PATCH /sessions/{id} returns 500 on unexpected error."""
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
         resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "New"})
     assert resp.status_code == 500
 
@@ -1560,8 +1560,8 @@ def test_delete_session_programming_error_returns_501(client: TestClient) -> Non
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error),
-        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=programming_error),
+        patch("farna.api.routes.assistant._get_registry", return_value=None),
     ):
         resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
     assert resp.status_code == 501
@@ -1572,8 +1572,8 @@ def test_delete_session_unexpected_error_returns_500(client: TestClient) -> None
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")),
-        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")),
+        patch("farna.api.routes.assistant._get_registry", return_value=None),
     ):
         resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
     assert resp.status_code == 500
@@ -1583,7 +1583,7 @@ def test_list_messages_unexpected_error_returns_500(client: TestClient) -> None:
     """GET /sessions/{id}/messages returns 500 on unexpected error."""
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError("kaboom")):
         resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}/messages")
     assert resp.status_code == 500
 
@@ -1591,7 +1591,7 @@ def test_list_messages_unexpected_error_returns_500(client: TestClient) -> None:
 def test_list_sessions_sqlalchemy_error_returns_503(client: TestClient) -> None:
     """GET /sessions returns 503 on SQLAlchemyError."""
     client.mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.get("/api/v1/assistant/sessions")
     assert resp.status_code == 503
 
@@ -1601,7 +1601,7 @@ def test_get_session_sqlalchemy_error_returns_503(client: TestClient) -> None:
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     client.mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
         resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
     assert resp.status_code == 503
 
@@ -1611,7 +1611,7 @@ def test_rename_session_sqlalchemy_error_returns_503(client: TestClient) -> None
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("db down"),
     ):
@@ -1625,11 +1625,11 @@ def test_delete_session_sqlalchemy_error_returns_503(client: TestClient) -> None
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with (
         patch(
-            "modulo.api.routes.assistant.set_rls_org",
+            "farna.api.routes.assistant.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ),
-        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+        patch("farna.api.routes.assistant._get_registry", return_value=None),
     ):
         resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
     assert resp.status_code == 503
@@ -1640,7 +1640,7 @@ def test_list_messages_sqlalchemy_error_returns_503(client: TestClient) -> None:
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("db down"),
     ):
@@ -1653,7 +1653,7 @@ def test_append_message_sqlalchemy_error_returns_503(client: TestClient) -> None
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
     with patch(
-        "modulo.api.routes.assistant.set_rls_org",
+        "farna.api.routes.assistant.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("db down"),
     ):

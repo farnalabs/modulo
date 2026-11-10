@@ -20,8 +20,8 @@ import jwt as pyjwt
 import pytest
 from jwt import InvalidTokenError as JWTError
 
-import modulo.auth.dependencies as auth_dependencies
-from modulo.auth.oauth import (
+import farna.auth.dependencies as auth_dependencies
+from farna.auth.oauth import (
     InvalidGrantError,
     create_oauth_refresh_token,
     decode_oauth_refresh_token,

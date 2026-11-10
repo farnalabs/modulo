@@ -61,8 +61,8 @@ import aiodocker
 import aiohttp
 import pytest
 
-from modulo.core.runtime_provider import WorkspaceSpec
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider import WorkspaceSpec
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
 pytestmark = [pytest.mark.docker]
 

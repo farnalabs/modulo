@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.pipeline_engine.error_codes import is_retryable, map_legacy_code
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.error_codes import is_retryable, map_legacy_code
+from farna.core.pipeline_engine.executor import (
     PipelineExecutor,
     _node_output_agent_failure,
     _node_output_sandbox_session_lost,
@@ -83,7 +83,7 @@ class _FakeSettings:
 def elevation_enabled(monkeypatch):
     fake = _FakeSettings()
     fake.modulo_agent_failure_elevation_enabled = True
-    monkeypatch.setattr("modulo.settings.get_settings", lambda _fresh=False: fake)
+    monkeypatch.setattr("farna.settings.get_settings", lambda _fresh=False: fake)
     return fake
 
 
@@ -91,7 +91,7 @@ def elevation_enabled(monkeypatch):
 def elevation_disabled(monkeypatch):
     fake = _FakeSettings()
     fake.modulo_agent_failure_elevation_enabled = False
-    monkeypatch.setattr("modulo.settings.get_settings", lambda _fresh=False: fake)
+    monkeypatch.setattr("farna.settings.get_settings", lambda _fresh=False: fake)
     return fake
 
 
@@ -247,7 +247,7 @@ async def test_elevation_fail_open_on_settings_error(monkeypatch):
     def _boom(*_args, **_kwargs):
         raise RuntimeError("settings exploded")
 
-    monkeypatch.setattr("modulo.settings.get_settings", _boom)
+    monkeypatch.setattr("farna.settings.get_settings", _boom)
     result, broker = await _run_stream_graph([_agent_failed_event()])
 
     assert result[0] == "complete"

@@ -20,14 +20,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes import system_maps as routes
-from modulo.api.schemas.system_maps import SystemMapDiscoveryRequest
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.typed_judge import JudgeOutcome
-from modulo.core.model_backend_hub import BackendNotFoundError, BackendUnavailableError
-from modulo.core.system_maps_ai_discovery import PROMPT_VERSION, RUBRIC_VERSION
-from modulo.core.system_maps_discovery import DiscoveryDraft
+from farna.api.routes import system_maps as routes
+from farna.api.schemas.system_maps import SystemMapDiscoveryRequest
+from farna.auth.jwt import TenantPrincipal
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.typed_judge import JudgeOutcome
+from farna.core.model_backend_hub import BackendNotFoundError, BackendUnavailableError
+from farna.core.system_maps_ai_discovery import PROMPT_VERSION, RUBRIC_VERSION
+from farna.core.system_maps_discovery import DiscoveryDraft
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

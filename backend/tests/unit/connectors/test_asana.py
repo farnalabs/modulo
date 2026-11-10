@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.asana import AsanaConnector
-from modulo.connectors.base import ConnectorQuery, ConnectorType
+from farna.connectors.asana import AsanaConnector
+from farna.connectors.base import ConnectorQuery, ConnectorType
 
 PAT = "asana_pat_123"
 _BASE = "https://app.asana.com/api/1.0"

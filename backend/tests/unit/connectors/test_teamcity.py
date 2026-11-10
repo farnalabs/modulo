@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
-from modulo.connectors.teamcity import TeamCityConnector, _TeamCityTestDouble
+from farna.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
+from farna.connectors.teamcity import TeamCityConnector, _TeamCityTestDouble
 
 _TC_BASE = "http://teamcity.example.com"
 

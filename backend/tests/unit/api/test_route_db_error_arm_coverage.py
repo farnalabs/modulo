@@ -31,7 +31,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.routes import (
+from farna.api.routes import (
     admin_email,
     admin_tiers,
     api_keys,

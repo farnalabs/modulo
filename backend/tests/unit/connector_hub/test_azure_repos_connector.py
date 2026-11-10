@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.azure_repos import AzureReposConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "azr_test_token"
 _ORG = "myorg"

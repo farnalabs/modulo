@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.settings import get_settings
+from farna.settings import get_settings
 from tests.bdd.conftest import _make_mock_pipeline_full, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -74,9 +74,9 @@ def create_team_pipeline(name: str, visibility: str, team_name: str, request, ct
     team_id = uuid.UUID(ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4())))
     mock_pipeline = _make_mock_pipeline_full(name=name, visibility=visibility, owner_team_id=team_id)
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=mock_pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=mock_pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -100,7 +100,7 @@ def user_requests_pipeline_list(username: str, request, ctx, client) -> None:
     page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
 
     with patch(
-        "modulo.api.routes.pipelines.list_pipelines",
+        "farna.api.routes.pipelines.list_pipelines",
         new_callable=AsyncMock,
         return_value=page,
     ):
@@ -122,7 +122,7 @@ def admin_requests_pipeline_list(request, ctx, client) -> None:
     page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
 
     with patch(
-        "modulo.api.routes.pipelines.list_pipelines",
+        "farna.api.routes.pipelines.list_pipelines",
         new_callable=AsyncMock,
         return_value=page,
     ):
@@ -132,7 +132,7 @@ def admin_requests_pipeline_list(request, ctx, client) -> None:
 
 @when(parsers.parse('user "{username}" requests GET /api/pipelines/{pipeline_name}'))
 def user_requests_specific_pipeline(username: str, pipeline_name: str, request, ctx) -> None:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
@@ -142,7 +142,7 @@ def user_requests_specific_pipeline(username: str, pipeline_name: str, request, 
 
     if pipeline and (pipeline.get("visibility") == "org" or is_member):
         with patch(
-            "modulo.api.routes.pipelines.get_pipeline",
+            "farna.api.routes.pipelines.get_pipeline",
             new_callable=AsyncMock,
             return_value=pipeline,
         ):
@@ -168,7 +168,7 @@ def update_pipeline_name(name: str, new_name: str, request, ctx, client) -> None
             visibility=pipeline["visibility"],
         )
         with patch(
-            "modulo.api.routes.pipelines.update_pipeline",
+            "farna.api.routes.pipelines.update_pipeline",
             new_callable=AsyncMock,
             return_value=updated,
         ):
@@ -190,7 +190,7 @@ def update_pipeline_visibility(name: str, visibility: str, request, ctx, client)
             visibility=visibility,
         )
         with patch(
-            "modulo.api.routes.pipelines.update_pipeline",
+            "farna.api.routes.pipelines.update_pipeline",
             new_callable=AsyncMock,
             return_value=updated,
         ):

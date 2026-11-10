@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core import cron_helpers as ch
-from modulo.db.models.run import (
+from farna.core import cron_helpers as ch
+from farna.db.models.run import (
     CANCEL_REASON_HITL_REVIEW_EXPIRED,
     CANCEL_REASON_HITL_REVIEW_MISSING,
     CANCELLED_BY_SYSTEM,

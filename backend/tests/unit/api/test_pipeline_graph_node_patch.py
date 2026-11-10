@@ -44,9 +44,9 @@ from pydantic.fields import FieldInfo
 from sqlalchemy import Select
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.routes.pipelines import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.routes.pipelines import (
     PipelineGraphEdge,
     PipelineGraphNode,
     PipelineGraphNodePatch,
@@ -55,11 +55,11 @@ from modulo.api.routes.pipelines import (
     _joined_validation_detail,
     _stored_edge_model,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.pipeline_engine.git_content import GitContentRefError
-from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
-from modulo.settings import Settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.pipeline_engine.git_content import GitContentRefError
+from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -134,10 +134,10 @@ def _graph_write_doubles() -> Iterator[None]:
     validation = MagicMock()
     validation.issues = []
     with (
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         yield
 
@@ -209,7 +209,7 @@ def _patch_url(node_id: uuid.UUID) -> str:
 def _write_double(nodes: list[dict[str, Any]]) -> Any:
     """Double the shared write, returning the graph it was handed."""
     return patch(
-        "modulo.api.routes.pipelines.replace_pipeline_graph",
+        "farna.api.routes.pipelines.replace_pipeline_graph",
         return_value=(nodes, []),
     )
 
@@ -299,7 +299,7 @@ def test_patch_syncs_agent_commands_to_the_bound_agent_row(client: TestClient) -
         _graph_write_doubles(),
         _write_double([dict(target)]),
         patch(
-            "modulo.api.routes.pipelines._sync_agent_row_commands",
+            "farna.api.routes.pipelines._sync_agent_row_commands",
             new=AsyncMock(return_value=1),
         ) as sync,
     ):
@@ -319,7 +319,7 @@ def test_unknown_node_id_is_404(client: TestClient) -> None:
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -376,7 +376,7 @@ def test_non_allowlisted_field_is_rejected_with_a_typed_path(client: TestClient,
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -397,7 +397,7 @@ def test_credential_dict_is_refused_before_any_read_or_write(client: TestClient)
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -417,7 +417,7 @@ def test_value_out_of_bounds_is_rejected_by_the_field_constraint(client: TestCli
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -445,7 +445,7 @@ def test_type_rule_violation_of_the_patched_node_is_rejected(client: TestClient)
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -474,7 +474,7 @@ def test_cross_field_violation_against_the_stored_node_is_rejected(client: TestC
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -549,7 +549,7 @@ def test_egress_policy_patched_onto_a_non_sandbox_node_is_rejected(client: TestC
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -569,7 +569,7 @@ def test_egress_allowlist_patched_onto_a_non_sandbox_node_is_rejected(client: Te
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -615,7 +615,7 @@ def test_merged_node_rejects_a_boolean_field_supplied_as_null(client: TestClient
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -652,7 +652,7 @@ def test_cross_field_model_validator_error_has_no_double_colon_in_the_response(c
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(),
         ) as write,
     ):
@@ -1199,7 +1199,7 @@ def test_guardrail_strip_denial_is_translated_to_403(client: TestClient) -> None
 
     with (
         _graph_write_doubles(),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
     ):
         resp = client.patch(_patch_url(target_id), json={"timeout_seconds": 900})
 
@@ -1224,7 +1224,7 @@ def test_unpinned_git_ref_sync_failure_is_mapped_to_422(client: TestClient) -> N
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines._sync_agent_row_commands",
+            "farna.api.routes.pipelines._sync_agent_row_commands",
             new=AsyncMock(side_effect=sync_error),
         ),
     ):
@@ -1244,7 +1244,7 @@ def test_db_migration_error_is_mapped_to_501(client: TestClient) -> None:
     with (
         _graph_write_doubles(),
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             side_effect=ProgrammingError("stmt", {}, Exception("relation does not exist")),
         ),
     ):

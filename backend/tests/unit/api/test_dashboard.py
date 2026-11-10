@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.dashboard import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.dashboard import (
     _compute_period_metrics,
     _dashboard_cache_key,
     _facts_status_counts,
@@ -26,13 +26,13 @@ from modulo.api.routes.dashboard import (
     _load_trend_run_and_spend,
     _set_cached_dashboard,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.models.base import Base
-from modulo.db.models.daily_run_count import OrgDailyRunCount
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.models.base import Base
+from farna.db.models.daily_run_count import OrgDailyRunCount
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -52,8 +52,8 @@ def _disable_dashboard_redis_cache() -> Generator[None, None, None]:
     the cache makes every test deterministic regardless of the environment.
     """
     with (
-        patch("modulo.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
+        patch("farna.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
     ):
         yield
 
@@ -629,7 +629,7 @@ class TestLoadConfigWarnings:
 
         config = MagicMock()
         config.default_provider = "anthropic"
-        with patch("modulo.api.routes.dashboard.AssistantConfigService") as service_cls:
+        with patch("farna.api.routes.dashboard.AssistantConfigService") as service_cls:
             service_cls.return_value.get_config = AsyncMock(return_value=config)
             warnings = await _load_config_warnings(session, _ORG_ID)
 
@@ -738,13 +738,13 @@ class TestDashboardSummaryPeriod:
         """
         fake = _FakeRedis()
         monkeypatch.setattr(
-            "modulo.api.routes.dashboard.Redis",
+            "farna.api.routes.dashboard.Redis",
             MagicMock(from_url=MagicMock(return_value=fake)),
         )
         # The module autouse fixture stubs the cache helpers for request tests;
         # restore the real ones so this test exercises the production key path.
-        monkeypatch.setattr("modulo.api.routes.dashboard._get_cached_dashboard", _get_cached_dashboard)
-        monkeypatch.setattr("modulo.api.routes.dashboard._set_cached_dashboard", _set_cached_dashboard)
+        monkeypatch.setattr("farna.api.routes.dashboard._get_cached_dashboard", _get_cached_dashboard)
+        monkeypatch.setattr("farna.api.routes.dashboard._set_cached_dashboard", _set_cached_dashboard)
 
         response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
 
@@ -858,7 +858,7 @@ class TestDashboardCacheKeyScoping:
     async def test_get_cached_dashboard_reads_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _FakeRedis(get_value=json.dumps({"total_runs": 3}))
         monkeypatch.setattr(
-            "modulo.api.routes.dashboard.Redis",
+            "farna.api.routes.dashboard.Redis",
             MagicMock(from_url=MagicMock(return_value=fake)),
         )
         result = await _get_cached_dashboard("org", 7, False)
@@ -868,7 +868,7 @@ class TestDashboardCacheKeyScoping:
     async def test_set_cached_dashboard_writes_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _FakeRedis()
         monkeypatch.setattr(
-            "modulo.api.routes.dashboard.Redis",
+            "farna.api.routes.dashboard.Redis",
             MagicMock(from_url=MagicMock(return_value=fake)),
         )
         await _set_cached_dashboard("org", {"total_runs": 3}, 7, False)
@@ -1074,10 +1074,10 @@ class TestFactsWindowRunDate:
             eval_calls.append((start, end))
             return None
 
-        monkeypatch.setattr("modulo.api.routes.dashboard._facts_window", _fake_facts)
-        monkeypatch.setattr("modulo.api.routes.dashboard._facts_status_counts", _fake_status)
-        monkeypatch.setattr("modulo.api.routes.dashboard._ledger_spend_window", _fake_spend)
-        monkeypatch.setattr("modulo.api.routes.dashboard._eval_rate_window", _fake_eval)
+        monkeypatch.setattr("farna.api.routes.dashboard._facts_window", _fake_facts)
+        monkeypatch.setattr("farna.api.routes.dashboard._facts_status_counts", _fake_status)
+        monkeypatch.setattr("farna.api.routes.dashboard._ledger_spend_window", _fake_spend)
+        monkeypatch.setattr("farna.api.routes.dashboard._eval_rate_window", _fake_eval)
 
         await _compute_period_metrics(None, _ORG_ID, 7)  # type: ignore[arg-type]
 

@@ -12,8 +12,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.github import GitHubConnector, GitHubNotFoundError
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.github import GitHubConnector, GitHubNotFoundError
 
 TOKEN = "ghp_test_token"
 

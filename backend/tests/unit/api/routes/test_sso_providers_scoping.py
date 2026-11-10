@@ -21,16 +21,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session, get_system_db_session
-from modulo.api.main import app
-from modulo.settings import get_settings
+from farna.api.dependencies import get_db_session, get_system_db_session
+from farna.api.main import app
+from farna.settings import get_settings
 
 _VALID_32 = "a" * 32
 _SSO_PROVIDERS_URL = "/api/v1/auth/sso/providers"
 
 
 def _make_settings() -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -125,8 +125,8 @@ def _anonymous_client(app_session: AsyncMock, system_session: AsyncMock) -> Test
 def _get_providers(client: TestClient, *, env_providers: list[dict[str, str]] | None = None) -> Any:
     try:
         with (
-            patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=_plan())),
-            patch("modulo.api.routes.sso.parse_oidc_providers", return_value=env_providers or []),
+            patch("farna.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=_plan())),
+            patch("farna.api.routes.sso.parse_oidc_providers", return_value=env_providers or []),
         ):
             return client.get(_SSO_PROVIDERS_URL)
     finally:

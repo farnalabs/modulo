@@ -15,12 +15,12 @@ from typing import Any
 
 from langgraph.graph import StateGraph
 
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine.graph_cache import (
     _make_conditional_router,
     _pipeline_state_reducer,
 )
-from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
+from farna.core.pipeline_engine.node_runner import (
     HITL_REVIEW_ANSWER_STATE_KEY_PREFIX,
     _inject_answer_state,
 )

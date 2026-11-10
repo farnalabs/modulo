@@ -38,17 +38,17 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.error_tracking import saq_hooks
-from modulo.core.run_outputs_dualwrite import (
+from farna.core.error_tracking import saq_hooks
+from farna.core.run_outputs_dualwrite import (
     _redis_incr_window,
     guard_dual_write,
     orchestrate_dual_write_failure,
 )
-from modulo.db.crud.run_node_outputs import DualWriteError
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import TERMINAL_STATUSES, Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.db.crud.run_node_outputs import DualWriteError
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.models.run_node_outputs import RunNodeOutput
 
 _ORG = uuid.uuid4()
 _PIPELINE = uuid.uuid4()
@@ -124,7 +124,7 @@ class TestRedisFailureIsolation:
     async def test_redis_failure_closes_client_and_returns_none(self):
         client = _FakeRedis()
         client.incrby = AsyncMock(side_effect=RuntimeError("redis down"))
-        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+        with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             assert await _redis_incr_window("key", 60) is None
         assert client.closed is True
 
@@ -133,7 +133,7 @@ class TestRedisFailureIsolation:
         client = _FakeRedis()
         client.incrby = AsyncMock(side_effect=asyncio.CancelledError())
         with (
-            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client),
             pytest.raises(asyncio.CancelledError),
         ):
             await _redis_incr_window("key", 60)
@@ -146,7 +146,7 @@ class TestOrchestration:
         exc = _dual_write_error(claim_token="tok-1", sqlstate="42501", origin="update_run_status.orm")
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1) as mark,
-            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
+            patch("farna.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 1
@@ -162,7 +162,7 @@ class TestOrchestration:
         exc = _dual_write_error()
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=0) as mark,
-            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
+            patch("farna.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 0
@@ -173,10 +173,10 @@ class TestOrchestration:
     async def test_event_suppression_skips_ingestion(self) -> None:
         exc = _dual_write_error()
         with (
-            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=2),
-            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
+            patch("farna.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=2),
+            patch("farna.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
         ):
-            from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+            from farna.core.run_outputs_dualwrite import _emit_dual_write_failed_event
 
             await _emit_dual_write_failed_event(exc, rowcount=1, error_detail="detail")
         emit.assert_not_awaited()
@@ -185,10 +185,10 @@ class TestOrchestration:
     async def test_event_sanitizes_and_truncates_detail(self) -> None:
         exc = _dual_write_error(origin="origin", sqlstate="57014")
         with (
-            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=1),
-            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
+            patch("farna.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=1),
+            patch("farna.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
         ):
-            from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+            from farna.core.run_outputs_dualwrite import _emit_dual_write_failed_event
 
             await _emit_dual_write_failed_event(exc, rowcount=1, error_detail="x" * 3000)
         context = emit.await_args.kwargs["context_json"]
@@ -197,13 +197,13 @@ class TestOrchestration:
 
     @pytest.mark.asyncio
     async def test_event_emission_failure_is_observed_and_swallowed(self) -> None:
-        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+        from farna.core.run_outputs_dualwrite import _emit_dual_write_failed_event
 
         exc = _dual_write_error()
         with (
-            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.core.run_outputs_dualwrite._emit_error_event",
+                "farna.core.run_outputs_dualwrite._emit_error_event",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("ingest"),
             ),
@@ -225,11 +225,11 @@ class TestOrchestration:
         factory = MagicMock(return_value=session_cm)
         ingest = AsyncMock()
         with (
-            patch("modulo.core.error_tracking.saq_hooks._open_factory", return_value=factory),
-            patch("modulo.core.error_tracking.ErrorIngestionService.ingest", ingest),
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as set_org,
+            patch("farna.core.error_tracking.saq_hooks._open_factory", return_value=factory),
+            patch("farna.core.error_tracking.ErrorIngestionService.ingest", ingest),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock) as set_org,
         ):
-            from modulo.core.run_outputs_dualwrite import _emit_error_event
+            from farna.core.run_outputs_dualwrite import _emit_error_event
 
             await _emit_error_event(uuid.uuid4(), level="error", message="x", context_json={"a": 1})
         set_org.assert_awaited_once()
@@ -241,7 +241,7 @@ class TestOrchestration:
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1),
             patch(
-                "modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event",
+                "farna.core.run_outputs_dualwrite._emit_dual_write_failed_event",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("ingest down"),
             ),
@@ -261,7 +261,7 @@ class TestOrchestration:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             ),
-            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock) as emit,
+            patch("farna.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock) as emit,
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 0
@@ -283,7 +283,7 @@ class TestOrchestration:
         session.rollback = _rollback
         with (
             patch(
-                "modulo.core.run_outputs_dualwrite.orchestrate_dual_write_failure",
+                "farna.core.run_outputs_dualwrite.orchestrate_dual_write_failure",
                 _orchestrate,
             ),
             pytest.raises(DualWriteError) as caught,
@@ -480,7 +480,7 @@ class TestMarkRunFailedGuard:
         session.begin = MagicMock(return_value=begin_cm)
         with (
             patch.object(saq_hooks, "_open_factory", return_value=MagicMock(return_value=session)),
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
         ):
             rowcount = await saq_hooks._mark_run_failed(
                 uuid.uuid4().hex,
@@ -506,8 +506,8 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
         orchestrate contract covers the org-context failure shape exactly like
         an in-savepoint store failure (an un-orchestrated escape would skip
         terminalize/event)."""
-        from modulo.db.crud.run import write_run_outputs_from_run
-        from modulo.db.rls import OutputsRlsMismatch
+        from farna.db.crud.run import write_run_outputs_from_run
+        from farna.db.rls import OutputsRlsMismatch
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -534,7 +534,7 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
         """qa iteration 1 Major 1: a MISMATCHED RLS org context also raises
         :class:`DualWriteError` (origin='rls_precheck') carrying BOTH orgs in
         the message (never silently skip a cross-tenant anomaly)."""
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -562,7 +562,7 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
         first), terminalized ``dual_write_failed`` via the separate-session
         ``_mark_run_failed``, and the failure event is emitted — no
         un-orchestrated escape."""
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -585,7 +585,7 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
         with (
             patch.object(saq_hooks, "_open_factory", return_value=maker),
             patch(
-                "modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event",
+                "farna.core.run_outputs_dualwrite._emit_dual_write_failed_event",
                 new_callable=AsyncMock,
             ) as emit,
             pytest.raises(DualWriteError) as err,
@@ -600,7 +600,7 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
 
 async def set_rls_org_for_test(session: AsyncSession, org_id: uuid.UUID) -> None:
     """SQLite-side RLS binding (session.info), bypassing the transaction guard."""
-    from modulo.db.rls import _TENANT_KEY
+    from farna.db.rls import _TENANT_KEY
 
     info = getattr(session, "info", None)
     if isinstance(info, dict):
@@ -615,7 +615,7 @@ class TestDualWriteHelperSentinelAbort:
         The repo's sentinel gate raises inside the savepoint; the helper
         converts it to the fail-closed DualWriteError (non-retryable).
         """
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -644,8 +644,8 @@ class TestDualWriteHelperRetryable:
         savepoint after them would fail with 25P02 (qa iteration-1)."""
         from sqlalchemy.exc import OperationalError
 
-        from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud import run as run_crud
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -681,8 +681,8 @@ class TestDualWriteHelperRetryable:
         STRAIGHT to DualWriteError (ONE replace attempt, no retry leg)."""
         from sqlalchemy.exc import OperationalError
 
-        from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud import run as run_crud
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -716,8 +716,8 @@ class TestDualWriteHelperRetryable:
     async def test_retryable_sqlstate_twice_raises_dual_write_error(self, sqlite_sessionmaker: Any) -> None:
         from sqlalchemy.exc import OperationalError
 
-        from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud import run as run_crud
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -749,8 +749,8 @@ class TestDualWriteHelperRetryable:
         DualWriteError, no doomed savepoint retry."""
         from sqlalchemy.exc import OperationalError
 
-        from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud import run as run_crud
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -794,7 +794,7 @@ class TestRedisHelpers:
         (accept but never answer) must not stall the abort path forever."""
         import redis.asyncio as redis_module
 
-        from modulo.core.run_outputs_dualwrite import _open_redis
+        from farna.core.run_outputs_dualwrite import _open_redis
 
         created: dict[str, Any] = {}
 
@@ -804,7 +804,7 @@ class TestRedisHelpers:
 
         with (
             patch.object(redis_module, "Redis") as redis_cls,
-            patch("modulo.settings.get_settings", return_value=MagicMock(redis_url="redis://localhost:6379/0")),
+            patch("farna.settings.get_settings", return_value=MagicMock(redis_url="redis://localhost:6379/0")),
         ):
             redis_cls.from_url = _from_url
             _open_redis()
@@ -817,7 +817,7 @@ class TestRedisHelpers:
         a process death between the two leaves a key that still expires, so
         the dual_write_failed event channel can never be suppressed forever."""
         client = _FakeRedis()
-        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+        with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             count = await _redis_incr_window("saq:run_outputs:dual_write_failed_window:o1", 60)
         assert count == 1
         assert client.set_calls[0] == {
@@ -849,7 +849,7 @@ class TestRedisHelpers:
             return amount
 
         client.incrby = _incr_recreates_bare  # type: ignore[method-assign]
-        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+        with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             count = await _redis_incr_window("k", 60)
         assert count == 1
         assert client.expire_calls == [{"key": "k", "ttl": 60, "nx": True}], (
@@ -866,20 +866,20 @@ class TestRedisHelpers:
             raise RuntimeError("process dies here")
 
         client.incrby = _boom  # type: ignore[method-assign]
-        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+        with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             assert await _redis_incr_window("k", 60) is None
         assert client.set_calls[0]["ex"] == 60, "the TTL survived the injected failure"
 
     @pytest.mark.asyncio
     async def test_incr_window_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        caplog.set_level("WARNING", logger="farna.core.run_outputs_dualwrite")
         client = _FakeRedis()
 
         async def _boom(key: Any, amount: int) -> int:
             raise RuntimeError("redis down")
 
         client.incrby = _boom  # type: ignore[method-assign]
-        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+        with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             assert await _redis_incr_window("k", 60) is None
         assert any("redis_incr_window_failed" in r.message for r in caplog.records)
 
@@ -890,7 +890,7 @@ class TestFailureEventDetailHygiene:
 
     @pytest.mark.asyncio
     async def test_detail_is_sanitized_and_truncated(self) -> None:
-        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+        from farna.core.run_outputs_dualwrite import _emit_dual_write_failed_event
 
         dirty = "x" * 3000 + "\x00" + "password=hunter2 secret-key=abc"
         exc = _dual_write_error(sqlstate="42501", origin="update_run_status.orm")
@@ -900,8 +900,8 @@ class TestFailureEventDetailHygiene:
             captured["context_json"] = context_json
 
         with (
-            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
-            patch("modulo.core.run_outputs_dualwrite._emit_error_event", _emit),
+            patch("farna.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.run_outputs_dualwrite._emit_error_event", _emit),
         ):
             await _emit_dual_write_failed_event(exc, rowcount=1, error_detail=dirty)
         detail = captured["context_json"]["error_detail"]
@@ -913,7 +913,7 @@ class TestFailureEventDetailHygiene:
 
     @pytest.mark.asyncio
     async def test_clean_short_detail_passes_verbatim(self) -> None:
-        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+        from farna.core.run_outputs_dualwrite import _emit_dual_write_failed_event
 
         exc = _dual_write_error()
         captured: dict[str, Any] = {}
@@ -922,8 +922,8 @@ class TestFailureEventDetailHygiene:
             captured["context_json"] = context_json
 
         with (
-            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
-            patch("modulo.core.run_outputs_dualwrite._emit_error_event", _emit),
+            patch("farna.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.run_outputs_dualwrite._emit_error_event", _emit),
         ):
             await _emit_dual_write_failed_event(exc, rowcount=0, error_detail="permission denied for table runs")
         assert captured["context_json"]["error_detail"] == "permission denied for table runs"
@@ -937,7 +937,7 @@ class TestOrgLessRaiseNotSkip:
 
     @pytest.mark.asyncio
     async def test_no_rls_org_raises_instead_of_skipping(self, sqlite_sessionmaker: Any) -> None:
-        from modulo.db.crud.run import write_run_outputs_from_run
+        from farna.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -967,7 +967,7 @@ class TestSqlstateExtraction:
     def test_savepoint_rollback_wrapper_does_not_mask_the_original(self) -> None:
         """25P02 (outer, raised by the savepoint __aexit__) with
         ``__context__`` = 40P01 (the original deadlock) → 40P01 wins."""
-        from modulo.db.sqlstates import sqlstate_of
+        from farna.db.sqlstates import sqlstate_of
 
         original = OperationalError("stmt", {}, Exception("deadlock detected"))
         original.orig = type("_FakePG", (Exception,), {"sqlstate": "40P01"})("deadlock detected")
@@ -982,7 +982,7 @@ class TestSqlstateExtraction:
         assert sqlstate_of(wrapper) == "40P01"
 
     def test_cause_chain_still_walks(self) -> None:
-        from modulo.db.sqlstates import sqlstate_of
+        from farna.db.sqlstates import sqlstate_of
 
         original = OperationalError("stmt", {}, Exception("statement timeout"))
         original.orig = type("_FakePG", (Exception,), {"sqlstate": "57014"})("statement timeout")
@@ -993,19 +993,19 @@ class TestSqlstateExtraction:
     def test_plain_25p02_with_no_other_state_is_the_fallback(self) -> None:
         """25P02 is skipped in favour of any other state in the chain; when
         the whole chain carries nothing else it is the honest answer."""
-        from modulo.db.sqlstates import sqlstate_of
+        from farna.db.sqlstates import sqlstate_of
 
         wrapper = OperationalError("stmt", {}, Exception("aborted"))
         wrapper.orig = type("_FakePG", (Exception,), {"sqlstate": "25P02"})("aborted")
         assert sqlstate_of(wrapper) == "25P02"
 
     def test_no_sqlstate_anywhere_returns_none(self) -> None:
-        from modulo.db.sqlstates import sqlstate_of
+        from farna.db.sqlstates import sqlstate_of
 
         assert sqlstate_of(RuntimeError("no sqlstate here")) is None
 
     def test_cycle_safe_and_bounded(self) -> None:
-        from modulo.db.sqlstates import sqlstate_of
+        from farna.db.sqlstates import sqlstate_of
 
         a = RuntimeError("a")
         b = RuntimeError("b")
@@ -1022,9 +1022,9 @@ class TestSqlstateExtraction:
         delegation alias."""
         import inspect
 
-        from modulo.core.pipeline_engine import node_runner
-        from modulo.db.crud.run import _DUAL_WRITE_RETRYABLE_SQLSTATES
-        from modulo.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES
+        from farna.core.pipeline_engine import node_runner
+        from farna.db.crud.run import _DUAL_WRITE_RETRYABLE_SQLSTATES
+        from farna.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES
 
         source = inspect.getsource(node_runner)
         # B2b: the last MARKER_TXN_ABORTING_SQLSTATES consumer died with
@@ -1036,7 +1036,7 @@ class TestSqlstateExtraction:
         assert _DUAL_WRITE_RETRYABLE_SQLSTATES is DUAL_WRITE_RETRYABLE_SQLSTATES
 
     def test_marker_abort_vocabulary_matches_the_shared_copy(self) -> None:
-        from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
+        from farna.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
 
         assert {
             "40P01",

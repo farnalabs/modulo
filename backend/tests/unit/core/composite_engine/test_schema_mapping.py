@@ -1,6 +1,6 @@
 """Tests for schema field mapping."""
 
-from modulo.core.composite_engine.schema_mapping import apply_field_mapping
+from farna.core.composite_engine.schema_mapping import apply_field_mapping
 
 
 class TestApplyFieldMapping:

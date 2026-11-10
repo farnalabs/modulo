@@ -10,7 +10,7 @@ the audit event payload. Internal callers that omit it keep payloads unchanged
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
-from modulo.core.hitl_manager import HITLManager
+from farna.core.hitl_manager import HITLManager
 
 from .conftest import _session_decide
 from .test_hitl_manager import _GATE, _ORG, _RUN, _USER, _gate, _session_update
@@ -31,7 +31,7 @@ def _decided(decision: str):
 
 async def _approve_payload(client_type: str | None) -> dict:
     session, _gate_decided = _decided("approved")
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         kwargs = {} if client_type is None else {"client_type": client_type}
         await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", **kwargs)
@@ -60,7 +60,7 @@ class TestApproveClientType:
 class TestRejectAndDeliverManualClientType:
     async def test_reject_records_client_type(self):
         session, _gate_decided = _decided("rejected")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.reject(
                 session,
@@ -77,14 +77,14 @@ class TestRejectAndDeliverManualClientType:
 
     async def test_reject_without_client_type_omits_key(self):
         session, _gate_decided = _decided("rejected")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
         assert "client_type" not in mock_audit.await_args.kwargs["payload_json"]
 
     async def test_deliver_manual_records_client_type(self):
         session, _gate_decided = _decided("deliver_manual")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.deliver_manual(
                 session,
@@ -104,7 +104,7 @@ class TestRejectAndDeliverManualClientType:
 class TestApproveWithModificationClientType:
     async def test_both_events_record_client_type(self):
         session, _gate_decided = _decided("approved")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.approve_with_modification(
                 session,
@@ -125,7 +125,7 @@ class TestApproveWithModificationClientType:
         ``hitl.output_modified`` audit event (the chosen option is queryable
         alongside the modification)."""
         session, _gate_decided = _decided("approved")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.approve_with_modification(
                 session,
@@ -148,7 +148,7 @@ class TestApproveWithModificationClientType:
 
     async def test_no_answer_omits_answer_fields(self):
         session, _gate_decided = _decided("approved")
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.approve_with_modification(
                 session,
@@ -175,7 +175,7 @@ class TestClaimClientType:
         gate = _gate(account_id=None, claim_token=None, expires_at=future)
         session = _session_update(pre_check_gate=gate, gate=gate)
 
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.claim(
                 session,
@@ -195,7 +195,7 @@ class TestClaimClientType:
         gate = _gate(account_id=None, claim_token=None, expires_at=future)
         session = _session_update(pre_check_gate=gate, gate=gate)
 
-        with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+        with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
             await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 

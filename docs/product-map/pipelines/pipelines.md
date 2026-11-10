@@ -3,17 +3,17 @@ id: feat-pipelines
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/api/routes/node_categories.py
-  - backend/src/modulo/api/routes/pipeline_folders.py
-  - backend/src/modulo/api/routes/composite_templates.py
-  - backend/src/modulo/db/crud/pipeline.py
-  - backend/src/modulo/db/models/pipeline.py
-  - backend/src/modulo/db/migrations/versions/0286_pipeline_run_state.py
-  - backend/src/modulo/core/pipeline_engine
-  - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/connectors/base.py
-  - backend/src/modulo/connectors/ci_runner/base.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/api/routes/node_categories.py
+  - backend/src/farna/api/routes/pipeline_folders.py
+  - backend/src/farna/api/routes/composite_templates.py
+  - backend/src/farna/db/crud/pipeline.py
+  - backend/src/farna/db/models/pipeline.py
+  - backend/src/farna/db/migrations/versions/0286_pipeline_run_state.py
+  - backend/src/farna/core/pipeline_engine
+  - backend/src/farna/core/graph_validator/__init__.py
+  - backend/src/farna/connectors/base.py
+  - backend/src/farna/connectors/ci_runner/base.py
 unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/api/test_pipelines_routes_coverage.py
@@ -162,12 +162,12 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       stamp only ever names a run whose frozen graph really dispatches
       (`connector_binding_operation` / `node_fires_dispatch_job` exclude the
       inert agent/sandbox shapes). Execution-origin provenance rides `feat-runs`.
-      (`backend/src/modulo/core/graph_validator/__init__.py
+      (`backend/src/farna/core/graph_validator/__init__.py
       _check_dispatch_binding_capabilities`,
-      `backend/src/modulo/core/pipeline_engine/node_runner.py
+      `backend/src/farna/core/pipeline_engine/node_runner.py
       _run_connector_dispatch` / `_await_dispatch_terminal`,
-      `backend/src/modulo/connectors/base.py`,
-      `backend/src/modulo/connectors/ci_runner/base.py`;
+      `backend/src/farna/connectors/base.py`,
+      `backend/src/farna/connectors/ci_runner/base.py`;
       `unit_test: backend/tests/unit/pipeline_engine/test_dispatch_guards.py,
       backend/tests/unit/pipeline_engine/test_dispatch_composed_e2e.py,
       backend/tests/unit/connectors/test_ci_runner.py,

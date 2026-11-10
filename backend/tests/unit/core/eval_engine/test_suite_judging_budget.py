@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.execute_suite_run import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.execute_suite_run import (
     SUITE_JUDGING_BUDGET_SECONDS,
     SuiteJudgingBudgetExhaustedError,
     _budget_exhausted,

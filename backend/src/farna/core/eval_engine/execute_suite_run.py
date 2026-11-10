@@ -1,0 +1,1172 @@
+"""SuiteRun execution runner — scheduled/event-driven eval execution (FAR-377).
+
+This is the *wiring* layer that turns a ``run_kind='suite_run'`` trigger into an
+end-to-end ``SuiteRun`` execution. It REUSES the behaviour layer in
+``modulo.core.eval_engine.suite_run`` (baseline resolution, comparison, spend,
+notification) and the existing ``EvalEngine.evaluate`` for per-case scoring —
+it does NOT reimplement any comparison or scoring logic.
+
+Execution path (given a resolved trigger config):
+    1. Load the org-scoped ``EvalSuite``, ``EvalDataset`` (pin ``version``) and
+       its active ``Eval`` rows, plus the pinned ``ModelBackend``.
+    2. Refuse an empty dataset (``validate_dataset_has_cases`` == 0) -> fail
+       loudly (never a silent pass).
+    3. Construct the ``SuiteRun`` with the immutable baseline tuple
+       (``build_baseline_tuple``), snapshot the definition checksum +
+       dataset version + scenario signature, persist it ``pending``.
+    4. Transition ``pending -> running`` (optimistic-lock guarded).
+    5. Iterate the active ``EvalCase`` rows -> synthesise each case's output ->
+       ``EvalEngine.evaluate`` per definition -> persist each per-case
+       ``EvalResult`` with ``suite_run_id`` + the ``eval_definition_version``
+       stamp (see FAR-382).
+    6. Reconcile pass/failed/excluded counts + claimed cost ledger.
+    7. Transition ``running -> completed | partial | failed``.
+    8. ``record_completion`` (comparison + regression alerting).
+
+Load-bearing guards:
+* **Org isolation** — every query injects an unconditional
+  ``organisation_id = :org`` predicate (the NOBYPASSRLS -> explicit predicate is
+  the primary isolation control; RLS also enforces org scoping, never relied on
+  alone).
+* **Loop guard** — the enforcement is the WRITE SURFACE: a SuiteRun completion
+  writes ONLY to ``suite_runs`` and ``eval_results``. It never creates a ``Run``,
+  never writes a ``TriggerEvent`` and never writes a
+  ``WebhookPayload``/dedup row, so a finished eval can NEVER re-trigger another
+  eval through the trigger-watch/dedup event set. ``exclude_eval_families`` and
+  ``is_eval_trigger`` are exposed helpers for the (forward) event-watch wiring —
+  the cron dispatch routes on ``run_kind == 'suite_run'`` directly, and the
+  suite-run execution path writes no watchable event.
+* **Separate spend pool** — the ``suite_run`` trigger uses its OWN
+  ``daily_spend_limit`` (summed over ``suite_runs``, never over ``runs``) and a
+  separate per-suite cumulative ceiling via the row-locked
+  ``claim_suite_run_cost`` ledger.
+* **Failure sink (monitored)** — an orchestration failure transitions the run to
+  ``failed`` and RE-RAISES a typed error (the SAQ ``after_process`` hook sinks it
+  to the Error Dashboard); the run is surfaced with ``error_detail`` populated so
+  a missed run is never rendered as current.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import time
+import uuid
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, evaluate_discovery_case
+from farna.core.eval_engine.suite_run import (
+    SuiteRunError,
+    build_baseline_tuple,
+    claim_suite_run_cost,
+    record_completion,
+    suite_cumulative_exceeded,
+)
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
+from farna.db.models.eval import Eval as EvalRow
+from farna.db.models.eval_dataset import EvalCase, EvalDataset
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.eval_suite import EvalSuite
+from farna.db.models.eval_suite_run import (
+    SuiteRun,
+    SuiteRunState,
+    can_transition,
+    compute_definition_checksum,
+    compute_scenario_signature,
+)
+from farna.db.models.model_backend import ModelBackend
+
+_log = logging.getLogger(__name__)
+
+# Nominal cost charged to the per-suite ledger per evaluated case when the suite
+# contains an model_judge definition and no explicit ``cost_per_case`` is given.
+# Deterministic evals cost nothing. This is an ESTIMATE — real per-token cost
+# accounting is the model backend's responsibility.
+_DEFAULT_COST_PER_LLM_CASE = Decimal("0.001")
+
+#: Hard run-level judging budget. The SAQ ``execute_suite_run`` job has a 300 s
+#: ceiling and owns ONE transaction for the whole run, so judging must stop well
+#: before it: otherwise a dataset of slow cases is killed at 300 s and every
+#: completed verdict is rolled back with the job. 200 s leaves 100 s of headroom
+#: for row writes, terminalisation and audit. Strictly below the job ceiling.
+SUITE_JUDGING_BUDGET_SECONDS = 200.0
+#: Below this remaining budget a case is not started at all (the write + the
+#: transition still need time, and a sub-100ms judge call is not meaningful).
+_MIN_JUDGING_SECONDS = 0.05
+#: Detail recorded on every unprocessed (budget-exhausted) definition row.
+_BUDGET_EXHAUSTED_DETAIL = "suite judging budget exhausted before this case was judged; no verdict was produced"
+
+
+class SuiteJudgingBudgetExhaustedError(RuntimeError):
+    """Raised internally when the run-level judging budget is spent."""
+
+
+# Eval/feedback event families that must NEVER re-fire a trigger through the
+# trigger-watch/dedup event set (loop guard). Selection of the watch set calls
+# ``exclude_eval_families`` to drop these.
+EVAL_WATCH_EVENT_FAMILIES: frozenset[str] = frozenset(
+    {"eval_regression", "eval_blocked", "suite_run", "eval_result", "feedback"}
+)
+
+
+class SuiteRunExecutionError(SuiteRunError):
+    """Raised when a SuiteRun orchestration step fails irrecoverably."""
+
+
+class SuiteRunEmptyDatasetError(SuiteRunExecutionError):
+    """Raised when the dataset has zero active cases (never a silent pass)."""
+
+
+class SuiteRunSpendExceededError(SuiteRunExecutionError):
+    """Raised when the suite run would exceed its cost ceiling."""
+
+
+async def _suite_run_transition(session: AsyncSession, run: SuiteRun, target: SuiteRunState) -> None:
+    """Async counterpart of ``transition_state`` (the caller is an ``AsyncSession``).
+
+    ``eval_suite_run.transition_state`` is a SYNC helper (it calls the ORM
+    ``session.execute`` without ``await``), so it is unusable from the async SAQ
+    path. This replicates its optimistic-lock semantics for ``AsyncSession``:
+    illegal edges raise before touching the DB; a version-guarded
+    ``UPDATE ... RETURNING`` lands the transition atomically and raises when a
+    concurrent writer bumped the version first.
+    """
+    from sqlalchemy import update
+
+    from farna.db.models.eval_suite_run import IllegalStateTransitionError, OptimisticLockError
+
+    if run.id is None:
+        raise ValueError("_suite_run_transition requires a persisted SuiteRun")
+    new_state = SuiteRunState(target) if isinstance(target, str) else target
+    if not can_transition(run.state, new_state):
+        raise IllegalStateTransitionError(run.state, new_state.value)
+    ver = run.version
+    values: dict[str, Any] = {"state": new_state.value, "version": SuiteRun.version + 1}
+    if new_state in (SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED):
+        values["completed_at"] = datetime.now(UTC)
+    stmt = (
+        update(SuiteRun)
+        .where(
+            SuiteRun.id == run.id,
+            SuiteRun.organisation_id == run.organisation_id,
+            SuiteRun.version == ver,
+        )
+        .values(**values)
+        .returning(SuiteRun.version)
+    )
+    new_version = (await session.execute(stmt)).scalar_one_or_none()
+    if new_version is None:
+        raise OptimisticLockError(run.id, ver)
+    run.state = new_state.value
+    run.version = new_version
+    if new_state in (SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED):
+        run.completed_at = values.get("completed_at")
+
+
+def is_eval_trigger(trigger: Any) -> bool:
+    """Return True when *trigger* fires a SuiteRun instead of a pipeline Run.
+
+    Uses the ``run_kind`` discriminator (``'suite_run'``) OR a bound
+    ``eval_suite_id``. This is the discriminator the cron/ongoing dispatch path
+    SHOULD route on; the current cron routing uses the ``run_kind`` attribute
+    directly, and a future event-watch loop-guard can use this to treat an eval
+    trigger as out-of-scope for the production watch set.
+    """
+    run_kind = getattr(trigger, "run_kind", "run")
+    return run_kind == "suite_run" or getattr(trigger, "eval_suite_id", None) is not None
+
+
+def exclude_eval_families(event_families: Sequence[str] | None) -> set[str]:
+    """Drop eval/feedback event families from a watch set (loop guard).
+
+    Returns a new set without any family in :data:`EVAL_WATCH_EVENT_FAMILIES`.
+    A caller that selects the production trigger-watch set SHOULD filter it
+    through this before deciding what re-fires a trigger, so a
+    ``SuiteRun``/``EvalResult`` write can never be observed as a re-fire trigger.
+    It is exposed for the forward event-watch wiring; the suite-run execution
+    path itself writes no watchable event, so the loop guard currently holds via
+    the write surface alone.
+    """
+    return {e for e in (event_families or []) if e} - EVAL_WATCH_EVENT_FAMILIES
+
+
+# --------------------------------------------------------------------------- #
+# Org-isolated loads (unconditional organisation_id predicate)                #
+# --------------------------------------------------------------------------- #
+async def load_suite(session: AsyncSession, org_id: uuid.UUID, suite_id: uuid.UUID) -> EvalSuite:
+    row = (
+        await session.execute(
+            select(EvalSuite).where(
+                EvalSuite.id == suite_id,
+                EvalSuite.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise SuiteRunExecutionError(f"EvalSuite {suite_id} not found (org {org_id})")
+    return row
+
+
+async def load_dataset(session: AsyncSession, org_id: uuid.UUID, dataset_id: uuid.UUID) -> EvalDataset:
+    row = (
+        await session.execute(
+            select(EvalDataset).where(
+                EvalDataset.id == dataset_id,
+                EvalDataset.organisation_id == org_id,
+                EvalDataset.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise SuiteRunExecutionError(f"EvalDataset {dataset_id} not found (org {org_id})")
+    return row
+
+
+async def load_model_backend(session: AsyncSession, org_id: uuid.UUID, model_backend_id: uuid.UUID) -> ModelBackend:
+    row = (
+        await session.execute(
+            select(ModelBackend).where(
+                ModelBackend.id == model_backend_id,
+                ModelBackend.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise SuiteRunExecutionError(f"ModelBackend {model_backend_id} not found (org {org_id})")
+    return row
+
+
+async def load_active_cases(session: AsyncSession, org_id: uuid.UUID, dataset_id: uuid.UUID) -> list[EvalCase]:
+    return list(
+        (
+            await session.execute(
+                select(EvalCase).where(
+                    EvalCase.dataset_id == dataset_id,
+                    EvalCase.organisation_id == org_id,
+                    EvalCase.deleted_at.is_(None),
+                )
+            )
+        ).scalars()
+    )
+
+
+async def load_suite_definitions(session: AsyncSession, org_id: uuid.UUID, suite_id: uuid.UUID) -> list[EvalRow]:
+    """Load the suite's live definition rows from ``evals`` (FAR-1729).
+
+    The frozen ``eval_definitions`` snapshot stops at the 0254 cutover —
+    reading it here would execute the pre-cutover definition set forever.
+    """
+    return list(
+        (
+            await session.execute(
+                select(EvalRow).where(
+                    EvalRow.eval_suite_id == suite_id,
+                    EvalRow.organisation_id == org_id,
+                    EvalRow.deleted_at.is_(None),
+                )
+            )
+        ).scalars()
+    )
+
+
+def _definition_snapshot(rows: Sequence[EvalRow]) -> list[dict[str, Any]]:
+    """Build the immutable definition snapshot list for the checksum.
+
+    ``config_json`` is snapshotted at creation so a later config edit produces a
+    NEW checksum + NEW baseline tuple, never a silent comparison against a
+    different contract.
+    """
+    return [{"id": str(r.id), "eval_type": r.eval_type, "config_json": r.config_json or {}} for r in rows]
+
+
+def _definition_dto(row: EvalRow, org_id: uuid.UUID) -> EvalDefinition:
+    """Convert a persisted ``evals`` row to the in-memory DTO.
+
+    ``failure_behaviour`` is not an ``evals`` column (it moved to
+    ``policy_gates.action`` at the cutover); suite-scoped definitions get no
+    policy gate by design, and the write path pins them to ``"warn"`` — so the
+    DTO default ``"warn"`` is used, matching
+    ``guardrails.to_engine_definition``.
+    """
+    return EvalDefinition(
+        id=row.id,
+        org_id=org_id,
+        pipeline_id=row.pipeline_id,
+        node_id=row.node_id,
+        name=row.name,
+        eval_type=EvalType(row.eval_type),
+        config=dict(row.config_json or {}),
+        failure_behaviour=getattr(row, "failure_behaviour", None) or "warn",
+        pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
+        suite_id=str(row.eval_suite_id) if row.eval_suite_id else None,
+    )
+
+
+def _synthesise_output(case: EvalCase, scenario_inputs: dict[str, Any] | None) -> dict[str, Any]:
+    """Synthesise the generic eval output for a dataset case."""
+    return {"output": case.input_payload, "scenario": scenario_inputs or {}}
+
+
+def _is_discovery_definition(definition: EvalDefinition) -> bool:
+    """Return whether *definition* opts into the reserved discovery adapter."""
+    return (
+        definition.eval_type == EvalType.CUSTOM_FUNCTION
+        and definition.config.get("function") == DISCOVERY_EVAL_FUNCTION
+    )
+
+
+def _evaluate_case_output(
+    case: EvalCase,
+    definition: EvalDefinition,
+    run: SuiteRun,
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+) -> Any:
+    """Run a deterministic discovery adapter or the existing generic engine."""
+    if _is_discovery_definition(definition):
+        evaluation = evaluate_discovery_case(case.input_payload, case.expected_output)
+        from farna.core.eval_engine import EvalResult as EngineEvalResult
+        from farna.core.eval_engine.typed_judge import JudgeOutcome, error_verdict
+
+        if evaluation.error:
+            outcome = JudgeOutcome.ERROR
+            verdict = error_verdict(JudgeErrorCode.JUDGE_CONFIGURATION, evaluation.detail)
+        elif evaluation.passed:
+            outcome = JudgeOutcome.PASS
+            verdict = None
+        else:
+            outcome = JudgeOutcome.FAIL
+            verdict = None
+        return EngineEvalResult(
+            run_id=run.id,
+            node_id=definition.node_id or "",
+            eval_id=definition.id,
+            outcome=outcome,
+            passed=evaluation.passed,
+            score=None if evaluation.error else evaluation.score,
+            detail=json.dumps(evaluation.as_json(), sort_keys=True),
+            judge_verdict=verdict,
+        )
+    return engine.evaluate_result(
+        _synthesise_output(case, scenario_inputs),
+        definition,
+        run_id=run.id,
+        model_judge_callable=model_judge_callable,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Baseline tuple + construction                                               #
+# --------------------------------------------------------------------------- #
+def build_suite_run_tuple(
+    *,
+    suite_id: uuid.UUID,
+    dataset_id: uuid.UUID,
+    dataset_version: int,
+    definition_snapshots: Sequence[dict[str, Any]],
+    model_backend_id: uuid.UUID,
+    scenario_inputs: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str, str | None]:
+    """Return ``(baseline_tuple, definition_checksum, scenario_signature)``.
+
+    These are snapshotted at creation (never live-looked-up). A changed dataset
+    version, definition config, or scenario input produces a NEW tuple and a NEW
+    baseline, never a corrupted comparison.
+    """
+    definition_checksum = compute_definition_checksum(list(definition_snapshots))
+    scenario_signature = compute_scenario_signature(scenario_inputs)
+    eval_definition_ids = [uuid.UUID(s["id"]) for s in definition_snapshots]
+    baseline_tuple = build_baseline_tuple(
+        suite_id=suite_id,
+        dataset_id=dataset_id,
+        dataset_version=dataset_version,
+        eval_definition_ids=eval_definition_ids,
+        definition_checksum=definition_checksum,
+        model_backend_id=model_backend_id,
+        scenario_signature=scenario_signature,
+    )
+    return baseline_tuple, definition_checksum, scenario_signature
+
+
+# --------------------------------------------------------------------------- #
+# Per-case evaluation                                                         #
+# --------------------------------------------------------------------------- #
+def _discovery_result_json(result: Any) -> dict[str, Any] | None:
+    if not isinstance(getattr(result, "detail", None), str):
+        return None
+    try:
+        payload = json.loads(result.detail)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and "provenance" in payload else None
+
+
+def _case_result_row(
+    run: SuiteRun,
+    definition: EvalDefinition,
+    result: Any,
+    *,
+    eval_definition_version: int,
+) -> EvalResult:
+    """Build the persisted row for one (definition, case) outcome."""
+    verdict = result.judge_verdict
+    is_error = result.outcome is JudgeOutcome.ERROR
+    return EvalResult(
+        organisation_id=run.organisation_id,
+        suite_run_id=run.id,
+        eval_id=definition.id,
+        outcome=result.outcome.value,
+        passed=bool(result.passed),
+        score=result.score,
+        judge_result_json=_discovery_result_json(result) or (verdict.to_json() if verdict is not None else None),
+        judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
+        error_code=(verdict.error_code.value if verdict is not None and verdict.error_code is not None else None),
+        detail=(result.detail or "")[:2000],
+        observed=True,
+        eval_definition_version=eval_definition_version,
+    )
+
+
+def _error_case_result(definition: EvalDefinition, run: SuiteRun, exc: BaseException) -> Any:
+    """An unexpected engine failure still produces its error row."""
+    _log.warning("suite_run case eval errored case=%s definition=%s: %s", run.id, definition.id, exc)
+    return EvalEngine.error_result(
+        definition,
+        run.id,
+        JudgeErrorCode.JUDGE_UNAVAILABLE,
+        f"eval execution failed ({type(exc).__name__}); no verdict was produced",
+    )
+
+
+def _budget_exhausted_result(definition: EvalDefinition, run: SuiteRun) -> Any:
+    """An unjudged definition row: ``error`` with a coded reason (never a pass)."""
+    return EvalEngine.error_result(
+        definition,
+        run.id,
+        JudgeErrorCode.JUDGE_TIMEOUT,
+        _BUDGET_EXHAUSTED_DETAIL,
+    )
+
+
+def _exhausted_case_results(
+    run: SuiteRun,
+    definitions: Sequence[EvalDefinition],
+    *,
+    eval_definition_version: int,
+) -> tuple[list[EvalResult], int]:
+    """Persist one ``error`` row per definition for a case the budget skipped."""
+    results = [
+        _case_result_row(
+            run,
+            definition,
+            _budget_exhausted_result(definition, run),
+            eval_definition_version=eval_definition_version,
+        )
+        for definition in definitions
+    ]
+    return results, len(results)
+
+
+def _case_results(
+    run: SuiteRun,
+    case: EvalCase,
+    definitions: Sequence[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    *,
+    eval_definition_version: int,
+) -> tuple[list[EvalResult], int]:
+    """Evaluate one case against every suite definition.
+
+    Returns ``(results, errored_count)``. **Every definition produces exactly
+    one row per case** (ADR 066 D13/§S1): an engine failure or a judge that
+    produced no verdict is persisted as ``outcome='error'`` with a NULL score,
+    never dropped and never recorded as a failure. ``errored_count`` counts
+    those rows so the case can be excluded from the pass-rate denominator.
+
+    Every result is stamped with ``suite_run_id`` and the definition version
+    (FAR-382 stamp).
+    """
+    results: list[EvalResult] = []
+    errored = 0
+    for definition in definitions:
+        try:
+            result = _evaluate_case_output(
+                case,
+                definition,
+                run,
+                engine,
+                model_judge_callable,
+                scenario_inputs,
+            )
+        except Exception as exc:
+            result = _error_case_result(definition, run, exc)
+        if result.outcome is JudgeOutcome.ERROR:
+            errored += 1
+        results.append(
+            _case_result_row(
+                run,
+                definition,
+                result,
+                eval_definition_version=eval_definition_version,
+            )
+        )
+    return results, errored
+
+
+async def _evaluate_within_budget(
+    engine: EvalEngine,
+    output: dict[str, Any],
+    definition: EvalDefinition,
+    run: SuiteRun,
+    model_judge_callable: Any,
+    judging_deadline: float | None,
+) -> Any:
+    """Await one definition's verdict, cut off at the run's judging deadline.
+
+    The transport's own per-question/per-definition deadlines are configured per
+    definition; this outer bound is the RUN budget, so the job can never spend
+    past it. A cut-off is a coded ``error`` row, never a missing row.
+    """
+    evaluation = engine.evaluate_result_async(
+        output,
+        definition,
+        run_id=run.id,
+        model_judge_callable=model_judge_callable,
+    )
+    if judging_deadline is None:
+        return await evaluation
+    remaining = judging_deadline - time.monotonic()
+    if remaining <= 0:
+        evaluation.close()
+        raise SuiteJudgingBudgetExhaustedError
+    try:
+        return await asyncio.wait_for(evaluation, timeout=remaining)
+    except TimeoutError as exc:
+        raise SuiteJudgingBudgetExhaustedError from exc
+
+
+async def _case_results_async(
+    run: SuiteRun,
+    case: EvalCase,
+    definitions: Sequence[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    *,
+    eval_definition_version: int,
+    judging_deadline: float | None = None,
+) -> tuple[list[EvalResult], int]:
+    """Async twin of :func:`_case_results` (the SAQ suite job is async).
+
+    A judge with ``ajudge`` is awaited on the job's own loop, so the suite path
+    never enters the sync bridge (ADR 066 D10).
+    """
+    results: list[EvalResult] = []
+    errored = 0
+    for definition in definitions:
+        try:
+            if _is_discovery_definition(definition):
+                result = _evaluate_case_output(
+                    case,
+                    definition,
+                    run,
+                    engine,
+                    model_judge_callable,
+                    scenario_inputs,
+                )
+            else:
+                result = await _evaluate_within_budget(
+                    engine,
+                    _synthesise_output(case, scenario_inputs),
+                    definition,
+                    run,
+                    model_judge_callable,
+                    judging_deadline,
+                )
+        except SuiteJudgingBudgetExhaustedError:
+            result = _budget_exhausted_result(definition, run)
+        except Exception as exc:
+            result = _error_case_result(definition, run, exc)
+        if result.outcome is JudgeOutcome.ERROR:
+            errored += 1
+        results.append(
+            _case_result_row(
+                run,
+                definition,
+                result,
+                eval_definition_version=eval_definition_version,
+            )
+        )
+    return results, errored
+
+
+def _has_model_judge(definitions: Sequence[EvalDefinition]) -> bool:
+    return any(d.eval_type == EvalType.MODEL_JUDGE for d in definitions)
+
+
+async def _claim_case_cost(session: AsyncSession, run: SuiteRun, cost: Decimal, suite_ceiling: Decimal | None) -> None:
+    """Atomically claim a case's cost against the per-suite cumulative ledger.
+
+    The ledger is incremented FIRST (row-locked) then compared against the
+    ceiling so a read-check-write race cannot overshoot.
+    """
+    new_total = await claim_suite_run_cost(session, run, cost)
+    if suite_cumulative_exceeded(new_total, suite_ceiling):
+        raise SuiteRunSpendExceededError(f"suite cumulative cost ceiling exceeded (claimed: {new_total})")
+
+
+def _resolve_suite_ceiling(run: SuiteRun, suite_ceiling: Decimal | None) -> Decimal | None:
+    """Resolve the per-suite cumulative cost ceiling.
+
+    An explicit *suite_ceiling* argument wins; otherwise the ceiling is read
+    from ``run.extra['suite_ceiling']`` (string → ``Decimal`` directly, any
+    other non-None value via ``str``).
+    """
+    if suite_ceiling is not None or not run.extra:
+        return suite_ceiling
+    raw = run.extra.get("suite_ceiling")
+    if isinstance(raw, str):
+        return Decimal(raw)
+    if raw is not None:
+        return Decimal(str(raw))
+    return None
+
+
+async def _load_suite_defs_and_cases(session: AsyncSession, run: SuiteRun) -> tuple[list[EvalRow], list[EvalCase]]:
+    """Load the suite's eval definitions and active cases, raising the typed errors when either is empty."""
+    definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
+    if not definitions:
+        raise SuiteRunExecutionError(f"suite {run.suite_id} has no active eval definitions")
+
+    cases = await load_active_cases(session, run.organisation_id, run.dataset_id)
+    if not cases:
+        raise SuiteRunEmptyDatasetError(f"dataset {run.dataset_id} has no active cases")
+    return definitions, cases
+
+
+async def _run_suite_cases(
+    session: AsyncSession,
+    run: SuiteRun,
+    *,
+    cases: list[EvalCase],
+    suite_defs: list[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    eval_definition_version: int,
+    claims_llm: bool,
+    suite_ceiling: Decimal | None,
+    cost_per_llm_case: Decimal,
+    judging_deadline: float | None = None,
+) -> tuple[int, int, int]:
+    """Score every active case against the suite's definitions.
+
+    Returns ``(passed, failed, excluded)``. Each judge-callable case first
+    claims its cost against the cumulative ledger; a non-LLM run initialises
+    the ledger to zero so the mirror read below never sees ``None``.
+    """
+    passed = 0
+    failed = 0
+    excluded = 0
+    for case in cases:
+        results, errored = await _score_case(
+            session,
+            run,
+            case,
+            suite_defs=suite_defs,
+            engine=engine,
+            model_judge_callable=model_judge_callable,
+            scenario_inputs=scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            claims_llm=claims_llm,
+            suite_ceiling=suite_ceiling,
+            cost_per_llm_case=cost_per_llm_case,
+            judging_deadline=judging_deadline,
+        )
+        for result in results:
+            session.add(result)
+
+        case_passed, case_failed, case_excluded = _case_tally(results, errored)
+        passed += case_passed
+        failed += case_failed
+        excluded += case_excluded
+    return passed, failed, excluded
+
+
+async def _score_case(
+    session: AsyncSession,
+    run: SuiteRun,
+    case: EvalCase,
+    *,
+    suite_defs: Sequence[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    eval_definition_version: int,
+    claims_llm: bool,
+    suite_ceiling: Decimal | None,
+    cost_per_llm_case: Decimal,
+    judging_deadline: float | None,
+) -> tuple[list[EvalResult], int]:
+    """Produce one case's result rows, or its budget-exhausted error rows."""
+    if _budget_exhausted(judging_deadline):
+        # Do not start (or charge for) a case the run budget cannot finish:
+        # record every definition as ``error`` so the run terminalises
+        # honestly and no verdict row is silently missing.
+        _log.warning(
+            "suite_run.judging_budget_exhausted",
+            extra={"suite_run_id": str(run.id), "unprocessed_cases": 1},
+        )
+        return _exhausted_case_results(
+            run,
+            suite_defs,
+            eval_definition_version=eval_definition_version,
+        )
+
+    if claims_llm:
+        await _claim_case_cost(session, run, cost_per_llm_case, suite_ceiling)
+    elif run.claimed_cost is None:
+        run.claimed_cost = Decimal(0)
+
+    if hasattr(model_judge_callable, "ajudge"):
+        return await _case_results_async(
+            run,
+            case,
+            suite_defs,
+            engine,
+            model_judge_callable,
+            scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            judging_deadline=judging_deadline,
+        )
+    # A synchronous judge cannot be interrupted mid-call; the budget check
+    # above still stops STARTING cases past the deadline.
+    return _case_results(
+        run,
+        case,
+        suite_defs,
+        engine,
+        model_judge_callable,
+        scenario_inputs,
+        eval_definition_version=eval_definition_version,
+    )
+
+
+def _case_tally(results: Sequence[EvalResult], errored: int) -> tuple[int, int, int]:
+    """Return ``(passed, failed, excluded)`` deltas for one case's rows.
+
+    A case is EXCLUDED when any definition produced no verdict (error) — an
+    instrument failure is not a defect escape (ADR 066 D18). Every non-error
+    row is one definition, so the flags are never pooled with an error's
+    fail-closed projection.
+    """
+    if errored:
+        return 0, 0, 1
+    verdict_flags = [result.passed for result in results if result.outcome != JudgeOutcome.ERROR.value]
+    if verdict_flags and all(verdict_flags):
+        return 1, 0, 0
+    return 0, 1, 0
+
+
+def _budget_exhausted(judging_deadline: float | None) -> bool:
+    """True when too little run budget remains to start another case."""
+    if judging_deadline is None:
+        return False
+    return judging_deadline - time.monotonic() <= _MIN_JUDGING_SECONDS
+
+
+def _resolve_judging_budget(run: SuiteRun, explicit: float | None) -> float:
+    """Resolve the run-level judging budget (seconds), clamped to the ceiling.
+
+    An explicit argument wins over ``run.extra['judging_budget_seconds']``; a
+    non-numeric, non-finite or non-positive override falls back to the default.
+    A larger override is clamped so an operator cannot configure the job to run
+    past its own ceiling.
+    """
+    default = SUITE_JUDGING_BUDGET_SECONDS
+    raw: Any = explicit
+    if raw is None and run.extra:
+        raw = run.extra.get("judging_budget_seconds")
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value) or value <= 0:
+        return default
+    return min(value, default)
+
+
+def _suite_run_stats(run: SuiteRun, target: SuiteRunState) -> dict[str, Any]:
+    """Build the runner's return-stats dict for a terminalised run."""
+    return {
+        "state": target.value,
+        "total_cases": run.total_cases,
+        "passed_cases": run.passed_cases,
+        "failed_cases": run.failed_cases,
+        "excluded_case_count": run.excluded_case_count,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
+async def execute_suite_run(
+    session: AsyncSession,
+    run: SuiteRun,
+    *,
+    model_judge_callable: Any = None,
+    entity_thresholds: dict[str, Any] | None = None,
+    suite_ceiling: Decimal | None = None,
+    scenario_inputs: dict[str, Any] | None = None,
+    eval_definition_version: int = 1,
+    cost_per_llm_case: Decimal = _DEFAULT_COST_PER_LLM_CASE,
+    judging_budget_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Execute a persisted ``SuiteRun`` end-to-end (pending -> terminal).
+
+    Runs a single evaluation pass: iterate active cases, score each against the
+    suite's definitions, persist per-case outcomes, reconcile counts + cost,
+    and transition to the terminal state. Orchestration errors are caught and
+    the run is transitioned to ``failed`` with ``error_detail`` populated (the
+    monitored failure sink) — the typed exception is re-raised so the SAQ
+    ``after_process`` hook can escalate to the Error Dashboard.
+
+    Returns a stats dict. The caller owns the transaction.
+    """
+    suite_ceiling = _resolve_suite_ceiling(run, suite_ceiling)
+    judging_deadline = time.monotonic() + _resolve_judging_budget(run, judging_budget_seconds)
+    try:
+        # The SAQ ``execute_suite_run`` job hands a run straight from
+        # ``build_suite_run`` (via ``fire_suite_run_trigger``) — a ``pending``
+        # run that has NOT been moved to ``running`` by a separate step. Self-
+        # transition it so the terminal transition below (``running ->
+        # completed/partial/failed``) is a legal edge. Without this the runner
+        # would try ``pending -> completed`` (illegal) and strand the run in
+        # ``pending`` forever — never terminal, never surfaced.
+        if run.state == SuiteRunState.PENDING.value:
+            await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+            await session.flush()
+
+        definitions, cases = await _load_suite_defs_and_cases(session, run)
+        suite_defs = [_definition_dto(r, run.organisation_id) for r in definitions]
+        engine = EvalEngine()
+        # A suite that contains judge definitions but has no callable is NOT
+        # refused up front: each judge row persists as outcome=error and the
+        # run terminalises honestly (all cases excluded -> failed). Refusing
+        # here would lose the per-definition rows the verdict contract exists
+        # to record.
+        claims_llm = _has_model_judge(suite_defs)
+        passed, failed, excluded = await _run_suite_cases(
+            session,
+            run,
+            cases=cases,
+            suite_defs=suite_defs,
+            engine=engine,
+            model_judge_callable=model_judge_callable,
+            scenario_inputs=scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            claims_llm=claims_llm,
+            suite_ceiling=suite_ceiling,
+            cost_per_llm_case=cost_per_llm_case,
+            judging_deadline=judging_deadline,
+        )
+
+        run.total_cases = len(cases)
+        run.passed_cases = passed
+        run.failed_cases = failed
+        run.excluded_case_count = excluded
+        # Feed the SEPARATE suite-run daily spend pool. ``suite_run_daily_spend_used``
+        # sums ``total_cost_usd`` over the org's ``suite_runs`` (never the production
+        # ``runs`` pool); ``claimed_cost`` is the row-locked per-suite ledger the
+        # runner already incremented per judge call. Mirroring it here is what makes
+        # the daily limit enforceable — without it the pool always reads 0 and the
+        # ``fire_suite_run_trigger`` daily guard is vacuous.
+        run.total_cost_usd = run.claimed_cost or Decimal(0)
+
+        # ``partial`` means SOME CASES ERRORED (excluded). A run that executed
+        # every case — even one where evals failed — is ``completed``; failed
+        # evals are counted in ``failed_cases`` and feed the pass-rate, not the
+        # state machine. A run where EVERY case is excluded produced no verdict
+        # at all and terminalises ``failed``, never a misleading ``partial``.
+        if excluded and excluded == len(cases):
+            target = SuiteRunState.FAILED
+        elif excluded:
+            target = SuiteRunState.PARTIAL
+        else:
+            target = SuiteRunState.COMPLETED
+
+        await _suite_run_transition(session, run, target)
+        await session.flush()
+
+        # Only a fully-completed run participates in baseline comparison/alerting.
+        if target == SuiteRunState.COMPLETED:
+            await record_completion(session, run, entity_thresholds or {})
+
+        return _suite_run_stats(run, target)
+    except SuiteRunExecutionError as exc:
+        await _fail_run(session, run, str(exc))
+        raise
+    except SQLAlchemyError as exc:
+        # Raw DB errors (IntegrityError/ProgrammingError/...) previously escaped
+        # this handler UNCAUGHT — the run was never terminalised and the error
+        # surfaced only via the after_process sink. Map them to a stable status
+        # code and route them through ``_fail_run`` so they also terminalise the
+        # run, then re-raise a typed orchestration error (the caller — the SAQ
+        # job — persists the failure in its OWN committed transaction).
+        detail = f"{_sql_error_status(exc)}: {exc}"
+        await _fail_run(session, run, detail)
+        raise SuiteRunExecutionError(detail) from exc
+
+
+async def _fail_run(session: AsyncSession, run: SuiteRun, detail: str) -> None:
+    """Terminalise the run as ``failed`` + populate the monitored failure sink.
+
+    Handles BOTH the caller-owned-transaction case (a run already ``running``
+    when orchestration failed) AND the SAQ-after-rollback case (the run is
+    re-read fresh and is ``pending`` again because the rolled-back transaction
+    discarded the ``pending -> running`` transition). ``pending`` only allows
+    the edge ``{running, cancelled}``, so a ``pending`` run is promoted to
+    ``running`` first — otherwise the ``failed`` edge would be illegal and the
+    run would stay stranded ``pending``. This is the transaction-boundary fix
+    (FAR-377): a persistent failure must land ``failed`` in a transaction that
+    survives the caller's rollback.
+
+    The Error-Ingestion sink is best-effort AND isolated in a savepoint, so a
+    broken sink (transient DB error, missing table) rolls back only the sink and
+    can never roll back the terminal ``failed`` transition below it.
+    """
+    run.error_detail = detail[:2000]
+    try:
+        if run.state == SuiteRunState.PENDING.value:
+            # A fresh re-read after a rolled-back transaction is PENDING again;
+            # promote to RUNNING so the FAILED edge below is a legal transition.
+            await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+            await session.flush()
+        await _suite_run_transition(session, run, SuiteRunState.FAILED)
+        await session.flush()
+    except Exception:
+        _log.exception("suite_run fail transition failed run=%s", run.id)
+
+    # Monitored sink: escalate to the Error Dashboard (best-effort — the run is
+    # already transitioning; a sink failure must not fail the run write). The
+    # savepoint isolates the sink so a failure here can never roll back the
+    # terminal transition in the same transaction.
+    try:
+        from farna.core.error_tracking import ErrorIngestionService
+
+        async with session.begin_nested():
+            await ErrorIngestionService().ingest(
+                session,
+                run.organisation_id,
+                {
+                    "level": "error",
+                    "message": f"SuiteRun {run.id} failed: {run.error_detail or detail}",
+                    "source": "suite_run",
+                    "context_json": {
+                        "suite_id": str(run.suite_id),
+                        "dataset_id": str(run.dataset_id),
+                        "suite_run_id": str(run.id),
+                    },
+                },
+            )
+        await session.flush()
+    except Exception:
+        _log.exception("suite_run failure sink ingest failed run=%s", run.id)
+
+
+def _sql_error_status(exc: Exception) -> int:
+    """Map a raw DB/exception to a stable status code (codebase convention).
+
+    ``IntegrityError``->409, ``ProgrammingError``->501, other ``SQLAlchemyError``
+    (e.g. ``OperationalError``)->503, and any other ``Exception``->500. Used to
+    label a SuiteRun orchestration failure (stored in ``error_detail``) so the
+    Error Dashboard / after_process sink shows a consistent code.
+    """
+    from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+
+    if isinstance(exc, IntegrityError):
+        return 409
+    if isinstance(exc, ProgrammingError):
+        return 501
+    if isinstance(exc, OperationalError):
+        return 503
+    if isinstance(exc, SQLAlchemyError):
+        return 503
+    return 500
+
+
+def _failure_detail(exc: Exception) -> str:
+    """Derive the ``error_detail`` message for a SuiteRun orchestration failure.
+
+    A typed ``SuiteRunExecutionError`` carries its own message; any other
+    exception (a raw DB error, a job-level failure) is surfaced with a mapped
+    status code, satisfying the "always terminalise with a labelled error"
+    contract.
+    """
+    if isinstance(exc, SuiteRunExecutionError):
+        return str(exc)
+    return f"{_sql_error_status(exc)}: {exc}"
+
+
+async def build_suite_run(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    suite_id: uuid.UUID,
+    dataset_id: uuid.UUID,
+    model_backend_id: uuid.UUID,
+    scenario_inputs: dict[str, Any] | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    owner_team_id: uuid.UUID | None = None,
+) -> SuiteRun:
+    """Construct and persist a ``pending`` SuiteRun with its immutable tuple.
+
+    Loads the suite + dataset (pins ``version``) + definitions + model backend
+    (all org-scoped), snapshots the baseline tuple, and inserts the run. The
+    caller owns the transaction. Raises ``SuiteRunEmptyDatasetError`` when the
+    dataset is empty (never a silent pass).
+    """
+    # ``load_suite`` validates the suite is org-scoped (raises otherwise); the
+    # dataset pins the corpus version and the definitions pin the checksum.
+    await load_suite(session, org_id, suite_id)
+    dataset = await load_dataset(session, org_id, dataset_id)
+    await load_model_backend(session, org_id, model_backend_id)
+    definitions = await load_suite_definitions(session, org_id, suite_id)
+    if not definitions:
+        raise SuiteRunExecutionError(f"suite {suite_id} has no active eval definitions")
+    definition_snapshots = _definition_snapshot(definitions)
+
+    active_cases = await load_active_cases(session, org_id, dataset_id)
+    if not active_cases:
+        raise SuiteRunEmptyDatasetError(f"dataset {dataset_id} has no active cases")
+
+    baseline_tuple, definition_checksum, scenario_signature = build_suite_run_tuple(
+        suite_id=suite_id,
+        dataset_id=dataset_id,
+        dataset_version=dataset.version,
+        definition_snapshots=definition_snapshots,
+        model_backend_id=model_backend_id,
+        scenario_inputs=scenario_inputs,
+    )
+
+    import uuid as _uuid
+
+    run = SuiteRun(
+        id=_uuid.uuid4(),
+        organisation_id=org_id,
+        owner_team_id=owner_team_id,
+        suite_id=suite_id,
+        dataset_id=dataset_id,
+        dataset_version=dataset.version,
+        definition_checksum=definition_checksum,
+        model_backend_id=model_backend_id,
+        scenario_signature=scenario_signature,
+        baseline_tuple=baseline_tuple,
+        state=SuiteRunState.PENDING.value,
+        version=0,
+        total_cases=0,
+        passed_cases=0,
+        failed_cases=0,
+        excluded_case_count=0,
+        claimed_cost=Decimal(0),
+    )
+    # Audit: stamp the owning pipeline id (the trigger's pipeline) so a scheduled
+    # SuiteRun is traceable to its pipeline even though it writes no production Run.
+    run.extra = {"pipeline_id": str(pipeline_id)} if pipeline_id is not None else None
+    session.add(run)
+    await session.flush()
+    return run
+
+
+def suite_run_daily_spend_exceeded(current_daily_used: Decimal, daily_limit: Decimal | None) -> bool:
+    """True when the SuiteRun daily spend already meets a limit.
+
+    This is the SEPARATE spend pool counter — it is fed by ``suite_runs`` cost,
+    never by production ``runs``. ``None`` limit = unlimited.
+    """
+    if daily_limit is None:
+        return False
+    return current_daily_used >= daily_limit
+
+
+async def suite_run_daily_spend_used(session: AsyncSession, org_id: uuid.UUID) -> Decimal:
+    """Sum today's ``suite_runs`` cost for *org_id* (the suite-run spend pool)."""
+    from farna.core.cost_controller import created_at_day_start
+
+    today_start = created_at_day_start()
+    value = (
+        await session.execute(
+            select(func.coalesce(func.sum(SuiteRun.total_cost_usd), 0)).where(
+                SuiteRun.organisation_id == org_id,
+                SuiteRun.created_at >= today_start,
+            )
+        )
+    ).scalar_one()
+    return Decimal(str(value or 0))
+
+
+async def suite_run_daily_spend_used_for_trigger(
+    session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID
+) -> Decimal:
+    """Sum today's ``suite_runs`` cost for one *trigger_id* (per-trigger pool).
+
+    ``daily_spend_limit`` is configured PER TRIGGER, so the daily suite-run
+    spend pool must be scoped to the trigger that owns the run, not summed over
+    the whole org. The owning trigger id is stamped onto ``suite_runs.extra`` at
+    fire time (see ``fire_suite_run_trigger``), so we sum ``total_cost_usd`` over
+    rows whose ``extra->>'trigger_id'`` matches — matching production's per-trigger
+    ``daily_spend_limit`` semantics on the ``runs`` table (``_spend_limit_skip``).
+    """
+    from farna.core.cost_controller import created_at_day_start
+
+    today_start = created_at_day_start()
+    value = (
+        await session.execute(
+            select(func.coalesce(func.sum(SuiteRun.total_cost_usd), 0)).where(
+                SuiteRun.organisation_id == org_id,
+                SuiteRun.created_at >= today_start,
+                SuiteRun.extra.op("->>")("trigger_id") == str(trigger_id),
+            )
+        )
+    ).scalar_one()
+    return Decimal(str(value or 0))
+
+
+def suite_run_daily_spend_exceeded_for_org(current_daily_used: Decimal, daily_limit: Decimal | None) -> bool:
+    """Alias kept for call-site clarity (separate pool, not production pool)."""
+    return suite_run_daily_spend_exceeded(current_daily_used, daily_limit)
+
+
+__all__ = [
+    "EVAL_WATCH_EVENT_FAMILIES",
+    "SuiteRunEmptyDatasetError",
+    "SuiteRunExecutionError",
+    "SuiteRunSpendExceededError",
+    "build_suite_run",
+    "build_suite_run_tuple",
+    "exclude_eval_families",
+    "execute_suite_run",
+    "is_eval_trigger",
+    "load_active_cases",
+    "load_dataset",
+    "load_model_backend",
+    "load_suite",
+    "load_suite_definitions",
+    "suite_run_daily_spend_exceeded",
+    "suite_run_daily_spend_exceeded_for_org",
+    "suite_run_daily_spend_used",
+    "suite_run_daily_spend_used_for_trigger",
+]

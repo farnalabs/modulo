@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.sql import Insert
 
-from modulo.core.product_analytics.hmac_verify import (
+from farna.core.product_analytics.hmac_verify import (
     _TIMESTAMP_WINDOW_SECONDS,
     sign_rotation_request,
     verify_hmac,
 )
-from modulo.core.product_analytics.instance_identity import (
+from farna.core.product_analytics.instance_identity import (
     _INSTANCE_ID_KEY,
     _SECRET_KEY,
     get_instance_id,

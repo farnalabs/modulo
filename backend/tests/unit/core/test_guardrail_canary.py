@@ -29,8 +29,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.guardrails import GuardrailAction, run_interception_pass_async
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.guardrails import GuardrailAction, run_interception_pass_async
 
 # The fixed marker the detectable canary matches. Deterministic and immutable —
 # changing the marker or the payload must be a deliberate, reviewed act.

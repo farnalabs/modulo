@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from modulo.core.guardrails.coverage import (
+from farna.core.guardrails.coverage import (
     RUNTIME_LOOP_UNAVAILABLE_REASON,
     SEAM_INGESTION_EDGE,
     SEAM_NODE_OUTPUT_EDGE,
@@ -32,7 +32,7 @@ from modulo.core.guardrails.coverage import (
     derive_seam_coverage,
     parse_seam_coverage,
 )
-from modulo.core.provenance import PROVENANCE_VALUES
+from farna.core.provenance import PROVENANCE_VALUES
 
 _INGESTION_SUMMARY = {"bound": 2, "evaluated": 2, "errored": 0}
 

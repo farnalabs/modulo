@@ -34,8 +34,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.connectors.base import ConnectorPermissionError, ConnectorQuery, ConnectorResult
-from modulo.core.trigger_engine.polling import (
+from farna.connectors.base import ConnectorPermissionError, ConnectorQuery, ConnectorResult
+from farna.core.trigger_engine.polling import (
     _build_polling_connector_from_instance,
     enforce_polling_read_acl,
 )
@@ -78,10 +78,10 @@ class _StubConnector:
 def _build_stubbed(instance: Any) -> tuple[Any, Any]:
     """Run the real builder with everything BELOW the ACL gate stubbed out."""
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=_SENTINEL),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", return_value=_SENTINEL),
     ):
         return asyncio.run(_build_polling_connector_from_instance(MagicMock(), instance, ORG))
 
@@ -147,9 +147,9 @@ def test_malformed_allowed_operations_fails_closed(allowed_operations: Any) -> N
 def test_denied_instance_never_reaches_credential_decryption() -> None:
     """The gate runs FIRST: a denied instance exposes no credentials."""
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
-        patch("modulo.core.trigger_engine.polling._build_polling_connector") as build,
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("farna.core.trigger_engine.polling._build_polling_connector") as build,
         pytest.raises(ConnectorPermissionError, match="not in allowed_operations"),
     ):
         asyncio.run(_build_polling_connector_from_instance(MagicMock(), _instance(["write"]), ORG))
@@ -165,15 +165,15 @@ def test_denied_instance_never_reaches_credential_decryption() -> None:
 
 def test_cron_fire_path_denies_write_only_instance_and_records_poll_error() -> None:
     """The cron fire build returns ``(None, None)`` and logs an observable denial."""
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     session = MagicMock()
     trigger = SimpleNamespace(id=uuid.uuid4())
 
     with (
         patch.object(cron_helpers, "_log_poll_event", new_callable=AsyncMock) as log_event,
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend") as create_backend,
     ):
         result = asyncio.run(
             cron_helpers._build_polling_connector(
@@ -200,14 +200,14 @@ def test_cron_fire_path_denies_write_only_instance_and_records_poll_error() -> N
 
 def test_evaluate_condition_denies_write_only_instance_without_querying() -> None:
     """The one-off evaluation path returns an explicit ACL-denied error dict."""
-    from modulo.core.trigger_engine import TriggerEngine
+    from farna.core.trigger_engine import TriggerEngine
 
     session = AsyncMock()
     row_result = MagicMock()
     row_result.scalar_one_or_none.return_value = _instance(["write"])
     session.execute = AsyncMock(return_value=row_result)
 
-    with patch("modulo.core.trigger_engine.polling._build_polling_connector") as build:
+    with patch("farna.core.trigger_engine.polling._build_polling_connector") as build:
         result = asyncio.run(
             TriggerEngine.evaluate_condition(
                 session,
@@ -231,7 +231,7 @@ def test_evaluate_condition_denies_write_only_instance_without_querying() -> Non
 )
 def test_polling_read_proceeds_for_unrestricted_and_read_granted(allowed_operations: Any) -> None:
     """Control: an unrestricted or read-granted instance still PERFORMS the read."""
-    from modulo.core.trigger_engine import TriggerEngine
+    from farna.core.trigger_engine import TriggerEngine
 
     session = AsyncMock()
     row_result = MagicMock()
@@ -240,10 +240,10 @@ def test_polling_read_proceeds_for_unrestricted_and_read_granted(allowed_operati
 
     stub = _StubConnector()
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=stub),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", return_value=stub),
     ):
         result = asyncio.run(
             TriggerEngine.evaluate_condition(
@@ -296,10 +296,10 @@ def _session_with_pipeline(owner_team_id: Any) -> Any:
 def _build_team_gated(instance: Any, session: Any, pipeline_id: Any = PIPELINE_ID) -> tuple[Any, Any]:
     """Run the real builder with everything BELOW both gates stubbed out."""
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=_SENTINEL),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", return_value=_SENTINEL),
     ):
         return asyncio.run(
             _build_polling_connector_from_instance(session, instance, ORG, pipeline_id=pipeline_id),
@@ -315,9 +315,9 @@ def test_cross_team_connector_denied_before_credential_decryption() -> None:
     """
     session = _session_with_pipeline(TEAM_A)
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
-        patch("modulo.core.trigger_engine.polling._build_polling_connector") as build,
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("farna.core.trigger_engine.polling._build_polling_connector") as build,
         pytest.raises(ConnectorPermissionError, match="Team-private connector"),
     ):
         asyncio.run(
@@ -395,15 +395,15 @@ def test_cron_fire_path_supplies_the_pipeline_team_context() -> None:
     Without this argument the team gate would silently never run on the one
     path that reads the connector row team-blind — the defect FAR-1595 names.
     """
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     session = _session_with_pipeline(TEAM_A)
     trigger = SimpleNamespace(id=uuid.uuid4(), pipeline_id=PIPELINE_ID)
 
     with (
         patch.object(cron_helpers, "_log_poll_event", new_callable=AsyncMock) as log_event,
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend") as create_backend,
     ):
         result = asyncio.run(
             cron_helpers._build_polling_connector(
@@ -434,7 +434,7 @@ def test_evaluate_condition_supplies_the_pipeline_team_context() -> None:
     cross-team denial in the message below never fires: the read proceeds to
     credential decryption instead.
     """
-    from modulo.core.trigger_engine import TriggerEngine
+    from farna.core.trigger_engine import TriggerEngine
 
     session = AsyncMock()
     instance_result = MagicMock()
@@ -443,9 +443,9 @@ def test_evaluate_condition_supplies_the_pipeline_team_context() -> None:
     session.execute = AsyncMock(side_effect=[instance_result, pipeline_result])
 
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
-        patch("modulo.core.trigger_engine.polling._build_polling_connector") as build,
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("farna.core.trigger_engine.polling._build_polling_connector") as build,
     ):
         result = asyncio.run(
             TriggerEngine.evaluate_condition(

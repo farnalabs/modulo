@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 # ---------------------------------------------------------------------------
 # Helpers — duck-typed (Eval, PolicyGate) row pairs, the shape the loader
@@ -167,7 +167,7 @@ def test_c8_disabled_gate_does_not_emit_backfill_anomaly(caplog: pytest.LogCaptu
     eval_row = _eval_row()
     gate_row = _gate_row(eval_row, enabled=False)
 
-    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.executor"):
         dto = _only([(eval_row, gate_row)], None)
 
     assert dto.failure_behaviour == "warn"
@@ -184,7 +184,7 @@ def test_c8_missing_gate_still_keeps_the_backfill_anomaly(caplog: pytest.LogCapt
 
     eval_row = _eval_row()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.executor"):
         dto = _only([(eval_row, None)], None)
 
     assert dto.failure_behaviour == "warn"
@@ -376,7 +376,7 @@ def test_malformed_pin_node_id_falls_back_to_the_live_node(
     pin = _pin(eval_row, gate_row, action="block")
     pin["node_id"] = "not-a-uuid"
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.executor"):
         dto = _only([(eval_row, gate_row)], [pin])
 
     assert dto.failure_behaviour == "block"
@@ -610,7 +610,7 @@ def test_governed_gate_from_pin_malformed_mode_falls_back_and_logs(
     pin = _pin(eval_row, gate_row)
     pin["evaluation_mode"] = pinned_mode  # type: ignore[assignment]
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.executor"):
         verdict = _from_pin(gate_row, pin)
 
     assert verdict[4] == "human"  # the live fallback, never the junk value

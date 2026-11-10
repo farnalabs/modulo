@@ -23,7 +23,7 @@ import pytest
 
 _MIGRATION_NAME = "0254_eval_backfill_cutover"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
 _NON_EXECUTING_STATUSES = ("awaiting_human", "hitl_parked", "claimed", "unknown", "pending")

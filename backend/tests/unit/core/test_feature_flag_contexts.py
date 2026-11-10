@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.feature_flags as feature_flags_module
-from modulo.core.feature_flags import (
+import farna.core.feature_flags as feature_flags_module
+from farna.core.feature_flags import (
     DEFAULT_OFF_FLAGS,
     INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
@@ -35,13 +35,13 @@ from modulo.core.feature_flags import (
     get_registry,
     resolve_plan_context,
 )
-from modulo.core.license import LicenseData
+from farna.core.license import LicenseData
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
-_LOGGER = "modulo.core.feature_flags"
+_LOGGER = "farna.core.feature_flags"
 
 
 @pytest.fixture(autouse=True)
@@ -173,8 +173,8 @@ class TestDbPlanContext:
     ) -> DbPlanContext:
         session = _make_db_session()
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=_db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=_db_flags()),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=_db_tiers()),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=_db_flags()),
         ):
             return await DbPlanContext.from_db(
                 session, tier, has_license_key=has_license_key, license_features=license_features
@@ -227,8 +227,8 @@ class TestResolvePlanContext:
         org = SimpleNamespace(settings_json={"license_key": "org-key"}, plan_id="team")
         settings = SimpleNamespace(modulo_license_key="env-key")
         with (
-            patch("modulo.core.license.parse_and_verify", return_value=self._valid(features=["sso"])),
-            patch("modulo.core.license.get_license", return_value=_license(features=["inmem"])),
+            patch("farna.core.license.parse_and_verify", return_value=self._valid(features=["sso"])),
+            patch("farna.core.license.get_license", return_value=_license(features=["inmem"])),
         ):
             await resolve_plan_context(settings, MagicMock(), org)
         mock_from_db.assert_awaited_once()
@@ -239,8 +239,8 @@ class TestResolvePlanContext:
     async def test_invalid_org_license_falls_through_to_in_memory(self, mock_from_db) -> None:
         org = SimpleNamespace(settings_json={"license_key": "bad"}, plan_id="team")
         with (
-            patch("modulo.core.license.parse_and_verify", return_value=self._invalid()),
-            patch("modulo.core.license.get_license", return_value=_license(features=["inmem"])),
+            patch("farna.core.license.parse_and_verify", return_value=self._invalid()),
+            patch("farna.core.license.get_license", return_value=_license(features=["inmem"])),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), org)
         mock_from_db.assert_awaited_once()
@@ -251,8 +251,8 @@ class TestResolvePlanContext:
         org = SimpleNamespace(settings_json={"license_key": "boom"}, plan_id=None)
         caplog.set_level(logging.WARNING, logger=_LOGGER)
         with (
-            patch("modulo.core.license.parse_and_verify", side_effect=ValueError("bad key")),
-            patch("modulo.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", side_effect=ValueError("bad key")),
+            patch("farna.core.license.get_license", return_value=None),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), org)
         assert any("Failed to parse org-level license key" in r.getMessage() for r in caplog.records)
@@ -262,15 +262,15 @@ class TestResolvePlanContext:
     async def test_org_license_cancelled_error_reraised(self, mock_from_db) -> None:
         org = SimpleNamespace(settings_json={"license_key": "boom"}, plan_id=None)
         with (
-            patch("modulo.core.license.parse_and_verify", side_effect=asyncio.CancelledError()),
-            patch("modulo.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", side_effect=asyncio.CancelledError()),
+            patch("farna.core.license.get_license", return_value=None),
             pytest.raises(asyncio.CancelledError),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), org)
         mock_from_db.assert_not_awaited()
 
     async def test_in_memory_license_wins_over_env(self, mock_from_db) -> None:
-        with patch("modulo.core.license.get_license", return_value=_license(features=["inmem"])):
+        with patch("farna.core.license.get_license", return_value=_license(features=["inmem"])):
             await resolve_plan_context(SimpleNamespace(modulo_license_key="env-key"), MagicMock(), None)
         mock_from_db.assert_awaited_once()
         assert mock_from_db.await_args.args[1] == "team"
@@ -278,8 +278,8 @@ class TestResolvePlanContext:
 
     async def test_env_license_used_when_no_org_and_no_in_memory(self, mock_from_db) -> None:
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=self._valid(features=["env"])),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=self._valid(features=["env"])),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key="env-key"), MagicMock(), None)
         mock_from_db.assert_awaited_once()
@@ -289,8 +289,8 @@ class TestResolvePlanContext:
     async def test_env_license_parse_error_logs_and_falls_back(self, mock_from_db, caplog) -> None:
         caplog.set_level(logging.WARNING, logger=_LOGGER)
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", side_effect=RuntimeError("boom")),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", side_effect=RuntimeError("boom")),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key="env-key"), MagicMock(), None)
         assert any("Failed to parse env-var license key" in r.getMessage() for r in caplog.records)
@@ -299,8 +299,8 @@ class TestResolvePlanContext:
 
     async def test_env_license_cancelled_error_reraised(self, mock_from_db) -> None:
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", side_effect=asyncio.CancelledError()),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key="env-key"), MagicMock(), None)
@@ -309,8 +309,8 @@ class TestResolvePlanContext:
     async def test_org_community_plan_uses_community_db_context(self, mock_from_db) -> None:
         org = SimpleNamespace(settings_json=None, plan_id="community")
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=self._invalid()),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=self._invalid()),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), org)
         mock_from_db.assert_awaited_once()
@@ -321,8 +321,8 @@ class TestResolvePlanContext:
         org = SimpleNamespace(settings_json=None, plan_id="team")
         caplog.set_level(logging.INFO, logger=_LOGGER)
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=self._invalid()),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=self._invalid()),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), org)
         assert any("plan.team_without_license_falling_back_to_community" in r.getMessage() for r in caplog.records)
@@ -331,8 +331,8 @@ class TestResolvePlanContext:
 
     async def test_no_org_no_license_community_fallback(self, mock_from_db) -> None:
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=self._invalid()),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=self._invalid()),
         ):
             await resolve_plan_context(SimpleNamespace(modulo_license_key=""), MagicMock(), None)
         mock_from_db.assert_awaited_once()
@@ -382,15 +382,15 @@ class TestEntityOverrideLookups:
     def _org_patch(session: AsyncMock, org, side_effect=None) -> contextlib.AbstractContextManager[None]:
         stack = contextlib.ExitStack()
         stack.enter_context(
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock()))
+            _fake_crud_module("farna.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock()))
         )
         stack.enter_context(
             _fake_crud_module(
-                "modulo.db.crud.organisation",
+                "farna.db.crud.organisation",
                 get_organisation=AsyncMock(return_value=org, side_effect=side_effect),
             )
         )
-        stack.enter_context(patch("modulo.settings.get_settings", return_value=MagicMock()))
+        stack.enter_context(patch("farna.settings.get_settings", return_value=MagicMock()))
         stack.enter_context(patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session))
         return stack
 
@@ -449,12 +449,12 @@ class TestEntityOverrideLookups:
         registry = FeatureFlagRegistry()
         session = self._session()
         with (
-            _fake_crud_module("modulo.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
+            _fake_crud_module("farna.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())),
             _fake_crud_module(
-                "modulo.db.crud.organisation",
+                "farna.db.crud.organisation",
                 get_organisation=AsyncMock(side_effect=asyncio.CancelledError()),
             ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
             patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
             pytest.raises(asyncio.CancelledError),
         ):
@@ -493,8 +493,8 @@ class TestLoadFromDbTransactionPaths:
         else:
             session.in_transaction = MagicMock(return_value=in_transaction)
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=_db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=_db_flags()),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=_db_tiers()),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=_db_flags()),
         ):
             await registry.load_from_db(session)
         return registry

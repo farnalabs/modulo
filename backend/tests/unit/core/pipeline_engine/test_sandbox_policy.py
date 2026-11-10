@@ -11,11 +11,11 @@ Covers:
 
 from __future__ import annotations
 
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_MULTI_HOST,
     derive_sandbox_capabilities,
 )
-from modulo.core.pipeline_engine.sandbox_policy import (
+from farna.core.pipeline_engine.sandbox_policy import (
     build_git_multi_host_script,
     build_git_none_script,
     build_git_scoped_script,

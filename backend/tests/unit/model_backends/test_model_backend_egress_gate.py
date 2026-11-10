@@ -18,18 +18,18 @@ Remove either ``validate_outbound_url*`` call and the matching case here fails.
 
 import pytest
 
-from modulo.core import ssrf
-from modulo.core.model_backend_hub import _build_backend
-from modulo.core.ssrf import PinnedAsyncHTTPTransport
-from modulo.model_backends.anthropic import AnthropicBackend
-from modulo.model_backends.base import openai_compatible_health_check
-from modulo.model_backends.cohere import CohereBackend
-from modulo.model_backends.gemini import GeminiBackend
-from modulo.model_backends.lm_studio import LmStudioBackend
-from modulo.model_backends.mistral import MistralBackend
-from modulo.model_backends.module import OpenAICompatibleBackend
-from modulo.model_backends.ollama import OllamaBackend
-from modulo.model_backends.vllm import VllmBackend
+from farna.core import ssrf
+from farna.core.model_backend_hub import _build_backend
+from farna.core.ssrf import PinnedAsyncHTTPTransport
+from farna.model_backends.anthropic import AnthropicBackend
+from farna.model_backends.base import openai_compatible_health_check
+from farna.model_backends.cohere import CohereBackend
+from farna.model_backends.gemini import GeminiBackend
+from farna.model_backends.lm_studio import LmStudioBackend
+from farna.model_backends.mistral import MistralBackend
+from farna.model_backends.module import OpenAICompatibleBackend
+from farna.model_backends.ollama import OllamaBackend
+from farna.model_backends.vllm import VllmBackend
 
 pytestmark = pytest.mark.real_ssrf_dns
 

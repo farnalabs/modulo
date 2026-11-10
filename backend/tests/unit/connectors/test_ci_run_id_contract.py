@@ -26,14 +26,14 @@ from typing import Any
 
 import pytest
 
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector, _AzurePipelinesTestDouble
-from modulo.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
-from modulo.connectors.ci_runner.github_actions import GitHubActionsCIRunner, _GitHubActionsTestDouble
-from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner, _GitLabCITestDouble
-from modulo.connectors.ci_runner.woodpecker import WoodpeckerCIRunner, _WoodpeckerTestDouble
-from modulo.connectors.circleci import _CircleCITestDouble
-from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
-from modulo.connectors.teamcity import _TeamCityTestDouble
+from farna.connectors.azure_pipelines import AzurePipelinesConnector, _AzurePipelinesTestDouble
+from farna.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
+from farna.connectors.ci_runner.github_actions import GitHubActionsCIRunner, _GitHubActionsTestDouble
+from farna.connectors.ci_runner.gitlab_ci import GitLabCIRunner, _GitLabCITestDouble
+from farna.connectors.ci_runner.woodpecker import WoodpeckerCIRunner, _WoodpeckerTestDouble
+from farna.connectors.circleci import _CircleCITestDouble
+from farna.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
+from farna.connectors.teamcity import _TeamCityTestDouble
 
 #: Connectors whose contract requires a QUALIFIED id (>=1 slash). CircleCI (the
 #: pipeline UUID) and TeamCity (the build id) are bare by contract - see

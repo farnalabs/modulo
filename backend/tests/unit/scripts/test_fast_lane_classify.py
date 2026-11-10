@@ -84,12 +84,12 @@ class TestClassifyPath:
             "frontend/package.json",
             ".semgrep/rls_set_local.yml",
             ".pre-commit-config.yaml",
-            "backend/src/modulo/api/routes/pipelines.py",
+            "backend/src/farna/api/routes/pipelines.py",
             "frontend/src/views/PipelinesView.vue",
             "fly.toml",
             "deploy/fly/entrypoint.sh",
-            "backend/src/modulo/db/migrations/versions/0001_initial.py",
-            "backend/src/modulo/core/pipeline_engine/graph.py",
+            "backend/src/farna/db/migrations/versions/0001_initial.py",
+            "backend/src/farna/core/pipeline_engine/graph.py",
         ],
         ids=[
             "gh-workflow-ci",
@@ -131,7 +131,7 @@ class TestClassifyPaths:
     def test_one_b_makes_all_b(self) -> None:
         paths = [
             "backend/tests/unit/test_foo.py",
-            "backend/src/modulo/api/routes/pipelines.py",  # class-B
+            "backend/src/farna/api/routes/pipelines.py",  # class-B
         ]
         assert classify_paths(paths) == "B"
 
@@ -165,7 +165,7 @@ class TestClassifyPaths:
         assert classify_paths(paths) == "B"
 
     def test_migrations_are_b(self) -> None:
-        paths = ["backend/src/modulo/db/migrations/versions/0123_foo.py"]
+        paths = ["backend/src/farna/db/migrations/versions/0123_foo.py"]
         assert classify_paths(paths) == "B"
 
     def test_mixed_a_and_b(self) -> None:
@@ -255,7 +255,7 @@ class TestMainExitCode:
         """A class-B PR (backend/src/ change) must exit 1."""
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout="backend/src/modulo/api/routes/pipelines.py\n",
+            stdout="backend/src/farna/api/routes/pipelines.py\n",
             stderr="",
         )
         rc = classify_main(

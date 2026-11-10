@@ -48,7 +48,7 @@ pytestmark = [pytest.mark.integration]
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 MIGRATION_REV = "0348_far147_legacy_run_group_backfill"
 PREV_REV = "0347_system_maps_version_aware"
-_MIGRATION_PATH = BACKEND_ROOT / "src/modulo/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
+_MIGRATION_PATH = BACKEND_ROOT / "src/farna/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ _MIGRATION_PATH = BACKEND_ROOT / "src/modulo/db/migrations/versions/0348_far147_
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 

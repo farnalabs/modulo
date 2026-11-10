@@ -20,12 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import retry_policy as retry_policy_module
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine import retry_policy as retry_policy_module
+from farna.core.pipeline_engine.executor import (
     PipelineExecutor,
     _graph_is_idempotent,
 )
-from modulo.core.pipeline_engine.retry_policy import (
+from farna.core.pipeline_engine.retry_policy import (
     _RETRY_BACKOFF_BASE_SECONDS,
     _RETRY_BACKOFF_CAP_SECONDS,
     _RETRY_BACKOFF_DEFAULT_MULTIPLIER,
@@ -475,7 +475,7 @@ async def test_execute_retry_policy_never_redispatch_non_idempotent_graph():
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         # The non-idempotent graph is excluded, so the backoff sleep must NOT fire.
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
             run_id=run.id,
@@ -518,7 +518,7 @@ async def test_execute_retry_policy_still_redispatch_idempotent_graph():
 
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError) as exc_info:
             await executor.execute(
@@ -539,7 +539,7 @@ async def test_execute_transient_retry_suppressed_on_non_idempotent_graph():
     non-idempotent node terminal-fails instead of fenced-resetting + requeueing.
     The error_detail explains that the retry was suppressed by idempotency, and
     no pending-reset / SAQ re-raise occurs."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot(
@@ -626,19 +626,19 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     compiled = _mock_compiled_raising(_GenericFailureError("boom"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
         # FAR-136 backoff: never actually sleep in the retry tests.
-        patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError) as exc_info:
@@ -658,7 +658,7 @@ def test_graph_non_idempotent_flag_semantics():
     """FAR-295: the graph helper flags ONLY an explicit boolean False — anything
     else (absent, True, or a malformed non-bool) stays idempotent so a retry is
     never fail-opened by a type mixup."""
-    from modulo.core.pipeline_engine.executor import _graph_is_idempotent
+    from farna.core.pipeline_engine.executor import _graph_is_idempotent
 
     assert _graph_is_idempotent(None) is True
     assert _graph_is_idempotent({"nodes": []}) is True
@@ -689,18 +689,18 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     compiled = _make_failure_compiled()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
+        patch("farna.settings.get_settings", return_value=settings),
+        patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -742,19 +742,19 @@ def _enter_execute_patches(
     finalization path.
     """
     finalize_mock = AsyncMock()
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_run", return_value=run))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_org"))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.get_run", return_value=run))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.set_rls_org"))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.set_rls_execution_context"))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()))
     stack.enter_context(patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity))
-    stack.enter_context(patch("modulo.settings.get_settings", return_value=settings))
+    stack.enter_context(patch("farna.settings.get_settings", return_value=settings))
     # FAR-136 backoff: never actually sleep in the retry-budget tests.
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
     return finalize_mock
 
 
@@ -898,7 +898,7 @@ async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
 def _eval_blocked_compiled() -> MagicMock:
     """A compiled graph raising EvalBlockedError — terminalizes as
     final_status "eval_failed" / error_code "eval_blocked"."""
-    from modulo.core.eval_engine import EvalBlockedError
+    from farna.core.eval_engine import EvalBlockedError
 
     return _mock_compiled_raising(EvalBlockedError("quality", "score 0.3 below threshold 0.8"))
 
@@ -1000,7 +1000,7 @@ async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_com
     present; the guard-A half proves the skipped envelope the re-executed node
     returns (end-to-end guard-A behaviour is covered by
     test_sandbox_output_retention.py::test_guard_a_skips_*)."""
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.node_runner import (
         _idempotency_gate_skipped_envelope,
         _marker_delivery_done_for_node,
     )
@@ -1096,7 +1096,7 @@ def test_retry_backoff_bounded_by_max_retries():
     """The schedule is bounded by the retry budget: the delay for the LAST
     allowed attempt (attempt == max_retries) never schedules beyond the cap,
     and attempts beyond the budget stay at the cap (never grow unbounded)."""
-    from modulo.core.retry_budget import RETRY_POLICY_MAX_RETRIES
+    from farna.core.retry_budget import RETRY_POLICY_MAX_RETRIES
 
     max_retries = RETRY_POLICY_MAX_RETRIES  # 5
     cap = _RETRY_BACKOFF_CAP_SECONDS
@@ -1125,7 +1125,7 @@ async def test_execute_retry_policy_applies_backoff_delay():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError) as exc_info:
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1153,7 +1153,7 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     ``error_detail`` is actually passed into ``retry_after_policy``. A
     regression that dropped ``error_detail`` at the call site would keep the
     pure-function hang tests green while real hang deaths resumed retrying."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     hang_msg = (
         "Sandbox agent command produced no output within 1200s. "
@@ -1173,7 +1173,7 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         # The hang is excluded, so the backoff sleep must NOT fire at all.
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
             run_id=run.id,
@@ -1218,7 +1218,7 @@ async def test_execute_retry_policy_never_redispatch_correction_run():
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         # The correction run is excluded, so the backoff sleep must NOT fire.
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
             run_id=run.id,
@@ -1289,8 +1289,8 @@ def test_retry_backoff_jitter_dead_zone_at_cap(monkeypatch):
 def test_retry_backoff_cap_constants_pinned():
     """Characterization: the THREE pre-existing cap constants are unchanged by
     FAR-525 (executor node-retry cap, authoring-layer cap, runtime-retry cap)."""
-    from modulo.core.pipeline_engine import retry_compensation as rc_mod
-    from modulo.core.pipeline_engine import runtime_retry as rr_mod
+    from farna.core.pipeline_engine import retry_compensation as rc_mod
+    from farna.core.pipeline_engine import runtime_retry as rr_mod
 
     assert _RETRY_BACKOFF_CAP_SECONDS == 300.0
     assert rc_mod.RETRY_BACKOFF_CAP_SECONDS == 300.0
@@ -1309,7 +1309,7 @@ def test_retry_backoff_defaults_single_sourced_from_retry_compensation():
     without the other must be impossible without this pin failing."""
     import inspect
 
-    from modulo.core.pipeline_engine import retry_compensation as rc
+    from farna.core.pipeline_engine import retry_compensation as rc
 
     assert _RETRY_BACKOFF_BASE_SECONDS == rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS
     assert rc.RETRY_SCHEDULE_DEFAULT_DELAY_SECONDS == 45.0
@@ -1339,7 +1339,7 @@ async def test_execute_retry_policy_schedule_fixed_delay_wiring():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         with _capture_executor_logs(_logging.WARNING) as records, pytest.raises(RunRetryPolicyError):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1374,7 +1374,7 @@ async def test_execute_retry_policy_schedule_fail_open_end_to_end():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(patch.object(random, "uniform", lambda a, b: 0.0))
         executor = PipelineExecutor(MagicMock())
         with _capture_executor_logs(_logging.WARNING) as records, pytest.raises(RunRetryPolicyError):
@@ -1406,10 +1406,10 @@ async def test_execute_retry_policy_resolver_defect_cannot_strand_a_reset():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_engine.retry_policy.resolve_backoff_schedule",
+                "farna.core.pipeline_engine.retry_policy.resolve_backoff_schedule",
                 side_effect=RuntimeError("resolver defect"),
             )
         )
@@ -1441,7 +1441,7 @@ async def test_execute_retry_policy_eval_failed_with_schedule_same_path():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError) as exc_info:
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -1471,7 +1471,7 @@ async def test_execute_retry_policy_counter_emitted_on_confirmed_reset():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=fake_meter))
         stack.enter_context(patch.object(random, "uniform", lambda a, b: 0.0))
         executor = PipelineExecutor(MagicMock())
@@ -1503,7 +1503,7 @@ async def test_execute_retry_policy_no_counter_on_fence_lost():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=fake_meter))
         stack.enter_context(patch.object(PipelineExecutor, "_fenced_pending_reset", new=AsyncMock(return_value=0)))
         executor = PipelineExecutor(MagicMock())
@@ -1529,7 +1529,7 @@ async def test_execute_retry_policy_counter_no_op_without_meter_provider():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=None))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
@@ -1555,7 +1555,7 @@ async def test_execute_retry_policy_counter_never_blocks_the_reraise():
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         stack.enter_context(patch.object(retry_policy_module, "_get_otel_meter", return_value=boom_meter))
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError):
@@ -1567,7 +1567,7 @@ def test_schedule_reresolution_reads_current_policy_per_attempt():
     """Per-attempt re-resolution characterization: resolution reads the policy
     dict fresh each attempt (each retry is a new SAQ job re-reading the row),
     so a mid-run PATCH takes effect on the NEXT attempt."""
-    from modulo.core.pipeline_engine import retry_compensation as rc_mod
+    from farna.core.pipeline_engine import retry_compensation as rc_mod
 
     policy = {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 10, "multiplier": 1.0}}
     _present, delay, _mult, _reason = rc_mod.resolve_backoff_schedule(policy)
@@ -1582,7 +1582,7 @@ def test_schedule_reresolution_reads_current_policy_per_attempt():
 def _real_check_graph_validator() -> MagicMock:
     """A GraphValidator class mock whose run-start checks are the REAL
     staticmethods (so the run-start validation layering is exercised)."""
-    from modulo.core.graph_validator import GraphValidator as RealGV
+    from farna.core.graph_validator import GraphValidator as RealGV
 
     validation = MagicMock()
     validation.is_valid = True
@@ -1609,9 +1609,9 @@ async def _execute_with_real_runstart_checks(retry_policy: dict[str, Any]):
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
         stack.enter_context(
-            patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_real_check_graph_validator())
+            patch("farna.core.pipeline_engine.executor.GraphValidator", new=_real_check_graph_validator())
         )
-        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         try:
             result = await executor.execute(
@@ -1628,7 +1628,7 @@ async def test_run_start_malformed_core_policy_still_raises_graph_validation_err
     _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks(
         {"on": ["failure"], "max_retries": 99, "backoff_schedule": {"delay_seconds": 45}}
     )
-    from modulo.core.pipeline_engine import GraphValidationError
+    from farna.core.pipeline_engine import GraphValidationError
 
     assert isinstance(exc, GraphValidationError)
     assert any("max_retries" in i.message for i in exc.issues)
@@ -1643,7 +1643,7 @@ async def test_run_start_malformed_schedule_warns_and_run_proceeds():
         kind, exc, _statements, sleep_mock, mock_finalize = await _execute_with_real_runstart_checks(
             {"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 0}}
         )
-    from modulo.core.pipeline_engine import GraphValidationError
+    from farna.core.pipeline_engine import GraphValidationError
 
     assert not isinstance(exc, GraphValidationError)
     assert kind == "raised"
@@ -1673,8 +1673,8 @@ def _capture_executor_logs(level: int):
     import logging as _logging
 
     loggers = [
-        _logging.getLogger("modulo.core.pipeline_engine.executor"),
-        _logging.getLogger("modulo.core.pipeline_engine.retry_policy"),
+        _logging.getLogger("farna.core.pipeline_engine.executor"),
+        _logging.getLogger("farna.core.pipeline_engine.retry_policy"),
     ]
     records: list = []
 
@@ -1712,7 +1712,7 @@ def test_watchdog_deadline_code_maps_to_timeout_match():
     what the deadline watchdog writes) resolves through ``map_legacy_code`` to
     ``node.deadline_exceeded`` and matches the ``timeout`` event — the chain
     the shared watchdog-retry hook relies on."""
-    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+    from farna.core.pipeline_engine.error_codes import map_legacy_code
 
     mapped = map_legacy_code("node_deadline_exceeded")
     assert mapped == "node.deadline_exceeded"
@@ -1725,7 +1725,7 @@ def test_watchdog_stalled_code_maps_to_stall_match():
     writes) resolves through ``map_legacy_code`` to ``agent.stall`` and matches
     the ``stall`` event — both via final_status ``stalled`` and the mapped
     code."""
-    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+    from farna.core.pipeline_engine.error_codes import map_legacy_code
 
     mapped = map_legacy_code("executor_stalled")
     assert mapped == "agent.stall"
@@ -1878,7 +1878,7 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
     on the refused path ("none"); the re-dispatched path raises
     ``RunRetryPolicyError`` out of the seam.
     """
-    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+    from farna.core.pipeline_engine.retry_policy import maybe_retry_after_policy
 
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -1888,7 +1888,7 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
 
     redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
 
-    with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
+    with patch("farna.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
         return await maybe_retry_after_policy(
             run_id=run_id,
             org_id=org_id,
@@ -1923,7 +1923,7 @@ async def test_mayberetry_after_policy_refuses_an_over_budget_attempt(
     not re-dispatch, and the refusal is recorded on the log line that explains
     why (the run is terminalised by the caller, so this warning is the only
     trace of the suppressed retry)."""
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.executor"):
         decision = await _drive_mayberetry_after_policy(elapsed_seconds=3300.0)
 
     assert decision == "none"
@@ -1988,7 +1988,7 @@ def _maybe_retry_kwargs(
 async def test_mayberetry_after_policy_probes_the_script_lease_before_requeue() -> None:
     """A script-mode graph's retry is gated on the lease probe: the probe runs
     with the run's identity BEFORE the re-dispatch seam is reached."""
-    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+    from farna.core.pipeline_engine.retry_policy import maybe_retry_after_policy
 
     probe = AsyncMock(return_value=True)
     redispatch = AsyncMock(side_effect=RunRetryPolicyError("failed", 2))
@@ -1998,7 +1998,7 @@ async def test_mayberetry_after_policy_probes_the_script_lease_before_requeue() 
     )
 
     with (
-        patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch),
+        patch("farna.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch),
         pytest.raises(RunRetryPolicyError),
     ):
         await maybe_retry_after_policy(**kwargs)
@@ -2011,7 +2011,7 @@ async def test_mayberetry_after_policy_terminal_fails_when_the_script_probe_bloc
     """A blocked lease probe refuses the requeue and terminal-fails the run with
     ``script.side_effect_unknown`` (never retried) so it cannot silently loop or
     stay stuck in ``running``."""
-    from modulo.core.pipeline_engine.retry_policy import maybe_retry_after_policy
+    from farna.core.pipeline_engine.retry_policy import maybe_retry_after_policy
 
     broker = MagicMock()
     probe = AsyncMock(return_value=False)
@@ -2022,7 +2022,7 @@ async def test_mayberetry_after_policy_terminal_fails_when_the_script_probe_bloc
         graph_has_script_mode_fn=lambda graph_json: True,
     )
 
-    with patch("modulo.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
+    with patch("farna.core.pipeline_engine.retry_policy._redispatch_after_policy", new=redispatch):
         decision = await maybe_retry_after_policy(**kwargs)
 
     assert decision == "side_effect_unknown"
@@ -2038,7 +2038,7 @@ async def test_mayberetry_after_policy_returns_none_when_the_budget_is_dropped(
 ) -> None:
     """Defensive narrowing: ``retry_policy_applies`` returning True while the
     computed budget or policy is None is a no-op, never a re-dispatch."""
-    from modulo.core.pipeline_engine import retry_policy as rp
+    from farna.core.pipeline_engine import retry_policy as rp
 
     monkeypatch.setattr(rp, "retry_policy_applies", lambda *args, **kwargs: True)
 

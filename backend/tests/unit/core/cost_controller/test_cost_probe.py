@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller.probe import (
+from farna.core.cost_controller.probe import (
     PROBE_TERMINAL_STATUSES,
     _assert_sample_query_index,
     _duplicate_flood_trigger,
@@ -221,13 +221,13 @@ async def test_explain_gate_uses_reset_on_success() -> None:
     plan_rows.all.return_value = [("Index Scan using ix_runs_probe",)]
     session.execute = AsyncMock(return_value=plan_rows)
     session.execute.side_effect = [AsyncMock(), plan_rows, AsyncMock()] * 2
-    with patch("modulo.core.cost_controller.probe._explain_checked", False):
+    with patch("farna.core.cost_controller.probe._explain_checked", False):
         await _assert_sample_query_index(session, _ORG_ID)
     executed = [call.args[0] for call in session.execute.await_args_list]
     assert any("SET enable_seqscan = off" in str(cmd) for cmd in executed)
     assert any("RESET enable_seqscan" in str(cmd) for cmd in executed)
     assert any("EXPLAIN" in str(cmd) for cmd in executed)
-    with patch("modulo.core.cost_controller.probe._explain_checked", False):
+    with patch("farna.core.cost_controller.probe._explain_checked", False):
         await _assert_sample_query_index(session, _ORG_ID)
     assert len(session.execute.await_args_list) == 6  # run twice, not once
 
@@ -240,8 +240,8 @@ async def test_explain_gate_resets_on_missing_index() -> None:
     session.execute = AsyncMock(return_value=plan_rows)
     session.execute.side_effect = [AsyncMock(), plan_rows, AsyncMock()]
     with (
-        patch("modulo.core.cost_controller.probe._explain_checked", False),
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe._explain_checked", False),
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _assert_sample_query_index(session, _ORG_ID)
     executed = [call.args[0] for call in session.execute.await_args_list]
@@ -255,8 +255,8 @@ async def test_explain_gate_reset_on_failure() -> None:
     session.execute = AsyncMock()
     session.execute.side_effect = [AsyncMock(), RuntimeError("boom"), AsyncMock()]
     with (
-        patch("modulo.core.cost_controller.probe._explain_checked", False),
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe._explain_checked", False),
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _assert_sample_query_index(session, _ORG_ID)
     executed = [call.args[0] for call in session.execute.await_args_list]
@@ -267,7 +267,7 @@ async def test_explain_gate_reset_on_failure() -> None:
 async def test_explain_gate_short_circuits_after_first_success() -> None:
     """Once checked, the EXPLAIN gate does not re-run in the same process."""
     session = AsyncMock()
-    with patch("modulo.core.cost_controller.probe._explain_checked", True):
+    with patch("farna.core.cost_controller.probe._explain_checked", True):
         await _assert_sample_query_index(session, _ORG_ID)
     session.execute.assert_not_awaited()
 
@@ -277,7 +277,7 @@ async def test_explain_gate_cancelled_error_re_raised() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError())
     with (
-        patch("modulo.core.cost_controller.probe._explain_checked", False),
+        patch("farna.core.cost_controller.probe._explain_checked", False),
         pytest.raises(asyncio.CancelledError),
     ):
         await _assert_sample_query_index(session, _ORG_ID)
@@ -404,10 +404,10 @@ def _blob(mismatch_runs: list[str], age_minutes: int) -> dict[str, Any]:
 async def _trigger(mismatches: list[str], sampled: int, blob: Any, gap_minutes: int = 4) -> bool:
     session = _make_session()
     with (
-        patch("modulo.core.cost_controller.probe.datetime", _FixedClock),
-        patch("modulo.core.cost_controller.probe.read_system_config", new=AsyncMock(return_value=blob)),
-        patch("modulo.core.cost_controller.probe.acquire_kv_lock", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe.write_system_config", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe.datetime", _FixedClock),
+        patch("farna.core.cost_controller.probe.read_system_config", new=AsyncMock(return_value=blob)),
+        patch("farna.core.cost_controller.probe.acquire_kv_lock", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe.write_system_config", new=AsyncMock()),
     ):
         return await _evaluate_trigger(session, _ORG_ID, runs=[object()] * sampled, mismatches=mismatches)
 
@@ -458,8 +458,8 @@ async def _flood(events: Any, suppressed_until: Any = None) -> bool:
     side_effect = [suppressed_until] if suppressed_until is not None else [None]
     side_effect.append(events)
     with (
-        patch("modulo.core.cost_controller.probe.datetime", _FixedClock),
-        patch("modulo.core.cost_controller.probe.read_system_config", new=AsyncMock(side_effect=side_effect)),
+        patch("farna.core.cost_controller.probe.datetime", _FixedClock),
+        patch("farna.core.cost_controller.probe.read_system_config", new=AsyncMock(side_effect=side_effect)),
     ):
         return await _duplicate_flood_trigger(session)
 
@@ -544,19 +544,19 @@ async def test_probe_org_happy_path_records_signals() -> None:
         breakdown=[{"component": "x", "amount_usd": "9.000000"}],
     )
     with (
-        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()) as mock_rls,
-        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()) as mock_rls,
+        patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
         patch(
-            "modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[ok_run, bad_run])
+            "farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[ok_run, bad_run])
         ) as mock_sample,
-        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
-        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
-        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
-        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
-        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("farna.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("farna.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("farna.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("farna.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
     mock_rls.assert_awaited_once()
@@ -576,17 +576,17 @@ async def test_probe_org_records_clamped_skip_and_missing_rows() -> None:
         total="99999999.999999", breakdown=[{"total_clamped": True, "amount_usd": "5.000000"}]
     )
     with (
-        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[clamped_run, clamped_run])),
-        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=2)),
-        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
-        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
-        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
-        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[clamped_run, clamped_run])),
+        patch("farna.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=2)),
+        patch("farna.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("farna.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("farna.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("farna.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
     mock_mismatch.assert_called_once_with(0)
@@ -605,17 +605,17 @@ async def test_probe_org_logs_rollback_trigger_on_rule_or_flood() -> None:
         breakdown=[{"component": "x", "amount_usd": "1.000000"}],
     )
     with (
-        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[bad_run])),
-        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
-        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=True)),
-        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=True)),
-        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs"),
-        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch"),
-        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip"),
-        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row"),
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[bad_run])),
+        patch("farna.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("farna.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=True)),
+        patch("farna.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=True)),
+        patch("farna.core.cost_controller.probe.record_probe_mismatch_runs"),
+        patch("farna.core.cost_controller.probe.record_probe_total_eq_mismatch"),
+        patch("farna.core.cost_controller.probe.record_probe_clamped_skip"),
+        patch("farna.core.cost_controller.probe.record_probe_missing_ledger_row"),
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
     mock_log.error.assert_called_once()
@@ -630,18 +630,18 @@ async def test_probe_org_eval_failure_logged_and_skipped() -> None:
     """A run whose evaluation raises is logged and skipped, never fatal."""
     session = _make_session()
     with (
-        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[_make_sampled_run()])),
-        patch("modulo.core.cost_controller.probe._evaluate_run", side_effect=RuntimeError("boom")),
-        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
-        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
-        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
-        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
-        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
-        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[_make_sampled_run()])),
+        patch("farna.core.cost_controller.probe._evaluate_run", side_effect=RuntimeError("boom")),
+        patch("farna.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("farna.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("farna.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("farna.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("farna.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("farna.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
     mock_log.warning.assert_called_once()
@@ -672,7 +672,7 @@ async def test_run_probe_zero_org_does_not_advance_heartbeat() -> None:
     session = _make_session()
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = []
-    with patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts:
+    with patch("farna.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts:
         summary = await run_probe(_make_factory(session))
     assert summary["advanced_heartbeat"] is False
     mock_ts.assert_not_called()
@@ -683,8 +683,8 @@ async def test_run_probe_advances_heartbeat_on_any_success() -> None:
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = [_ORG_ID]
     with (
-        patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
+        patch("farna.core.cost_controller.probe._probe_org", new=AsyncMock()),
+        patch("farna.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
     ):
         summary = await run_probe(_make_factory(session))
     assert summary["orgs_succeeded"] == 1
@@ -698,8 +698,8 @@ async def test_run_probe_per_org_exception_isolation() -> None:
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = [_ORG_ID, uuid.uuid4()]
     with (
-        patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=[None, RuntimeError("boom")])),
-        patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
+        patch("farna.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=[None, RuntimeError("boom")])),
+        patch("farna.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
     ):
         summary = await run_probe(_make_factory(session))
     assert summary["orgs_succeeded"] == 1
@@ -713,8 +713,8 @@ async def test_run_probe_all_orgs_failed_does_not_advance() -> None:
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = [_ORG_ID]
     with (
-        patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=RuntimeError("boom"))),
-        patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
+        patch("farna.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        patch("farna.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts,
     ):
         summary = await run_probe(_make_factory(session))
     assert summary["orgs_succeeded"] == 0
@@ -727,7 +727,7 @@ async def test_run_probe_enumeration_failure_reports_error() -> None:
     """Org enumeration failure aborts before sampling; summary carries the error."""
     session = _make_session()
     session.execute = AsyncMock(side_effect=RuntimeError("boom"))
-    with patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts:
+    with patch("farna.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts:
         summary = await run_probe(_make_factory(session))
     assert summary["error"] == "enumeration_failed"
     assert summary["orgs_enumerated"] == 0
@@ -749,7 +749,7 @@ async def test_run_probe_org_cancelled_error_propagates() -> None:
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = [_ORG_ID]
     with (
-        patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=asyncio.CancelledError())),
+        patch("farna.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=asyncio.CancelledError())),
         pytest.raises(asyncio.CancelledError),
     ):
         await run_probe(_make_factory(session))
@@ -760,7 +760,7 @@ async def test_run_probe_zero_org_enumerated_is_quiet_success() -> None:
     session = _make_session()
     session.execute = AsyncMock(return_value=MagicMock())
     session.execute.return_value.scalars.return_value.all.return_value = []
-    with patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock()) as mock_probe:
+    with patch("farna.core.cost_controller.probe._probe_org", new=AsyncMock()) as mock_probe:
         summary = await run_probe(_make_factory(session))
     assert summary == {
         "orgs_enumerated": 0,
@@ -784,7 +784,7 @@ async def test_cooldown_writes_suppression_until() -> None:
     async def _fake_write(s: Any, key: str, value: Any) -> None:
         written[key] = value
 
-    with patch("modulo.core.cost_controller.probe.write_system_config", side_effect=_fake_write):
+    with patch("farna.core.cost_controller.probe.write_system_config", side_effect=_fake_write):
         await set_duplicate_terminal_cooldown(_make_factory(session))
     raw = written.get("duplicate_terminal_suppressed_until")
     assert raw is not None
@@ -796,8 +796,8 @@ async def test_cooldown_survives_underlying_failure() -> None:
     """A DB failure is logged and swallowed — the worker must not crash on write."""
     session = _make_session()
     with (
-        patch("modulo.core.cost_controller.probe.write_system_config", side_effect=RuntimeError("boom")),
-        patch("modulo.core.cost_controller.probe._log") as mock_log,
+        patch("farna.core.cost_controller.probe.write_system_config", side_effect=RuntimeError("boom")),
+        patch("farna.core.cost_controller.probe._log") as mock_log,
     ):
         await set_duplicate_terminal_cooldown(_make_factory(session))
     mock_log.exception.assert_called_once()
@@ -807,7 +807,7 @@ async def test_cooldown_cancelled_error_propagates() -> None:
     """A CancelledError during the cooldown write is re-raised, never swallowed."""
     session = _make_session()
     with (
-        patch("modulo.core.cost_controller.probe.write_system_config", side_effect=asyncio.CancelledError()),
+        patch("farna.core.cost_controller.probe.write_system_config", side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await set_duplicate_terminal_cooldown(_make_factory(session))

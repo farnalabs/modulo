@@ -8,7 +8,7 @@ foreign Origin is rejected too; missing Host is rejected.
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from modulo.api.middleware.host_origin import LAN_ORIGINS_ENV, HostOriginMiddleware, split_lan_origins
+from farna.api.middleware.host_origin import LAN_ORIGINS_ENV, HostOriginMiddleware, split_lan_origins
 
 FOREIGN_HOST = "evil.example"
 

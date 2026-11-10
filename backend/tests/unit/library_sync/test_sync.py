@@ -16,9 +16,9 @@ import pytest
 from sqlalchemy.exc import InvalidRequestError
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
-from modulo.core.library_sync import get_cached_manifest, is_revoked, sync_library
-from modulo.core.library_sync import sync as sync_module
-from modulo.core.library_sync.models import SINGLETON_ID, LibrarySyncState
+from farna.core.library_sync import get_cached_manifest, is_revoked, sync_library
+from farna.core.library_sync import sync as sync_module
+from farna.core.library_sync.models import SINGLETON_ID, LibrarySyncState
 
 ENDPOINT = "https://library.modulo.run"
 

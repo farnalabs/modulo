@@ -272,7 +272,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
     start_saq_runs() {
         while true; do
             RUNS_START=$(date +%s)
-            ( python3 -m saq modulo.core.saq_worker.runs_settings ) &
+            ( python3 -m saq farna.core.saq_worker.runs_settings ) &
             SAQ_RUNS_PID=$!
             echo $SAQ_RUNS_PID > "$RUN_WORKER_PID_FILE"
             # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
@@ -316,14 +316,14 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
     start_saq_system() {
         while true; do
             SYSTEM_START=$(date +%s)
-            # Custom runner (modulo.core.saq_worker.run_system_web): binds the
+            # Custom runner (farna.core.saq_worker.run_system_web): binds the
             # web UI to 127.0.0.1 (fly ssh only) AND maps
             # SAQ_AUTH_USERNAME/PASSWORD to the AUTH_USER/AUTH_PASSWORD env vars
             # saq.web.aiohttp.create_app reads for BasicAuth. The plain
             # `python -m saq ... --web` CLI binds 0.0.0.0 and applies NO auth —
             # never use it. Runs the system worker (crons + functions) and the
             # web app in the same process.
-            ( python3 -m modulo.core.saq_worker ) &
+            ( python3 -m farna.core.saq_worker ) &
             SAQ_SYSTEM_PID=$!
             echo $SAQ_SYSTEM_PID > "$SYSTEM_WORKER_PID_FILE"
             # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
@@ -513,7 +513,7 @@ PY
     echo "=== Admin user seeding handled by backend lifespan startup ==="
 
     echo "=== Starting uvicorn ==="
-    uvicorn modulo.api.main:app \
+    uvicorn farna.api.main:app \
         --host 0.0.0.0 --port ${PORT:-8000} \
         --proxy-headers \
         --timeout-keep-alive 30 \

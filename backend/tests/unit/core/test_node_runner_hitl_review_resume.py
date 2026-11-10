@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY, PROVENANCE_REPORTED
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY, PROVENANCE_REPORTED
 
 _REVIEW_ID = "gate_a_b"
 _FOREIGN_REVIEW_ID = "gate_c_d"
@@ -93,7 +93,7 @@ async def test_non_dict_decision_fails_closed() -> None:
 async def test_malformed_decision_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
     """The fail-closed branch emits ``hitl_review.malformed_decision_ignored``
     with the gate id and the decision's type/action (never payload content)."""
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         await _resume({"action": "weird", "review_id": _REVIEW_ID, "secret_payload": "do-not-log"})
     records = [r for r in caplog.records if r.getMessage() == "hitl_review.malformed_decision_ignored"]
     assert len(records) == 1
@@ -136,7 +136,7 @@ async def test_unstamped_decision_does_not_resume() -> None:
 async def test_foreign_decision_logs_warning_without_payload(caplog: pytest.LogCaptureFixture) -> None:
     """``hitl_review.foreign_decision_ignored`` carries the gate id and the
     decision's stamped gate id ONLY — never payload content."""
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         await _resume(
             {"action": "approved", "review_id": _FOREIGN_REVIEW_ID, "notes": "do-not-log-me", "output": {"x": 1}}
         )
@@ -385,7 +385,7 @@ def test_human_decision_vocabulary_has_a_single_source() -> None:
     inlined the same set, so the two could drift. Pinned in lockstep here."""
     from typing import get_args, get_type_hints
 
-    from modulo.core.eval_engine.policy_gate import HumanDecision
+    from farna.core.eval_engine.policy_gate import HumanDecision
 
     resolver_vocabulary = set(get_args(get_type_hints(HumanDecision)["action"]))
     assert set(nr._HUMAN_DECISION_ACTIONS) == resolver_vocabulary
@@ -405,8 +405,8 @@ async def test_grounding_constructor_failure_is_fail_open(caplog: pytest.LogCapt
     """
     import uuid
 
-    from modulo.core.eval_engine import policy_gate as policy_gate_module
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.eval_engine import policy_gate as policy_gate_module
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     dto = EvalDefDTO(
         id=uuid.uuid4(),
@@ -439,7 +439,7 @@ async def test_grounding_constructor_failure_is_fail_open(caplog: pytest.LogCapt
 
     with (
         patch.object(policy_gate_module, "HumanDecision", _boom),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
     ):
         # No pytest.raises: the point is that NOTHING escapes.
         await nr._ground_human_gate_evidence(
@@ -462,7 +462,7 @@ async def test_grounding_cancelled_error_propagates() -> None:
     import asyncio
     import uuid
 
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     dto = EvalDefDTO(
         id=uuid.uuid4(),
@@ -504,7 +504,7 @@ async def test_grounding_cancelled_error_propagates() -> None:
 
 def _grounding_dto(*, failure_behaviour: str = "block") -> Any:
     """A human-governed DTO as the resume path's DTO universe carries it."""
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     return EvalDefDTO(
         id=uuid.uuid4(),
@@ -547,7 +547,7 @@ async def test_grounding_skips_when_session_org_or_run_is_missing(
     into the already-committed decision."""
     dto = _grounding_dto()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         await nr._ground_human_gate_evidence(
             {"action": "approved"},
             [dto],
@@ -578,9 +578,9 @@ async def test_grounding_appends_one_evidence_row_for_a_resolved_decision() -> N
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
     with (
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.eval_engine.evidence_layer.append_evidence", side_effect=_append),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.eval_engine.evidence_layer.append_evidence", side_effect=_append),
     ):
         await nr._ground_human_gate_evidence(
             {"action": "approved", "decided_by": "user-1", "reason": "lgtm"},
@@ -612,10 +612,10 @@ async def test_grounding_logs_out_of_set_gate_action_and_still_grounds(
     append_mock = MagicMock()
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.eval_engine.evidence_layer.append_evidence", append_mock),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.eval_engine.evidence_layer.append_evidence", append_mock),
     ):
         await nr._ground_human_gate_evidence(
             {"action": "rejected"},
@@ -644,10 +644,10 @@ async def test_grounding_skips_an_unrecognised_human_action(
     append_mock = MagicMock()
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.eval_engine.evidence_layer.append_evidence", append_mock),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.eval_engine.evidence_layer.append_evidence", append_mock),
     ):
         await nr._ground_human_gate_evidence(
             {"action": "not-a-recognised-gate-action"},

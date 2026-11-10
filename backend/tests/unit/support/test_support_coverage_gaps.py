@@ -17,16 +17,16 @@ from typing import Any, ClassVar, Self
 
 import pytest
 
-import modulo.support as support_package
-import modulo.support.bundle as bundle
-from modulo.support.bundle import (
+import farna.support as support_package
+import farna.support.bundle as bundle
+from farna.support.bundle import (
     BundleSources,
     BundleTooLargeError,
     RedactionGateError,
     build_bundle,
     main,
 )
-from modulo.support.redaction import (
+from farna.support.redaction import (
     Redactor,
     _looks_like_unclassified_secret,
     _unquote,
@@ -92,7 +92,7 @@ def test_degraded_json_none_and_persisted_record(tmp_path: Path) -> None:
 def test_resolve_licence_uses_the_settings_key_when_no_stored_licence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import modulo.core.license as licence_module
+    import farna.core.license as licence_module
 
     class _Licence:
         tier = "pro"
@@ -117,7 +117,7 @@ def test_resolve_licence_uses_the_settings_key_when_no_stored_licence(
 def test_resolve_licence_degrades_when_the_licence_read_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import modulo.core.license as licence_module
+    import farna.core.license as licence_module
 
     def _boom() -> Any:
         raise RuntimeError("licence backend down")
@@ -129,7 +129,7 @@ def test_resolve_licence_degrades_when_the_licence_read_raises(
 
 
 def test_health_json_degrades_when_readiness_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.health as health_module
+    import farna.api.routes.health as health_module
 
     async def _boom() -> Any:
         raise RuntimeError("readiness exploded")
@@ -194,7 +194,7 @@ def test_read_one_records_a_reader_failure() -> None:
 def test_expected_migration_head_degrades_when_alembic_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import modulo.db.health_checks as health_checks
+    import farna.db.health_checks as health_checks
 
     def _boom() -> Any:
         raise RuntimeError("no alembic config")
@@ -234,7 +234,7 @@ def test_read_log_members_without_a_data_dir() -> None:
 def test_build_bundle_container_mode_keeps_going_without_settings_or_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import modulo.settings as settings_module
+    import farna.settings as settings_module
 
     def _boom() -> Any:
         raise RuntimeError("settings unavailable")
@@ -285,7 +285,7 @@ def _member_text(path: Path, member: str) -> str:
 def test_session_factory_returns_none_when_the_db_module_cannot_import(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(sys.modules, "modulo.db.session", None)
+    monkeypatch.setitem(sys.modules, "farna.db.session", None)
 
     assert bundle._session_factory(BundleSources(enable_db=True, session_factory=None)) is None
 
@@ -456,8 +456,8 @@ def test_redact_stdin_preserves_input_without_a_trailing_newline(
 
 
 def test_seed_values_skips_empty_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.secrets_file as secrets_file
-    from modulo.support.redaction import seed_values_from_data_dir
+    import farna.launcher.secrets_file as secrets_file
+    from farna.support.redaction import seed_values_from_data_dir
 
     (tmp_path / "secrets.json").write_text("{}", encoding="utf-8")
 

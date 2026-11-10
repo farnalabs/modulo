@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_engine import executor as ex
+from farna.core.pipeline_engine import executor as ex
 
 
 def _executor() -> MagicMock:

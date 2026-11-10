@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.auth.passwords import (
+from farna.auth.passwords import (
     authenticate_db_user,
     hash_password,
     password_entropy_bits,

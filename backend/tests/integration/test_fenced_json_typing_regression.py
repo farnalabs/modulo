@@ -30,8 +30,8 @@ from sqlalchemy import insert as sa_insert
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.db.crud.run import update_run_status
-from modulo.db.models.run import Run
+from farna.db.crud.run import update_run_status
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 

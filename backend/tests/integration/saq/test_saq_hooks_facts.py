@@ -26,8 +26,8 @@ from saq import Status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.core.error_tracking import saq_hooks
-from modulo.settings import get_settings
+from farna.core.error_tracking import saq_hooks
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -142,7 +142,7 @@ async def _insert_running_run(
 
 def _failed_job(run_id: uuid.UUID, org_id: uuid.UUID, claim_token: str, error: str) -> SimpleNamespace:
     return SimpleNamespace(
-        function="modulo.core.saq_worker.execute_run",
+        function="farna.core.saq_worker.execute_run",
         status=Status.FAILED,
         error=error,
         kwargs={"run_id": str(run_id), "org_id": str(org_id), "claim_token": claim_token},
@@ -268,7 +268,7 @@ class TestAfterProcessTaskFailureFacts:
         """set_rls_org is invoked on BOTH the mark session and the separate
         facts session — the compensating write is org-scoped on its own
         connection (P6')."""
-        import modulo.db.rls as rls_mod
+        import farna.db.rls as rls_mod
 
         run_id = await _insert_running_run(
             db_session,
@@ -286,7 +286,7 @@ class TestAfterProcessTaskFailureFacts:
             calls.append(org_id)
             await real(session, org_id)  # type: ignore[misc]
 
-        monkeypatch.setattr("modulo.db.rls.set_rls_org", _spy)
+        monkeypatch.setattr("farna.db.rls.set_rls_org", _spy)
         await saq_hooks.after_process({"job": _failed_job(run_id, org, "tok-abc", "boom")})
 
         # mark session + facts session each set the org context.
@@ -316,7 +316,7 @@ class TestAfterProcessTaskFailureFacts:
         async def _boom(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("facts boom")
 
-        monkeypatch.setattr("modulo.core.analytics.record_run_facts", _boom)
+        monkeypatch.setattr("farna.core.analytics.record_run_facts", _boom)
         await saq_hooks.after_process({"job": _failed_job(run_id, org, "tok-abc", "boom")})  # must not raise
 
         async with db_session.begin():

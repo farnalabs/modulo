@@ -9,19 +9,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api import mcp_server
-from modulo.api.dependencies import _assert_tenant_permission, require_in_dev_operator
-from modulo.api.routes.pipelines import _is_guardrail_admin, _is_privileged, _may_manage_cost
-from modulo.auth import api_key as api_key_mod
-from modulo.auth.api_key import (
+from farna.api import mcp_server
+from farna.api.dependencies import _assert_tenant_permission, require_in_dev_operator
+from farna.api.routes.pipelines import _is_guardrail_admin, _is_privileged, _may_manage_cost
+from farna.auth import api_key as api_key_mod
+from farna.auth.api_key import (
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
     api_key_grants_enabled,
     resolve_key_grants,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.mcp.scope_validator import resolve_tool_access
-from modulo.settings import Settings
+from farna.auth.jwt import TenantPrincipal
+from farna.core.mcp.scope_validator import resolve_tool_access
+from farna.settings import Settings
 
 
 def _principal(role: str, grants: frozenset[str] | None) -> TenantPrincipal:
@@ -94,7 +94,7 @@ class TestPipelinePrivilegeHelpers:
     def test_internal_gate_requires_dev_mode(self) -> None:
         with (
             patch(
-                "modulo.api.dependencies.get_settings",
+                "farna.api.dependencies.get_settings",
                 return_value=Settings(
                     database_url="postgresql+asyncpg://localhost/test",
                     secret_key="a" * 32,
@@ -272,7 +272,7 @@ class TestMalformedValuesFailClosed:
         cm.__aexit__ = AsyncMock(return_value=False)
         session.begin = MagicMock(return_value=cm)
         with (
-            patch("modulo.api.dependencies.resolve_authz_enforce", AsyncMock(return_value=True)),
+            patch("farna.api.dependencies.resolve_authz_enforce", AsyncMock(return_value=True)),
             pytest.raises(HTTPException) as exc,
         ):
             await _assert_tenant_permission(session, principal, "run.trigger", "runner")

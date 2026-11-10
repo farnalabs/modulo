@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.model_backends import _validate_fallback_ids
+from farna.api.routes.model_backends import _validate_fallback_ids
 from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

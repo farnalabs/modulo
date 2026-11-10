@@ -26,7 +26,7 @@ import uuid
 
 import pytest
 
-from modulo.db.lifecycle_refs import (
+from farna.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
     canonicalise_kind,

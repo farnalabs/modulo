@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.eval_engine.coverage_gap import (
+from farna.core.eval_engine.coverage_gap import (
     DEFAULT_DIVERGENCE_THRESHOLD,
     compute_eval_differentiation,
     compute_variant_divergence,
@@ -365,7 +365,7 @@ class TestFar1729EvalNameLookupSourcePin:
     async def test_name_lookup_compiles_against_evals_table(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
-        from modulo.core.eval_engine.coverage_gap import _load_eval_names
+        from farna.core.eval_engine.coverage_gap import _load_eval_names
 
         captured: list[str] = []
 

@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.sonarqube import SonarQubeConnector, _next_page_cursor
+from farna.connectors._safe_page import safe_paging_total as _paging_total
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.sonarqube import SonarQubeConnector, _next_page_cursor
 
 TOKEN = "sqp_test_token"
 BASE_URL = "https://sonarqube.company.com"

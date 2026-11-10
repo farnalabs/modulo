@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.gitea import GiteaConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.gitea import GiteaConnector
 
 TOKEN = "gitea_test_token"
 _API = "https://codeberg.org/api/v1"

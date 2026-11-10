@@ -10,7 +10,7 @@ import uuid
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _ctx_auth_token,
     _ctx_auth_type,
     _ctx_org_id,
@@ -32,9 +32,9 @@ from modulo.api.mcp_server import (
     trigger_pipeline,
     validate_current_auth,
 )
-from modulo.auth.api_key import ApiKeyInvalidError
-from modulo.db.capacity import StorageExhaustedError
-from modulo.settings import Settings
+from farna.auth.api_key import ApiKeyInvalidError
+from farna.db.capacity import StorageExhaustedError
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -58,7 +58,7 @@ def _reset_ctx() -> None:
     _ctx_role.set(None)
     _ctx_auth_token.set(None)
     _ctx_auth_type.set(None)
-    from modulo.api.mcp_server import _live_role_cache
+    from farna.api.mcp_server import _live_role_cache
 
     _live_role_cache.clear()
 
@@ -84,9 +84,9 @@ class TestValidateCurrentAuth:
     def teardown_method(self) -> None:
         _reset_ctx()
 
-    @patch("modulo.api.mcp_server.resolve_role_from_membership")
-    @patch("modulo.api.mcp_server.validate_api_key")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.resolve_role_from_membership")
+    @patch("farna.api.mcp_server.validate_api_key")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_true_for_valid_api_key(
         self,
         mock_session: AsyncMock,
@@ -110,8 +110,8 @@ class TestValidateCurrentAuth:
         assert result is True
         mock_validate_api_key.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_api_key")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_api_key")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_false_for_revoked_api_key(
         self,
         mock_session: AsyncMock,
@@ -131,10 +131,10 @@ class TestValidateCurrentAuth:
         result = await validate_current_auth()
         assert result is False
 
-    @patch("modulo.api.mcp_server.decode_oauth_access_token")
-    @patch("modulo.api.mcp_server.check_oauth_token_family_valid")
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
+    @patch("farna.api.mcp_server.decode_oauth_access_token")
+    @patch("farna.api.mcp_server.check_oauth_token_family_valid")
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
     async def test_returns_true_for_valid_oauth(
         self,
         mock_get_settings: MagicMock,
@@ -166,10 +166,10 @@ class TestValidateCurrentAuth:
         mock_decode.assert_called_once()
         mock_check_family.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.decode_oauth_access_token")
-    @patch("modulo.api.mcp_server.check_oauth_token_family_valid")
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
+    @patch("farna.api.mcp_server.decode_oauth_access_token")
+    @patch("farna.api.mcp_server.check_oauth_token_family_valid")
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
     async def test_returns_false_for_revoked_oauth_family(
         self,
         mock_get_settings: MagicMock,
@@ -229,8 +229,8 @@ class TestHandlerPerEventAuth:
     def teardown_method(self) -> None:
         _reset_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_list_pipelines_returns_auth_error_on_revoked_token(
         self,
         mock_session: AsyncMock,
@@ -241,8 +241,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_trigger_pipeline_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -252,8 +252,8 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_get_run_status_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -263,8 +263,8 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_list_pending_hitl_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -274,7 +274,7 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_review_hitl_returns_auth_error(self, mock_validate_auth: AsyncMock) -> None:
         result = await review_hitl(
             run_id=str(uuid.uuid4()),
@@ -284,7 +284,7 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_copy_library_primitive_returns_auth_error(
         self,
         mock_validate_auth: AsyncMock,
@@ -293,8 +293,8 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_get_run_output_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -304,7 +304,7 @@ class TestHandlerPerEventAuth:
         assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_resource_pipelines_returns_auth_error(
         self,
         mock_validate_auth: AsyncMock,
@@ -313,8 +313,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_pipeline_detail_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -324,8 +324,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_run_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -335,10 +335,10 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.db.crud.run.get_child_run_rollup")
     async def test_resource_run_includes_cost_rollup(
         self,
         mock_get_child_run_rollup: AsyncMock,
@@ -376,10 +376,10 @@ class TestHandlerPerEventAuth:
         mock_get_child_run_rollup.assert_awaited_once()
         mock_get_run.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.db.crud.run.get_child_run_rollup")
     async def test_resource_run_no_children_shows_zero_rollup(
         self,
         mock_get_child_run_rollup: AsyncMock,
@@ -417,8 +417,8 @@ class TestHandlerPerEventAuth:
         mock_get_child_run_rollup.assert_awaited_once()
         mock_get_run.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_hitl_review_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -428,8 +428,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_schemas_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -439,8 +439,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_connectors_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -450,8 +450,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_connectors_returns_connector_uuid(
         self,
         mock_session: AsyncMock,
@@ -480,8 +480,8 @@ class TestHandlerPerEventAuth:
         assert result.startswith("Connectors (1):")
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server._session")
     async def test_resource_model_backends_returns_auth_error(
         self,
         mock_session: AsyncMock,
@@ -491,8 +491,8 @@ class TestHandlerPerEventAuth:
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_handler_proceeds_when_auth_valid(
         self,
         mock_session: AsyncMock,
@@ -510,7 +510,7 @@ class TestHandlerPerEventAuth:
         mock_page.total = 0
         mock_page.next_cursor = None
         mock_page.has_more = False
-        with patch("modulo.db.crud.pipeline.list_pipelines", return_value=mock_page) as mock_list:
+        with patch("farna.db.crud.pipeline.list_pipelines", return_value=mock_page) as mock_list:
             result = await list_pipelines_tool(limit=20)
 
         mock_validate_auth.assert_called_once()
@@ -529,10 +529,10 @@ class TestMcpAuthMiddlewareContext:
     def teardown_method(self) -> None:
         _reset_ctx()
 
-    @patch("modulo.api.mcp_server.resolve_role_from_membership")
-    @patch("modulo.api.mcp_server.validate_api_key")
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server._get_session_factory")
+    @patch("farna.api.mcp_server.resolve_role_from_membership")
+    @patch("farna.api.mcp_server.validate_api_key")
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server._get_session_factory")
     async def test_middleware_sets_auth_context_for_api_key(
         self,
         mock_get_factory: MagicMock,
@@ -572,7 +572,7 @@ class TestMcpAuthMiddlewareContext:
         from starlette.requests import Request
         from starlette.responses import PlainTextResponse
 
-        from modulo.api.mcp_server import McpAuthMiddleware
+        from farna.api.mcp_server import McpAuthMiddleware
 
         scope = {
             "type": "http",
@@ -624,16 +624,16 @@ async def test_trigger_pipeline_storage_exhausted_returns_error() -> None:
     snapshot.graph_json = {"nodes": [{"id": "n"}]}
 
     with (
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._session") as mock_session,
-        patch("modulo.api.mcp_server.get_pipeline", return_value=pipeline),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._session") as mock_session,
+        patch("farna.api.mcp_server.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=snapshot),
         ),
-        patch("modulo.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
+        patch("farna.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
         patch(
-            "modulo.db.capacity.enforce_capacity_gate",
+            "farna.db.capacity.enforce_capacity_gate",
             new=AsyncMock(
                 side_effect=StorageExhaustedError(
                     "Storage capacity exhausted (99% of configured capacity, hard-stop 98%). "

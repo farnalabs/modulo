@@ -1,0 +1,1011 @@
+"""GET /api/v1/analytics/query + /export — typed-params analytics over run_daily_facts (ADR 020).
+
+The backend is the SOLE bucketing authority: day/hour/ISO-week bucketing and
+zero-fill happen in the shared service (``modulo.core.analytics.service``),
+never on the client. Tenant isolation relies on the EXPLICIT
+``organisation_id = :org`` predicate injected by the SQL builder (modulo_app is
+NOBYPASSRLS on Postgres and the ORM tenant filter is NOT registered there) — RLS
+via ``set_rls_org`` is a further defense-in-depth, and the explicit predicate is
+the control on the analytics writes. Every request sets a
+bounded ``statement_timeout`` so a runaway date range degrades to a clean 503
+instead of hogging a pooled connection.
+
+The route is a thin adapter over the service: it maps the service's typed
+``AnalyticsError`` exceptions to HTTP status codes and passes the query params
+through unchanged. The ``query_analytics`` MCP tool shares the same service.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import logging
+import uuid
+from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from starlette import status as http_status
+from starlette.responses import StreamingResponse
+
+from farna.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
+from farna.api.db_error_handling import prime_stream, raise_session_contract_error, reemit_primed_stream
+from farna.api.dependencies import get_or_create_engine, require_feature, require_permission
+from farna.auth.jwt import TenantPrincipal
+from farna.core.analytics.builder import (
+    AnalyticsDimension,
+    AnalyticsGroupBy,
+    AnalyticsStatus,
+    AnalyticsTriggerType,
+)
+from farna.core.analytics.capacity import CapacityParams, run_capacity_query
+from farna.core.analytics.guardrails import run_guardrail_scorecard
+from farna.core.analytics.service import (
+    EXPORT_COLUMN_NAMES,
+    AnalyticsDatabaseError,
+    AnalyticsError,
+    AnalyticsMigrationRequiredError,
+    AnalyticsParams,
+    AnalyticsQueryTimeoutError,
+    AnalyticsRateLimitedError,
+    AnalyticsValidationError,
+    export_facts,
+    run_analytics_query,
+    run_concurrency_query,
+    stream_export_facts,
+)
+from farna.db.models.team_membership import TeamMembership
+from farna.db.rls import set_rls_org
+from farna.settings import Settings, get_settings
+
+_CODE_ANALYTICS_QUERY = "analytics.query"
+
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+
+# Export pagination bounds (FAR-102, Part D).
+_EXPORT_DEFAULT_LIMIT = 500
+_EXPORT_MAX_LIMIT = 5000
+
+# Scan export media types — the whole matching set is streamed in ONE response.
+_SCAN_NDJSON_MEDIA_TYPE = "application/x-ndjson"
+
+
+class AnalyticsBucket(BaseModel):
+    date: str
+    key: str | None = None
+    count: int = 0
+    total_cost_usd: float | None = None
+    total_tokens: int | None = None
+    avg_duration_ms: float | None = None
+    success_rate: float | None = None
+    failure_count: int = 0
+    stall_count: int = 0
+    # FAR-604 capacity-starvation sub-bucket: failures whose error code is a
+    # capacity code (capacity_timeout / pipeline_capacity / org_capacity_limited),
+    # reported SEPARATELY from the generic failure_count, plus the queue-wait
+    # duration those runs endured (completed_at - created_at).
+    capacity_failure_count: int = 0
+    avg_capacity_wait_ms: float | None = None
+    avg_queue_wait_ms: float | None = None
+    # FAR-1421 claim→dispatch latency, bucketed per trigger (dimension
+    # trigger_type / trigger_id): dispatch_phase_entered_at - created_at,
+    # falling back to started_at - created_at when the phase timestamp is
+    # NULL (pre-migration rows / no durable phase / purged-run backfills).
+    # NULL when the bucket has no sample — never 0 for "no data".
+    avg_dispatch_latency_ms: float | None = None
+    avg_final_idle_ms: float | None = None
+    avg_output_bytes: float | None = None
+    # FAR-1463: node-deadline watchdog firings summed across the bucket's runs
+    # (0 when nothing fired — a firing is recorded whether the kill
+    # re-dispatched or terminal-failed, so this is the observability signal the
+    # error_code dimension could never show: a re-dispatched firing nulls
+    # error_code). Count-field semantics: never NULL, 0 for an empty bucket.
+    node_deadline_watchdog_fired_count: int = 0
+
+
+class AnalyticsResponse(BaseModel):
+    group_by: str
+    dimension: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    # FAR-200 facts-freshness indicator: hours since the org's newest day with a
+    # TERMINAL-status fact row (None when the org has no terminal facts yet),
+    # and whether that lags > ~36h. The frontend surfaces a "stale data" notice
+    # when ``facts_stale`` is true.
+    facts_freshness_hours: float | None = None
+    facts_stale: bool = False
+    buckets: list[AnalyticsBucket]
+
+
+class ConcurrencyBucket(BaseModel):
+    """One slot-utilization bucket — max/avg concurrent active + queued runs.
+
+    ``key`` is always ``None`` (concurrency is an overall-series surface) and
+    ``pool_reference`` mirrors the top-level reference on every bucket — both
+    are surfaced so REST and the MCP tool return the identical schema.
+    """
+
+    date: str
+    key: str | None = None
+    max_active: int = 0
+    avg_active: float = 0.0
+    max_queued: int = 0
+    avg_queued: float = 0.0
+    pool_reference: int | None = None
+
+
+class ConcurrencyResponse(BaseModel):
+    group_by: str
+    date_from: str | None = None
+    date_to: str | None = None
+    pool_reference: int | None = None
+    buckets: list[ConcurrencyBucket]
+
+
+class CapacityLimits(BaseModel):
+    """The configured limits alongside the queue so a reader sees headroom."""
+
+    org_run_concurrency_limit: int | None = None
+    sandbox_concurrency_limit: int | None = None
+    sandbox_limit_is_default: bool = False
+
+
+class CapacityPendingByPipeline(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    pending_count: int = 0
+    oldest_pending_age_seconds: float | None = None
+    max_concurrent_runs: int | None = None
+
+
+class CapacityPending(BaseModel):
+    total: int = 0
+    oldest_pending_age_seconds: float | None = None
+    by_cause: dict[str, int] = Field(default_factory=dict)
+    by_pipeline: list[CapacityPendingByPipeline]
+
+
+class CapacityDrain(BaseModel):
+    created: int = 0
+    started: int = 0
+    completed: int = 0
+    ratio: float | None = None
+    baseline_depth: int = 0
+    baseline_oldest_pending_age_seconds: float | None = None
+    final_depth: int = 0
+    depth_change: int = 0
+    verdict: str
+
+
+class CapacityBinding(BaseModel):
+    """Which limit currently binds, and what lifting it would admit."""
+
+    scope: str
+    limit: int | None = None
+    in_use: int | None = None
+    headroom: int | None = None
+    pending_blocked: int = 0
+    admissible_if_raised: int = 0
+
+
+class CapacityQueueIfRaised(BaseModel):
+    pending_now: int = 0
+    admissible_if_binding_raised: int = 0
+    pending_after_raise: int = 0
+
+
+class CapacityAttribution(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    executing: int = 0
+    running: int = 0
+    parked: int = 0
+    oldest_executing_age_seconds: float | None = None
+    stale_heartbeat_count: int = 0
+
+
+class CapacityActiveHealth(BaseModel):
+    """Org ACTIVE-RUN health: cap utilisation vs completion rate (FAR-1343).
+
+    ``executing_total`` is the part of the gate total that genuinely holds a
+    slot (running/claimed/unknown); ``parked_total`` is human-waiting runs the
+    org gate counts but which are not executing. ``stall_suspected`` is the
+    leak/stall signature: the org cap fully held while nothing completed for
+    ``stall_intervals`` consecutive complete intervals.
+    """
+
+    org_run_limit: int | None = None
+    gate_total: int = 0
+    executing_total: int = 0
+    running_total: int = 0
+    parked_total: int = 0
+    cancelling_total: int = 0
+    utilisation: float | None = None
+    cap_held: bool = False
+    completions_in_window: int = 0
+    zero_completion_intervals: int = 0
+    stall_intervals: int = 3
+    stall_suspected: bool = False
+    stale_heartbeat_threshold_seconds: int = 1800
+    stale_heartbeat_count: int = 0
+    attribution: list[CapacityAttribution]
+
+
+class CapacitySeriesPipeline(BaseModel):
+    pipeline_id: str
+    pipeline_name: str | None = None
+    pending_depth: int = 0
+    oldest_pending_age_seconds: float | None = None
+
+
+class CapacitySeriesBucket(BaseModel):
+    interval_start: str
+    interval_end: str
+    created: int = 0
+    started: int = 0
+    completed: int = 0
+    pending_depth: int = 0
+    oldest_pending_age_seconds: float | None = None
+    drain_ratio: float | None = None
+    complete: bool = False
+    by_pipeline: list[CapacitySeriesPipeline]
+
+
+class CapacityResponse(BaseModel):
+    generated_at: str
+    window_start: str
+    window_seconds: int
+    interval_seconds: int
+    limits: CapacityLimits
+    pending: CapacityPending
+    drain: CapacityDrain
+    binding: CapacityBinding
+    queue_if_raised: CapacityQueueIfRaised
+    active_health: CapacityActiveHealth
+    series: list[CapacitySeriesBucket]
+
+
+class GuardrailScorecardScope(BaseModel):
+    """Run-level fire counts — how many runs in range carried/triggered guardrails."""
+
+    runs_with_guardrail: int
+    runs_with_violations: int
+    runs_blocked: int
+    first_try_pass_runs: int
+
+
+class GuardrailFireCounts(BaseModel):
+    """Guardrail-level aggregate buckets (summed across the per-run summaries)."""
+
+    bound: int
+    evaluated: int
+    passed: int
+    violated: int
+    observed: int
+    errored: int
+    redacted: int
+    skipped: int
+    expected_skips: int
+    unexpected_skips: int
+
+
+class GuardrailRates(BaseModel):
+    """ADVISORY rates only — the raw detection rate plus the separated
+    first-try-pass view. Every metric is labelled advisory and never gates
+    autonomy (a raw-pass-rate gate is FAR-218, deferred)."""
+
+    raw_violation_rate: float | None = None
+    first_try_pass_rate: float | None = None
+    note: str = ""
+
+
+class GuardrailSelfCorrection(BaseModel):
+    """Single-node correction outcomes (FAR-210 T2b trail).
+
+    Reported SEPARATELY from first-try-pass — never merged into a single pass
+    rate (Goodhart: retries inflate pass rates; retrying a violation makes a
+    naive pass rate look better than the raw detection did).
+    """
+
+    corrections_total: int
+    converged_clean: int
+    escalated_hitl: int
+    budget_exhausted: int
+    dismissed: int
+    in_flight: int
+    corrected_pass_rate: float | None = None
+    note: str = ""
+
+
+class GuardrailEvasionBandDrift(BaseModel):
+    """Advisory drift signal (canary-band concept, FAR-223 PR C).
+
+    Tracks when ``unexpected_skips`` or the ``errored`` bucket move outside a
+    soft band vs the historical baseline. ADVISORY ONLY — never a gate, never
+    blocks anything, never changes CI enforcement.
+    """
+
+    current_errored_rate: float | None = None
+    baseline_errored_rate: float | None = None
+    baseline_window_days: int = 0
+    unexpected_skips_total: int = 0
+    drift_detected: bool = False
+    drift_indicator: str = "in_band"
+    advisory_only: bool = True
+    note: str = ""
+
+
+class GuardrailScorecardResponse(BaseModel):
+    """Advisory guardrail scorecard (FAR-217).
+
+    Read-only, org-scoped, and deliberately advisory: no metric here gates
+    autonomy, blocks a run, or changes CI enforcement.
+    """
+
+    advisory_only: bool = True
+    date_from: str
+    date_to: str
+    scope: GuardrailScorecardScope
+    fire_counts: GuardrailFireCounts
+    rates: GuardrailRates
+    self_correction: GuardrailSelfCorrection
+    evasion_band_drift: GuardrailEvasionBandDrift
+    generated_at: str
+
+
+class AnalyticsExportItem(BaseModel):
+    """One raw fact row — all fact columns, serialised to JSON-safe values."""
+
+    run_id: str
+    run_date: str
+    team_id: str | None = None
+    team_name: str | None = None
+    pipeline_id: str | None = None
+    pipeline_name: str | None = None
+    folder_id: str | None = None
+    trigger_type: str
+    status: str
+    total_cost_usd: float | None = None
+    total_tokens: int | None = None
+    duration_ms: int | None = None
+    error_code: str | None = None
+    claim_count: int | None = None
+    queue_wait_ms: int | None = None
+    final_idle_ms: int | None = None
+    cancellation_requested: bool | None = None
+    dispatcher: str | None = None
+    node_count: int | None = None
+    sandbox_agent_node_count: int | None = None
+    max_node_timeout_seconds: int | None = None
+    parent_run_id: str | None = None
+    snapshot_id: str | None = None
+    run_number: int | None = None
+    output_bytes: int | None = None
+    rate_limited: bool | None = None
+    # The JSON surface validates through this model, so every column in the
+    # service's ``_EXPORT_COLUMNS`` must exist here too or pydantic silently
+    # drops it — CSV/NDJSON would carry the value and JSON would not. Parity is
+    # asserted by ``tests/unit/api/test_analytics_export_contract.py``.
+    batch_id: str | None = None
+    telemetry_bytes: int | None = None
+    dispatched_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    total_queue_wait_ms: int | None = None
+    workspace_inputs_count: int | None = None
+    enforcement_native_count: int | None = None
+    enforcement_verbatim_count: int | None = None
+    enforcement_repair_count: int | None = None
+    enforcement_wasted_count: int | None = None
+    # FAR-1421 claim→dispatch latency provenance — the fields
+    # avg_dispatch_latency_ms is bucketed from (dispatch_phase_entered_at -
+    # created_at, else started_at - created_at).
+    trigger_id: str | None = None
+    dispatch_phase: str | None = None
+    dispatch_phase_entered_at: str | None = None
+    # FAR-1463: node-deadline watchdog firings per run — the raw per-run
+    # counterpart of the bucket's summed metric.
+    node_deadline_watchdog_fired_count: int | None = None
+    # FAR-1141 / ADR-042: the run's execution origin ('dispatched' / NULL) —
+    # an export is a claim-ready run surface, so the raw facts an auditor pulls
+    # must be provenance-typed like every other run read surface. Nullable:
+    # pre-column rows and runs Modulo executed itself read NULL.
+    execution_origin: str | None = None
+    # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
+    # under (from run.autonomy_level_applied; NULL when none).
+    autonomy_level: str | None = None
+    # FAR-707: the run's terminal classification was a business-expected
+    # (``benign``) outcome — nullable, since pre-column rows and benign
+    # signatures that didn't exist at write time read NULL, treated as "not
+    # benign". Carried so the raw-facts export reproduces the failure-rate
+    # figures the analytics surfaces report (which exclude benign rows).
+    benign: bool | None = None
+    created_at: str
+
+
+class AnalyticsExportResponse(BaseModel):
+    items: list[AnalyticsExportItem]
+    total: int
+    offset: int
+    limit: int
+
+
+def _analytics_session_factory(settings: Settings) -> async_sessionmaker[Any]:
+    """Dedicated sessionmaker over the EXISTING shared engine (autobegin=False)."""
+    return async_sessionmaker(get_or_create_engine(settings), expire_on_commit=False, autobegin=False)
+
+
+def _build_params(
+    *,
+    group_by: AnalyticsGroupBy,
+    auto_granularity: bool,
+    dimension: AnalyticsDimension | None,
+    trigger_type: AnalyticsTriggerType | None,
+    status: AnalyticsStatus | None,
+    pipeline_ids: tuple[uuid.UUID, ...],
+    error_code: str | None,
+    folder_id: uuid.UUID | None,
+    date_from: Any,
+    date_to: Any,
+    limit: int,
+) -> AnalyticsParams:
+    return AnalyticsParams(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=pipeline_ids,
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+
+
+def _analytics_query_filters(
+    group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
+    auto_granularity: bool = Query(False),
+    dimension: AnalyticsDimension | None = Query(None),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    limit: int = Query(1000, ge=1, le=1000),
+) -> AnalyticsParams:
+    return _build_params(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+
+
+def _analytics_export_filters(
+    dimension: AnalyticsDimension | None = Query(None),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    limit: int = Query(_EXPORT_DEFAULT_LIMIT, ge=1, le=_EXPORT_MAX_LIMIT),
+) -> AnalyticsParams:
+    return _build_params(
+        group_by=AnalyticsGroupBy.DAY,
+        auto_granularity=False,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+
+
+def _analytics_scan_filters(
+    dimension: AnalyticsDimension | None = Query(None),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+) -> AnalyticsParams:
+    """Scan filters — the same typed surface as export, minus the pagination knob.
+
+    A scan streams the WHOLE matching set, so there is deliberately no
+    ``offset``/``limit``; the server keyset-paginates internally.
+    """
+    return _build_params(
+        group_by=AnalyticsGroupBy.DAY,
+        auto_granularity=False,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=0,
+    )
+
+
+def _require_org(principal: TenantPrincipal) -> uuid.UUID:
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="Analytics requires an organisation context",
+        )
+    return org_id
+
+
+async def _resolve_scoped_team_ids(
+    factory: async_sessionmaker[Any],
+    *,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> tuple[uuid.UUID, ...] | None:
+    """Resolve the caller's team boundary for analytics reads (#1795).
+
+    An org admin is NOT team-scoped (returns ``None`` = unconstrained).
+    Every other caller gets the tuple of their OWN team-membership ids,
+    resolved inside a session pinned to the caller's org (the membership read
+    needs the org RLS context). ``fail closed``: a DB failure is a 503, never
+    an unconstrained boundary — a missing boundary would silently broaden the
+    query past the team ring the membership should enforce.
+    """
+    if principal.org_role == "admin":
+        return None
+    account_id = principal.account_id
+    if account_id is None:
+        return ()
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            rows = await session.execute(
+                select(TeamMembership.team_id).where(
+                    TeamMembership.account_id == account_id,
+                    TeamMembership.organisation_id == org_id,
+                )
+            )
+            return tuple(rows.scalars().all())
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "analytics._resolve_scoped_team_ids")
+        _log.exception("analytics.route.team_boundary_db_error", extra={"org_id": str(org_id)})
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+
+def _map_service_error(exc: Exception) -> HTTPException:
+    """Map a typed service error to the REST HTTP response."""
+    if isinstance(exc, AnalyticsRateLimitedError):
+        return HTTPException(
+            status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+        )
+    if isinstance(exc, AnalyticsValidationError):
+        return HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.detail)
+    if isinstance(exc, AnalyticsQueryTimeoutError):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    if isinstance(exc, AnalyticsMigrationRequiredError):
+        return HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc),
+        )
+    if isinstance(exc, AnalyticsDatabaseError):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    _log.exception("analytics.route.unexpected_error")
+    return HTTPException(
+        status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_UNEXPECTED_ERROR,
+    )
+
+
+@router.get("/query")
+async def analytics_query(
+    params: AnalyticsParams = Depends(_analytics_query_filters),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> AnalyticsResponse:
+    """Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
+
+    ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
+    request. ``error_code`` filters to a specific failure code and doubles as a
+    group-by dimension (``dimension=error_code``); ``dimension=trigger_type`` /
+    ``dimension=trigger_id`` group the series per trigger, which is how the
+    claim→dispatch latency metric (``avg_dispatch_latency_ms`` —
+    ``dispatch_phase_entered_at - created_at``, else ``started_at - created_at``)
+    is read per trigger. ``date_from``/``date_to``
+    accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
+    ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
+    from the effective range span (hour ≤3d, day ≤90d, week otherwise).
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        result = await run_analytics_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            team_ids=team_ids,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return AnalyticsResponse(**result)
+
+
+@router.get("/concurrency")
+async def analytics_concurrency(
+    group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
+    auto_granularity: bool = Query(False),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    limit: int = Query(1000, ge=1, le=1000),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> ConcurrencyResponse:
+    """Slot-utilization series: per-bucket max/avg concurrent active + queued runs.
+
+    Reconstructs "how many runs were running / queued at any instant" from the
+    retained fact instants (``[started_at, completed_at)`` overlap — a run
+    spanning a bucket boundary counts in both). ``pool_reference`` is the
+    binding concurrency cap for the query scope: a single filtered pipeline's
+    ``max_concurrent_runs`` (or a shared cap across equally-capped filtered
+    pipelines), else the org's ``run_concurrency_limit`` — and when no org cap
+    is configured, the tightest pipeline cap in scope (FAR-604).
+    ``dimension``/``error_code`` are not surfaced — there is no per-dimension
+    concurrency split.
+    """
+    org_id = _require_org(principal)
+    params = AnalyticsParams(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=None,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=None,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        result = await run_concurrency_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            team_ids=team_ids,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return ConcurrencyResponse(**result)
+
+
+@router.get("/capacity")
+async def analytics_capacity(
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    window_minutes: int = Query(60, ge=5, le=1440),
+    interval_seconds: int = Query(300, ge=60, le=3600),
+    stall_intervals: int = Query(3, ge=1, le=12),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> CapacityResponse:
+    """Capacity / queue-pressure observability (FAR-1343).
+
+    Answers "is my queue draining, and if not, which limit is holding it?" plus
+    "is the org's active-run resource healthy?" from one read surface:
+
+    * per-pipeline and org-wide pending depth, oldest-pending age and the
+      created/started/completed counts over the window (the drain rate);
+    * a cause breakdown for the pending queue (pipeline capacity vs org run
+      capacity vs org sandbox capacity, from the canonical capacity markers);
+    * the configured limits, the limit currently binding, and how many pending
+      runs would become admissible if that limit were raised;
+    * org ACTIVE-RUN health — cap utilisation vs completion rate and the
+      "cap fully held AND completions ≈ 0 for K consecutive intervals"
+      leak/stall signature with per-pipeline attribution.
+
+    **Observability only — signal, never a refusal.** A repeated ``pipeline_id``
+    narrows the queue, drain and series sections; the ACTIVE-RUN health totals
+    are always org-wide (their denominator is the org cap), and its
+    per-pipeline attribution lists only the pipelines visible to the caller's
+    team scope. ``window_minutes`` bounds the scan; an oversized scan is a 422
+    asking the caller to narrow it, never a silently truncated series.
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        params = CapacityParams(
+            window_minutes=window_minutes,
+            interval_seconds=interval_seconds,
+            stall_intervals=stall_intervals,
+            pipeline_ids=tuple(pipeline_id or ()),
+            team_ids=team_ids,
+        )
+        result = await run_capacity_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return CapacityResponse(**result)
+
+
+@router.get("/guardrails")
+async def analytics_guardrails(
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> GuardrailScorecardResponse:
+    """Advisory guardrail scorecard (FAR-217) — read-only, never a gate.
+
+    Aggregates the per-run guardrail_summary telemetry (fire counts, raw
+    detection rate, first-try-pass), the single-node self-correction trail
+    (converged clean / escalated to HITL / budget-exhausted, reported
+    SEPARATELY from first-try-pass), and an advisory evasion-band drift signal
+    (unexpected skips + errored rate vs baseline). Every metric is advisory:
+    nothing here gates autonomy, blocks a run, or changes CI enforcement.
+    ``date_from``/``date_to`` accept bare dates or ISO datetimes like the other
+    analytics endpoints.
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        result = await run_guardrail_scorecard(
+            org_id=org_id,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            date_from=date_from,
+            date_to=date_to,
+            team_ids=team_ids,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return GuardrailScorecardResponse(**result)
+
+
+@router.get("/export", response_model=AnalyticsExportResponse)
+async def analytics_export(
+    format: str = Query("json", pattern="^(json|csv)$"),
+    offset: int = Query(0, ge=0),
+    params: AnalyticsParams = Depends(_analytics_export_filters),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> Response:
+    """Raw fact rows (no bucketing) filtered by the same typed params.
+
+    Paginated via ``offset``/``limit`` (default 500, max 5000), ordered by
+    ``run_date``/``created_at``. ``format=json`` (default) returns structured
+    rows; ``format=csv`` returns a Content-Disposition attachment with one row
+    per fact and one column per fact field. ``dimension`` is accepted for
+    surface parity but ignored — export has no bucketing.
+    """
+    org_id = _require_org(principal)
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+        result = await export_facts(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            offset=offset,
+            limit=params.limit,
+            team_ids=team_ids,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+
+    if format == "csv":
+        return _csv_response(result)
+    return Response(
+        content=AnalyticsExportResponse(**result).model_dump_json(),
+        media_type="application/json",
+    )
+
+
+def _csv_response(result: dict[str, Any]) -> Response:
+    """Render an export result as a CSV attachment with a sanitized filename."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(EXPORT_COLUMN_NAMES), extrasaction="ignore")
+    writer.writeheader()
+    for item in result["items"]:
+        writer.writerow(item)
+    filename = "analytics-export.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+def _csv_stream_line(*, header: bool, item: dict[str, Any] | None = None) -> str:
+    """One properly-quoted CSV line for the scan stream (header xor row)."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    if header:
+        writer.writerow(list(EXPORT_COLUMN_NAMES))
+    elif item is not None:
+        writer.writerow([item.get(name, "") for name in EXPORT_COLUMN_NAMES])
+    return buffer.getvalue()
+
+
+async def _scan_body(
+    stream: AsyncIterator[dict[str, Any]],
+    *,
+    first: dict[str, Any] | None,
+    format: str,
+) -> AsyncIterator[str]:
+    """Chunk the primed scan generator into the wire format (NDJSON or CSV).
+
+    A thin format adapter over the shared
+    :func:`modulo.api.db_error_handling.reemit_primed_stream` — the
+    first-item-then-the-rest loop lives in ONE place for all three streaming
+    exports. ``first`` is the row already fetched by the route to surface
+    pre-stream errors (validation/rate-limit/migration/database) as a proper
+    HTTP status; it is re-emitted here so no row is lost.
+    """
+    if format == "csv":
+        body = reemit_primed_stream(
+            stream,
+            first,
+            lambda item: _csv_stream_line(header=False, item=item),
+            header=_csv_stream_line(header=True),
+        )
+    else:
+        body = reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
+    async for chunk in body:
+        yield chunk
+
+
+def _map_analytics_domain_error(exc: Exception) -> HTTPException | None:
+    """Preserve the typed analytics service verdict ahead of the shared classifier.
+
+    Returned to :func:`~modulo.api.db_error_handling.prime_stream` as its
+    ``map_domain_error`` seam: a typed ``AnalyticsError`` keeps its existing
+    REST mapping (rate-limit -> 429, validation -> 422, migration -> 501,
+    timeout/database -> 503); anything else returns ``None`` so the shared DB
+    classifier's arms (409/422/501/503/re-raise/500) apply unchanged.
+    """
+    if isinstance(exc, AnalyticsError):
+        return _map_service_error(exc)
+    return None
+
+
+@router.get("/scan")
+async def analytics_scan(
+    format: str = Query("json", pattern="^(json|csv)$"),
+    params: AnalyticsParams = Depends(_analytics_scan_filters),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> Response:
+    """Server-side scan export: stream the WHOLE matching set in ONE response.
+
+    The deferral companion to ``/export``: the same raw fact rows, typed filters,
+    org + team-boundary scoping, rate limit and statement timeout — but no
+    ``offset``/``limit`` pagination. The server keyset-paginates internally over
+    the stable ``(run_date, created_at, run_id)`` order, so memory stays bounded
+    for any org size while the client receives the entire result as a single
+    streaming body: ``format=json`` (default) is NDJSON (one JSON object per
+    line), ``format=csv`` is a Content-Disposition CSV attachment. ``dimension``
+    is accepted for surface parity but ignored (a scan has no bucketing).
+    """
+    org_id = _require_org(principal)
+    # The team-boundary resolver owns its own DB-error mapping (503 fail-closed
+    # in ``_resolve_scoped_team_ids``); preserve its existing fallback for a
+    # non-HTTP escape unchanged.
+    try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_service_error(exc) from None
+    stream = stream_export_facts(
+        org_id=org_id,
+        params=params,
+        factory=_analytics_session_factory(settings),
+        settings=settings,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        team_ids=team_ids,
+    )
+    # Prime the generator so validation / rate-limit / migration / database
+    # errors surface as a proper HTTP status BEFORE the stream starts. Typed
+    # ``AnalyticsError`` keep their own verdict via the domain-error seam;
+    # everything else goes through the shared DB classifier.
+    first = await prime_stream(stream, "analytics.scan", map_domain_error=_map_analytics_domain_error)
+
+    body = _scan_body(stream, first=first, format=format)
+    if format == "csv":
+        return StreamingResponse(
+            body,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="analytics-scan.csv"'},
+        )
+    return StreamingResponse(body, media_type=_SCAN_NDJSON_MEDIA_TYPE)

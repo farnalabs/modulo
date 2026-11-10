@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.assistant.config_service import AssistantConfig, AssistantConfigService
+from farna.core.assistant.config_service import AssistantConfig, AssistantConfigService
 
 
 def _stored_config(mock_session: AsyncMock, value: object) -> None:
@@ -171,7 +171,7 @@ class TestAssistantConfigServiceUpdateConfig:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        with patch("modulo.core.assistant.config_service.update_config", new_callable=AsyncMock) as mock_set:
+        with patch("farna.core.assistant.config_service.update_config", new_callable=AsyncMock) as mock_set:
             config = AssistantConfig(
                 system_prompt="New system prompt",
                 default_provider="deepseek",
@@ -192,7 +192,7 @@ class TestAssistantConfigServiceUpdateConfig:
     ) -> None:
         with (
             patch(
-                "modulo.core.assistant.config_service.update_config",
+                "farna.core.assistant.config_service.update_config",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("write failed"),
             ),
@@ -401,7 +401,7 @@ class TestAssistantConfigServiceCheckAccess:
     ) -> None:
         user_id = uuid.uuid4()
         with patch(
-            "modulo.core.assistant.config_service.get_config",
+            "farna.core.assistant.config_service.get_config",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -417,7 +417,7 @@ class TestAssistantConfigServiceCheckAccess:
         user_id = uuid.uuid4()
         with (
             patch(
-                "modulo.core.assistant.config_service.get_config",
+                "farna.core.assistant.config_service.get_config",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),

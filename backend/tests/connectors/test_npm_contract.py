@@ -7,7 +7,7 @@ to re-record against the live registry.
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorQuery, ConnectorType
+from farna.connectors.base import ConnectorQuery, ConnectorType
 
 
 @pytest.mark.vcr
@@ -37,7 +37,7 @@ def test_npm_connector_type(npm_connector):
 
 async def test_npm_health_check(npm_connector, monkeypatch):
     """Health check reports registry reachability — stubbed offline via MockTransport."""
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"objects": []})
@@ -59,7 +59,7 @@ async def test_npm_health_check(npm_connector, monkeypatch):
 
 async def test_npm_write_raises(npm_connector):
     """npm connector is read-only — write() must raise."""
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with pytest.raises(ValueError, match="read-only"):
         await npm_connector.write(ConnectorPayload(resource="package", data={"name": "test"}))

@@ -68,7 +68,7 @@ _CLASS_B_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^frontend/src/"),
     re.compile(r"^fly\.toml$"),
     re.compile(r"^deploy/"),
-    re.compile(r"^backend/src/modulo/db/migrations/"),
+    re.compile(r"^backend/src/farna/db/migrations/"),
 ]
 
 

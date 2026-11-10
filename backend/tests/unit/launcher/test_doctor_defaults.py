@@ -14,8 +14,8 @@ from typing import ClassVar
 
 import pytest
 
-from modulo.launcher import doctor as doctor_module
-from modulo.launcher.doctor import (
+from farna.launcher import doctor as doctor_module
+from farna.launcher.doctor import (
     DoctorProbes,
     _cwd_env_file,
     _parse_listeners_from_proc,
@@ -26,8 +26,8 @@ from modulo.launcher.doctor import (
     check_postgres,
     default_probes,
 )
-from modulo.launcher.secrets_file import LauncherSecrets
-from modulo.launcher.state import LauncherState, save_state
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import LauncherState, save_state
 
 
 def _state() -> LauncherState:
@@ -173,7 +173,7 @@ def test_default_probes_postgres_probe_reachable(tmp_path: Path, monkeypatch: py
 
     import asyncpg
 
-    import modulo.db.bootstrap_role as br
+    import farna.db.bootstrap_role as br
 
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
@@ -189,7 +189,7 @@ def test_default_probes_postgres_probe_reachable(tmp_path: Path, monkeypatch: py
 def test_default_probes_role_violations_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncpg
 
-    import modulo.db.bootstrap_role as br
+    import farna.db.bootstrap_role as br
 
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
@@ -232,7 +232,7 @@ def test_default_probes_migrations_at_head_probe(tmp_path: Path, monkeypatch: py
 
     import sqlalchemy.ext.asyncio as sae
 
-    import modulo.db.health_checks as hc
+    import farna.db.health_checks as hc
 
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
@@ -246,7 +246,7 @@ def test_default_probes_migrations_at_head_probe(tmp_path: Path, monkeypatch: py
 
 
 def test_default_probes_launcher_running_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.supervisor as sup
+    import farna.launcher.supervisor as sup
 
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
@@ -260,7 +260,7 @@ def test_default_probes_launcher_running_probe(tmp_path: Path, monkeypatch: pyte
 
 
 def test_default_probes_env_file_pinned_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.settings as settings
+    import farna.settings as settings
 
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)

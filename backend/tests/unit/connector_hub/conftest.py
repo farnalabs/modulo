@@ -22,7 +22,7 @@ def _reset_skip_warn_registry():
     one module can never silence the first-traceback logging another module
     asserts on.
     """
-    from modulo.core.connector_hub import _SKIP_WARN_SEEN
+    from farna.core.connector_hub import _SKIP_WARN_SEEN
 
     _SKIP_WARN_SEEN.clear()
     yield
@@ -35,7 +35,7 @@ def _pin_settings_for_tenant_paths() -> None:
     # shared Redis budget look unconfigured so the tenant path resolves None.
     settings = MagicMock()
     settings.redis_url = None
-    patcher = patch("modulo.settings.get_settings", return_value=settings)
+    patcher = patch("farna.settings.get_settings", return_value=settings)
     patcher.start()
     yield
     patcher.stop()
@@ -122,7 +122,7 @@ def otel_span_exporter():
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from modulo.otel_bridge.export import setup_otel
+    from farna.otel_bridge.export import setup_otel
 
     setup_otel(service_name="connector-hub-tests")
     span_exporter = InMemorySpanExporter()

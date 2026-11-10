@@ -31,7 +31,7 @@ Feature: Plugin Registry
   Scenario: Plugin discovery on startup
     Given no plugins are initially registered
     When the plugin registry discovers plugins
-    Then entry points in "modulo.connectors" and "modulo.model_backends" are scanned
+    Then entry points in "farna.connectors" and "farna.model_backends" are scanned
     And discovered plugins are available via list_plugins
 
   Scenario: Plugin manifest validation

@@ -24,13 +24,13 @@ from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
-from modulo.api.exception_handlers import (
+from farna.api.exception_handlers import (
     http_exception_handler,
     unhandled_exception_handler,
     union_allow_header,
     validation_exception_handler,
 )
-from modulo.api.models.problem import ProblemDetail, ProblemException, ProblemType
+from farna.api.models.problem import ProblemDetail, ProblemException, ProblemType
 
 
 class _Request:
@@ -210,7 +210,7 @@ class TestUnhandledExceptionHandler:
         assert "request_id" not in body
 
     def test_logs_exception_with_structured_context(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.ERROR, logger="modulo.api.exception_handlers"):
+        with caplog.at_level(logging.ERROR, logger="farna.api.exception_handlers"):
             _run_unhandled(_Request("rid-9", path="/x"), ValueError("bad value"))
         assert any("exception_handlers.unhandled_exception" in r.getMessage() for r in caplog.records)
         assert any(r.exc_info is not None for r in caplog.records)
@@ -220,7 +220,7 @@ class TestUnhandledExceptionHandler:
             raise RuntimeError("cannot even build problem")
 
         monkeypatch.setattr(
-            "modulo.api.exception_handlers.ProblemDetail.from_type",
+            "farna.api.exception_handlers.ProblemDetail.from_type",
             classmethod(_boom),
         )
         resp = _run_unhandled(_Request("rid-fallback"), RuntimeError("kaboom"))
@@ -335,7 +335,7 @@ class TestUnionAllowHeader:
 
 @pytest.fixture
 def client() -> TestClient:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return TestClient(app)
 
@@ -351,7 +351,7 @@ class TestAllowHeaderOnLiveApp:
 
     @pytest.mark.parametrize("path", ["/api/v1/libraries", "/api/v1/pipelines"])
     def test_options_405_advertises_every_documented_method(self, client: TestClient, path: str) -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         response = client.request("OPTIONS", path)
         assert response.status_code == 405

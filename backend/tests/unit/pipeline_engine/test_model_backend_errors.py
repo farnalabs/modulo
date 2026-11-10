@@ -7,7 +7,7 @@ error-code registry (map_legacy_code resolves the new codes, no harness.unknown
 fallback).
 """
 
-from modulo.core.pipeline_engine.error_codes import (
+from farna.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     class_for,
     expand_code_variants,
@@ -15,7 +15,7 @@ from modulo.core.pipeline_engine.error_codes import (
     known_error_codes,
     map_legacy_code,
 )
-from modulo.core.pipeline_engine.model_backend_errors import (
+from farna.core.pipeline_engine.model_backend_errors import (
     _INSUFFICIENT_FUNDS_PATTERN,
     _PROVIDER_BILLING_PATTERN,
     NON_RETRYABLE_PROVIDER_CODES,

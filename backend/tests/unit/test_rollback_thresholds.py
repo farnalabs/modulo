@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.core.pipeline_engine.error_codes import known_error_codes
-from modulo.core.rollback_thresholds import (
+from farna.core.pipeline_engine.error_codes import known_error_codes
+from farna.core.rollback_thresholds import (
     _SCRIPT_ANOMALY_ERROR_CODES,
     _count_claim_without_marker,
     _graph_has_script_mode_node,

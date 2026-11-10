@@ -15,14 +15,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.credential_issuer import (
+from farna.core.credential_issuer import (
     ISSUANCE_PROVENANCE_BROKER_ISSUED,
     ISSUANCE_PROVENANCE_MODULO_MINTED,
     IssuedRunCredential,
     ModuloCredentialIssuer,
     default_credential_issuer,
 )
-from modulo.util.uuid import coerce_uuid
+from farna.util.uuid import coerce_uuid
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = "11111111-1111-1111-1111-111111111111"
@@ -95,7 +95,7 @@ class TestCoerceUuid:
     """
 
     def test_issuer_reuses_the_shared_helper(self) -> None:
-        import modulo.core.credential_issuer as credential_issuer
+        import farna.core.credential_issuer as credential_issuer
 
         assert credential_issuer.coerce_uuid is coerce_uuid
 
@@ -148,8 +148,8 @@ class TestModuloCredentialIssuer:
             return MagicMock(), _FAKE_KEY
 
         with (
-            patch("modulo.auth.api_key.mint_run_api_key", new=_mint),
-            patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+            patch("farna.auth.api_key.mint_run_api_key", new=_mint),
+            patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
             issued = await ModuloCredentialIssuer().issue_for_run(
                 session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
@@ -175,8 +175,8 @@ class TestModuloCredentialIssuer:
             return MagicMock(), _FAKE_KEY
 
         with (
-            patch("modulo.auth.api_key.mint_run_api_key", new=_mint),
-            patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+            patch("farna.auth.api_key.mint_run_api_key", new=_mint),
+            patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
             issued = await ModuloCredentialIssuer().issue_for_run(
                 session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
@@ -188,8 +188,8 @@ class TestModuloCredentialIssuer:
     async def test_issue_returns_none_when_mint_returns_none(self) -> None:
         _session, factory = _session_factory()
         with (
-            patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+            patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
             issued = await ModuloCredentialIssuer().issue_for_run(
                 session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
@@ -199,8 +199,8 @@ class TestModuloCredentialIssuer:
     async def test_issue_failure_is_swallowed(self) -> None:
         _session, factory = _session_factory()
         with (
-            patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(side_effect=RuntimeError("boom"))),
-            patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+            patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
             issued = await ModuloCredentialIssuer().issue_for_run(
                 session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
@@ -210,7 +210,7 @@ class TestModuloCredentialIssuer:
     async def test_revoke_for_run_delegates_to_revoke_run_api_key(self) -> None:
         run_id = uuid.UUID(_RUN_ID)
         org_id = uuid.UUID(_ORG_ID)
-        with patch("modulo.auth.api_key.revoke_run_api_key", new=AsyncMock(return_value=3)) as revoke:
+        with patch("farna.auth.api_key.revoke_run_api_key", new=AsyncMock(return_value=3)) as revoke:
             count = await ModuloCredentialIssuer().revoke_for_run(MagicMock(), run_id=run_id, org_id=org_id)
         assert count == 3
         assert revoke.await_args.kwargs["run_id"] == run_id

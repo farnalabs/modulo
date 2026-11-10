@@ -33,9 +33,9 @@ from sqlalchemy import DateTime, Index, Uuid
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 
-from modulo.db.models.collection_install import CollectionInstall
-from modulo.db.models.composite_template import CompositeTemplate
-from modulo.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.collection_install import CollectionInstall
+from farna.db.models.composite_template import CompositeTemplate
+from farna.db.models.library_primitive import LibraryPrimitive
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0310_library_cluster_db_hardening"
@@ -50,7 +50,7 @@ _0165_CHECKS = ("ck_library_primitive_download_count", "ck_library_primitive_rev
 # The four library_primitives JSON columns 0310 aligned to the jsonb variant.
 _LIBRARY_PRIMITIVE_JSON_COLUMNS = ("tags", "content_json", "manifest_pins", "trust_header")
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

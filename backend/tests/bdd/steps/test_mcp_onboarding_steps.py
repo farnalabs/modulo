@@ -63,9 +63,9 @@ def _dispatch_middleware(request: Request) -> int:
         return JSONResponse({})
 
     with (
-        patch("modulo.api.mcp_server.get_settings", return_value=make_settings()),
+        patch("farna.api.mcp_server.get_settings", return_value=make_settings()),
     ):
-        from modulo.api.mcp_server import McpAuthMiddleware
+        from farna.api.mcp_server import McpAuthMiddleware
 
         middleware = McpAuthMiddleware(app=MagicMock())
         return asyncio.run(middleware.dispatch(request, call_next)).status_code
@@ -83,7 +83,7 @@ def invalid_bearer_request(request) -> None:
 
 @when("the MCP tool registry is inspected")
 def mcp_registry_inspected(request) -> None:
-    from modulo.api.mcp_server import mcp
+    from farna.api.mcp_server import mcp
 
     request.node._mcp_tools = dict(getattr(mcp._tool_manager, "_tools", {}))
 

@@ -2,7 +2,7 @@
 
 These cover the ``session.no_autoflush`` path added in the fix for PR #473:
 
-    `backend/src/modulo/core/library_service/install.py`
+    `backend/src/farna/core/library_service/install.py`
 
 The ``no_autoflush`` block defers the autoflush triggered by the
 ``session.get`` lookups until the ``CollectionInstall`` provenance row has been
@@ -16,7 +16,7 @@ unit test of ``_stamp_install_id`` to keep the new-code coverage gate green.
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.library_service.install import _stamp_install_id
+from farna.core.library_service.install import _stamp_install_id
 
 
 def _make_session(*, lookup) -> MagicMock:

@@ -110,7 +110,7 @@ manifest's exact bytes). The current production key, `modulo-2026-a`, is
 provisioned in the shipped verifier and the release pipeline's
 `BUNDLE_MANIFEST_SIGNING_KEY` GitHub Actions secret. The next rotation slot is
 reserved and remains empty in both trust-store assemblies:
-`backend/src/modulo/launcher/manifest.py` `_TRUST_ROWS` and the installer's
+`backend/src/farna/launcher/manifest.py` `_TRUST_ROWS` and the installer's
 `TRUST_KEY_CURRENT_B64` / `TRUST_KEY_NEXT_B64` values in `scripts/install.sh`.
 
 No `bundle-v*` release has been published yet, so this does not claim that a

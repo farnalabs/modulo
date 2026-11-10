@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.artifacts.store import (
+from farna.core.artifacts.store import (
     ArtifactPointer,
     LocalArtifactStore,
     _encode_segment,
@@ -443,14 +443,14 @@ def test_finalize_cleanup_on_write_failure(tmp_path):
 
 def test_reset_store_clears_singleton():
     """reset_store clears the module-level singleton."""
-    from modulo.core.artifacts.store import get_store, reset_store
+    from farna.core.artifacts.store import get_store, reset_store
 
     # Ensure singleton is set
     store = get_store()
     assert store is not None
     # Reset it
     reset_store()
-    from modulo.core.artifacts.store import _store_instance as inst_after
+    from farna.core.artifacts.store import _store_instance as inst_after
 
     assert inst_after is None
 

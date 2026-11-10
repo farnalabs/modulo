@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import PipelineGraphNode
-from modulo.core.graph_validator import GraphValidator
+from farna.api.routes.pipelines import PipelineGraphNode
+from farna.core.graph_validator import GraphValidator
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _CI_TYPE = "github_actions_ci"
@@ -208,7 +208,7 @@ def test_dispatch_binding_to_the_ci_runner_family_label_is_rejected():
     dispatch binding persisted against it would raise ``Unknown connector type``
     at run time. The accept path must fail CLOSED on it instead.
     """
-    from modulo.connectors.base import connector_type_supports_dispatch
+    from farna.connectors.base import connector_type_supports_dispatch
 
     assert connector_type_supports_dispatch("ci_runner") is False
     payload = _dispatch_node_payload()
@@ -363,8 +363,8 @@ def test_every_write_surface_defaults_the_dispatch_verb_to_the_engine_verdict():
     """The API model and the ``modulo apply`` CLI model must persist EXACTLY the
     verb ``connector_binding_operation`` (the declared single source of truth)
     computes for the same raw node — one rule, one answer, on every surface."""
-    from modulo.cli.apply.models import ApplyGraphNode
-    from modulo.connectors.base import connector_binding_operation
+    from farna.cli.apply.models import ApplyGraphNode
+    from farna.connectors.base import connector_binding_operation
 
     raw = _raw_dispatch_node()
     engine_verdict = connector_binding_operation(
@@ -405,8 +405,8 @@ def test_each_write_surface_calls_the_shared_resolver_for_the_default():
     that hand-rolls the default again is exactly the drift FIX 6 removes."""
     import inspect
 
-    from modulo.api import mcp_server
-    from modulo.cli.apply.models import ApplyGraphNode
+    from farna.api import mcp_server
+    from farna.cli.apply.models import ApplyGraphNode
 
     surfaces = {
         "api/routes/pipelines.py": inspect.getsource(PipelineGraphNode._validate_dispatch_node),
@@ -430,7 +430,7 @@ class TestDispatchCapabilityCheckSkips:
     a crash. The ordinary binding checks report those shapes."""
 
     def _run(self, graph_json: Any, found: dict[uuid.UUID, Any] | None = None) -> Any:
-        from modulo.core.graph_validator._types import ValidationResult
+        from farna.core.graph_validator._types import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_dispatch_binding_capabilities(graph_json, found or {}, result)

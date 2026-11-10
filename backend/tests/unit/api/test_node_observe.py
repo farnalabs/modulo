@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -162,9 +162,9 @@ class TestObserveNode:
         obs = _make_observation()
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.observe_node", return_value=obs) as mock_observe,
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.observe_node", return_value=obs) as mock_observe,
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")
 
@@ -181,9 +181,9 @@ class TestObserveNode:
         obs = _make_observation()
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.observe_node", return_value=obs),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.observe_node", return_value=obs),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = operator_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")
 
@@ -192,8 +192,8 @@ class TestObserveNode:
 
     def test_runner_gets_403(self, runner_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.runs.get_run"),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run"),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = runner_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")
 
@@ -201,8 +201,8 @@ class TestObserveNode:
 
     def test_viewer_gets_403(self, viewer_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.runs.get_run"),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run"),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = viewer_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")
 
@@ -210,8 +210,8 @@ class TestObserveNode:
 
     def test_run_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=None),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=None),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/runs/{uuid.uuid4()}/nodes/planner/observe")
 
@@ -223,9 +223,9 @@ class TestObserveNode:
         obs = _make_observation()
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.observe_node", return_value=obs) as mock_observe,
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.observe_node", return_value=obs) as mock_observe,
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp1 = client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")
             resp2 = client.post(f"/api/v1/runs/{_RUN_ID}/nodes/planner/observe")

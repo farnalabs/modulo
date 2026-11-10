@@ -34,16 +34,16 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.api.main as main
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.schema import Schema, SchemaVersion
-from modulo.db.seed import SYSTEM_SCHEMAS
+import farna.api.main as main
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.seed import SYSTEM_SCHEMAS
 from tests.unit.api.test_main_coverage_gaps import _make_settings
 
-MAIN_LOGGER = "modulo.api.main"
+MAIN_LOGGER = "farna.api.main"
 
 ORG1 = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 ORG2 = uuid.UUID("00000000-0000-0000-0000-0000000000e2")
@@ -172,8 +172,8 @@ def _patch_seams(
     ``modulo.api.dependencies``, so patching the module attributes is what the
     real call site sees.
     """
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_engine", lambda *_a, **_kw: engine)
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_session_factory", lambda *_a, **_kw: factory)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", lambda *_a, **_kw: engine)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_session_factory", lambda *_a, **_kw: factory)
 
 
 async def _seed_orgs_and_admin(factory: async_sessionmaker[AsyncSession]) -> None:

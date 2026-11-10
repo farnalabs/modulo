@@ -2,8 +2,8 @@
 
 from sqlalchemy import CheckConstraint
 
-from modulo.db.enums import ModelBackendProvider
-from modulo.db.models.model_backend import _PROVIDER_VALUES, ModelBackend
+from farna.db.enums import ModelBackendProvider
+from farna.db.models.model_backend import _PROVIDER_VALUES, ModelBackend
 
 EXPECTED_PROVIDERS = frozenset(
     {

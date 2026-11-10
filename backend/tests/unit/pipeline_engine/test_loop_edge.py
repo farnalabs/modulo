@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.graph_validator import GraphValidator
+from farna.core.pipeline_engine.graph_cache import (
     _CACHE,
     _make_loop_counter_router,
     build_graph_from_json,
@@ -251,7 +251,7 @@ class TestBuildGraphWithLoop:
         update. This exercises the real seeding path ``execute()`` uses and
         asserts the graph reaches the default target.
         """
-        from modulo.core.pipeline_engine.executor import _seed_state
+        from farna.core.pipeline_engine.executor import _seed_state
 
         snapshot = MagicMock()
         snapshot.run_context_defaults = {}

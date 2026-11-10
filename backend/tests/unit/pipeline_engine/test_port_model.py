@@ -3,9 +3,9 @@
 import jmespath
 import pytest
 
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.core.pipeline_engine.executor import compute_retry_aware_topology_hash
-from modulo.core.pipeline_engine.port_resolver import (
+from farna.core.graph_validator._types import ValidationResult
+from farna.core.pipeline_engine.executor import compute_retry_aware_topology_hash
+from farna.core.pipeline_engine.port_resolver import (
     DEFAULT_INPUT_PORT,
     DEFAULT_OUTPUT_PORT,
     JOIN_NODE_TYPE,
@@ -425,7 +425,7 @@ def test_topology_hash_canonicalization_round_trip() -> None:
     hash identically once canonicalised — type-stable storage keeps the key
     stable across a PATCH round-trip."""
     g = _base_graph()
-    from modulo.api.routes.pipelines import _validate_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
 
     patched = _validate_retry_policy(
         {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0}}

@@ -58,7 +58,7 @@ def _scalar_result(value: Any) -> MagicMock:
 
 async def test_get_coverage_gaps_includes_deleted_at_filter():
     """get_coverage_gaps must add deleted_at IS NULL to the WHERE."""
-    from modulo.db.crud.variant_group import get_coverage_gaps
+    from farna.db.crud.variant_group import get_coverage_gaps
 
     pipeline_id = uuid.uuid4()
 
@@ -83,7 +83,7 @@ async def test_get_coverage_gaps_includes_deleted_at_filter():
 
 async def test_has_pipeline_default_evals_includes_deleted_at_filter():
     """has_pipeline_default_evals must add deleted_at IS NULL to the WHERE."""
-    from modulo.db.crud.variant_group import has_pipeline_default_evals
+    from farna.db.crud.variant_group import has_pipeline_default_evals
 
     pipeline_id = uuid.uuid4()
 

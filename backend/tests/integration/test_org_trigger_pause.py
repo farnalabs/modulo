@@ -22,7 +22,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -259,9 +259,9 @@ async def _post_webhook(client: AsyncClient, trigger_id: uuid.UUID, secret: str,
 
 @pytest_asyncio.fixture
 async def integration_client(db_url: str, db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -342,7 +342,7 @@ async def _reset_pauses(db_engine: AsyncEngine, org_a: uuid.UUID, org_b: uuid.UU
 @pytest.fixture(autouse=True)
 def _no_dispatch() -> Generator[None, None, None]:
     """Never actually dispatch runs during integration webhook tests."""
-    with patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None):
+    with patch("farna.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None):
         yield
 
 
@@ -442,7 +442,7 @@ async def test_race_backstop_engine_gate_commits_paused_event(
     # window opens). The engine's own real gate (ensure_triggers_resumable ->
     # settings_resolver.org_is_paused) still reads the DB, sees the paused org,
     # and raises — the route's inner catch then commits the paused event.
-    with patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock):
+    with patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock):
         resp = await integration_client.post(
             f"/api/v1/triggers/{trigger_a}/webhook",
             content=body,
@@ -503,7 +503,7 @@ async def test_cross_tenant_paused_a_accepted_b(
 async def test_validation_result_constraint_accepts_full_vocabulary(
     db_engine: AsyncEngine, org_a: uuid.UUID, trigger_a: uuid.UUID
 ) -> None:
-    from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
+    from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
     inserted_ids: list[str] = []
     async with db_engine.connect() as conn:
@@ -657,7 +657,7 @@ async def test_manual_run_created_while_paused(
     await _pause_via_api(integration_client, org_a, user_a, paused=True)
 
     before = await _count(db_engine, "runs", org_a)
-    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock):
         resp = await integration_client.post(
             "/api/v1/runs",
             json={"pipeline_id": str(pipeline_a), "input_payload": {}},

@@ -33,9 +33,9 @@ from typing import Any
 import httpx
 import respx
 
-from modulo.connectors.base import ConnectorBase
-from modulo.connectors.github import GitHubConnector
-from modulo.connectors.security import _MASK, CredentialRedactor
+from farna.connectors.base import ConnectorBase
+from farna.connectors.github import GitHubConnector
+from farna.connectors.security import _MASK, CredentialRedactor
 from tests.unit._source_scan import iter_source_text
 
 #: Classes allowed to rely on the no-credential default from
@@ -78,7 +78,7 @@ _VIOLATION_TOKENS = (
 
 def _connector_classes() -> list[type]:
     """Import every connector module; return all ConnectorBase subclasses."""
-    pkg = importlib.import_module("modulo.connectors")
+    pkg = importlib.import_module("farna.connectors")
     for module_info in pkgutil.walk_packages(pkg.__path__, prefix=pkg.__name__ + "."):
         importlib.import_module(module_info.name)
     seen: set[type] = set()
@@ -90,7 +90,7 @@ def _connector_classes() -> list[type]:
                 walk(sub)
 
     walk(ConnectorBase)
-    return [c for c in seen if c.__module__.startswith("modulo.connectors")]
+    return [c for c in seen if c.__module__.startswith("farna.connectors")]
 
 
 def _credential_recipe_origin(cls: type[ConnectorBase]) -> str:
@@ -308,7 +308,7 @@ def test_scanner_detects_planted_violations() -> None:
 
 def test_connector_source_contains_no_raw_echo_details() -> None:
     """Every real ``HealthResult``/``detail =`` region routes echoes through a redactor."""
-    pkg = importlib.import_module("modulo.connectors")
+    pkg = importlib.import_module("farna.connectors")
     root = pathlib.Path(pkg.__file__).parent  # type: ignore[arg-type, union-attr]
     assert root.is_dir(), f"connector package directory missing: {root}"
     offenders: list[str] = []

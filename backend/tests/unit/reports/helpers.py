@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.sql.elements import BinaryExpression
 
-from modulo.db.models.scheduled_report import ScheduledReport
+from farna.db.models.scheduled_report import ScheduledReport
 
 # Shared Slack webhook URLs for the reports tests — a single definition so the
 # quality and scheduler suites cannot drift apart.
@@ -227,18 +227,18 @@ def report_firing_env(session: MockSession) -> Iterator[None]:
     ``compute_next_send`` stack those patches on top in the same ``with`` block.
     """
     with (
-        patch("modulo.core.reports.scheduler._get_engine"),
+        patch("farna.core.reports.scheduler._get_engine"),
         patch(
-            "modulo.core.reports.scheduler.async_sessionmaker",
+            "farna.core.reports.scheduler.async_sessionmaker",
             return_value=MockSessionFactory(session),
         ),
-        patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.reports.scheduler._acquire_report_fire_lease",
+            "farna.core.reports.scheduler._acquire_report_fire_lease",
             new_callable=AsyncMock,
             return_value="lease-token",
         ),
-        patch("modulo.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
+        patch("farna.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
     ):
         yield
 
@@ -253,7 +253,7 @@ def patched_http_client(client: AsyncMock) -> Iterator[AsyncMock]:
     factory mock so tests that must inspect the construction call (e.g. the
     timeout pass-through contract) can assert on its kwargs.
     """
-    with patch("modulo.core.reports.scheduler.pinned_async_client", new=AsyncMock(return_value=client)) as pinned:
+    with patch("farna.core.reports.scheduler.pinned_async_client", new=AsyncMock(return_value=client)) as pinned:
         yield pinned
 
 
@@ -263,8 +263,8 @@ def patched_quality_delivery(client: AsyncMock) -> Iterator[MagicMock]:
     retry delays), retry sleeps stubbed, and ``httpx.AsyncClient`` hands out
     *client*. Yields the mocked client class for constructor assertions."""
     with (
-        patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 1),
-        patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+        patch("farna.core.reports.scheduler._REPORT_MAX_RETRIES", 1),
+        patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
         patched_http_client(client) as client_cls,
     ):
         yield client_cls

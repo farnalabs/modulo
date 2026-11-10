@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.product_analytics import consent as consent_module
-from modulo.core.product_analytics.consent import resolve_instance_analytics_switch
-from modulo.core.product_analytics.constants import (
+from farna.core.product_analytics import consent as consent_module
+from farna.core.product_analytics.consent import resolve_instance_analytics_switch
+from farna.core.product_analytics.constants import (
     ENV_INSTANCE_SWITCH,
     PARTNER_LICENSE_CLAIM,
     SWITCH_SOURCE_DEFAULT,

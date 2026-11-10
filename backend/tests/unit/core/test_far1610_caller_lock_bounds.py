@@ -33,9 +33,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from modulo.core.hitl_manager import GateNotFoundError, HITLManager
-from modulo.core.pipeline_engine.executor import AdmissionLockTimeoutError, PipelineExecutor, RunNotFoundError
-from modulo.core.pipeline_execution import _handle_executor_failure
+from farna.core.hitl_manager import GateNotFoundError, HITLManager
+from farna.core.pipeline_engine.executor import AdmissionLockTimeoutError, PipelineExecutor, RunNotFoundError
+from farna.core.pipeline_execution import _handle_executor_failure
 
 
 def _lock_timeout_error(statement: str = "UPDATE runs") -> OperationalError:
@@ -143,11 +143,11 @@ async def test_spend_ceiling_gate_bounds_before_the_terminal_write() -> None:
         return run
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=_update),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=_update),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
     ):
         halted = await PipelineExecutor._check_spend_ceiling_gate(
             fake_self, run_id=run.id, org_id=org.id, claim_token=None
@@ -169,15 +169,15 @@ async def test_spend_ceiling_gate_lock_timeout_is_fail_open_and_logged(
     fake_self = _fake_executor(_make_session(org))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(side_effect=_lock_timeout_error()),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        caplog.at_level("ERROR", logger="modulo.core.pipeline_engine.executor"),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        caplog.at_level("ERROR", logger="farna.core.pipeline_engine.executor"),
     ):
         halted = await PipelineExecutor._check_spend_ceiling_gate(
             fake_self, run_id=run.id, org_id=org.id, claim_token=None
@@ -221,12 +221,12 @@ async def test_check_capacity_bounds_before_the_claim_time_write() -> None:
         return run
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=_update),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=_update),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -261,13 +261,13 @@ async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalisin
     executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update),
+        caplog.at_level("WARNING", logger="farna.core.pipeline_engine.executor"),
         pytest.raises(AdmissionLockTimeoutError) as excinfo,
     ):
         await executor._check_capacity(
@@ -320,10 +320,10 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_none_on_lock_ti
     session.execute = AsyncMock(side_effect=_execute)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        caplog.at_level("WARNING", logger="farna.core.pipeline_engine.executor"),
     ):
         reset = await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
 
@@ -340,9 +340,9 @@ async def test_fenced_pending_reset_cancellation_propagates() -> None:
     session.execute = AsyncMock(side_effect=asyncio.CancelledError())
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(asyncio.CancelledError),
     ):
         await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
@@ -356,9 +356,9 @@ async def test_fenced_pending_reset_non_lock_failure_propagates() -> None:
     session.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(RuntimeError, match="connection reset"),
     ):
         await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
@@ -377,12 +377,12 @@ async def test_check_capacity_reset_cancellation_propagates() -> None:
     executor._fenced_pending_reset = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update),
         pytest.raises(asyncio.CancelledError),
     ):
         await executor._check_capacity(
@@ -425,12 +425,12 @@ async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(
     executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update),
         pytest.raises(AdmissionLockTimeoutError) as excinfo,
     ):
         await executor._check_capacity(
@@ -467,13 +467,13 @@ async def test_check_capacity_raised_reset_stays_unknown_and_names_both_possibil
     get_run_mock = AsyncMock(return_value=run)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
-        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=get_run_mock),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update),
+        caplog.at_level("WARNING", logger="farna.core.pipeline_engine.executor"),
         pytest.raises(AdmissionLockTimeoutError) as excinfo,
     ):
         await executor._check_capacity(
@@ -512,7 +512,7 @@ async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
     (asserted here so the new branch cannot widen).
     """
     fail_run = AsyncMock()
-    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+    with patch("farna.core.pipeline_execution.fail_run_terminal", fail_run):
         deferred = await _handle_executor_failure(
             MagicMock(),
             str(uuid.uuid4()),
@@ -524,7 +524,7 @@ async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
     assert deferred == {"status": "deferred"}
     fail_run.assert_not_awaited()
 
-    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+    with patch("farna.core.pipeline_execution.fail_run_terminal", fail_run):
         failed = await _handle_executor_failure(
             MagicMock(),
             str(uuid.uuid4()),
@@ -548,15 +548,15 @@ async def test_check_capacity_lock_timeout_retry_succeeds_and_spends_once() -> N
     bump = AsyncMock(return_value=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
         # Admission branch: no active run -> the slot is free.
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
         patch.object(executor, "_claim_run_and_audit", admit),
         # Imported lazily inside ``_claim_under_capacity`` from this module.
-        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", new=bump),
+        patch("farna.core.pipeline_execution.bump_execution_attempt_count", new=bump),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -578,13 +578,13 @@ async def test_check_capacity_non_lock_failure_still_propagates() -> None:
     executor = _capacity_executor(_begin_session())
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(side_effect=RuntimeError("connection reset")),
         ),
         pytest.raises(RuntimeError, match="connection reset"),
@@ -603,10 +603,10 @@ async def test_check_capacity_missing_run_raises_not_found() -> None:
     executor = _capacity_executor(_begin_session())
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=None)),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=None)),
         pytest.raises(RunNotFoundError),
     ):
         await executor._check_capacity(
@@ -625,11 +625,11 @@ async def test_check_capacity_cancelled_run_disappears_raises_not_found() -> Non
     executor = _capacity_executor(_begin_session())
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
         pytest.raises(RunNotFoundError),
     ):
         await executor._check_capacity(
@@ -647,12 +647,12 @@ async def test_check_capacity_declined_run_disappears_raises_not_found() -> None
     executor = _capacity_executor(_begin_session())
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
         pytest.raises(RunNotFoundError),
     ):
         await executor._check_capacity(
@@ -670,11 +670,11 @@ async def test_check_capacity_cancellation_propagates() -> None:
 
     with (
         patch(
-            "modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout",
+            "farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(asyncio.CancelledError),
     ):
         await executor._check_capacity(
@@ -704,13 +704,13 @@ async def test_resume_bounds_before_the_claim_write() -> None:
         order.append("get_run")
         return None
 
-    from modulo.core.pipeline_engine.executor import RunNotFoundError
+    from farna.core.pipeline_engine.executor import RunNotFoundError
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=_get_run),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=_get_run),
         pytest.raises(RunNotFoundError),
     ):
         await PipelineExecutor.resume(
@@ -744,9 +744,9 @@ async def test_execute_bounds_the_policy_gate_pin_transaction() -> None:
     fake_self._execute_policy_gate_pin = PipelineExecutor._execute_policy_gate_pin.__get__(fake_self)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
     ):
         result = await PipelineExecutor.execute(
             fake_self,
@@ -798,7 +798,7 @@ async def test_decide_bounds_before_the_decision_update() -> None:
         order.append("bound")
 
     with (
-        patch("modulo.core.hitl_manager.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.hitl_manager.set_mutation_row_lock_timeout", new=_bound),
         pytest.raises(GateNotFoundError),
     ):
         await mgr.approve(
@@ -822,7 +822,7 @@ async def test_claim_bounds_before_the_first_lock() -> None:
         order.append("bound")
 
     with (
-        patch("modulo.core.hitl_manager.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.hitl_manager.set_mutation_row_lock_timeout", new=_bound),
         pytest.raises(GateNotFoundError),
     ):
         await mgr.claim(
@@ -849,7 +849,7 @@ def test_finalize_cost_entry_point_issues_the_bound_first() -> None:
     FRESH transaction. FAR-1610 confirms — no change needed."""
     import inspect
 
-    from modulo.core.cost_controller import finalize
+    from farna.core.cost_controller import finalize
 
     source = inspect.getsource(finalize.finalize_cost)
     assert "set_mutation_row_lock_timeout(session)" in source

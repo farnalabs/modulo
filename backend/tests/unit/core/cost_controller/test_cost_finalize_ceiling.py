@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     FinalizeMetricSink,
     _emit_duplicate_terminal,
     _emit_finalize_deferred,
@@ -34,10 +34,10 @@ from modulo.core.cost_controller.finalize import (
     _MergedSets,
     _record_ledger_with_retry,
 )
-from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.organisation_cost_state import OrganisationCostState
-from modulo.db.models.run import Run
+from farna.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
+from farna.db.models.organisation import Organisation
+from farna.db.models.organisation_cost_state import OrganisationCostState
+from farna.db.models.run import Run
 
 
 @asynccontextmanager
@@ -88,12 +88,12 @@ def _cost_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumula
         if present
         else None
     )
-    return patch("modulo.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
+    return patch("farna.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
 
 
 def _accrual():
     """Patch the atomic cost-state accrual so unit tests never touch the DB."""
-    return patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=AsyncMock())
+    return patch("farna.core.cost_controller.finalize.increment_org_cumulative_spend", new=AsyncMock())
 
 
 async def test_spend_ceiling_gate_takes_cost_state_advisory_lock_not_org_row() -> None:
@@ -108,7 +108,7 @@ async def test_spend_ceiling_gate_takes_cost_state_advisory_lock_not_org_row() -
     """
     from sqlalchemy.dialects import postgresql
 
-    from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
+    from farna.core.cost_controller.finalize import _apply_spend_ceiling_gate
 
     org = _make_org()
     captured: list[object] = []
@@ -125,7 +125,7 @@ async def test_spend_ceiling_gate_takes_cost_state_advisory_lock_not_org_row() -
 
     run = _make_run()
     with (
-        patch("modulo.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()) as lock_cost,
+        patch("farna.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()) as lock_cost,
         _cost_state(present=True),
     ):
         skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
@@ -252,7 +252,7 @@ async def test_ceiling_refusal_preserves_explicit_cancelled_status() -> None:
 async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     """FAR-1025: an org row that vanished is treated as no ceiling — the gate
     returns ``(False, 0)`` so the ledger write proceeds without an accrual."""
-    from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
+    from farna.core.cost_controller.finalize import _apply_spend_ceiling_gate
 
     run = _make_run()
     result = MagicMock()
@@ -260,7 +260,7 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    with patch("modulo.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()):
+    with patch("farna.core.cost_controller.finalize.lock_org_cost_state", new=AsyncMock()):
         skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
             session,
             run,
@@ -281,12 +281,12 @@ async def test_within_ceilings_increments_org_cumulative() -> None:
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
         # The best-effort circuit-breaker check is out of scope here and would
         # otherwise issue real queries against the mock session.
-        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
         _accrual() as accrual,
     ):
         await _ledger_block(
@@ -325,10 +325,10 @@ async def test_missing_cost_state_row_uses_defaults_and_accrual_inserts_row() ->
     with (
         _cost_state(present=False),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
-        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
         _accrual() as accrual,
     ):
         await _ledger_block(
@@ -365,7 +365,7 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=RuntimeError("ledger write failed")),
         ),
         _accrual() as accrual,
@@ -391,10 +391,10 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
-        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
         _accrual() as accrual,
     ):
         await _ledger_block(
@@ -444,10 +444,10 @@ async def test_accrual_retry_reapplies_atomic_increment_without_orm_reread() -> 
 
     with (
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
-        patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
+        patch("farna.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
     ):
         ok, reason = await _record_ledger_with_retry(
             session,
@@ -487,7 +487,7 @@ async def test_record_ledger_rolls_back_savepoint_and_propagates_cancellation() 
 
     with (
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -527,7 +527,7 @@ async def test_ledger_path_lock_abort_is_reraised_not_reduced_escaped() -> None:
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=_SqlstateError("55P03")),
         ),
         pytest.raises(_SqlstateError),
@@ -574,11 +574,11 @@ async def test_non_lock_whole_tx_abort_reduced_escapes_with_bounded_fresh_txn() 
 
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
-        patch("modulo.core.cost_controller.finalize.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize.set_mutation_row_lock_timeout", new=lock_bound),
-        patch("modulo.core.cost_controller.finalize.guard_dual_write", new=lambda _s: _acm(None)),
+        patch("farna.core.cost_controller.finalize.set_rls_org", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.set_mutation_row_lock_timeout", new=lock_bound),
+        patch("farna.core.cost_controller.finalize.guard_dual_write", new=lambda _s: _acm(None)),
         patch(
-            "modulo.core.cost_controller.finalize.update_run_status",
+            "farna.core.cost_controller.finalize.update_run_status",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -612,7 +612,7 @@ async def test_record_ledger_skips_accrual_when_no_cents() -> None:
 
     with (
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(True, None)),
         ),
         _accrual() as accrual,
@@ -663,19 +663,19 @@ async def test_fallback_finalize_rereises_lock_abort_from_ledger_block() -> None
     session = AsyncMock()
     with (
         patch(
-            "modulo.core.cost_controller.finalize._apply_agent_budget_override",
+            "farna.core.cost_controller.finalize._apply_agent_budget_override",
             new=AsyncMock(return_value=("complete", None, None)),
         ),
         patch(
-            "modulo.core.cost_controller.finalize._fallback_write",
+            "farna.core.cost_controller.finalize._fallback_write",
             new=AsyncMock(return_value=Decimal("1.00")),
         ),
         patch(
-            "modulo.core.cost_controller.finalize._ledger_run_date",
+            "farna.core.cost_controller.finalize._ledger_run_date",
             new=MagicMock(return_value=date(2026, 6, 24)),
         ),
         patch(
-            "modulo.core.cost_controller.finalize._ledger_block",
+            "farna.core.cost_controller.finalize._ledger_block",
             new=AsyncMock(side_effect=_SqlstateError("40P01")),
         ),
         pytest.raises(_SqlstateError),
@@ -691,18 +691,18 @@ async def test_fallback_finalize_swallows_non_lock_ledger_error() -> None:
     ledger = AsyncMock(side_effect=RuntimeError("ledger boom"))
     with (
         patch(
-            "modulo.core.cost_controller.finalize._apply_agent_budget_override",
+            "farna.core.cost_controller.finalize._apply_agent_budget_override",
             new=AsyncMock(return_value=("complete", None, None)),
         ),
         patch(
-            "modulo.core.cost_controller.finalize._fallback_write",
+            "farna.core.cost_controller.finalize._fallback_write",
             new=AsyncMock(return_value=Decimal("1.00")),
         ),
         patch(
-            "modulo.core.cost_controller.finalize._ledger_run_date",
+            "farna.core.cost_controller.finalize._ledger_run_date",
             new=MagicMock(return_value=date(2026, 6, 24)),
         ),
-        patch("modulo.core.cost_controller.finalize._ledger_block", new=ledger),
+        patch("farna.core.cost_controller.finalize._ledger_block", new=ledger),
     ):
         await _run_fallback(session, run)
 
@@ -720,8 +720,8 @@ def test_metric_sink_buffers_until_flush() -> None:
     cannot leak a counter."""
     sink = FinalizeMetricSink()
     with (
-        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
-        patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
+        patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("farna.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
     ):
         sink.limit_refused("team-a")
         sink.duplicate_terminal()
@@ -737,7 +737,7 @@ def test_metric_sink_flush_emits_once_then_clears() -> None:
     """A second ``flush`` must not re-emit — the buffer is drained, so a retry
     that flushed once cannot double-count on a later flush."""
     sink = FinalizeMetricSink()
-    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+    with patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused:
         sink.limit_refused("team-a")
         sink.flush()
         sink.flush()
@@ -748,11 +748,11 @@ def test_emit_limit_refused_defers_with_sink_and_emits_inline_without() -> None:
     """``_emit_limit_refused`` buffers when a retry-owning sink is present and
     emits inline when it is not (the cancel path / any caller without a retry)."""
     sink = FinalizeMetricSink()
-    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+    with patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused:
         _emit_limit_refused("team-a", sink)
         limit_refused.assert_not_called()
 
-    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as inline:
+    with patch("farna.core.cost_controller.finalize.record_limit_refused") as inline:
         _emit_limit_refused("team-a", None)
         inline.assert_called_once_with("team-a")
 
@@ -760,11 +760,11 @@ def test_emit_limit_refused_defers_with_sink_and_emits_inline_without() -> None:
 def test_emit_duplicate_terminal_defers_with_sink_and_emits_inline_without() -> None:
     """``_emit_duplicate_terminal`` mirrors ``_emit_limit_refused``'s defer/inline split."""
     sink = FinalizeMetricSink()
-    with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate:
+    with patch("farna.core.cost_controller.finalize.record_duplicate_terminal") as duplicate:
         _emit_duplicate_terminal(sink)
         duplicate.assert_not_called()
 
-    with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as inline:
+    with patch("farna.core.cost_controller.finalize.record_duplicate_terminal") as inline:
         _emit_duplicate_terminal(None)
         inline.assert_called_once_with()
 
@@ -773,7 +773,7 @@ def test_metric_sink_buffers_finalize_deferred_until_flush() -> None:
     """``finalize_deferred`` queues on the sink and only emits on ``flush`` — a
     rolled-back write-failure attempt must not count a deferred finalisation."""
     sink = FinalizeMetricSink()
-    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+    with patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred:
         sink.finalize_deferred("write_failure", "team-a")
         deferred.assert_not_called()
 
@@ -785,11 +785,11 @@ def test_emit_finalize_deferred_defers_with_sink_and_emits_inline_without() -> N
     """``_emit_finalize_deferred`` buffers when a retry-owning sink is present and
     emits inline when it is not (the cancel path / any caller without a retry)."""
     sink = FinalizeMetricSink()
-    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+    with patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred:
         _emit_finalize_deferred("write_failure", "team-a", sink)
         deferred.assert_not_called()
 
-    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline:
+    with patch("farna.core.cost_controller.finalize.record_finalize_deferred") as inline:
         _emit_finalize_deferred("write_failure", "team-a", None)
         inline.assert_called_once_with(reason="write_failure", team="team-a")
 
@@ -809,8 +809,8 @@ async def test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_wit
     session = MagicMock()
 
     with (
-        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()) as reduced_escape,
-        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+        patch("farna.core.cost_controller.finalize._reduced_escape", new=AsyncMock()) as reduced_escape,
+        patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred,
     ):
         sink = FinalizeMetricSink()
         await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=sink)
@@ -820,8 +820,8 @@ async def test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_wit
         reduced_escape.assert_awaited_once()
 
     with (
-        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline,
+        patch("farna.core.cost_controller.finalize._reduced_escape", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.record_finalize_deferred") as inline,
     ):
         await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=None)
         inline.assert_called_once_with(reason="write_failure", team="none")
@@ -851,7 +851,7 @@ async def test_ledger_block_threads_sink_to_ceiling_limit_refused() -> None:
 
     with (
         _cost_state(max_run_cost_cents=100),
-        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused,
     ):
         await _ledger_block(
             session,
@@ -883,11 +883,11 @@ async def test_ledger_block_threads_sink_to_daily_limit_refused() -> None:
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(return_value=(False, "daily_limit_exceeded: team")),
         ),
         _accrual(),
-        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused,
     ):
         await _ledger_block(
             session,
@@ -917,9 +917,9 @@ async def test_ledger_block_threads_sink_to_duplicate_terminal() -> None:
     sink = FinalizeMetricSink()
 
     with (
-        patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
+        patch("farna.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
         patch(
-            "modulo.core.cost_controller.finalize._record_duplicate_terminal_event",
+            "farna.core.cost_controller.finalize._record_duplicate_terminal_event",
             new=AsyncMock(),
         ),
     ):
@@ -953,10 +953,10 @@ async def test_ledger_block_threads_sink_to_finalize_deferred_on_write_failure()
     with (
         _cost_state(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500),
         patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=RuntimeError("ledger boom")),
         ),
-        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+        patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred,
     ):
         await _ledger_block(
             session,

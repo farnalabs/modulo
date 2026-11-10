@@ -15,8 +15,8 @@ from typing import Any, cast
 import pytest
 from jsonschema import Draft202012Validator
 
-from modulo.core.library.agents import __all__ as agent_exports
-from modulo.core.library.agents import definitions as agent_defs
+from farna.core.library.agents import __all__ as agent_exports
+from farna.core.library.agents import definitions as agent_defs
 
 from .helpers import AGENTS, kebab
 
@@ -65,7 +65,7 @@ def test_all_agents_exported() -> None:
 
 def test_package_reexports_every_agent() -> None:
     """The ``modulo.core.library`` package re-exports every agent primitive."""
-    import modulo.core.library as library_package
+    import farna.core.library as library_package
 
     for name in agent_exports:
         assert getattr(library_package, name) is _agent(name)

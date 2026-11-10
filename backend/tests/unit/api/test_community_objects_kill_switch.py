@@ -20,12 +20,12 @@ class TestCommunityObjectsGateListCommunity:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library._community_objects_enabled",
+        "farna.api.routes.community_library._community_objects_enabled",
         new_callable=AsyncMock,
         return_value=False,
     )
     async def test_disabled_returns_403(self, mock_flag) -> None:
-        from modulo.api.routes.community_library import list_community
+        from farna.api.routes.community_library import list_community
 
         session = AsyncMock()
         principal = AsyncMock()
@@ -39,21 +39,21 @@ class TestCommunityObjectsGateListCommunity:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library.get_cached_manifest",
+        "farna.api.routes.community_library.get_cached_manifest",
         new_callable=AsyncMock,
     )
     @patch(
-        "modulo.api.routes.community_library.list_community_entries",
+        "farna.api.routes.community_library.list_community_entries",
         new_callable=AsyncMock,
         return_value=[],
     )
     @patch(
-        "modulo.api.routes.community_library._community_objects_enabled",
+        "farna.api.routes.community_library._community_objects_enabled",
         new_callable=AsyncMock,
         return_value=True,
     )
     async def test_enabled_proceeds_normally(self, mock_flag, mock_entries, mock_manifest) -> None:
-        from modulo.api.routes.community_library import list_community
+        from farna.api.routes.community_library import list_community
 
         session = AsyncMock()
         principal = AsyncMock()
@@ -68,7 +68,7 @@ class TestCommunityObjectsGateListCommunity:
 class TestLifecycleMapCommunityAccess:
     @pytest.mark.asyncio
     async def test_list_hides_lifecycle_maps_for_ordinary_operator(self) -> None:
-        from modulo.api.routes.community_library import list_community
+        from farna.api.routes.community_library import list_community
 
         session = configure_rls_preamble(AsyncMock())
         principal = MagicMock()
@@ -78,14 +78,14 @@ class TestLifecycleMapCommunityAccess:
         entries = [{"id": "map", "type": "lifecycle_map"}, {"id": "agent", "type": "agent"}]
         with (
             patch(
-                "modulo.api.routes.community_library.list_community_entries",
+                "farna.api.routes.community_library.list_community_entries",
                 new_callable=AsyncMock,
                 return_value=entries,
             ),
-            patch("modulo.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch("farna.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -95,7 +95,7 @@ class TestLifecycleMapCommunityAccess:
 
     @pytest.mark.asyncio
     async def test_install_rejects_lifecycle_map_for_ordinary_operator(self) -> None:
-        from modulo.api.routes.community_library import InstallRequest, install
+        from farna.api.routes.community_library import InstallRequest, install
 
         session = MagicMock()
         principal = MagicMock()
@@ -105,13 +105,13 @@ class TestLifecycleMapCommunityAccess:
         entry = {"id": "map", "type": "lifecycle_map"}
         with (
             patch(
-                "modulo.api.routes.community_library.get_community_entry",
+                "farna.api.routes.community_library.get_community_entry",
                 new_callable=AsyncMock,
                 return_value=entry,
             ),
-            patch("modulo.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch("farna.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
             patch(
-                "modulo.api.routes.community_library._community_objects_enabled",
+                "farna.api.routes.community_library._community_objects_enabled",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -126,12 +126,12 @@ class TestCommunityObjectsGateGetEntry:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library._community_objects_enabled",
+        "farna.api.routes.community_library._community_objects_enabled",
         new_callable=AsyncMock,
         return_value=False,
     )
     async def test_disabled_returns_403(self, mock_flag) -> None:
-        from modulo.api.routes.community_library import get_entry
+        from farna.api.routes.community_library import get_entry
 
         session = AsyncMock()
         principal = AsyncMock()
@@ -149,12 +149,12 @@ class TestCommunityObjectsGateInstall:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library._community_objects_enabled",
+        "farna.api.routes.community_library._community_objects_enabled",
         new_callable=AsyncMock,
         return_value=False,
     )
     async def test_disabled_returns_403(self, mock_flag) -> None:
-        from modulo.api.routes.community_library import InstallRequest, install
+        from farna.api.routes.community_library import InstallRequest, install
 
         session = AsyncMock()
         principal = AsyncMock()
@@ -172,12 +172,12 @@ class TestCommunityObjectsFlagFailOpen:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library.read_org_flag",
+        "farna.api.routes.community_library.read_org_flag",
         new_callable=AsyncMock,
         side_effect=RuntimeError("db down"),
     )
     async def test_flag_read_error_returns_true(self, mock_flag) -> None:
-        from modulo.api.routes.community_library import _community_objects_enabled
+        from farna.api.routes.community_library import _community_objects_enabled
 
         # Contract-correct double: ``_community_objects_enabled`` calls
         # ``session.in_transaction()`` SYNCHRONOUSLY — on a bare AsyncMock that
@@ -203,7 +203,7 @@ class TestCommunityObjectsFlagOwnsTransaction:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from modulo.api.routes.community_library import _community_objects_enabled
+        from farna.api.routes.community_library import _community_objects_enabled
 
         async def _autobegin_read(session, org_id, flag_name, *, default):
             # A real SELECT autobegins a transaction, exactly like read_org_flag.
@@ -215,7 +215,7 @@ class TestCommunityObjectsFlagOwnsTransaction:
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as session:
                 with patch(
-                    "modulo.api.routes.community_library.read_org_flag",
+                    "farna.api.routes.community_library.read_org_flag",
                     new=_autobegin_read,
                 ):
                     assert await _community_objects_enabled(session, uuid.uuid4()) is True

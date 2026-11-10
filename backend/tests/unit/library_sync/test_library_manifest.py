@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
-from modulo.core.library_sync.manifest import (
+from farna.core.library_sync.manifest import (
     canonical_manifest_bytes,
     parse_manifest,
     verify_manifest,
 )
-from modulo.registry.crypto import generate_keypair
+from farna.registry.crypto import generate_keypair
 
 
 class TestVerifyManifest:

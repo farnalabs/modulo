@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.dependencies import _assert_tenant_permission
-from modulo.api.routes import api_keys as api_keys_routes
-from modulo.api.routes.api_keys import ApiKeyUpdate, _enforce_grants_mint_cap, _resolve_grants_expiry
-from modulo.auth import api_key as api_key_mod
-from modulo.auth import permissions as perms
-from modulo.auth.api_key import ApiKeyInvalidError, _serialize_key, resolve_key_grants
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import (
+from farna.api.dependencies import _assert_tenant_permission
+from farna.api.routes import api_keys as api_keys_routes
+from farna.api.routes.api_keys import ApiKeyUpdate, _enforce_grants_mint_cap, _resolve_grants_expiry
+from farna.auth import api_key as api_key_mod
+from farna.auth import permissions as perms
+from farna.auth.api_key import ApiKeyInvalidError, _serialize_key, resolve_key_grants
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import (
     PERMISSIONS,
     PermissionDenied,
     assert_grant,
@@ -26,7 +26,7 @@ from modulo.auth.permissions import (
     parse_grants,
     serialize_grants,
 )
-from modulo.core.mcp.scope_validator import resolve_tool_access
+from farna.core.mcp.scope_validator import resolve_tool_access
 
 
 def _principal(role: str = "operator", grants: frozenset[str] | None = None) -> TenantPrincipal:
@@ -207,7 +207,7 @@ class TestRestResolver:
     async def _check(self, principal: TenantPrincipal, permission: str = "run.trigger") -> None:
         session = MagicMock()
         session.begin = MagicMock()
-        with patch("modulo.api.dependencies.resolve_authz_enforce", AsyncMock(return_value=True)):
+        with patch("farna.api.dependencies.resolve_authz_enforce", AsyncMock(return_value=True)):
             cm = MagicMock()
             cm.__aenter__ = AsyncMock(return_value=None)
             cm.__aexit__ = AsyncMock(return_value=False)
@@ -381,7 +381,7 @@ class TestMintCap:
 
 class TestGrantablePermissionsEndpoint:
     async def _list(self, role: str, flag: bool):
-        from modulo.api.routes.api_keys import grantable_permissions_endpoint
+        from farna.api.routes.api_keys import grantable_permissions_endpoint
 
         with patch.object(api_keys_routes, "api_key_grants_enabled", AsyncMock(return_value=flag)):
             return await grantable_permissions_endpoint(principal=_principal(role))

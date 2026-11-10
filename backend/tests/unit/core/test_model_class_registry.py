@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.model_class_registry import (
+from farna.core.model_class_registry import (
     MODEL_ORIGIN_NODE_MODEL_CLASS,
     MODEL_ORIGIN_REGISTRY_PIPELINE_DEFAULT,
     MODEL_ORIGIN_REGISTRY_PIPELINE_MAP,

@@ -210,7 +210,7 @@ async def _all_features_ctx() -> Any:
 
 
 def _build_settings() -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/modulo_unused",
@@ -227,8 +227,8 @@ def _build_settings() -> Any:
 
 
 def _make_saml_client(app: Any, app_engine: AsyncEngine) -> httpx.AsyncClient:
-    from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session
-    from modulo.settings import get_settings
+    from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session
+    from farna.settings import get_settings
 
     app.dependency_overrides[get_settings] = lambda: _build_settings()
     app.dependency_overrides[_get_engine] = lambda: app_engine
@@ -257,7 +257,7 @@ async def saml_seed(
     db_engine: AsyncEngine,
 ) -> AsyncIterator[dict[str, Any]]:
     """Seed the org, inviter and per-provider DB row for the SAML flow."""
-    from modulo.api.main import app
+    from farna.api.main import app
 
     saml_tenant = keycloak_tenants[1]
     org_id = await _create_org(db_engine)
@@ -310,7 +310,7 @@ class TestRealKeycloakSamlHttpFlow:
         app_engine: AsyncEngine,
         keycloak_driver: IdpBrowserDriver,
     ) -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         provider_id = saml_seed["provider_id"]
         tenant = saml_seed["saml_tenant"]

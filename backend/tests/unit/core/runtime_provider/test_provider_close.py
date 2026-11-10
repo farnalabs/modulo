@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec, build_hub
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider import RuntimeProvider, WorkspaceSpec, build_hub
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 
 def _spec(**kwargs: Any) -> WorkspaceSpec:

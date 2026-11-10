@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorType
+from farna.connectors.base import ConnectorPayload, ConnectorType
 from tests.connectors._conformance import assert_health_shape
 
 
@@ -57,7 +57,7 @@ class SubprocessRuntimeProvider:
 @pytest.fixture
 def real_shell_connector():
     """ShellConnector backed by a real subprocess runtime provider."""
-    from modulo.connectors.shell import ShellConnector
+    from farna.connectors.shell import ShellConnector
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
@@ -99,7 +99,7 @@ class TestShellRealSubprocess:
 
     async def test_write_command_blocked(self, real_shell_connector) -> None:
         """Command not in allowlist raises ConnectorPermissionError."""
-        from modulo.connectors.base import ConnectorPermissionError
+        from farna.connectors.base import ConnectorPermissionError
 
         with pytest.raises(ConnectorPermissionError, match="not in the allowed list"):
             await real_shell_connector.write(
@@ -111,7 +111,7 @@ class TestShellRealSubprocess:
 
     async def test_health_check_no_provider(self) -> None:
         """ShellConnector with no provider reports not-ok."""
-        from modulo.connectors.shell import ShellConnector
+        from farna.connectors.shell import ShellConnector
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)

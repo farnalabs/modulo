@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.pipeline import set_earned_autonomy_level
-from modulo.db.crud.pipeline_owner import is_account_in_team
+from farna.db.crud.pipeline import set_earned_autonomy_level
+from farna.db.crud.pipeline_owner import is_account_in_team
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,7 +26,7 @@ class TestSetEarnedAutonomyLevel:
         pipeline.earned_autonomy_updated_at = None
         session = AsyncMock()
 
-        with patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)):
+        with patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)):
             result = await set_earned_autonomy_level(
                 session,
                 org_id=uuid.uuid4(),
@@ -42,7 +42,7 @@ class TestSetEarnedAutonomyLevel:
     async def test_missing_pipeline_returns_none(self) -> None:
         session = AsyncMock()
 
-        with patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=None)):
+        with patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=None)):
             result = await set_earned_autonomy_level(
                 session,
                 org_id=uuid.uuid4(),

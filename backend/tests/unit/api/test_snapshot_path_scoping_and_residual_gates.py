@@ -52,11 +52,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -71,7 +71,7 @@ _SNAPSHOT_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 _OTHER_SNAPSHOT_ID = uuid.UUID("55555555-5555-5555-5555-555555555555")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
-_PREFIX = "modulo.api.routes.pipelines."
+_PREFIX = "farna.api.routes.pipelines."
 _NON_MEMBER_DETAIL = "Not a member of the team that owns this resource"
 _SNAPSHOT_NOT_FOUND = "Snapshot not found"
 
@@ -262,7 +262,7 @@ def _diff_body(snapshot_a: uuid.UUID = _SNAPSHOT_ID, snapshot_b: uuid.UUID = _OT
 
 async def _tag_crud(session: AsyncMock, *, pipeline_id: uuid.UUID | None) -> Any:
     """Drive the REAL ``tag_snapshot`` with (or without) the route's scoping."""
-    from modulo.db.crud.pipeline_snapshot_versioning import tag_snapshot
+    from farna.db.crud.pipeline_snapshot_versioning import tag_snapshot
 
     kwargs: dict[str, Any] = {"tag": "prod"}
     if pipeline_id is not None:
@@ -491,8 +491,8 @@ async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> N
     trace on an unexecuted statement is the ``include_deleted`` execution
     option (the listener reads exactly that flag to skip the injection).
     """
-    from modulo.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
-    from modulo.api.team_scope import resolve_pipeline_team_scope
+    from farna.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
+    from farna.api.team_scope import resolve_pipeline_team_scope
 
     request = MagicMock()
     request.path_params = {"pipeline_id": str(_PATH_PIPELINE_ID)}
@@ -533,7 +533,7 @@ async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> N
 
 async def test_restore_resolver_missing_row_returns_none() -> None:
     """Fail-closed parity with the stock resolver: no row -> None -> 404."""
-    from modulo.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
+    from farna.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {"pipeline_id": str(_PATH_PIPELINE_ID)}
@@ -546,7 +546,7 @@ async def test_restore_resolver_missing_row_returns_none() -> None:
 
 
 async def test_restore_resolver_missing_path_param_returns_none() -> None:
-    from modulo.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
+    from farna.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {}
@@ -558,7 +558,7 @@ async def test_restore_resolver_missing_path_param_returns_none() -> None:
 
 async def test_restore_resolver_rejects_a_non_uuid_path_param() -> None:
     """A malformed path param is a 400, never an unscoped read."""
-    from modulo.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
+    from farna.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {"pipeline_id": "not-a-uuid"}
@@ -663,7 +663,7 @@ async def test_crud_get_snapshot_by_version_scopes_on_pipeline_and_version() -> 
     ``None`` (which the route maps to 404). Pins that the 404s above are the
     scope/version predicates, not a read that always misses.
     """
-    from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
+    from farna.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
 
     owner = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
     foreign = _make_session(snapshot_pipeline_id=_OTHER_PIPELINE_ID, snapshot_version=7)
@@ -688,7 +688,7 @@ async def test_crud_get_snapshot_by_version_org_scope_is_optional() -> None:
     statement carries no ``organisation_id`` bind. Pins the ``None`` branch of
     the scope guard so it is exercised, not just the org-scoped leg above.
     """
-    from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
+    from farna.db.crud.pipeline_snapshot_versioning import get_snapshot_by_version
 
     owner = _make_session(snapshot_pipeline_id=_PATH_PIPELINE_ID, snapshot_version=7)
 

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.eval_engine.decision_reconcile import DecisionReconcileReport, DecisionRecordAnomaly
+from farna.core.eval_engine.decision_reconcile import DecisionReconcileReport, DecisionRecordAnomaly
 
 
 def _sessionmaker_like() -> MagicMock:
@@ -32,13 +32,13 @@ def _sessionmaker_like() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_clean_tick_persists_stats_without_warning(caplog: pytest.LogCaptureFixture) -> None:
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     report = DecisionReconcileReport(scanned=12, anomalies=[])
     with (
         patch.object(sw, "_make_system_session_factory", return_value=_sessionmaker_like()),
         patch(
-            "modulo.core.eval_engine.decision_reconcile.reconcile_decision_records",
+            "farna.core.eval_engine.decision_reconcile.reconcile_decision_records",
             new=AsyncMock(return_value=report),
         ),
         patch.object(sw, "_persist_sweep_stats", new=AsyncMock()) as persist,
@@ -57,7 +57,7 @@ async def test_clean_tick_persists_stats_without_warning(caplog: pytest.LogCaptu
 
 @pytest.mark.asyncio
 async def test_anomalies_are_logged_and_counted(caplog: pytest.LogCaptureFixture) -> None:
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     report = DecisionReconcileReport(
         scanned=5,
@@ -70,7 +70,7 @@ async def test_anomalies_are_logged_and_counted(caplog: pytest.LogCaptureFixture
     with (
         patch.object(sw, "_make_system_session_factory", return_value=_sessionmaker_like()),
         patch(
-            "modulo.core.eval_engine.decision_reconcile.reconcile_decision_records",
+            "farna.core.eval_engine.decision_reconcile.reconcile_decision_records",
             new=AsyncMock(return_value=report),
         ),
         patch.object(sw, "_persist_sweep_stats", new=AsyncMock()) as persist,
@@ -87,12 +87,12 @@ async def test_anomalies_are_logged_and_counted(caplog: pytest.LogCaptureFixture
 
 @pytest.mark.asyncio
 async def test_failure_persists_error_then_reraises() -> None:
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     with (
         patch.object(sw, "_make_system_session_factory", return_value=_sessionmaker_like()),
         patch(
-            "modulo.core.eval_engine.decision_reconcile.reconcile_decision_records",
+            "farna.core.eval_engine.decision_reconcile.reconcile_decision_records",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
         patch.object(sw, "_persist_sweep_stats", new=AsyncMock()) as persist,

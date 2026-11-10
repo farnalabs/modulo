@@ -2,8 +2,8 @@
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.filesystem import FilesystemConnector, PathTraversalError
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ async def test_unsupported_write_resource(connector):
 
 
 def test_connector_type(connector):
-    from modulo.connectors.base import ConnectorType
+    from farna.connectors.base import ConnectorType
 
     assert connector.connector_type == ConnectorType.FILESYSTEM
 

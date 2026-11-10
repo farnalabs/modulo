@@ -35,7 +35,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.runs import _cancel_run
+from farna.api.routes.runs import _cancel_run
 
 
 def _principal() -> MagicMock:
@@ -57,10 +57,10 @@ async def test_parked_run_cancels_through_the_normal_path() -> None:
     finalize = AsyncMock()
 
     with (
-        patch("modulo.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.runs.request_cancellation", new=request),
-        patch("modulo.core.cost_controller.finalize.finalize_cancelled_run", new=finalize),
+        patch("farna.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.runs.request_cancellation", new=request),
+        patch("farna.core.cost_controller.finalize.finalize_cancelled_run", new=finalize),
     ):
         await _cancel_run(session, principal, uuid.uuid4())
 
@@ -81,10 +81,10 @@ async def test_parked_run_skips_cost_finalization() -> None:
     parked_finalize = AsyncMock()
 
     with (
-        patch("modulo.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=parked)),
-        patch("modulo.api.routes.runs.request_cancellation", new=AsyncMock(return_value=parked)),
-        patch("modulo.core.cost_controller.finalize.finalize_cancelled_run", new=parked_finalize),
+        patch("farna.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=parked)),
+        patch("farna.api.routes.runs.request_cancellation", new=AsyncMock(return_value=parked)),
+        patch("farna.core.cost_controller.finalize.finalize_cancelled_run", new=parked_finalize),
     ):
         await _cancel_run(MagicMock(), _principal(), uuid.uuid4())
 
@@ -95,10 +95,10 @@ async def test_parked_run_skips_cost_finalization() -> None:
     running_finalize = AsyncMock()
 
     with (
-        patch("modulo.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=running)),
-        patch("modulo.api.routes.runs.request_cancellation", new=AsyncMock(return_value=running)),
-        patch("modulo.core.cost_controller.finalize.finalize_cancelled_run", new=running_finalize),
+        patch("farna.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=running)),
+        patch("farna.api.routes.runs.request_cancellation", new=AsyncMock(return_value=running)),
+        patch("farna.core.cost_controller.finalize.finalize_cancelled_run", new=running_finalize),
     ):
         await _cancel_run(MagicMock(), _principal(), uuid.uuid4())
 
@@ -113,10 +113,10 @@ async def test_every_paused_status_is_cancellable(status: str) -> None:
     request = AsyncMock(return_value=run)
 
     with (
-        patch("modulo.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.runs.request_cancellation", new=request),
-        patch("modulo.core.cost_controller.finalize.finalize_cancelled_run", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.runs.request_cancellation", new=request),
+        patch("farna.core.cost_controller.finalize.finalize_cancelled_run", new=AsyncMock()),
     ):
         await _cancel_run(MagicMock(), _principal(), uuid.uuid4())
 

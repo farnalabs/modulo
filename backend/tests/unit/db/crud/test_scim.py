@@ -65,12 +65,12 @@ class TestScimCreateUser:
     async def test_new_account_created_with_membership(self, mock_session: AsyncMock) -> None:
         new_account = _make_account()
         with (
-            patch("modulo.db.crud.scim.get_account_by_email", AsyncMock(return_value=None)),
-            patch("modulo.db.crud.scim.get_membership_by_account_and_org", AsyncMock()) as get_membership,
-            patch("modulo.db.crud.scim.create_membership", AsyncMock()) as create_membership,
-            patch("modulo.db.crud.scim.Account", return_value=new_account) as account_cls,
+            patch("farna.db.crud.scim.get_account_by_email", AsyncMock(return_value=None)),
+            patch("farna.db.crud.scim.get_membership_by_account_and_org", AsyncMock()) as get_membership,
+            patch("farna.db.crud.scim.create_membership", AsyncMock()) as create_membership,
+            patch("farna.db.crud.scim.Account", return_value=new_account) as account_cls,
         ):
-            from modulo.db.crud.scim import scim_create_user
+            from farna.db.crud.scim import scim_create_user
 
             result = await scim_create_user(
                 mock_session,
@@ -95,11 +95,11 @@ class TestScimCreateUser:
     async def test_existing_user_without_membership_gets_one(self, mock_session: AsyncMock) -> None:
         existing = _make_account()
         with (
-            patch("modulo.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
-            patch("modulo.db.crud.scim.get_membership_by_account_and_org", AsyncMock(return_value=None)),
-            patch("modulo.db.crud.scim.create_membership", AsyncMock()) as create_membership,
+            patch("farna.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
+            patch("farna.db.crud.scim.get_membership_by_account_and_org", AsyncMock(return_value=None)),
+            patch("farna.db.crud.scim.create_membership", AsyncMock()) as create_membership,
         ):
-            from modulo.db.crud.scim import scim_create_user
+            from farna.db.crud.scim import scim_create_user
 
             result = await scim_create_user(
                 mock_session,
@@ -120,13 +120,13 @@ class TestScimCreateUser:
         existing = _make_account(password_hash="hash-should-clear")
         existing.active = True
         with (
-            patch("modulo.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
+            patch("farna.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
             patch(
-                "modulo.db.crud.scim.get_membership_by_account_and_org",
+                "farna.db.crud.scim.get_membership_by_account_and_org",
                 AsyncMock(return_value=membership),
             ),
         ):
-            from modulo.db.crud.scim import scim_create_user
+            from farna.db.crud.scim import scim_create_user
 
             result = await scim_create_user(
                 mock_session,
@@ -142,13 +142,13 @@ class TestScimCreateUser:
         membership = _make_membership()
         existing = _make_account()
         with (
-            patch("modulo.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
+            patch("farna.db.crud.scim.get_account_by_email", AsyncMock(return_value=existing)),
             patch(
-                "modulo.db.crud.scim.get_membership_by_account_and_org",
+                "farna.db.crud.scim.get_membership_by_account_and_org",
                 AsyncMock(return_value=membership),
             ),
         ):
-            from modulo.db.crud.scim import scim_create_user
+            from farna.db.crud.scim import scim_create_user
 
             result = await scim_create_user(
                 mock_session,
@@ -166,30 +166,30 @@ class TestScimGetUser:
     async def test_returns_account_when_membership_exists(self, mock_session: AsyncMock) -> None:
         account = _make_account()
         with (
-            patch("modulo.db.crud.scim.get_account_by_id", AsyncMock(return_value=account)),
+            patch("farna.db.crud.scim.get_account_by_id", AsyncMock(return_value=account)),
             patch(
-                "modulo.db.crud.scim.get_membership_by_account_and_org",
+                "farna.db.crud.scim.get_membership_by_account_and_org",
                 AsyncMock(return_value=MagicMock()),
             ),
         ):
-            from modulo.db.crud.scim import scim_get_user
+            from farna.db.crud.scim import scim_get_user
 
             result = await scim_get_user(mock_session, _ORG_ID, _ACCOUNT_ID)
         assert result is account
 
     async def test_returns_none_when_account_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.scim.get_account_by_id", AsyncMock(return_value=None)):
-            from modulo.db.crud.scim import scim_get_user
+        with patch("farna.db.crud.scim.get_account_by_id", AsyncMock(return_value=None)):
+            from farna.db.crud.scim import scim_get_user
 
             result = await scim_get_user(mock_session, _ORG_ID, _ACCOUNT_ID)
         assert result is None
 
     async def test_returns_none_when_no_membership_in_org(self, mock_session: AsyncMock) -> None:
         with (
-            patch("modulo.db.crud.scim.get_account_by_id", AsyncMock(return_value=_make_account())),
-            patch("modulo.db.crud.scim.get_membership_by_account_and_org", AsyncMock(return_value=None)),
+            patch("farna.db.crud.scim.get_account_by_id", AsyncMock(return_value=_make_account())),
+            patch("farna.db.crud.scim.get_membership_by_account_and_org", AsyncMock(return_value=None)),
         ):
-            from modulo.db.crud.scim import scim_get_user
+            from farna.db.crud.scim import scim_get_user
 
             result = await scim_get_user(mock_session, _ORG_ID, _ACCOUNT_ID)
         assert result is None
@@ -198,8 +198,8 @@ class TestScimGetUser:
 class TestScimUpdateUser:
     async def test_applies_updates_and_flushes(self, mock_session: AsyncMock) -> None:
         account = _make_account()
-        with patch("modulo.db.crud.scim.apply_updates") as apply_updates:
-            from modulo.db.crud.scim import scim_update_user
+        with patch("farna.db.crud.scim.apply_updates") as apply_updates:
+            from farna.db.crud.scim import scim_update_user
 
             result = await scim_update_user(
                 mock_session,
@@ -217,8 +217,8 @@ class TestScimUpdateUser:
 
     async def test_org_role_update_executes_membership_statement(self, mock_session: AsyncMock) -> None:
         account = _make_account()
-        with patch("modulo.db.crud.scim.apply_updates"):
-            from modulo.db.crud.scim import scim_update_user
+        with patch("farna.db.crud.scim.apply_updates"):
+            from farna.db.crud.scim import scim_update_user
 
             result = await scim_update_user(mock_session, account, org_id=_ORG_ID, org_role="admin")
         assert result is account
@@ -226,7 +226,7 @@ class TestScimUpdateUser:
 
     async def test_no_updates_is_noop(self, mock_session: AsyncMock) -> None:
         account = _make_account()
-        from modulo.db.crud.scim import scim_update_user
+        from farna.db.crud.scim import scim_update_user
 
         result = await scim_update_user(mock_session, account, org_id=_ORG_ID)
         assert result is account
@@ -236,9 +236,9 @@ class TestScimDeactivateDelete:
     async def test_deactivate_calls_security_definer_and_refreshes(self, mock_session: AsyncMock) -> None:
         account = _make_account()
         with (
-            patch("modulo.db.crud.scim.scim_get_user", AsyncMock(return_value=account)) as get_user,
+            patch("farna.db.crud.scim.scim_get_user", AsyncMock(return_value=account)) as get_user,
         ):
-            from modulo.db.crud.scim import scim_deactivate_user
+            from farna.db.crud.scim import scim_deactivate_user
 
             result = await scim_deactivate_user(
                 mock_session,
@@ -254,16 +254,16 @@ class TestScimDeactivateDelete:
         assert result is account
 
     async def test_delete_user_returns_false_when_unknown(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.scim.scim_get_user", AsyncMock(return_value=None)):
-            from modulo.db.crud.scim import scim_delete_user_by_id
+        with patch("farna.db.crud.scim.scim_get_user", AsyncMock(return_value=None)):
+            from farna.db.crud.scim import scim_delete_user_by_id
 
             result = await scim_delete_user_by_id(mock_session, _ORG_ID, _ACCOUNT_ID, caller_account_id=_ACCOUNT_ID)
         assert result is False
         mock_session.execute.assert_not_awaited()
 
     async def test_delete_user_tombstones_and_returns_true(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.scim.scim_get_user", AsyncMock(return_value=_make_account())):
-            from modulo.db.crud.scim import scim_delete_user_by_id
+        with patch("farna.db.crud.scim.scim_get_user", AsyncMock(return_value=_make_account())):
+            from farna.db.crud.scim import scim_delete_user_by_id
 
             result = await scim_delete_user_by_id(mock_session, _ORG_ID, _ACCOUNT_ID, caller_account_id=_ACCOUNT_ID)
         assert result is True
@@ -274,7 +274,7 @@ class TestScimListUsers:
     async def test_lists_users_with_org_scope_and_pagination(self, mock_session: AsyncMock) -> None:
         accounts = [_make_account(), _make_account(email="b@example.com")]
         mock_session.execute = AsyncMock(side_effect=[_count_result(2), _listing_result(accounts)])
-        from modulo.db.crud.scim import scim_list_users
+        from farna.db.crud.scim import scim_list_users
 
         items, total = await scim_list_users(mock_session, _ORG_ID, start_index=11, count=10)
         assert items == accounts
@@ -282,7 +282,7 @@ class TestScimListUsers:
 
     async def test_filter_applies_search(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=[_count_result(0), _listing_result([])])
-        from modulo.db.crud.scim import scim_list_users
+        from farna.db.crud.scim import scim_list_users
 
         items, total = await scim_list_users(mock_session, _ORG_ID, filter_str="ali")
         assert items == []
@@ -290,7 +290,7 @@ class TestScimListUsers:
 
     async def test_programming_error_returns_empty(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.scim import scim_list_users
+        from farna.db.crud.scim import scim_list_users
 
         items, total = await scim_list_users(mock_session, _ORG_ID)
         assert items == []
@@ -300,8 +300,8 @@ class TestScimListUsers:
 class TestScimGroupOperations:
     async def test_create_group_without_account_uses_nil_uuid(self, mock_session: AsyncMock) -> None:
         team = _make_team()
-        with patch("modulo.db.crud.scim.create_team", AsyncMock(return_value=team)) as create_team:
-            from modulo.db.crud.scim import scim_create_group
+        with patch("farna.db.crud.scim.create_team", AsyncMock(return_value=team)) as create_team:
+            from farna.db.crud.scim import scim_create_group
 
             result = await scim_create_group(
                 mock_session,
@@ -321,9 +321,9 @@ class TestScimGroupOperations:
     async def test_create_group_with_account(self, mock_session: AsyncMock) -> None:
         team = _make_team()
         with (
-            patch("modulo.db.crud.scim.create_team", AsyncMock(return_value=team)) as create_team,
+            patch("farna.db.crud.scim.create_team", AsyncMock(return_value=team)) as create_team,
         ):
-            from modulo.db.crud.scim import scim_create_group
+            from farna.db.crud.scim import scim_create_group
 
             result = await scim_create_group(
                 mock_session,
@@ -337,10 +337,10 @@ class TestScimGroupOperations:
     async def test_get_and_delete_group_delegate(self, mock_session: AsyncMock) -> None:
         team = _make_team()
         with (
-            patch("modulo.db.crud.scim.get_team", AsyncMock(return_value=team)) as get_team,
-            patch("modulo.db.crud.scim.delete_team", AsyncMock(return_value=True)) as delete_team,
+            patch("farna.db.crud.scim.get_team", AsyncMock(return_value=team)) as get_team,
+            patch("farna.db.crud.scim.delete_team", AsyncMock(return_value=True)) as delete_team,
         ):
-            from modulo.db.crud.scim import scim_delete_group_by_id, scim_get_group
+            from farna.db.crud.scim import scim_delete_group_by_id, scim_get_group
 
             assert await scim_get_group(mock_session, _TEAM_ID) is team
             assert await scim_delete_group_by_id(mock_session, _TEAM_ID) is True
@@ -349,7 +349,7 @@ class TestScimGroupOperations:
 
     async def test_update_group_no_updates_returns_team(self, mock_session: AsyncMock) -> None:
         team = _make_team()
-        from modulo.db.crud.scim import scim_update_group
+        from farna.db.crud.scim import scim_update_group
 
         assert await scim_update_group(mock_session, team) is team
 
@@ -357,9 +357,9 @@ class TestScimGroupOperations:
         team = _make_team()
         renamed = _make_team(name="Renamed")
         with (
-            patch("modulo.db.crud.scim.update_team", AsyncMock(return_value=renamed)) as update_team,
+            patch("farna.db.crud.scim.update_team", AsyncMock(return_value=renamed)) as update_team,
         ):
-            from modulo.db.crud.scim import scim_update_group
+            from farna.db.crud.scim import scim_update_group
 
             result = await scim_update_group(mock_session, team, name="Renamed")
         update_team.assert_awaited_once_with(mock_session, team.id, {"name": "Renamed"})
@@ -368,7 +368,7 @@ class TestScimGroupOperations:
     async def test_list_groups(self, mock_session: AsyncMock) -> None:
         teams = [_make_team(), _make_team(name="B Team")]
         mock_session.execute = AsyncMock(side_effect=[_count_result(2), _listing_result(teams)])
-        from modulo.db.crud.scim import scim_list_groups
+        from farna.db.crud.scim import scim_list_groups
 
         items, total = await scim_list_groups(mock_session, _ORG_ID, filter_str="team", count=5)
         assert items == teams
@@ -376,7 +376,7 @@ class TestScimGroupOperations:
 
     async def test_list_groups_programming_error(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.scim import scim_list_groups
+        from farna.db.crud.scim import scim_list_groups
 
         items, total = await scim_list_groups(mock_session, _ORG_ID)
         assert not items
@@ -388,12 +388,12 @@ class TestScimGroupMembership:
         existing = _make_membership()
         with (
             patch(
-                "modulo.db.crud.scim.get_membership_by_team_and_account",
+                "farna.db.crud.scim.get_membership_by_team_and_account",
                 AsyncMock(return_value=existing),
             ),
-            patch("modulo.db.crud.scim.add_team_member") as add_team_member,
+            patch("farna.db.crud.scim.add_team_member") as add_team_member,
         ):
-            from modulo.db.crud.scim import scim_add_group_member
+            from farna.db.crud.scim import scim_add_group_member
 
             result = await scim_add_group_member(mock_session, org_id=_ORG_ID, team_id=_TEAM_ID, user_id=_ACCOUNT_ID)
         add_team_member.assert_not_awaited()
@@ -403,12 +403,12 @@ class TestScimGroupMembership:
         created = _make_membership(role="member")
         with (
             patch(
-                "modulo.db.crud.scim.get_membership_by_team_and_account",
+                "farna.db.crud.scim.get_membership_by_team_and_account",
                 AsyncMock(return_value=None),
             ),
-            patch("modulo.db.crud.scim.add_team_member", AsyncMock(return_value=created)) as add_team_member,
+            patch("farna.db.crud.scim.add_team_member", AsyncMock(return_value=created)) as add_team_member,
         ):
-            from modulo.db.crud.scim import scim_add_group_member
+            from farna.db.crud.scim import scim_add_group_member
 
             result = await scim_add_group_member(mock_session, org_id=_ORG_ID, team_id=_TEAM_ID, user_id=_ACCOUNT_ID)
         add_team_member.assert_awaited_once_with(
@@ -423,11 +423,11 @@ class TestScimGroupMembership:
     async def test_remove_member_missing_returns_false(self, mock_session: AsyncMock) -> None:
         with (
             patch(
-                "modulo.db.crud.scim.get_membership_by_team_and_account",
+                "farna.db.crud.scim.get_membership_by_team_and_account",
                 AsyncMock(return_value=None),
             ),
         ):
-            from modulo.db.crud.scim import scim_remove_group_member
+            from farna.db.crud.scim import scim_remove_group_member
 
             result = await scim_remove_group_member(mock_session, _TEAM_ID, _ACCOUNT_ID)
         assert result is False
@@ -436,12 +436,12 @@ class TestScimGroupMembership:
         membership = _make_membership()
         with (
             patch(
-                "modulo.db.crud.scim.get_membership_by_team_and_account",
+                "farna.db.crud.scim.get_membership_by_team_and_account",
                 AsyncMock(return_value=membership),
             ),
-            patch("modulo.db.crud.scim.remove_team_member", AsyncMock()) as remove_team_member,
+            patch("farna.db.crud.scim.remove_team_member", AsyncMock()) as remove_team_member,
         ):
-            from modulo.db.crud.scim import scim_remove_group_member
+            from farna.db.crud.scim import scim_remove_group_member
 
             result = await scim_remove_group_member(mock_session, _TEAM_ID, _ACCOUNT_ID)
         remove_team_member.assert_awaited_once_with(mock_session, membership.id)
@@ -450,7 +450,7 @@ class TestScimGroupMembership:
     async def test_list_group_members(self, mock_session: AsyncMock) -> None:
         members = [_make_membership(), _make_membership(account_id=uuid.uuid4())]
         mock_session.execute = AsyncMock(return_value=_listing_result(members))
-        from modulo.db.crud.scim import scim_list_group_members
+        from farna.db.crud.scim import scim_list_group_members
 
         result = await scim_list_group_members(mock_session, _TEAM_ID)
         assert result == members

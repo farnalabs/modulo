@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.pipeline import (
+from farna.db.crud.pipeline import (
     audit_accountability_owner_change,
     create_pipeline,
     update_pipeline,
@@ -62,7 +62,7 @@ def _pipeline_stub(
 class TestAuditAccountabilityOwnerChange:
     async def test_noop_when_value_unchanged(self) -> None:
         session = _mock_session()
-        with patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
+        with patch("farna.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
             result = await audit_accountability_owner_change(
                 session,
                 org_id=_ORG_ID,
@@ -77,7 +77,7 @@ class TestAuditAccountabilityOwnerChange:
 
     async def test_noop_when_both_none(self) -> None:
         session = _mock_session()
-        with patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
+        with patch("farna.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
             result = await audit_accountability_owner_change(
                 session,
                 org_id=_ORG_ID,
@@ -92,7 +92,7 @@ class TestAuditAccountabilityOwnerChange:
 
     async def test_assignment_writes_event(self) -> None:
         session = _mock_session()
-        with patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
+        with patch("farna.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
             result = await audit_accountability_owner_change(
                 session,
                 org_id=_ORG_ID,
@@ -113,7 +113,7 @@ class TestAuditAccountabilityOwnerChange:
 
     async def test_clear_writes_event_with_null_new_and_actor(self) -> None:
         session = _mock_session()
-        with patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
+        with patch("farna.db.crud.pipeline.append_audit_event", new=AsyncMock()) as audit:
             result = await audit_accountability_owner_change(
                 session,
                 org_id=_ORG_ID,
@@ -141,8 +141,8 @@ class TestCreatePipelineOwners:
     async def test_validates_each_owner_and_audits_assignments(self) -> None:
         session = _mock_session()
         with (
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             pipeline = await create_pipeline(
                 session,
@@ -164,8 +164,8 @@ class TestCreatePipelineOwners:
     async def test_no_owners_validates_but_writes_no_audit(self) -> None:
         session = _mock_session()
         with (
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             await create_pipeline(session, org_id=_ORG_ID, name="unowned", account_id=_ACTOR_ID)
         assert validate.await_count == 2
@@ -183,9 +183,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub(business_owner_id=_OTHER_OWNER_ID)
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             result = await update_pipeline(
                 session,
@@ -205,9 +205,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub(business_owner_id=_OWNER_ID)
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()),
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()),
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             await update_pipeline(
                 session,
@@ -227,11 +227,11 @@ class TestUpdatePipelineOwners:
             visibility="org",
         )
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
-            patch("modulo.db.crud.pipeline.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
-            patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock()),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
+            patch("farna.db.crud.pipeline.append_audit_event", new=AsyncMock()),
         ):
             await update_pipeline(
                 session,
@@ -252,9 +252,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub(business_owner_id=MagicMock(), reliability_owner_id=None)
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()),
         ):
             await update_pipeline(
                 session,
@@ -272,9 +272,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub(business_owner_id=None)
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             await update_pipeline(session, _PIPELINE_ID, {"business_owner_id": _OWNER_ID}, account_id=None)
         assert validate.await_args.kwargs["org_id"] == _ORG_ID
@@ -285,9 +285,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub(business_owner_id=None, visibility=MagicMock())
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()),
         ):
             await update_pipeline(session, _PIPELINE_ID, {"business_owner_id": _OWNER_ID}, org_id=_ORG_ID)
         assert validate.await_args.kwargs["visibility"] == "org"
@@ -296,9 +296,9 @@ class TestUpdatePipelineOwners:
         session = _mock_session()
         pipeline = _pipeline_stub()
         with (
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
-            patch("modulo.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.validate_accountability_owner", new=AsyncMock()) as validate,
+            patch("farna.db.crud.pipeline.audit_accountability_owner_change", new=AsyncMock()) as audit,
         ):
             await update_pipeline(session, _PIPELINE_ID, {"name": "renamed"})
         validate.assert_not_awaited()

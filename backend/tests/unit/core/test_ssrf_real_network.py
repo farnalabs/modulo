@@ -25,7 +25,7 @@ from typing import ClassVar
 import httpx
 import pytest
 
-from modulo.core import ssrf
+from farna.core import ssrf
 
 # Opt out of the autouse DNS shim (tests/conftest.py) so the REAL resolver is
 # consulted — the module's filename also opts out, this marker makes it explicit.

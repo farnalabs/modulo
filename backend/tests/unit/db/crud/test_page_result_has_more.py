@@ -19,8 +19,8 @@ from sqlalchemy import Select, column
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
-from modulo.db.repositories.base import BaseRepository
+from farna.db.crud.base import PageResult
+from farna.db.repositories.base import BaseRepository
 
 
 def test_omitted_has_more_full_non_final_page_is_true() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from modulo.connectors.gitlab import GitLabConnector
+from farna.connectors.gitlab import GitLabConnector
 
 
 def _status_exc(status_code: int) -> httpx.HTTPStatusError:

@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.linear import LinearConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.linear import LinearConnector
 
 TOKEN = "lin_test_api_key"
 _URL = "https://api.linear.app/graphql"

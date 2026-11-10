@@ -32,8 +32,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud import pipeline as pipeline_crud
-from modulo.db.crud.pipeline import (
+from farna.db.crud import pipeline as pipeline_crud
+from farna.db.crud.pipeline import (
     _declared_policy_gates,
     _ensure_declared_gate,
     _iter_declared_policy_gates,
@@ -43,12 +43,12 @@ from modulo.db.crud.pipeline import (
     reconcile_graph_policy_gates,
     reject_declared_policy_gates,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.policy_gate import PolicyGate
-from modulo.db.soft_delete import include_soft_deleted
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.policy_gate import PolicyGate
+from farna.db.soft_delete import include_soft_deleted
 
 # Scoped create_all: unrelated models use Postgres-only column types that SQLite
 # cannot render (same rationale as tests/unit/db/test_seed_demo.py).

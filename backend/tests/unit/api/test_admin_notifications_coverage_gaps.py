@@ -25,12 +25,12 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes.admin_notifications as admin_notifications
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+import farna.api.routes.admin_notifications as admin_notifications
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -179,7 +179,7 @@ def api() -> Generator[tuple[TestClient, AsyncMock], None, None]:
     # Webhook payloads use non-resolving example hosts; stub the DNS-backed
     # SSRF floor so these tests exercise their own concern. The floor's
     # internal-address rejection is covered in test_admin_notifications_webhooks.
-    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+    with patch("farna.api.routes.admin_notifications.validate_outbound_url"):
         yield client, session
     app.dependency_overrides.clear()
 

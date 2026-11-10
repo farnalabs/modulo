@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _is_sandbox_session_lost_echo,
     make_sandbox_agent_fn,

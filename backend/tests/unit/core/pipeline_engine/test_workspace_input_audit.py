@@ -21,16 +21,16 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine.workspace_input_audit import (
+from farna.core.pipeline_engine.workspace_input_audit import (
     AUDIT_NODE_ID,
     WorkspaceInputAuditRecord,
     record_drift,
     record_resolved_inputs,
     redact_url,
 )
-from modulo.db.crud.run_node_outputs import read_audit_row_outputs_json
-from modulo.db.models.base import Base
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
+from farna.db.crud.run_node_outputs import read_audit_row_outputs_json
+from farna.db.models.base import Base
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
 
 _TABLE_NAMES = {"run_node_outputs", "organisations"}
 
@@ -306,7 +306,7 @@ class TestRecordResolvedInputsBestEffort:
         """A failing session write is logged, not raised."""
         rec = _make_record()
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_audit.dialect_insert",
+            "farna.core.pipeline_engine.workspace_input_audit.dialect_insert",
             side_effect=RuntimeError("db down"),
         ):
             # Must NOT raise.
@@ -443,7 +443,7 @@ class TestRecordDriftBestEffort:
         await session.flush()
 
         with patch(
-            "modulo.core.pipeline_engine.workspace_input_audit.dialect_insert",
+            "farna.core.pipeline_engine.workspace_input_audit.dialect_insert",
             side_effect=RuntimeError("db down"),
         ):
             # Must NOT raise.

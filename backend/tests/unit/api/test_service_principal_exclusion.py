@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.me import _require_human_account
-from modulo.api.routes.scim import _require_human_scim_user
+from farna.api.routes.me import _require_human_account
+from farna.api.routes.scim import _require_human_scim_user
 
 
 def _account(kind: str | None) -> SimpleNamespace:

@@ -8,21 +8,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.db.crud.hitl_review_guard import (
+from farna.db.crud.hitl_review_guard import (
     DiffResult,
     EdgeWeakening,
     HitlReviewWeakeningDenied,
     resolve_effective_privilege,
 )
-from modulo.db.crud.pipeline_snapshot_versioning import (
+from farna.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     get_snapshot_detail,
     list_snapshots,
     rollback_to_snapshot,
     tag_snapshot,
 )
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 
 def _sequenced_session(results: list[MagicMock]) -> AsyncMock:
@@ -106,7 +106,7 @@ class TestRollbackToSnapshot:
         one and keeps their assertions on the mock they hold.
         """
         monkeypatch.setattr(
-            "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+            "farna.db.crud.pipeline_snapshot_versioning.append_audit_event",
             AsyncMock(),
         )
 
@@ -144,7 +144,7 @@ class TestRollbackToSnapshot:
         session.execute = AsyncMock(side_effect=execute_side)
 
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
         ) as mock_create:
             mock_create.return_value = new_snapshot
@@ -214,7 +214,7 @@ class TestRollbackToSnapshot:
         on_lock = AsyncMock()
 
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+            "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
             new_callable=MagicMock,
         ) as mock_diff:
             mock_diff.return_value = DiffResult(
@@ -225,7 +225,7 @@ class TestRollbackToSnapshot:
                 caller_type="rest",
             )
             with patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ):
                 await rollback_to_snapshot(
@@ -251,12 +251,12 @@ class TestRollbackToSnapshot:
 
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
+                "farna.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
                 new_callable=AsyncMock,
                 return_value=False,
             ) as mock_resolve,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
             ) as mock_diff,
         ):
@@ -268,7 +268,7 @@ class TestRollbackToSnapshot:
                 caller_type="mcp",
             )
             with patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ):
                 await rollback_to_snapshot(
@@ -317,17 +317,17 @@ class TestRollbackToSnapshot:
 
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
+                "farna.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
                 new_callable=AsyncMock,
                 return_value=False,
             ) as mock_resolve,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
                 return_value=allowed_diff,
             ) as mock_diff,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=new_snapshot,
             ),
@@ -371,12 +371,12 @@ class TestRollbackToSnapshot:
         )
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
                 return_value=denied_diff,
             ),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ) as mock_create,
             pytest.raises(HitlReviewWeakeningDenied) as excinfo,
@@ -413,12 +413,12 @@ class TestRollbackToSnapshot:
 
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
                 return_value=_denied_diff("legacy-snapshot-ambiguous"),
             ),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ) as mock_create,
             pytest.raises(HitlReviewWeakeningDenied) as exc_info,
@@ -462,16 +462,16 @@ class TestRollbackToSnapshot:
         )
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
                 return_value=weakened_diff,
             ),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+                "farna.db.crud.pipeline_snapshot_versioning.append_audit_event",
                 new_callable=AsyncMock,
             ) as mock_audit,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -534,16 +534,16 @@ class TestRollbackToSnapshot:
 
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
                 return_value=weakening_diff,
             ),
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+                "farna.db.crud.pipeline_snapshot_versioning.append_audit_event",
                 new_callable=AsyncMock,
             ) as mock_audit,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=new_snapshot,
             ),
@@ -595,7 +595,7 @@ class TestRollbackToSnapshot:
 
         new_snapshot = MagicMock(spec=PipelineSnapshot)
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=new_snapshot,
         ) as mock_create:
@@ -632,11 +632,11 @@ class TestRollbackToSnapshot:
         )
         with (
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+                "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
                 new_callable=MagicMock,
             ) as mock_diff,
             patch(
-                "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+                "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
                 return_value=None,
             ),

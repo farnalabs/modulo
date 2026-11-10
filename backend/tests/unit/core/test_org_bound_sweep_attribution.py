@@ -35,7 +35,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
 ORG1 = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 ORG2 = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
@@ -198,7 +198,7 @@ async def test_hitl_overdue_notification_failures_are_attributed_to_their_own_or
     orgs on the forwarded records prove both attribution AND that the second
     tick did not inherit the first org's context.
     """
-    from modulo.core.hitl_manager import overdue_warning as ow
+    from farna.core.hitl_manager import overdue_warning as ow
 
     assert org_id_var.get() is None
     claim = SimpleNamespace(
@@ -234,7 +234,7 @@ async def test_hitl_deadline_failures_are_attributed_to_their_own_orgs(
     resolve empty). No hand-set ``org_id_var``: the orgs on the forwarded
     records come solely from the production bind.
     """
-    from modulo.core.hitl_manager import deadline_warning as dw
+    from farna.core.hitl_manager import deadline_warning as dw
 
     assert org_id_var.get() is None
     now = datetime.now(UTC)
@@ -294,7 +294,7 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
     assert org_id_var.get() is None
 
     if site == "expiry_audit":
-        from modulo.core.hitl_manager import expiry_job as exp
+        from farna.core.hitl_manager import expiry_job as exp
 
         row = SimpleNamespace(id=uuid.uuid4(), run_id=uuid.uuid4(), review_id="gate-1", account_id=uuid.uuid4())
         session = _OrgSweepSession([ORG1, ORG2], stale_rows=[row])
@@ -305,7 +305,7 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
         assert len(expired) == 2
         expected = "Failed to record claim_expired audit event"
     elif site == "cost_probe":
-        from modulo.core.cost_controller import probe as probe_mod
+        from farna.core.cost_controller import probe as probe_mod
 
         session = _OrgSweepSession([ORG1, ORG2])
         factory = MagicMock(return_value=session)
@@ -315,7 +315,7 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
         assert summary["orgs_failed"] == 2
         expected = "cost_probe.org_failed"
     elif site == "api_key_sweep":
-        from modulo.auth.api_key import revoke_run_api_key_sweep
+        from farna.auth.api_key import revoke_run_api_key_sweep
 
         session = _OrgSweepSession([ORG1, ORG2], fail_join=True)
         factory = MagicMock(return_value=session)
@@ -324,7 +324,7 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
         assert result["errors"] == 2
         expected = "api_key.revoke_run_sweep_org_failed"
     else:
-        from modulo.core import trigger_streak as ts
+        from farna.core import trigger_streak as ts
 
         async def _stub(_factory: Any, _org_id: uuid.UUID, **_kwargs: Any) -> int:
             ts._log.exception("trigger_streak.test_org_failure")
@@ -361,7 +361,7 @@ async def test_api_key_sweep_job_level_failure_keeps_the_announced_drop(
     silently forwarded — pinning that the FAR-1501 bind covers only the
     per-org loop body.
     """
-    from modulo.auth.api_key import revoke_run_api_key_sweep
+    from farna.auth.api_key import revoke_run_api_key_sweep
 
     assert org_id_var.get() is None
     session = _OrgSweepSession([ORG1, ORG2], fail_org_index=True)

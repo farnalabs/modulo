@@ -21,13 +21,13 @@ class _PollutedSQLiteEngine:
 @pytest.mark.asyncio
 async def test_integration_boundary_clears_polluted_sqlite_engine_caches() -> None:
     """A SQLite engine left by an earlier suite cannot survive the boundary."""
-    from modulo.api import dependencies as api_dependencies
-    from modulo.cli import break_glass
-    from modulo.core import cron_helpers, saq_worker
-    from modulo.core.error_tracking import saq_hooks
-    from modulo.core.reports import scheduler
-    from modulo.db import session as db_session
-    from modulo.db.crud import pipeline_snapshot
+    from farna.api import dependencies as api_dependencies
+    from farna.cli import break_glass
+    from farna.core import cron_helpers, saq_worker
+    from farna.core.error_tracking import saq_hooks
+    from farna.core.reports import scheduler
+    from farna.db import session as db_session
+    from farna.db.crud import pipeline_snapshot
 
     polluted_engine = _PollutedSQLiteEngine(create_async_engine("sqlite+aiosqlite:///:memory:"))
 

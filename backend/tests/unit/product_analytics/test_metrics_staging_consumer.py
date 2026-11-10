@@ -31,16 +31,16 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.product_analytics.metrics_dump import (
+from farna.core.product_analytics.metrics_dump import (
     _STAGING_RETENTION_DAYS,
     _aggregate_staged_events,
     _build_payload,
     _purge_staging,
     metrics_dump,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.metrics_staging import MetricsStaging
-from modulo.db.models.system_config import SystemConfig
+from farna.db.models.base import Base
+from farna.db.models.metrics_staging import MetricsStaging
+from farna.db.models.system_config import SystemConfig
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()
@@ -104,7 +104,7 @@ async def _count(maker: async_sessionmaker[AsyncSession]) -> int:
 
 
 async def _set_watermark(maker: async_sessionmaker[AsyncSession], value: str) -> None:
-    from modulo.core.product_analytics.constants import DUMP_WATERMARK_KEY
+    from farna.core.product_analytics.constants import DUMP_WATERMARK_KEY
 
     async with maker() as session, session.begin():
         session.add(SystemConfig(id=uuid.uuid4(), key=DUMP_WATERMARK_KEY, value=value))
@@ -190,22 +190,22 @@ class TestBuildPayloadEventCounts:
             # The other aggregates read tables this fixture does not create;
             # only the staged-event consumer runs for real here.
             patch(
-                "modulo.core.product_analytics.metrics_dump._count_entities",
+                "farna.core.product_analytics.metrics_dump._count_entities",
                 new_callable=AsyncMock,
                 return_value={"pipelines": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._aggregate_run_stats",
+                "farna.core.product_analytics.metrics_dump._aggregate_run_stats",
                 new_callable=AsyncMock,
                 return_value={"total_runs": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._aggregate_error_stats",
+                "farna.core.product_analytics.metrics_dump._aggregate_error_stats",
                 new_callable=AsyncMock,
                 return_value={"total": 0},
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._build_integration_inventory",
+                "farna.core.product_analytics.metrics_dump._build_integration_inventory",
                 new_callable=AsyncMock,
                 return_value={},
             ),
@@ -352,15 +352,15 @@ class TestMetricsDumpPurgeWiring:
 
         with (
             patch(
-                "modulo.core.saq_worker._make_system_session_factory",
+                "farna.core.saq_worker._make_system_session_factory",
                 return_value=factory,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                "farna.core.product_analytics.metrics_dump._should_dump_now",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
 

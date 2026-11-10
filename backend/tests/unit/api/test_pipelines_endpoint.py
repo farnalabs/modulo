@@ -14,22 +14,22 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.pipelines import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.pipelines import (
     HITL_DESCRIPTION_MIN_LENGTH,
     HitlReviewConfig,
     PipelineGraphNode,
     PipelineUpdate,
     _resolve_graph_references,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.exceptions import SnapshotLockNotAvailableError
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
-from modulo.db.crud.pipeline_folder import create_folder, update_folder
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.core.graph_validator._types import ValidationResult
+from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+from farna.db.crud.pipeline_folder import create_folder, update_folder
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -192,9 +192,9 @@ def test_list_pipelines_returns_200(client: TestClient) -> None:
     page_result.has_more = False
 
     with (
-        patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/pipelines")
 
@@ -220,9 +220,9 @@ def test_list_pipelines_includes_node_count(client: TestClient) -> None:
     page_result.has_more = False
 
     with (
-        patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/pipelines")
 
@@ -245,9 +245,9 @@ def test_list_pipelines_node_count_defaults_to_zero_for_empty_graph(client: Test
     page_result.has_more = False
 
     with (
-        patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/pipelines")
 
@@ -264,9 +264,9 @@ def test_create_pipeline_returns_201(client: TestClient) -> None:
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org") as set_org,
-        patch("modulo.api.routes.pipelines.set_rls_user_context") as set_user_ctx,
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org") as set_org,
+        patch("farna.api.routes.pipelines.set_rls_user_context") as set_user_ctx,
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Test Pipeline"})
 
@@ -282,9 +282,9 @@ def test_create_pipeline_rejects_zero_max_concurrent_runs(client: TestClient) ->
     """FAR-604: 0 (or negative) permanently wedges run admission — the create
     contract rejects it with a validation error before any row is written."""
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline") as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline") as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Wedged", "max_concurrent_runs": 0})
 
@@ -294,9 +294,9 @@ def test_create_pipeline_rejects_zero_max_concurrent_runs(client: TestClient) ->
 
 def test_create_pipeline_rejects_negative_max_concurrent_runs(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline") as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline") as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Wedged", "max_concurrent_runs": -1})
 
@@ -309,9 +309,9 @@ def test_create_pipeline_default_autonomy_level(client: TestClient) -> None:
     pipeline.default_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -328,9 +328,9 @@ def test_create_pipeline_default_autonomy_default_value(client: TestClient) -> N
     pipeline.default_autonomy_level = "manual_approval"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline"})
 
@@ -346,7 +346,7 @@ def test_create_pipeline_rejects_invalid_default_autonomy_level(client: TestClie
     an unparseable value into an ``IntegrityError`` -> HTTP 409 deep in the
     handler. The field validator rejects it during request parsing instead.
     """
-    with patch("modulo.api.routes.pipelines.create_pipeline") as create:
+    with patch("farna.api.routes.pipelines.create_pipeline") as create:
         resp = client.post(
             "/api/v1/pipelines",
             json={"name": "Pipeline", "default_autonomy_level": "banana"},
@@ -359,7 +359,7 @@ def test_create_pipeline_rejects_invalid_default_autonomy_level(client: TestClie
 
 def test_update_pipeline_rejects_invalid_default_autonomy_level(client: TestClient) -> None:
     """PATCH runs through the SAME field validator — 422, never 409."""
-    with patch("modulo.api.routes.pipelines.update_pipeline") as update:
+    with patch("farna.api.routes.pipelines.update_pipeline") as update:
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
             json={"default_autonomy_level": "banana"},
@@ -381,9 +381,9 @@ def test_create_pipeline_normalises_mixed_case_default_autonomy_level(client: Te
     pipeline.default_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -403,11 +403,11 @@ def test_update_pipeline_normalises_mixed_case_default_autonomy_level(client: Te
     updated.default_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated) as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event"),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=updated) as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -430,9 +430,9 @@ def test_create_pipeline_passes_max_autonomy_level(client: TestClient) -> None:
     pipeline.max_autonomy_level = "fully_autonomous"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -450,9 +450,9 @@ def test_create_pipeline_passes_max_autonomy_level(client: TestClient) -> None:
 
 def test_create_pipeline_rejects_ceiling_below_default(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline") as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline") as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -469,7 +469,7 @@ def test_create_pipeline_rejects_ceiling_below_default(client: TestClient) -> No
 
 
 def test_create_pipeline_rejects_invalid_ceiling_level(client: TestClient) -> None:
-    with patch("modulo.api.routes.pipelines.create_pipeline") as create:
+    with patch("farna.api.routes.pipelines.create_pipeline") as create:
         resp = client.post(
             "/api/v1/pipelines",
             json={"name": "Pipeline", "max_autonomy_level": "banana"},
@@ -484,9 +484,9 @@ def test_create_pipeline_allows_ceiling_equal_to_default(client: TestClient) -> 
     pipeline.max_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -509,18 +509,18 @@ def test_update_pipeline_rejects_ceiling_below_existing_default(client: TestClie
     current.max_autonomy_level = None
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline") as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.update_pipeline") as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
         # FAR-1222: the merge is validated against the row SELECTed FOR UPDATE
         # by the in-txn team gate — keep the locked row identical to the row
         # under test.
         patch(
-            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
             new=AsyncMock(return_value=current),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -540,15 +540,15 @@ def test_update_pipeline_rejects_default_above_existing_ceiling(client: TestClie
     current.max_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline") as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.update_pipeline") as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
         patch(
-            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
             new=AsyncMock(return_value=current),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -595,12 +595,12 @@ def test_update_pipeline_ceiling_validated_against_locked_row(client: TestClient
         return row
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline") as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=row)),
-        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=_reapply),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event"),
+        patch("farna.api.routes.pipelines.update_pipeline") as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=row)),
+        patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=_reapply),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -622,11 +622,11 @@ def test_update_pipeline_accepts_valid_ceiling_and_emits_audit(client: TestClien
     updated.max_autonomy_level = "fully_autonomous"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=updated),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -653,11 +653,11 @@ def test_update_pipeline_unchanged_ceiling_emits_no_audit(client: TestClient) ->
     updated.max_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=updated),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -691,9 +691,9 @@ def test_create_pipeline_normalises_mixed_case_ceiling(client: TestClient) -> No
     pipeline.max_autonomy_level = "fully_autonomous"
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -720,11 +720,11 @@ def test_update_pipeline_normalises_mixed_case_ceiling(client: TestClient) -> No
     updated.max_autonomy_level = "notify_on_complete"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated) as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=updated) as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -746,9 +746,9 @@ def test_create_pipeline_passes_stale_run_timeout_minutes(client: TestClient) ->
     pipeline.stale_run_timeout_minutes = 45
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -765,9 +765,9 @@ def test_create_pipeline_defaults_stale_run_timeout_minutes(client: TestClient) 
     pipeline.stale_run_timeout_minutes = 30
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline) as create,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline"})
 
@@ -791,9 +791,9 @@ def test_get_pipeline_returns_200(client: TestClient) -> None:
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
@@ -810,9 +810,9 @@ def test_get_pipeline_detail_returns_node_count_from_graph(client: TestClient) -
     pipeline.graph_nodes_json = [{"id": "n1"}, {"id": "n2"}, {"id": "n3"}]
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
@@ -822,9 +822,9 @@ def test_get_pipeline_detail_returns_node_count_from_graph(client: TestClient) -
 
 def test_get_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
@@ -858,9 +858,9 @@ def test_get_pipeline_graph_returns_authoritative_graph(client: TestClient) -> N
     ]
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -894,20 +894,20 @@ def test_replace_pipeline_graph_returns_soft_validation_issues(client: TestClien
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ) as validate,
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=(schema_pins, backend_pins),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -939,14 +939,14 @@ def test_replace_pipeline_graph_lock_busy_maps_503(client: TestClient) -> None:
     ]
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             new=AsyncMock(side_effect=SnapshotLockNotAvailableError("snapshot allocation lock busy")),
         ),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -996,20 +996,20 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1065,24 +1065,24 @@ def test_replace_pipeline_graph_accepts_connector_node_and_keeps_binding_fields(
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ) as replace,
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=MagicMock(issues=[]),
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1107,11 +1107,11 @@ def test_replace_pipeline_graph_rejects_connector_node_without_binding(
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ) as replace,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1137,11 +1137,11 @@ def test_replace_pipeline_graph_rejects_connector_node_with_agent(
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ) as replace,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1162,11 +1162,11 @@ def test_replace_pipeline_graph_rejects_connector_query_without_resource(
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ) as replace,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1211,8 +1211,8 @@ async def test_a_connector_node_bound_to_another_teams_connector_is_refused() ->
     ``find_connector_team_mismatches`` — no patch — so a node the extractor
     skipped could not ride through the 409.
     """
-    from modulo.api.routes.pipelines import _enforce_connector_team_bindings
-    from modulo.core.team_visibility import extract_connector_bindings
+    from farna.api.routes.pipelines import _enforce_connector_team_bindings
+    from farna.core.team_visibility import extract_connector_bindings
 
     team_a = uuid.UUID("00000000-0000-0000-0000-000000000003")
     team_b = uuid.UUID("00000000-0000-0000-0000-000000000004")
@@ -1266,24 +1266,24 @@ def test_graph_save_blocks_a_binding_outside_the_connector_allowlist(client: Tes
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=(nodes, []),
         ),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=MagicMock(issues=[issue]),
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1301,7 +1301,7 @@ def test_graph_save_blocks_only_the_allowlisted_connector_validation_codes() -> 
     pipeline, while an operation the connector's allowlist denies is a binding
     guaranteed to fail its first run and is refused at save time (FAR-1395).
     """
-    from modulo.api.routes.pipelines import _reject_graph_validation_issues
+    from farna.api.routes.pipelines import _reject_graph_validation_issues
 
     # Advisory codes do not raise.
     _reject_graph_validation_issues(
@@ -1633,20 +1633,20 @@ def test_replace_pipeline_graph_round_trips_delivery_sentinel(client: TestClient
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=([node], []),
         ),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1701,12 +1701,12 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
 
     validation = MagicMock(issues=[])
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=_fake_replace),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", side_effect=_fake_replace),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1750,9 +1750,9 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
     ]
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -1820,9 +1820,9 @@ def test_get_pipeline_graph_tolerates_legacy_short_gate_description(client: Test
     ]
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -1874,19 +1874,19 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
         "guardrail — a correction on a redaction guardrail is an exfiltration channel",
     )
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
             return_value=[],
         ),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1934,15 +1934,15 @@ def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_review_422(cl
         node_id=str(node_id),
     )
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)) as mock_replace,
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)) as mock_replace,
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1999,16 +1999,16 @@ def test_nonadmin_cannot_strip_guardrail_binding(operator_client: TestClient) ->
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             side_effect=denied,
         ),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         patch(
-            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
@@ -2031,14 +2031,14 @@ def test_admin_can_strip_guardrail_binding(client: TestClient) -> None:
     edges = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         patch(
-            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
@@ -2076,13 +2076,13 @@ def test_nonadmin_cannot_strip_guardrail_binding_via_update_graph_json(
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = operator_client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2102,13 +2102,13 @@ def test_admin_can_strip_guardrail_binding_via_update_graph_json(client: TestCli
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2142,9 +2142,9 @@ def test_nonadmin_cannot_strip_guardrail_binding_via_snapshot_rollback(
     )
 
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", side_effect=denied),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", side_effect=denied),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = operator_client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}/rollback",
@@ -2173,9 +2173,9 @@ def test_admin_can_strip_guardrail_binding_via_snapshot_rollback(client: TestCli
     new_snapshot.channel = "none"
 
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}/rollback",
@@ -2204,14 +2204,14 @@ def test_nonadmin_unrelated_graph_changes_allowed(operator_client: TestClient) -
     ]
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         patch(
-            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
             return_value=[_guardrail_row(bound_node_id)],
         ),
     ):
@@ -2232,16 +2232,16 @@ def test_nonadmin_removing_unbound_node_allowed(operator_client: TestClient) -> 
     edges = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         # A guardrail bound to a DIFFERENT node (kept in the graph) — the removed
         # node has none, so removal is allowed.
         patch(
-            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
             return_value=[_guardrail_row(kept_node_id)],
         ),
     ):
@@ -2349,14 +2349,14 @@ def test_replace_graph_blocks_cross_team_connector_binding(client: TestClient) -
     )
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[mismatch]),
         ) as find_mismatches,
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -2378,22 +2378,22 @@ def test_replace_graph_allows_same_team_connector_binding(client: TestClient) ->
     validation = MagicMock(issues=[])
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -2457,14 +2457,14 @@ def test_replace_graph_org_pipeline_pinning_team_private_model_backend_is_409(cl
 
     app.dependency_overrides[get_db_session] = override_session
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph"),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -2481,10 +2481,10 @@ def test_replace_graph_missing_pipeline_returns_404(client: TestClient) -> None:
     node = _graph_node_with_connector_binding(connector_id)
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -2511,15 +2511,15 @@ def test_update_pipeline_with_graph_blocks_cross_team_connector_binding(client: 
     )
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[mismatch]),
         ),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
-        patch("modulo.api.routes.pipelines.update_pipeline") as update_pipeline,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph") as replace_graph,
+        patch("farna.api.routes.pipelines.update_pipeline") as update_pipeline,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2542,23 +2542,23 @@ def test_update_pipeline_with_graph_uses_effective_owner_team(client: TestClient
     validation = MagicMock(issues=[])
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ) as find_mismatches,
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             new=AsyncMock(return_value=([], [])),
         ) as resolve_refs,
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2582,13 +2582,13 @@ def test_update_pipeline_with_graph_blocks_cross_team_model_backend_binding(clie
     node = _graph_node_with_connector_binding(connector_id)
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            "farna.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             new=AsyncMock(
                 side_effect=HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -2597,10 +2597,10 @@ def test_update_pipeline_with_graph_blocks_cross_team_model_backend_binding(clie
                 )
             ),
         ) as resolve_refs,
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2788,10 +2788,10 @@ def test_update_pipeline_returns_200(client: TestClient) -> None:
     pipeline.name = "Updated"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"name": "Updated"})
 
@@ -2806,10 +2806,10 @@ def test_update_pipeline_autonomy_level(client: TestClient) -> None:
     updated.default_autonomy_level = "fully_autonomous"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=updated),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=updated),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2826,10 +2826,10 @@ def test_update_pipeline_autonomy_level_unchanged_no_audit(client: TestClient) -
     pipeline.default_autonomy_level = "manual_approval"
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.append_audit_event") as mock_audit,
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.append_audit_event") as mock_audit,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2842,10 +2842,10 @@ def test_update_pipeline_autonomy_level_unchanged_no_audit(client: TestClient) -
 
 def test_update_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/pipelines/{uuid.uuid4()}", json={"name": "x"})
 
@@ -2893,10 +2893,10 @@ def test_update_pipeline_accepts_stale_run_timeout(client: TestClient) -> None:
     pipeline.stale_run_timeout_minutes = 45
 
     with (
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline) as update,
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline) as update,
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -2923,9 +2923,9 @@ def test_update_pipeline_openapi_schema_not_nullable() -> None:
 
 def test_delete_pipeline_returns_204(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=_make_pipeline()),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.soft_delete_pipeline", return_value=_make_pipeline()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
@@ -2934,9 +2934,9 @@ def test_delete_pipeline_returns_204(client: TestClient) -> None:
 
 def test_delete_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.soft_delete_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.soft_delete_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/pipelines/{uuid.uuid4()}")
 
@@ -2955,15 +2955,15 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
     cloned.id = uuid.uuid4()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=True,
         ),
-        patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
+        patch("farna.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -2992,15 +2992,15 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
     cloned.id = uuid.uuid4()
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=source),
         patch(
-            "modulo.api.routes.pipelines.check_pipeline_name_available",
+            "farna.api.routes.pipelines.check_pipeline_name_available",
             return_value=True,
         ),
-        patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
+        patch("farna.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/clone",
@@ -3022,9 +3022,9 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
 
 def test_clone_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(f"/api/v1/pipelines/{uuid.uuid4()}/clone", json={})
 
@@ -3107,7 +3107,7 @@ class TestPipelineFolderCyclePrevention:
         session = _folder_parent_chain_session({folder_id: None})
 
         with (
-            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
+            patch("farna.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
             pytest.raises(ValueError, match="cannot be its own parent"),
         ):
             asyncio.run(update_folder(session, folder_id, {"parent_id": folder_id}))
@@ -3118,7 +3118,7 @@ class TestPipelineFolderCyclePrevention:
         session = _folder_parent_chain_session({f2: f3, f3: f1, f1: None})
 
         with (
-            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(f1)),
+            patch("farna.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(f1)),
             pytest.raises(ValueError, match="descendants"),
         ):
             asyncio.run(update_folder(session, f1, {"parent_id": f2}))
@@ -3132,7 +3132,7 @@ class TestPipelineFolderCyclePrevention:
         session = _folder_parent_chain_session(chain)
 
         with (
-            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(target)),
+            patch("farna.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(target)),
             pytest.raises(ValueError, match="nesting depth"),
         ):
             asyncio.run(update_folder(session, target, {"parent_id": ids[0]}))
@@ -3145,8 +3145,8 @@ class TestPipelineFolderCyclePrevention:
         folder.parent_id = None
 
         with (
-            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=folder),
-            patch("modulo.db.crud.pipeline_folder.apply_updates"),
+            patch("farna.db.crud.pipeline_folder.get_folder", return_value=folder),
+            patch("farna.db.crud.pipeline_folder.apply_updates"),
         ):
             result = asyncio.run(update_folder(session, folder_id, {"parent_id": parent_id}))
         assert result is folder
@@ -3160,7 +3160,7 @@ class TestPipelineFolderCyclePrevention:
         session = _folder_parent_chain_session({})  # foreign parent is not in this org
 
         with (
-            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
+            patch("farna.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
             pytest.raises(ValueError, match="Parent folder not found"),
         ):
             asyncio.run(update_folder(session, folder_id, {"parent_id": foreign_parent_id}))
@@ -3221,9 +3221,9 @@ class TestPipelineFolderEndpoints:
 
     def test_list_folders_returns_200(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipeline_folders.list_folders", return_value=[_make_folder()]),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.list_folders", return_value=[_make_folder()]),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipeline-folders")
 
@@ -3233,9 +3233,9 @@ class TestPipelineFolderEndpoints:
     def test_create_folder_returns_201(self, client: TestClient) -> None:
         folder = _make_folder()
         with (
-            patch("modulo.api.routes.pipeline_folders.create_folder", return_value=folder),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.create_folder", return_value=folder),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/pipeline-folders", json={"name": "QA Folder"})
 
@@ -3245,11 +3245,11 @@ class TestPipelineFolderEndpoints:
     def test_create_folder_rejects_invalid_parent_returns_422(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.pipeline_folders.create_folder",
+                "farna.api.routes.pipeline_folders.create_folder",
                 side_effect=ValueError("Folder nesting depth would exceed 8 levels"),
             ),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.post(
                 "/api/v1/pipeline-folders",
@@ -3262,9 +3262,9 @@ class TestPipelineFolderEndpoints:
         folder = _make_folder()
         folder.name = "Renamed"
         with (
-            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=folder),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.update_folder", return_value=folder),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipeline-folders/{folder.id}", json={"name": "Renamed"})
 
@@ -3275,11 +3275,11 @@ class TestPipelineFolderEndpoints:
         folder_id = uuid.uuid4()
         with (
             patch(
-                "modulo.api.routes.pipeline_folders.update_folder",
+                "farna.api.routes.pipeline_folders.update_folder",
                 side_effect=ValueError("A folder cannot be its own parent"),
             ),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipeline-folders/{folder_id}", json={"parent_id": str(folder_id)})
 
@@ -3289,11 +3289,11 @@ class TestPipelineFolderEndpoints:
         folder_id = uuid.uuid4()
         with (
             patch(
-                "modulo.api.routes.pipeline_folders.update_folder",
+                "farna.api.routes.pipeline_folders.update_folder",
                 side_effect=ValueError("Setting this parent would create a folder ancestry cycle"),
             ),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.patch(
                 f"/api/v1/pipeline-folders/{folder_id}",
@@ -3304,9 +3304,9 @@ class TestPipelineFolderEndpoints:
 
     def test_update_folder_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=None),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.update_folder", return_value=None),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipeline-folders/{uuid.uuid4()}", json={"name": "x"})
 
@@ -3316,9 +3316,9 @@ class TestPipelineFolderEndpoints:
         folder = _make_folder()
         folder.sort_order = 3
         with (
-            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=folder),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.update_folder", return_value=folder),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipeline-folders/{folder.id}/move", json={"sort_order": 3})
 
@@ -3327,9 +3327,9 @@ class TestPipelineFolderEndpoints:
 
     def test_delete_folder_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipeline_folders.delete_folder", return_value=True),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.delete_folder", return_value=True),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/pipeline-folders/{uuid.uuid4()}")
 
@@ -3337,9 +3337,9 @@ class TestPipelineFolderEndpoints:
 
     def test_delete_folder_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipeline_folders.delete_folder", return_value=False),
-            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
-            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+            patch("farna.api.routes.pipeline_folders.delete_folder", return_value=False),
+            patch("farna.api.routes.pipeline_folders.set_rls_org"),
+            patch("farna.api.routes.pipeline_folders.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/pipeline-folders/{uuid.uuid4()}")
 
@@ -3349,9 +3349,9 @@ class TestPipelineFolderEndpoints:
         pipeline = _make_pipeline()
         pipeline.folder_id = uuid.uuid4()
         with (
-            patch("modulo.api.routes.pipelines.move_pipeline_to_folder", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.move_pipeline_to_folder", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}/folder", json={"folder_id": str(pipeline.folder_id)})
 
@@ -3361,11 +3361,11 @@ class TestPipelineFolderEndpoints:
     def test_move_pipeline_to_missing_folder_returns_422(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.pipelines.move_pipeline_to_folder",
+                "farna.api.routes.pipelines.move_pipeline_to_folder",
                 side_effect=ValueError("Folder not found"),
             ),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.patch(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/folder",
@@ -3376,9 +3376,9 @@ class TestPipelineFolderEndpoints:
 
     def test_move_pipeline_to_folder_pipeline_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipelines.move_pipeline_to_folder", return_value=None),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.move_pipeline_to_folder", return_value=None),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}/folder", json={"folder_id": None})
 
@@ -3394,8 +3394,8 @@ class TestCompositeValidation:
     """Unit coverage for composite node validation — previously only BDD."""
 
     def _run_check(self, template_sub_graph: object, output_validation: dict | None = None) -> list[dict]:
-        from modulo.core.graph_validator import GraphValidator
-        from modulo.core.graph_validator._types import ValidationResult
+        from farna.core.graph_validator import GraphValidator
+        from farna.core.graph_validator._types import ValidationResult
 
         validator = GraphValidator()
         result = ValidationResult()

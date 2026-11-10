@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher.runtime_config import (
+from farna.launcher.runtime_config import (
     RUNTIME_CONFIG_FILENAME,
     RUNTIME_CONFIG_KEYS,
     build_runtime_config_payload,

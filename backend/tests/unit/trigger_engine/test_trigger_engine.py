@@ -34,8 +34,8 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from modulo.auth.secret_storage import DecryptionError
-from modulo.core.trigger_engine import (
+from farna.auth.secret_storage import DecryptionError
+from farna.core.trigger_engine import (
     _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS,
     _CI_FAILURE_COALESCE_WINDOW_SECONDS,
     _DEDUP_TTL_SECONDS,
@@ -60,7 +60,7 @@ from modulo.core.trigger_engine import (
     verify_hmac,
     verify_timestamp,
 )
-from modulo.db.models.trigger import Trigger
+from farna.db.models.trigger import Trigger
 from tests.unit.api.mock_session import configure_mock_session
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ def _replay_auth_headers() -> dict[str, str]:
     principal is scoped to :data:`_WEBHOOK_ORG_ID` so it owns the fixture's
     trigger.
     """
-    from modulo.auth.jwt import create_access_token
+    from farna.auth.jwt import create_access_token
 
     token = create_access_token(
         "ci@test.local",
@@ -254,7 +254,7 @@ def _org_not_paused() -> Generator[None, None, None]:
     as paused. Paused-specific tests override this with a nested
     ``return_value=True``.
     """
-    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
+    with patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
         yield
 
 
@@ -277,11 +277,11 @@ def webhook_client() -> Generator[TestClient, None, None]:
         sys.modules["langchain_google_vertexai"] = _mock_lgv
 
     try:
-        from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
-        from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-        from modulo.settings import Settings, get_settings
+        from farna.api.dependencies import _get_engine, get_db_session, get_system_db_session
+        from farna.api.main import app
+        from farna.auth.dependencies import get_current_user
+        from farna.auth.jwt import AuthenticatedPrincipal
+        from farna.settings import Settings, get_settings
     finally:
         if not _was_in_sys:
             sys.modules.pop("langchain_google_vertexai", None)
@@ -346,15 +346,15 @@ def webhook_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = _principal
 
     with (
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
-        patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
+        patch("farna.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
         # Present a PROVISIONED system role. The predicate reads a process-global
         # flag set when the system engine is first built, so without this patch
         # the answer depends on which test module initialised the engine first
         # (unset MODULO_SYSTEM_DATABASE_URL here → fallback → every delivery
         # 503s). The dedicated 503 test patches this same seam to True.
-        patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=False),
+        patch("farna.api.routes.webhooks.system_engine_is_fallback", return_value=False),
     ):
         yield TestClient(app, raise_server_exceptions=False)
 
@@ -708,10 +708,10 @@ class TestTriggerEngineEvaluateCondition:
         settings.redis_url = ""
         settings.modulo_db = "postgresql"
         with (
-            patch("modulo.settings.get_settings", return_value=settings),
-            patch("modulo.core.secrets_backend.create_secrets_backend") as mock_sb,
-            patch("modulo.core.trigger_engine.polling._build_polling_connector") as mock_build,
-            patch("modulo.core.trigger_engine.polling.evaluate_condition") as mock_eval,
+            patch("farna.settings.get_settings", return_value=settings),
+            patch("farna.core.secrets_backend.create_secrets_backend") as mock_sb,
+            patch("farna.core.trigger_engine.polling._build_polling_connector") as mock_build,
+            patch("farna.core.trigger_engine.polling.evaluate_condition") as mock_eval,
         ):
             backend = AsyncMock()
             backend.get_secret.return_value = '{"token": "test-token"}'
@@ -831,8 +831,8 @@ async def test_handle_webhook_success_no_hmac() -> None:
     run_mock.id = uuid.uuid4()
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         result = await TriggerEngine().handle_webhook(
             session,
@@ -865,8 +865,8 @@ async def test_handle_webhook_success_with_hmac() -> None:
     run_mock.id = uuid.uuid4()
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=ts),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=ts),
     ):
         run, _, _ = await TriggerEngine().handle_webhook(
             session,
@@ -893,8 +893,8 @@ async def test_handle_webhook_github_signature_verified_skips_modulo_checks() ->
     run_mock.id = uuid.uuid4()
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         run, _, _ = await TriggerEngine().handle_webhook(
             session,
@@ -942,8 +942,8 @@ async def test_handle_webhook_verifies_hmac_after_secret_resync() -> None:
     run_mock = MagicMock()
     run_mock.id = uuid.uuid4()
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=ts),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=ts),
     ):
         run, _, _ = await TriggerEngine().handle_webhook(
             current_session,
@@ -987,8 +987,8 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
     run_mock.id = uuid.uuid4()
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         _, _, input_payload = await TriggerEngine().handle_webhook(
             session,
@@ -1061,7 +1061,7 @@ async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
     settings cache in a combined test run."""
     import base64
 
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     alien_token = Fernet(Fernet.generate_key().decode()).encrypt(b"alien-secret").decode()
     trigger = _make_trigger(hmac_secret=alien_token)
@@ -1075,8 +1075,8 @@ async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
     )
 
     with (
-        patch("modulo.settings.get_settings", return_value=fake_settings),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.settings.get_settings", return_value=fake_settings),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
         pytest.raises(DecryptionError),
     ):
         await TriggerEngine().handle_webhook(
@@ -1172,7 +1172,7 @@ async def test_handle_webhook_refuses_at_concurrency_limit_without_creating_run(
     trigger = _make_trigger(max_concurrent_runs=2)
     session = _make_session(trigger=trigger, active_run_count=2)
     with (
-        patch("modulo.core.trigger_engine.create_run", new_callable=AsyncMock) as create_run,
+        patch("farna.core.trigger_engine.create_run", new_callable=AsyncMock) as create_run,
         pytest.raises(ConcurrentRunLimitError) as excinfo,
     ):
         await TriggerEngine().handle_webhook(
@@ -1231,7 +1231,7 @@ class TestCiFailureCoalesce:
         stable — an extra ``session.execute`` would shift every later result.
         """
         with patch(
-            "modulo.core.trigger_engine.has_in_flight_ci_failure_run",
+            "farna.core.trigger_engine.has_in_flight_ci_failure_run",
             new_callable=AsyncMock,
             return_value=False,
         ):
@@ -1278,8 +1278,8 @@ class TestCiFailureCoalesce:
         ci_calls: list[Any] = []
 
         with (
-            patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, False], ci_calls)),
         ):
             run1, te1, _ = await self._deliver(
@@ -1319,8 +1319,8 @@ class TestCiFailureCoalesce:
         run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
 
         with (
-            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, True], [])),
         ):
             run1, _, _ = await self._deliver(
@@ -1345,8 +1345,8 @@ class TestCiFailureCoalesce:
         run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
 
         with (
-            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True, True], [])),
         ):
             await self._deliver(
@@ -1372,8 +1372,8 @@ class TestCiFailureCoalesce:
         ci_calls: list[Any] = []
 
         with (
-            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
         ):
             await self._deliver(
@@ -1401,8 +1401,8 @@ class TestCiFailureCoalesce:
             return True
 
         with (
-            patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=AsyncMock(side_effect=_flaky)),
         ):
             run, _, _ = await self._deliver(
@@ -1419,8 +1419,8 @@ class TestCiFailureCoalesce:
         ci_calls: list[Any] = []
 
         with (
-            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
         ):
             await self._deliver(
@@ -1445,8 +1445,8 @@ class TestCiFailureCoalesce:
         ci_calls: list[Any] = []
 
         with (
-            patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([True], ci_calls)),
         ):
             await self._deliver(
@@ -1465,8 +1465,8 @@ class TestCiFailureCoalesce:
         run1_mock.id, run2_mock.id = uuid.uuid4(), uuid.uuid4()
 
         with (
-            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             # Empty scripted results: if the gate consulted the ci key at all, the
             # pop(0) would raise IndexError and the test would fail loudly.
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([], [])),
@@ -1493,8 +1493,8 @@ class TestCiFailureCoalesce:
         ci_calls: list[Any] = []
 
         with (
-            patch("modulo.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
-            patch("modulo.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
+            patch("farna.core.trigger_engine.create_run", side_effect=[run1_mock, run2_mock]) as mock_create,
+            patch("farna.core.trigger_engine.evaluate_backpressure", AsyncMock(return_value=(False, ""))),
             patch.object(TriggerEngine, "_try_insert_dedup", new=self._dedup_patch([], ci_calls)),
         ):
             await self._deliver(
@@ -1539,7 +1539,7 @@ async def test_handle_webhook_event_type_not_accepted() -> None:
     session = _make_session(trigger=trigger, active_run_count=0)
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
         pytest.raises(EventNotAcceptedError, match="none of the accepted event types"),
     ):
         await TriggerEngine().handle_webhook(
@@ -1566,8 +1566,8 @@ async def test_handle_webhook_event_type_accepted_passes() -> None:
 
     run_mock = MagicMock(id=uuid.uuid4())
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -1629,8 +1629,8 @@ async def test_handle_webhook_event_value_filter_rejects() -> None:
     session = _make_session(trigger=trigger, active_run_count=0)
 
     with (
-        patch("modulo.core.trigger_engine.create_run") as mock_create,
-        patch("modulo.core.trigger_engine.TriggerEngine._try_insert_dedup") as mock_dedup,
+        patch("farna.core.trigger_engine.create_run") as mock_create,
+        patch("farna.core.trigger_engine.TriggerEngine._try_insert_dedup") as mock_dedup,
         pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().handle_webhook(
@@ -1659,7 +1659,7 @@ async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
     session = _make_session(trigger=trigger, active_run_count=0)
 
     with (
-        patch("modulo.core.trigger_engine.create_run") as mock_create,
+        patch("farna.core.trigger_engine.create_run") as mock_create,
         pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().handle_webhook(
@@ -1688,8 +1688,8 @@ async def test_handle_webhook_event_value_filter_matches_passes() -> None:
 
     run_mock = MagicMock(id=uuid.uuid4())
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -1714,8 +1714,8 @@ async def test_handle_webhook_event_value_filter_absent_unchanged() -> None:
 
     run_mock = MagicMock(id=uuid.uuid4())
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -1747,7 +1747,7 @@ async def test_handle_webhook_rate_limit_exceeded() -> None:
     )
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
         pytest.raises(PipelineRateLimitError) as exc_info,
     ):
         await TriggerEngine().handle_webhook(
@@ -1768,7 +1768,7 @@ async def test_handle_webhook_rate_limit_exceeded() -> None:
         c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None) == "rate_limited"
     ]
     assert len(rate_limited) == 1
-    from modulo.core.trigger_engine.pre_guardrail import canonical_payload_hash
+    from farna.core.trigger_engine.pre_guardrail import canonical_payload_hash
 
     assert rate_limited[0].raw_payload_hash == canonical_payload_hash(_RAW_PAYLOAD)
     assert rate_limited[0].raw_payload_hash != sha256_hex(_RAW_BODY)
@@ -1791,8 +1791,8 @@ async def test_handle_webhook_rate_limit_pass_through_sets_key() -> None:
     )
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())) as mock_create,
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())) as mock_create,
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -1821,7 +1821,7 @@ async def test_handle_webhook_rate_limit_from_trigger_config() -> None:
     )
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
         pytest.raises(PipelineRateLimitError) as exc_info,
     ):
         await TriggerEngine().handle_webhook(
@@ -1853,8 +1853,8 @@ async def test_handle_webhook_pipeline_not_found_skips_rate_limit() -> None:
     )
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())) as mock_create,
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())) as mock_create,
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -1874,14 +1874,14 @@ async def test_handle_webhook_pipeline_not_found_skips_rate_limit() -> None:
 async def test_handle_webhook_paused_org_raises_and_writes_no_dedup() -> None:
     """Org-wide pause: handle_webhook raises TriggersPausedError and does NOT
     attempt the dedup insert (no add, no run, no accepted event)."""
-    from modulo.core.exceptions import TriggersPausedError
+    from farna.core.exceptions import TriggersPausedError
 
     trigger = _make_trigger()
     session = _make_session(trigger=trigger, active_run_count=0)
 
     with (
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("farna.core.trigger_engine.time.time", return_value=_VALID_TS),
         pytest.raises(TriggersPausedError) as exc_info,
     ):
         await TriggerEngine().handle_webhook(
@@ -2001,7 +2001,7 @@ async def test_replay_event_success() -> None:
     )
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock):
+    with patch("farna.core.trigger_engine.create_run", return_value=run_mock):
         run, te, input_payload = await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -2138,7 +2138,7 @@ async def test_replay_event_value_filter_not_accepted() -> None:
         active_run_count=0,
     )
     with (
-        patch("modulo.core.trigger_engine.create_run") as mock_create,
+        patch("farna.core.trigger_engine.create_run") as mock_create,
         pytest.raises(EventNotAcceptedError, match="event value filters"),
     ):
         await TriggerEngine().replay_event(
@@ -2169,7 +2169,7 @@ async def test_replay_event_accepted_event_present_passes() -> None:
     )
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock):
+    with patch("farna.core.trigger_engine.create_run", return_value=run_mock):
         run, te, input_payload = await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -2246,7 +2246,7 @@ async def test_replay_event_pipeline_not_found_skips_rate_limit() -> None:
     )
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
+    with patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
         run, te, _ = await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -2283,7 +2283,7 @@ async def test_replay_event_rate_limit_not_exceeded_passes() -> None:
     )
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
+    with patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
         run, te, _ = await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -2298,7 +2298,7 @@ async def test_replay_event_rate_limit_not_exceeded_passes() -> None:
 
 async def test_replay_event_paused_org_raises() -> None:
     """Org-wide pause: replay_event raises TriggersPausedError and writes nothing."""
-    from modulo.core.exceptions import TriggersPausedError
+    from farna.core.exceptions import TriggersPausedError
 
     trigger = _make_trigger()
     event = MagicMock()
@@ -2312,7 +2312,7 @@ async def test_replay_event_paused_org_raises() -> None:
     )
 
     with (
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
         pytest.raises(TriggersPausedError) as exc_info,
     ):
         await TriggerEngine().replay_event(
@@ -2535,7 +2535,7 @@ def test_webhook_route(
     else:
         nargs = mock_factory.__code__.co_argcount
         mock_obj = mock_factory(tid, eid) if nargs == 2 else mock_factory()
-        with patch(f"modulo.api.routes.webhooks._trigger_engine.{patch_target}", new=mock_obj):
+        with patch(f"farna.api.routes.webhooks._trigger_engine.{patch_target}", new=mock_obj):
             resp = webhook_client.post(f"/api/v1/triggers/{tid}/webhook{url_suffix}", **request_kwargs)
 
     assert resp.status_code == expected_status
@@ -2666,7 +2666,7 @@ class TestAgentSignalPauseCheck:
         """Paused org: fire_agent_signal records exactly ONE paused event and
         skips the trigger BEFORE the concurrency check / snapshot resolution —
         no wasted snapshot work, no concurrency_limit_reached / invalid_snapshot_id."""
-        from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+        from farna.core.trigger_engine.agent_signal import fire_agent_signal
 
         trigger = _make_signal_trigger()
         session = MagicMock()
@@ -2682,7 +2682,7 @@ class TestAgentSignalPauseCheck:
         session.execute = _execute
 
         with patch(
-            "modulo.core.trigger_engine.agent_signal.org_is_paused",
+            "farna.core.trigger_engine.agent_signal.org_is_paused",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -2705,7 +2705,7 @@ class TestAgentSignalPauseCheck:
     async def test_not_paused_org_still_fires(self) -> None:
         """A not-paused org fires normally — the early check is a skip, not a
         block, and the create_run gate stays the TOCTOU backstop."""
-        from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+        from farna.core.trigger_engine.agent_signal import fire_agent_signal
 
         trigger = _make_signal_trigger(snapshot_id=str(uuid.uuid4()))
         session = MagicMock()
@@ -2727,11 +2727,11 @@ class TestAgentSignalPauseCheck:
 
         with (
             patch(
-                "modulo.core.trigger_engine.agent_signal.org_is_paused",
+                "farna.core.trigger_engine.agent_signal.org_is_paused",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
-            patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as create_run,
+            patch("farna.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as create_run,
         ):
             run_mock = MagicMock(id=uuid.uuid4())
             create_run.return_value = run_mock
@@ -2764,7 +2764,7 @@ class TestResolveChildNodeOutputSplitDetection:
 
     def test_real_split_envelope_takes_the_direct_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The production envelope resolves WITHOUT a legacy re-split."""
-        from modulo.core.trigger_engine import agent_signal
+        from farna.core.trigger_engine import agent_signal
 
         calls: list[Any] = []
 
@@ -2788,7 +2788,7 @@ class TestResolveChildNodeOutputSplitDetection:
         """A legacy envelope (artifacts + output, no telemetry) must still be
         resolved through ``split_node_output`` — the direct branch is keyed on
         the canonical predicate, not on a bare ``output`` key."""
-        from modulo.core.trigger_engine import agent_signal
+        from farna.core.trigger_engine import agent_signal
 
         calls: list[Any] = []
 

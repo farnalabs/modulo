@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:

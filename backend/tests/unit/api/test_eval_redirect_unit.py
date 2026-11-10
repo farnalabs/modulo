@@ -16,16 +16,16 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     delete_eval_definition,
     update_eval_definition,
 )
-from modulo.core.eval_engine.eval_definition_write import (
+from farna.core.eval_engine.eval_definition_write import (
     EvalWriteOptions,
     create_or_update_eval,
     validate_guardrail_request,
 )
-from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -69,7 +69,7 @@ def _make_session(return_obj: object) -> AsyncMock:
 
 
 def _set_context(role: str) -> None:
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_org_id,
@@ -85,7 +85,7 @@ def _set_context(role: str) -> None:
 
 
 def _clear_context() -> None:
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_org_id,
@@ -111,10 +111,10 @@ _VALID_GUARDRAIL_CONFIG = {"action": "block", "type": "regex"}
 class TestGuardrailBranchDispatch:
     """Criterion 7   guardrail-typed writes run the config validator only."""
 
-    @patch("modulo.db.models.policy_gate.PolicyGate", new_callable=MagicMock)
-    @patch("modulo.core.eval_engine.eval_definition_write.validate_binding", new_callable=MagicMock)
+    @patch("farna.db.models.policy_gate.PolicyGate", new_callable=MagicMock)
+    @patch("farna.core.eval_engine.eval_definition_write.validate_binding", new_callable=MagicMock)
     @patch(
-        "modulo.core.eval_engine.eval_definition_write.validate_guardrail_request",
+        "farna.core.eval_engine.eval_definition_write.validate_guardrail_request",
         new_callable=MagicMock,
     )
     async def test_guardrail_routes_to_validator_not_binding(
@@ -214,7 +214,7 @@ class TestValidatorMatrix:
         # at authoring, mirroring ``_validate_config_item`` (config-as-code).
         with (
             patch(
-                "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+                "farna.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
                 return_value="",
             ),
             pytest.raises(HTTPException) as excinfo,
@@ -235,7 +235,7 @@ class TestValidatorMatrix:
         # the envelope fall-through arc (which now lands on the new block) hit.
         with (
             patch(
-                "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+                "farna.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
                 return_value="",
             ),
             pytest.raises(HTTPException) as excinfo,
@@ -253,7 +253,7 @@ class TestValidatorMatrix:
     def test_destroy_redaction_with_pepper_passes(self) -> None:
         # The SAME config is accepted once the pepper is configured.
         with patch(
-            "modulo.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
+            "farna.core.guardrails.redaction_mode.resolve_guardrail_destroy_pepper",
             return_value="pepper",
         ):
             result = validate_guardrail_request(
@@ -298,8 +298,8 @@ class TestValidatorMatrix:
 class TestSuiteScopedCreate:
     """Criterion 9   suite-scoped non-guardrail writes persist Eval WITHOUT a gate."""
 
-    @patch("modulo.db.models.policy_gate.PolicyGate", new_callable=MagicMock)
-    @patch("modulo.core.eval_engine.eval_definition_write.validate_binding", new_callable=MagicMock)
+    @patch("farna.db.models.policy_gate.PolicyGate", new_callable=MagicMock)
+    @patch("farna.core.eval_engine.eval_definition_write.validate_binding", new_callable=MagicMock)
     async def test_suite_scoped_no_gate_no_binding(self, mock_binding: MagicMock, mock_gate_cls: MagicMock) -> None:
         session = _make_session(None)
 
@@ -367,7 +367,7 @@ class TestBindingViolationPrecedesPersistence:
 
         with (
             patch(
-                "modulo.core.eval_engine.eval_definition_write.validate_binding",
+                "farna.core.eval_engine.eval_definition_write.validate_binding",
                 side_effect=_violate,
             ),
             pytest.raises(PolicyGateBindingViolationError, match="detection mismatch"),
@@ -414,9 +414,9 @@ class TestMcpDeleteCutover:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_guardrail_soft_delete_stamps_gate_too(
         self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock
     ) -> None:
@@ -451,9 +451,9 @@ class TestMcpDeleteCutover:
             "purge": False,
         }
 
-    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_guardrail_soft_delete_without_live_gate(
         self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock
     ) -> None:
@@ -474,8 +474,8 @@ class TestMcpDeleteCutover:
         assert guardrail.deleted_by == _USER_ID
         assert session.delete.call_count == 0
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_hard_delete_blocked_by_decisions(self, mock_session: AsyncMock, mock_auth: AsyncMock) -> None:
         """Criterion 20   IntegrityError on hard delete maps to the
         ``delete_blocked_by_decisions`` error envelope."""
@@ -491,8 +491,8 @@ class TestMcpDeleteCutover:
         assert result["error"] == "delete_blocked_by_decisions"
         assert session.delete.call_count == 1
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_guardrail_config_violation_returns_validation_failed(
         self, mock_session: AsyncMock, mock_auth: AsyncMock
     ) -> None:
@@ -520,7 +520,7 @@ class TestGuardrailConfigSoftDeletes:
         """Criterion 21   rows the config layer owns and no longer proposes
         are soft-deleted (deleted_at/deleted_by stamped), node-bound rows are
         NEVER reconciled away."""
-        from modulo.api.routes.guardrail_config import _apply_guardrail_deletes
+        from farna.api.routes.guardrail_config import _apply_guardrail_deletes
 
         org_level = _make_eval(name="no-longer-proposed", node_id=None)
         node_bound = _make_eval(name="also-absent", node_id=uuid.uuid4())
@@ -577,10 +577,10 @@ class TestEvaluationModeCarriedOrPreserved:
         recorder = AsyncMock(return_value=eval_row)
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new_callable=AsyncMock, return_value=True),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(session)),
-            patch("modulo.core.eval_engine.eval_definition_write.create_or_update_eval", recorder),
-            patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": str(eval_row.id)}),
+            patch("farna.api.mcp_server.validate_current_auth", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(session)),
+            patch("farna.core.eval_engine.eval_definition_write.create_or_update_eval", recorder),
+            patch("farna.api.routes.evals._eval_def_to_dict", return_value={"id": str(eval_row.id)}),
         ):
             result = await update_eval_definition(eval_id=str(eval_row.id), name="renamed")
 

@@ -49,7 +49,7 @@ def _assert_json_serializable(value: Any, label: str) -> None:
 
 
 def assert_result_shape(result: Any) -> None:
-    from modulo.connectors.base import ConnectorResult
+    from farna.connectors.base import ConnectorResult
 
     assert isinstance(result, ConnectorResult), f"Expected ConnectorResult, got {type(result).__name__}"
     assert isinstance(result.records, list), f"ConnectorResult.records must be a list, got {type(result.records)}"
@@ -74,7 +74,7 @@ def assert_write_result_shape(result: Any) -> None:
 
 
 def assert_health_shape(result: Any) -> None:
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     assert isinstance(result, HealthResult), f"Expected HealthResult, got {type(result).__name__}"
     assert isinstance(result.ok, bool)

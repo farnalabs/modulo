@@ -8,7 +8,7 @@ so a database outage was reported by the publish endpoint as a 422
 "pin references unknown primitive" instead of a 503.
 
 The rule mirrors the no-silent-failure-paths principle: every
-``except SQLAlchemyError`` handler under ``src/modulo/api`` must do at least
+``except SQLAlchemyError`` handler under ``src/farna/api`` must do at least
 one of:
 
 * log the failure (``logger``/``_log``/``logging`` receiver, or a
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna" / "api"
 
 _LOG_METHODS = {"warning", "exception", "error", "info", "debug", "critical"}
 _LOG_RECEIVERS = {"logger", "_log", "log", "logging", "_logger"}

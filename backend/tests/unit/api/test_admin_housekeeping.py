@@ -8,13 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.admin_housekeeping import CleanupResponse
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.admin_housekeeping import CleanupResponse
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.housekeeping import Candidate, CategoryResult, Scanner
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -208,8 +208,8 @@ class TestListHousekeeping:
 
     def test_returns_200_with_categories(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin_housekeeping.scan_all", return_value=[_make_scan_response()]),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.scan_all", return_value=[_make_scan_response()]),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -227,8 +227,8 @@ class TestListHousekeeping:
 
     def test_returns_200_when_no_candidates(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin_housekeeping.scan_all", return_value=[]),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.scan_all", return_value=[]),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -247,10 +247,10 @@ class TestListHousekeeping:
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.scan_all",
+                "farna.api.routes.admin_housekeeping.scan_all",
                 side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
             ),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 501
@@ -258,10 +258,10 @@ class TestListHousekeeping:
     def test_returns_503_on_sqlalchemy_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.scan_all",
+                "farna.api.routes.admin_housekeeping.scan_all",
                 side_effect=SQLAlchemyError("connection lost"),
             ),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 503
@@ -269,10 +269,10 @@ class TestListHousekeeping:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.scan_all",
+                "farna.api.routes.admin_housekeeping.scan_all",
                 side_effect=RuntimeError("boom"),
             ),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 500
@@ -306,8 +306,8 @@ class TestListHousekeeping:
             ),
         ]
         with (
-            patch("modulo.core.housekeeping._SCANNERS", scanners),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.core.housekeeping._SCANNERS", scanners),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.get(self.URL)
 
@@ -330,7 +330,7 @@ class TestPerformCleanup:
 
     def test_deletes_selected_items(self, client: TestClient) -> None:
         target_id = str(uuid.uuid4())
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin_nested = MagicMock(return_value=_make_begin_nested())
             session.execute = AsyncMock(return_value=make_empty_execute_result())
@@ -357,7 +357,7 @@ class TestPerformCleanup:
         advance (FAR-1857). This exercises the False arm of the count-only-
         after-release guard in the REST cleanup route.
         """
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin_nested = MagicMock(return_value=_make_begin_nested())
             session.execute = AsyncMock(return_value=make_empty_execute_result())
@@ -376,7 +376,7 @@ class TestPerformCleanup:
         session.delete.assert_not_awaited()
 
     def test_unknown_entity_type_reports_error(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin_nested = MagicMock(return_value=_make_begin_nested())
 
@@ -395,7 +395,7 @@ class TestPerformCleanup:
         assert body["errors"] == [{"entity_type": "does_not_exist", "error": "Unknown entity type: does_not_exist"}]
 
     def test_invalid_org_fk_is_triage_only(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -417,7 +417,7 @@ class TestPerformCleanup:
         session.delete.assert_not_awaited()
 
     def test_integrity_error_does_not_block_other_types(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
 
             first = MagicMock()
@@ -464,7 +464,7 @@ class TestPerformCleanup:
         assert resp.status_code == 401
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
 
             def raise_programming_error(*_args, **_kwargs):  # type: ignore[no-untyped-def]
@@ -485,7 +485,7 @@ class TestPerformCleanup:
         assert resp.status_code == 501
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.begin = MagicMock(side_effect=RuntimeError("boom"))
 
@@ -512,10 +512,10 @@ class TestPurgeCheckpoints:
     def test_purges_checkpoints_and_reports_bytes(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                "farna.api.routes.admin_housekeeping.purge_terminal_checkpoints",
                 new=AsyncMock(return_value={"checkpoints_purged": 12, "threads_purged": 3, "bytes_freed": 4096}),
             ),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.post(self.URL, json={"max_age_days": 5, "confirm": True})
 
@@ -528,10 +528,10 @@ class TestPurgeCheckpoints:
     def test_scopes_purge_to_caller_org_with_requested_age(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                "farna.api.routes.admin_housekeeping.purge_terminal_checkpoints",
                 new=AsyncMock(return_value={"checkpoints_purged": 0, "threads_purged": 0, "bytes_freed": 0}),
             ) as purge_mock,
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             client.post(self.URL, json={"max_age_days": 7, "confirm": True})
 
@@ -542,7 +542,7 @@ class TestPurgeCheckpoints:
         assert args.kwargs["max_age_days"] == 7
 
     def test_requires_confirm(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             resp = client.post(self.URL, json={"max_age_days": 5})
         assert resp.status_code == 400
 
@@ -557,10 +557,10 @@ class TestPurgeCheckpoints:
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_housekeeping.purge_terminal_checkpoints",
+                "farna.api.routes.admin_housekeeping.purge_terminal_checkpoints",
                 new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing table"))),
             ),
-            patch("modulo.api.routes.admin_housekeeping.set_rls_org"),
+            patch("farna.api.routes.admin_housekeeping.set_rls_org"),
         ):
             resp = client.post(self.URL, json={"max_age_days": 5, "confirm": True})
         assert resp.status_code == 501

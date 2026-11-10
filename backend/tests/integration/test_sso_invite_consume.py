@@ -28,8 +28,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.models.invitation import Invitation
-from modulo.db.models.sso_provider import SsoProvider
+from farna.db.models.invitation import Invitation
+from farna.db.models.sso_provider import SsoProvider
 
 pytestmark = pytest.mark.integration
 
@@ -240,7 +240,7 @@ async def test_sso_invite_consume_invitation_role_wins(
     async with factory() as session, session.begin():
         # set_rls_* requires an active transaction; session.begin() opens one
         # (and commits on exit) so the RLS config applies to this unit of work.
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
 
@@ -255,7 +255,7 @@ async def test_sso_invite_consume_invitation_role_wins(
         assert invitation.org_role == "operator"
 
         # Call jit_provision_user -- the function under test
-        from modulo.settings import Settings, get_settings
+        from farna.settings import Settings, get_settings
 
         get_settings.cache_clear()
         settings = Settings(
@@ -265,7 +265,7 @@ async def test_sso_invite_consume_invitation_role_wins(
             modulo_sso_default_role="runner",
         )
 
-        from modulo.auth.sso import jit_provision_user
+        from farna.auth.sso import jit_provision_user
 
         account, _returned_org_id, returned_role = await jit_provision_user(
             session,
@@ -329,13 +329,13 @@ async def test_sso_invite_consume_exactly_once(
 
     # First SSO sign-in -- consumes the invitation
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         provider = await session.get(SsoProvider, prov_db_id)
         assert provider is not None
 
-        from modulo.settings import Settings, get_settings
+        from farna.settings import Settings, get_settings
 
         get_settings.cache_clear()
         settings = Settings(
@@ -345,7 +345,7 @@ async def test_sso_invite_consume_exactly_once(
             modulo_sso_default_role="runner",
         )
 
-        from modulo.auth.sso import jit_provision_user
+        from farna.auth.sso import jit_provision_user
 
         account, _, role1 = await jit_provision_user(
             session,
@@ -363,7 +363,7 @@ async def test_sso_invite_consume_exactly_once(
 
     # Second SSO sign-in -- should find existing membership, not burn invitation
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         provider = await session.get(SsoProvider, prov_db_id)

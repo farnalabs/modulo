@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.api import main
+from farna.api import main
 
 pytestmark = [pytest.mark.integration]
 
@@ -71,7 +71,7 @@ async def test_seed_tier_catalog_prunes_stale_rows(migrated_db_url: str, monkeyp
             )
 
         # Point the seeder's engine seam at this testcontainer for this call.
-        monkeypatch.setattr("modulo.db.session.engine", engine)
+        monkeypatch.setattr("farna.db.session.engine", engine)
 
         assert STALE_SENTINEL in await _catalog_names(migrated_db_url)
 

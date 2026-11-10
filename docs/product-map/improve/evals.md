@@ -3,20 +3,20 @@ id: feat-evals
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/evals.py
-  - backend/src/modulo/core/eval_engine/__init__.py
-  - backend/src/modulo/core/eval_engine/suite_run.py
-  - backend/src/modulo/core/eval_engine/execute_suite_run.py
-  - backend/src/modulo/core/eval_engine/coverage_gap.py
-  - backend/src/modulo/core/eval_engine/regression.py
-  - backend/src/modulo/core/eval_engine/policy_gate.py
-  - backend/src/modulo/core/eval_engine/author_warnings.py
-  - backend/src/modulo/core/pipeline_engine/executor.py
-  - backend/src/modulo/core/pipeline_engine/eval_persist_order.py
-  - backend/src/modulo/db/models/policy_gate.py
-  - backend/src/modulo/db/models/policy_gate_decision.py
-  - backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py
-  - backend/src/modulo/api/routes/feedback.py
+  - backend/src/farna/api/routes/evals.py
+  - backend/src/farna/core/eval_engine/__init__.py
+  - backend/src/farna/core/eval_engine/suite_run.py
+  - backend/src/farna/core/eval_engine/execute_suite_run.py
+  - backend/src/farna/core/eval_engine/coverage_gap.py
+  - backend/src/farna/core/eval_engine/regression.py
+  - backend/src/farna/core/eval_engine/policy_gate.py
+  - backend/src/farna/core/eval_engine/author_warnings.py
+  - backend/src/farna/core/pipeline_engine/executor.py
+  - backend/src/farna/core/pipeline_engine/eval_persist_order.py
+  - backend/src/farna/db/models/policy_gate.py
+  - backend/src/farna/db/models/policy_gate_decision.py
+  - backend/src/farna/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py
+  - backend/src/farna/api/routes/feedback.py
   - frontend/src/views/EvalEditorView.vue
   - frontend/src/views/EvalProposalsQueueView.vue
 unit-tests:

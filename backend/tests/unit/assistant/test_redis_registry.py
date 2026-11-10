@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.assistant.redis_registry import AssistantRedisRegistry
+from farna.core.assistant.redis_registry import AssistantRedisRegistry
 
 
 @pytest.fixture

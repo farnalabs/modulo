@@ -18,11 +18,11 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine.evidence import EvidenceResult
-from modulo.core.pipeline_engine.executor import PipelineExecutor, _apply_work_intact
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_evidence import RunEvidence
+from farna.core.pipeline_engine.evidence import EvidenceResult
+from farna.core.pipeline_engine.executor import PipelineExecutor, _apply_work_intact
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_evidence import RunEvidence
 
 _NODE_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -183,7 +183,7 @@ class TestApplyWorkIntact:
 # migration 0008 — run_evidence table + runs.work_intact (reconciliation chain)
 # ---------------------------------------------------------------------------
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 
 class TestMigrationRunEvidenceFinalState:

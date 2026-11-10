@@ -8,7 +8,7 @@ deterministic rank-ascending drop order. Pure function — no DB, no clock.
 
 from __future__ import annotations
 
-from modulo.core.pipeline_engine.ancestor_refs import collect_injected_refs
+from farna.core.pipeline_engine.ancestor_refs import collect_injected_refs
 
 
 def _ref(kind: str, ref: str, source: str) -> dict[str, object]:

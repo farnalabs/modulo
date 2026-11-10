@@ -36,9 +36,9 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from modulo.db.models.collection_install import CollectionInstallEntity
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.publisher import Publisher
+from farna.db.models.collection_install import CollectionInstallEntity
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.publisher import Publisher
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0311_library_cluster_schema_hygiene"
@@ -50,7 +50,7 @@ _TRUST_TIER_CHECK = "ck_publishers_trust_tier"
 _VERSION_GROUP_FK = "library_primitives_version_group_id_fkey"
 _TENANT_TRIGGER = "trg_library_primitives_version_group_id_tenant"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

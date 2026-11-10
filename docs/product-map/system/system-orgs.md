@@ -3,8 +3,8 @@ id: feat-system-orgs
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/admin_orgs.py
-  - backend/src/modulo/core/system_audit_logger.py
+  - backend/src/farna/api/routes/admin_orgs.py
+  - backend/src/farna/core/system_audit_logger.py
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py

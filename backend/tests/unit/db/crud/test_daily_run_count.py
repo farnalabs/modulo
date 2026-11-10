@@ -10,14 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.daily_run_count import (
+from farna.db.crud.daily_run_count import (
     _UNSET,
     get_daily_run_counts,
     get_org_spend_total,
     org_level_predicate,
     upsert_daily_run_count,
 )
-from modulo.db.models.daily_run_count import OrgDailyRunCount
+from farna.db.models.daily_run_count import OrgDailyRunCount
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

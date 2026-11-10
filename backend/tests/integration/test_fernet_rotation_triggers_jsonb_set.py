@@ -16,8 +16,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.fernet_rotation import _rotate_triggers
-from modulo.db.rls import set_rls_org
+from farna.core.fernet_rotation import _rotate_triggers
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

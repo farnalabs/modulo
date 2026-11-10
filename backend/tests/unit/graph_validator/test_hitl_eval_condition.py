@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import codes_of as _codes
 
 

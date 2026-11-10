@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.analytics.service as svc
-from modulo.core.analytics.builder import AnalyticsGroupBy
-from modulo.core.analytics.service import (
+import farna.core.analytics.service as svc
+from farna.core.analytics.builder import AnalyticsGroupBy
+from farna.core.analytics.service import (
     AnalyticsValidationError,
     _check_hour_cap,
     _normalise_bounds,

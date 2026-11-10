@@ -34,8 +34,8 @@ from unittest.mock import MagicMock, patch
 import click
 import pytest
 
-from modulo.launcher import upgrade as upgrade_module
-from modulo.launcher.doctor import (
+from farna.launcher import upgrade as upgrade_module
+from farna.launcher.doctor import (
     EXIT_HEALTHY,
     DoctorProbes,
     run_doctor,
@@ -69,7 +69,7 @@ def _boot_strap_matrix(tmp_path: Any, monkeypatch: Any, *, recorded_heads: list[
         counter["n"] += 1
         import json as json_module
 
-        from modulo.launcher.upgrade import PreUpgradeSnapshot
+        from farna.launcher.upgrade import PreUpgradeSnapshot
 
         snapshot_dir = data_dir / f"pre-upgrade-dump-fake-{counter['n']}"
         snapshot_dir.mkdir()
@@ -221,7 +221,7 @@ def test_previous_release_seeded_then_upgraded_keeps_data_and_doctor_green(
     assert marker["target_version"] == "1.2.0"
     assert marker["pre_upgrade_snapshot"] is not None
     # Data integrity: the adopted state/secrets/pgdata are untouched.
-    from modulo.launcher.state import LauncherState, load_state
+    from farna.launcher.state import LauncherState, load_state
 
     secrets_payload = json_module.loads((plant["data_dir"] / "secrets.json").read_text(encoding="utf-8"))
     state = load_state(
@@ -273,7 +273,7 @@ def test_matrix_pg_major_mismatch_refusal_blocks_the_swap(
     tmp_path: Any, monkeypatch: Any, patched_trust_store: Any
 ) -> None:
     """Bundled PG 16-only: a 17 target HARD-refuses against a 16 data dir."""
-    from modulo.launcher import manifest as manifest_module
+    from farna.launcher import manifest as manifest_module
 
     plant = _boot_strap_matrix(tmp_path, monkeypatch)
     boot, _ = _latest_boot_arg_record([])
@@ -318,7 +318,7 @@ def _settings_env_ready() -> bool:
 
 _requires_cli_env = pytest.mark.skipif(
     not _settings_env_ready(),
-    reason="modulo.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import â€” exported by CI",
+    reason="farna.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import â€” exported by CI",
 )
 
 
@@ -334,9 +334,9 @@ def _collation_connection(rows: list[tuple[Any, ...]]) -> MagicMock:
 
 def _run_collation_check(rows: list[tuple[Any, ...]]) -> None:
     """Run the FAR-672 collation check WITHOUT connecting to a real database."""
-    from modulo.cli.backup import _check_collation_versions_sync
+    from farna.cli.backup import _check_collation_versions_sync
 
-    with patch("modulo.cli.backup.psycopg.connect", return_value=_collation_connection(rows)):
+    with patch("farna.cli.backup.psycopg.connect", return_value=_collation_connection(rows)):
         _check_collation_versions_sync("postgresql://unused")
 
 

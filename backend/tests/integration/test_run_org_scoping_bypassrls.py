@@ -33,8 +33,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run, list_runs
+from farna.db.crud.pipeline import get_pipeline
+from farna.db.crud.run import get_run, list_runs
 
 pytestmark = pytest.mark.integration
 

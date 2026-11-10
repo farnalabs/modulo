@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from modulo.core.pipeline_engine.executor import _teardown_hub
+from farna.core.pipeline_engine.executor import _teardown_hub
 
 
 async def test_teardown_hub_aclose_runtime_provider() -> None:

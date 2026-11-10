@@ -1,0 +1,767 @@
+"""API key generation and validation for MCP clients.
+
+Key format:  mk_<8-char-prefix>_<32-char-secret>
+Storage:     lookup_prefix = first 8 chars after "mk_"
+             hashed_secret = SHA-256 hex of full key (constant-time compare)
+
+Alpha scopes (roles are cumulative — the hierarchy is viewer < runner <
+operator < admin and a principal is admitted when its level is >= the
+permission's required level, so operator and runner each also hold the whole
+viewer floor of reads: audit.list, dashboard.*, analytics.query, ...):
+  operator — everything runner can do, plus the management bundle: pipeline,
+             connector, secret, model-backend and agent create/update/delete,
+             trigger create/update/delete, library.write, eval.run and the HITL
+             decisions (approve/reject/deliver_manual).
+  runner   — the viewer floor, plus run trigger/list/cancel/evals,
+             api_key.create/update/revoke, hitl.claim/list and library.copy.
+
+The registry in ``modulo.auth.permissions`` (``PERMISSIONS``) is the source of
+truth; this block is a terse mnemonic, not an exhaustive scope list.
+
+Team-scoped enforcement:
+  When an API key has a non-null ``team_id``, all operations performed
+  with that key are scoped to that specific team. The key's ``role`` field
+  already limits the effective permission level (operator/runner). The
+  ``team_id`` on the key acts as an additional filter — RLS policies on
+  team-scoped tables enforce that only the owning team's data is accessible.
+"""
+
+import asyncio
+import hashlib
+import hmac
+import logging
+import secrets
+import time
+import uuid
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.auth.permissions import parse_grants, serialize_grants
+from farna.core.feature_flags import get_registry
+from farna.db.models.account import KIND_SERVICE, Account
+from farna.db.models.api_key import OrgApiKey
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
+
+
+class ApiKeyInvalidError(PermissionError):
+    def __init__(self, detail: str = "API key is invalid or revoked") -> None:
+        super().__init__(detail)
+
+
+class ApiKeyGrantsUnavailableError(Exception):
+    """The ``api_key_grants`` flag could not be read for a grant-bearing key.
+
+    Distinct from ``ApiKeyInvalidError``: the key may be perfectly valid, so
+    callers answer 503 (retry) rather than 401. Still fail-closed (never allows).
+    """
+
+
+class ApiKeyScopeError(ValueError):
+    """Raised when a mint or update payload carries an invalid key scope."""
+
+
+class ApiKeyTtlError(ValueError):
+    """Raised when a mint or update payload's expiry exceeds a key class's TTL ceiling.
+
+    FAR-1478 / ADR 058's tiered TTL: a key OWNED by a service principal may
+    live at most ``SERVICE_KEY_MAX_TTL_DAYS`` (the service half of the
+    resolution; the 90-day user-scoped half is FAR-1477's). Raised at the
+    mint AND update choke points (``create_api_key`` / ``update_api_key``) so
+    every surface (REST, MCP, on-behalf mint, key update) refuses the same
+    way — a cap enforced only at mint would let any runner/operator extend a
+    service-owned key arbitrarily via PUT. Callers map it to a 422 — never to
+    a silent clamp, which would mint or extend a key the caller did not ask
+    for.
+    """
+
+
+_PREFIX_LEN = 8
+_SECRET_LEN = 32  # url-safe base64 chars
+_MK_PREFIX = "mk_"
+
+# FAR-620: caller-scope axis. 'org' = org-level caller (historical default,
+# covers org-wide AND team-scoped AND per-run keys); 'user' = per-user key
+# that acts as its creator's identity. IMMUTABLE post-mint.
+KEY_SCOPE_ORG = "org"
+KEY_SCOPE_USER = "user"
+KEY_SCOPES: frozenset[str] = frozenset({KEY_SCOPE_ORG, KEY_SCOPE_USER})
+
+# FAR-2281: the role ceiling is split by credential PROVENANCE, not transport.
+# An org-scoped key is an unattributed machine identity, so it stays capped at
+# operator/runner. A user-scoped key is human-linked (its owner's live org role
+# is the ceiling), so it may carry admin. The DB CHECK
+# (``ck_org_api_keys_role``) enforces the same split.
+ORG_KEY_ROLES: frozenset[str] = frozenset({"operator", "runner"})
+USER_KEY_ROLES: frozenset[str] = ORG_KEY_ROLES | {"admin"}
+KNOWN_API_KEY_ROLES: frozenset[str] = USER_KEY_ROLES
+
+
+def api_key_role_violation(role: str, scope: str, team_id: uuid.UUID | None = None) -> str | None:
+    """Return the user-facing refusal when *role* is invalid for *scope*/*team_id*, else ``None``.
+
+    The ONE rule both mint surfaces (REST ``POST /api/v1/api-keys`` and the MCP
+    ``create_api_key`` tool) and the update choke point share. ``admin`` is
+    permitted only for a ``user``-scoped (human-linked) key, and never for a
+    team-scoped key (a team boundary must not carry org-wide admin). Every
+    other scope keeps the operator/runner ceiling. An unknown role is refused
+    for every scope. Returning a message rather than raising keeps the REST
+    (HTTP 422) and MCP (error envelope) wrappers thin and their wording
+    identical.
+    """
+    if team_id is not None and role == "admin":
+        return "team-scoped API keys cannot have admin role"
+    allowed = USER_KEY_ROLES if scope == KEY_SCOPE_USER else ORG_KEY_ROLES
+    if role in allowed:
+        return None
+    if role == "admin":
+        return "role 'admin' is permitted only for user-scoped API keys"
+    return "role must be 'operator', 'runner', or 'admin' (admin only for user-scoped keys)"
+
+
+# FAR-1477 / ADR 058: org-level flag gating API-key grant-sets (default OFF).
+FLAG_API_KEY_GRANTS = "api_key_grants"
+# User-scoped keys: 90-day default AND maximum lifetime (grants flag ON only).
+USER_KEY_MAX_TTL_DAYS = 90
+# Service-owned keys: 365-day maximum lifetime (ADR 058 tiered TTL — the
+# service half of the 365d-service / 90d-user-scoped resolution of ADR 030's
+# deferred Phase-2 TTL decision). Shorter TTLs (e.g. the per-run sandbox
+# keys' 300s-24h window) are always fine; only a LONGER request is refused.
+SERVICE_KEY_MAX_TTL_DAYS = 365
+
+
+async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> bool:
+    """Resolve the per-org ``api_key_grants`` flag.
+
+    Default (mint/UI paths): any read error is OFF (fail-closed). ``strict=True``
+    (enforcement path for grant-bearing keys) raises
+    ``ApiKeyGrantsUnavailableError`` instead, so a transient read failure is not
+    mistaken for "flag OFF" (401 invalid key) — it must surface as 503.
+    """
+    try:
+        # strict propagates the registry's org-override read error (the default
+        # path swallows it and falls through to the tier default, which would
+        # make a DB blip indistinguishable from "flag OFF").
+        return bool(await get_registry().resolve_flag(FLAG_API_KEY_GRANTS, org_id=org_id, raise_on_error=strict))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("feature_flag.api_key_grants_read_failed", exc_info=True)
+        if strict:
+            raise ApiKeyGrantsUnavailableError from None
+        return False
+
+
+async def resolve_key_grants(key: OrgApiKey) -> frozenset[str] | None:
+    """Return the key's effective grant-set for enforcement, or raise if it must die.
+
+    Tri-state: a NULL column -> ``None`` (legacy role bundle) WITHOUT reading
+    the flag, so pre-existing keys are byte-identical with the flag OFF. A
+    non-NULL grant-set (including the explicit empty deny-all) with the flag
+    OFF raises ``ApiKeyInvalidError`` — the key is DENIED rather than silently
+    widened to its full role bundle (revoke-don't-broaden, the FAR-620 pattern).
+    A malformed (non-str, non-NULL) value is DENIED too, never read as legacy.
+    A flag-read failure raises ``ApiKeyGrantsUnavailableError`` (503, fail-closed).
+    """
+    # getattr: duck-typed key fakes without the column read as legacy (real rows always have it).
+    raw = getattr(key, "grants", None)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        _log.error("api_key.grants_malformed", extra={"key_id": str(key.id)})
+        raise ApiKeyInvalidError
+    if not await api_key_grants_enabled(key.organisation_id, strict=True):
+        _log.info("api_key.grants_key_denied_flag_off", extra={"key_id": str(key.id)})
+        raise ApiKeyInvalidError
+    return parse_grants(raw)
+
+
+_UNSET = object()  # sentinel: ``team_id`` not provided in an update payload
+
+
+def generate_api_key() -> tuple[str, str, str]:
+    """Return (full_key, lookup_prefix, hashed_secret).
+
+    full_key   — returned once to the caller; never stored
+    lookup_prefix — stored in DB for fast lookup
+    hashed_secret — SHA-256 hex of full_key; stored for verification
+    """
+    rand = secrets.token_urlsafe(_SECRET_LEN)[:_SECRET_LEN]
+    prefix = rand[:_PREFIX_LEN]
+    full_key = f"{_MK_PREFIX}{rand}"
+    hashed = hashlib.sha256(full_key.encode()).hexdigest()
+    return full_key, prefix, hashed
+
+
+def _hash_key(full_key: str) -> str:
+    """Return SHA-256 hex digest of *full_key*."""
+    return hashlib.sha256(full_key.encode()).hexdigest()
+
+
+async def _enforce_service_key_ttl(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    expires_at: datetime | None,
+) -> None:
+    """FAR-1478 / ADR 058 tiered TTL: refuse a service-owned key beyond the ceiling.
+
+    Shared by mint (:func:`create_api_key`) and update (:func:`update_api_key`)
+    — the 365-day cap is a property of the key OWNER's kind, so every surface
+    that can SET or EXTEND a service-owned key's expiry refuses the same way.
+    ``expires_at=None`` is a no-op (nothing to check — the caller decides the
+    default, which already lands at 365 days, so only an EXPLICIT longer
+    expiry is refused). A missing owner row cannot be a service principal, so
+    it skips the cap (the FK on account_id makes a missing row impossible
+    outside tests). Boundary is strict ``>``: exactly 365 days is accepted.
+    """
+    if expires_at is None:
+        return
+    owner = await session.get(Account, account_id)
+    if owner is not None and getattr(owner, "kind", None) == KIND_SERVICE:
+        service_ceiling = datetime.now(UTC) + timedelta(days=SERVICE_KEY_MAX_TTL_DAYS)
+        if expires_at > service_ceiling:
+            raise ApiKeyTtlError(f"Keys owned by a service account expire within {SERVICE_KEY_MAX_TTL_DAYS} days")
+
+
+async def create_api_key(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    name: str,
+    role: str,
+    account_id: uuid.UUID,
+    team_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
+    scope: str = "org",
+    grants: Iterable[str] | None = None,
+) -> tuple[OrgApiKey, str]:
+    """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once.
+
+    ``scope`` is the explicit mint-context (FAR-620): ``'org'`` (default) for
+    every existing surface — org-wide, team-scoped and per-run keys — and
+    ``'user'`` only when the caller's surface explicitly requests a per-user
+    key (REST POST /api/v1/api-keys with ``scope: "user"``, behind the
+    ``user_scoped_mcp_keys`` flag + quota). An unknown scope raises
+    ``ApiKeyScopeError``. The scope is stamped at mint and NEVER updated —
+    ``update_api_key`` accepts no scope parameter.
+    """
+    if scope not in KEY_SCOPES:
+        raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
+    # FAR-2281: the role ceiling is scope- and team-aware. Enforced here as
+    # well as at the REST/MCP validators so every future mint surface
+    # (on-behalf mints included) refuses the same way; the DB CHECK is the
+    # final backstop. A team-scoped key can never carry admin, even when its
+    # user scope would otherwise allow it.
+    role_violation = api_key_role_violation(role, scope, team_id)
+    if role_violation is not None:
+        raise ApiKeyScopeError(role_violation)
+    # FAR-1478 / ADR 058 tiered TTL: a key owned by a SERVICE principal may
+    # live at most SERVICE_KEY_MAX_TTL_DAYS. Checked at this choke point so
+    # REST, MCP, on-behalf mints and any future surface all refuse the same
+    # way; the default below already lands every key (human- or service-owned)
+    # at 365 days, so only an EXPLICIT longer expiry is refused.
+    await _enforce_service_key_ttl(session, account_id, expires_at)
+    if expires_at is None:
+        expires_at = datetime.now(UTC) + timedelta(days=365)
+    full_key, prefix, hashed = generate_api_key()
+    key = OrgApiKey(
+        organisation_id=org_id,
+        name=name,
+        lookup_prefix=prefix,
+        hashed_secret=hashed,
+        role=role,
+        scope=scope,
+        grants=serialize_grants(grants),
+        account_id=account_id,
+        team_id=team_id,
+        expires_at=expires_at,
+    )
+    session.add(key)
+    await session.flush()
+    return key, full_key
+
+
+async def mint_run_api_key(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    node_id: str,
+    account_id: uuid.UUID,
+    ttl_seconds: int,
+) -> tuple[OrgApiKey, str] | None:
+    """Mint a short-TTL RUNNER-ROLE API key for a script-mode sandbox run.
+
+    FAR-296 Phase 3b: the key gives the script a restricted identity to call
+    the Modulo API. Runner is the tightest role that can trigger/list runs; it
+    also grants run.cancel, run.evals, api_key.create/update/revoke,
+    hitl.claim/list, and library.copy — NOT pipeline/connector/secret access,
+    and NOT the admin-only housekeeping surface. Escalation risk from a leaked
+    key (e.g. minting further runner-scope keys) is mitigated by the short TTL
+    (clamped
+    to ``[300, 86400]``s), per-run linkage, and revocation at run finalization.
+    Fail-open: the caller decides whether a failed mint blocks the dispatch
+    (it should NOT — the sandbox runs without the key rather than failing).
+    """
+    ttl_seconds = max(300, min(ttl_seconds, 86400))
+    try:
+        key, full_key = await create_api_key(
+            session,
+            org_id=org_id,
+            name=f"run:{run_id}:node:{node_id}",
+            role="runner",
+            account_id=account_id,
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+            # FAR-620: sandbox keys are pinned to the org scope — a run-scoped
+            # key is an org-level machine identity and is DENIED caller-scoped
+            # (.self) tools; run_id is non-null on this construction path.
+            scope="org",
+        )
+        key.run_id = run_id
+        await session.flush()
+        return key, full_key
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "api_key.mint_run_failed",
+            extra={"run_id": str(run_id), "node_id": node_id, "org_id": str(org_id)},
+        )
+        return None
+
+
+async def revoke_run_api_key(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> int:
+    """Revoke all per-run API keys linked to a run (FAR-296 Phase 3b).
+
+    Returns the number of keys revoked. Uses the ``run_id`` linkage column.
+    """
+    from sqlalchemy.engine import CursorResult
+
+    result = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(OrgApiKey)
+            .where(OrgApiKey.organisation_id == org_id, OrgApiKey.run_id == run_id, OrgApiKey.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        ),
+    )
+    return result.rowcount or 0
+
+
+async def _seal_one_terminal_run(
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    session_factory: Callable[..., Any],
+) -> tuple[int, int, bool]:
+    """Seal ONE terminal run through the single shared choke point.
+
+    Returns ``(keys_revoked, workspaces_destroyed, ok)``. ``ok`` is False when
+    the seal raised (fail-closed: revoke unconfirmed, or the fact could not be
+    written) — the caller counts it and continues to the next run rather than
+    abandoning the org's leak set. A cancellation is re-raised untouched.
+    """
+    from farna.core.run_teardown import seal_run_teardown
+
+    try:
+        seal_result = await seal_run_teardown(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=session_factory,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "api_key.revoke_run_sweep_seal_failed",
+            extra={"run_id": str(run_id), "org_id": str(org_id)},
+        )
+        return 0, 0, False
+    return seal_result.keys_revoked, seal_result.workspaces_destroyed, True
+
+
+async def _seal_terminal_run_keys_for_org(
+    org_id: uuid.UUID,
+    session_factory: Callable[..., Any],
+    *,
+    batch_size: int,
+    deadline: float,
+) -> dict[str, int]:
+    """Select and seal one org's terminal-run keys. Never raises (except cancel).
+
+    Returns per-org counts ``{"scanned", "revoked", "errors", "sealed",
+    "destroyed"}``. The candidate runs are selected in ONE short transaction,
+    then each run is sealed OUTSIDE it: the seal opens its OWN sessions for the
+    revoke leg and the audit fact, and holds a transaction only across DB work —
+    never across the remote workspace destroy.
+    """
+    scanned = revoked = errors = sealed = destroyed = 0
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            key_rows = (
+                await session.execute(
+                    select(OrgApiKey.id, OrgApiKey.run_id)
+                    .join(Run, Run.id == OrgApiKey.run_id)
+                    .where(
+                        OrgApiKey.organisation_id == org_id,
+                        OrgApiKey.run_id.is_not(None),
+                        OrgApiKey.revoked_at.is_(None),
+                        Run.status.in_(sorted(TERMINAL_STATUSES)),
+                    )
+                    .limit(batch_size)
+                )
+            ).all()
+        for _key_id, key_run_id in key_rows:
+            if time.monotonic() > deadline:
+                break
+            scanned += 1
+            keys_revoked, workspaces_destroyed, ok = await _seal_one_terminal_run(
+                run_id=key_run_id,
+                org_id=org_id,
+                session_factory=session_factory,
+            )
+            if not ok:
+                errors += 1
+                continue
+            revoked += keys_revoked
+            destroyed += workspaces_destroyed
+            sealed += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        errors += 1
+        _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
+    return {"scanned": scanned, "revoked": revoked, "errors": errors, "sealed": sealed, "destroyed": destroyed}
+
+
+async def revoke_run_api_key_sweep(
+    session_factory: Callable[..., Any],
+    *,
+    org_ids: list[uuid.UUID] | None = None,
+    batch_size: int = 50,
+    budget_seconds: float = 30.0,
+) -> dict[str, int]:
+    """Sealed compensating sweep for per-run runner-role API keys (FAR-296 3b-2 + FAR-1690 A3).
+
+    Finds per-run keys (``run_id`` NOT NULL, ``revoked_at`` IS NULL) whose runs
+    are TERMINAL but were terminalized by a NON-executor path (dispatcher_reconcile
+    raw-SQL terminalizers, saq_hooks._mark_run_failed, transition_run,
+    request_cancellation). For each such run it drives the single sealed terminal
+    step :func:`modulo.core.run_teardown.seal_run_teardown` — revoke the run's
+    credential(s), destroy every workspace labelled ``modulo.run.id``, and write
+    ONE ``run.teardown_sealed`` fact — so the compensating path seals exactly as
+    the executor path does (FAR-1690 D2: one choke point, one sweep, not two).
+    The executor path already seals at finalization; this sweep is the backstop.
+
+    Bounded: ``batch_size`` keys per org, ``budget_seconds`` wall-clock budget,
+    never raises. Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS — the
+    dedicated cross-org system cron role); the sweep processes each org under its
+    own RLS context when ``org_ids`` is None (self-selects all orgs). Each run's
+    seal is isolated: a fail-closed stop on one run (credential revoke could not
+    be confirmed) is counted in ``errors`` and the sweep continues.
+
+    Returns ``{"scanned", "revoked", "errors"}``.
+    """
+    deadline = time.monotonic() + budget_seconds
+    scanned = 0
+    revoked = 0
+    errors = 0
+    sealed = 0
+    destroyed = 0
+    try:
+        if org_ids is None:
+            # Org self-selection runs system-scoped, but the factory's sessions
+            # are autobegin=False (the DI default), so the SELECT needs an
+            # explicit begin() — a bare execute would raise InvalidRequestError
+            # and be swallowed into errors (this org-selection path is the ONLY
+            # production path via dispatcher_reconcile).
+            async with session_factory() as session, session.begin():
+                result = await session.execute(select(Organisation.id))
+                org_ids = list(result.scalars())
+        # FAR-1501: lazy import — this sweep is reached from
+        # ``_run_reconcile_sweeps`` (the org-less post-loop phase of
+        # ``dispatcher_reconcile``), so the per-org loop must bind its own org
+        # for the duration of the tick.
+        from farna.core.cron_helpers import _bound_org
+
+        for org_id in org_ids:
+            if time.monotonic() > deadline:
+                break
+            # FAR-1501: bind THIS org for the whole per-org tick so
+            # ``api_key.revoke_run_sweep_org_failed`` is attributed by
+            # ErrorTrackingLogHandler instead of dropped as no_org_context.
+            # ``_bound_org`` resets in finally, so the org self-selection
+            # (org-less) and the next org's tick never inherit the binding;
+            # the job-level ``api_key.revoke_run_sweep_failed`` below runs
+            # OUTSIDE this loop and keeps the announced drop.
+            async with _bound_org(org_id):
+                outcome = await _seal_terminal_run_keys_for_org(
+                    org_id,
+                    session_factory,
+                    batch_size=batch_size,
+                    deadline=deadline,
+                )
+            scanned += outcome["scanned"]
+            revoked += outcome["revoked"]
+            errors += outcome["errors"]
+            sealed += outcome["sealed"]
+            destroyed += outcome["destroyed"]
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        errors += 1
+        _log.exception("api_key.revoke_run_sweep_failed")
+    if sealed or destroyed:
+        _log.info(
+            "api_key.revoke_run_sweep_sealed",
+            extra={"sealed": sealed, "workspaces_destroyed": destroyed},
+        )
+    return {"scanned": scanned, "revoked": revoked, "errors": errors}
+
+
+async def validate_api_key(
+    session: AsyncSession,
+    full_key: str,
+    org_id: uuid.UUID | None = None,
+) -> OrgApiKey:
+    """Validate a full API key.  Raises ApiKeyInvalidError on any failure.
+
+    When *org_id* is ``None`` the lookup is scoped only by prefix (useful
+    when the caller needs to resolve the organisation from the key record
+    itself).
+    """
+    if not full_key.startswith(_MK_PREFIX):
+        raise ApiKeyInvalidError
+
+    inner = full_key[len(_MK_PREFIX) :]
+    prefix = inner[:_PREFIX_LEN]
+
+    now = datetime.now(UTC)
+    filters = [
+        OrgApiKey.lookup_prefix == prefix,
+        OrgApiKey.revoked_at.is_(None),
+    ]
+    if org_id is not None:
+        filters.append(OrgApiKey.organisation_id == org_id)
+    result = await session.execute(select(OrgApiKey).where(*filters))
+    keys = list(result.scalars())
+    if not keys:
+        _log.info("api_key.not_found", extra={"prefix": prefix, "org_id": str(org_id) if org_id else None})
+        raise ApiKeyInvalidError
+
+    actual_hash = _hash_key(full_key)
+    for key in keys:
+        if key.expires_at is not None and key.expires_at < now:
+            continue
+        if hmac.compare_digest(key.hashed_secret, actual_hash):
+            key.last_used_at = datetime.now(UTC)
+            await session.flush()
+            return key
+
+    raise ApiKeyInvalidError
+
+
+async def revoke_api_key(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> OrgApiKey | None:
+    """Revoke an API key. Returns the revoked key ROW, or None if not found.
+
+    FAR-620: the row (not a bool) lets the callers stamp audit payloads with
+    the key's ``scope`` and masked prefix. The key row is locked with
+    ``FOR UPDATE`` so two concurrent revocations serialise: the second waits
+    for the first to commit, re-reads the row with ``revoked_at`` already set
+    (the ``revoked_at IS NULL`` filter excludes it) and returns None instead
+    of racing on the same row.
+    """
+    result = await session.execute(
+        select(OrgApiKey)
+        .where(
+            OrgApiKey.id == key_id,
+            OrgApiKey.organisation_id == org_id,
+            OrgApiKey.revoked_at.is_(None),
+        )
+        .with_for_update()
+    )
+    key = result.scalar_one_or_none()
+    if key is None:
+        _log.info("api_key.revoke_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
+        return None
+    key.revoked_at = datetime.now(UTC)
+    await session.flush()
+    _log.info("api_key.revoked", extra={"key_id": str(key.id)})
+    return key
+
+
+def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
+    """Build a serialisable dict from an OrgApiKey for API responses.
+
+    Masks the secret portion of the key and adds a computed ``is_active``
+    field based on revocation and expiration state.
+    """
+    now = datetime.now(UTC)
+    is_active = k.revoked_at is None and (k.expires_at is None or k.expires_at > now)
+    # ``scope`` is always present on real rows (NOT NULL, server_default 'org');
+    # the isinstance guard keeps serialisation of test doubles stable.
+    raw_scope = getattr(k, "scope", None)
+    out: dict[str, Any] = {
+        "id": str(k.id),
+        "name": k.name,
+        "role": k.role,
+        "scope": raw_scope if isinstance(raw_scope, str) and raw_scope else "org",
+        "team_id": str(k.team_id) if k.team_id else None,
+        "lookup_prefix": f"{_MK_PREFIX}{k.lookup_prefix}****",
+        "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+        "created_at": k.created_at.isoformat(),
+        "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        # FAR-1299: the revocation FACT, not an inference from ``is_active``.
+        # ``is_active`` is derived (see above), so without this field a caller
+        # cannot tell an operator's revocation from a lapsed expiry. Same
+        # emission shape as ``expires_at`` above: ISO-8601 when set, else None.
+        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
+        "is_active": is_active,
+    }
+    # FAR-1477: emitted ONLY for grant-bearing keys so legacy (NULL) keys
+    # serialise byte-identically. An empty list is the explicit deny-all.
+    raw_grants = getattr(k, "grants", None)
+    if isinstance(raw_grants, str):
+        out["grants"] = sorted(raw_grants.split())
+    return out
+
+
+def _serialize_key_with_account(
+    k: OrgApiKey,
+    kind: str,
+    display_name: str,
+    email: str | None,
+) -> dict[str, Any]:
+    """Build a serialisable dict from an OrgApiKey with joined Account info."""
+    base = _serialize_key(k)
+    base["account_kind"] = kind
+    base["account_display_name"] = display_name
+    # The typed list response always includes this field. Service accounts
+    # deliberately expose an explicit null rather than omitting it.
+    base["account_email"] = email if kind == "human" else None
+    return base
+
+
+async def list_api_keys(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    include_revoked: bool = False,
+) -> list[dict[str, Any]]:
+    """List API keys for an organisation, ordered by creation date descending.
+
+    Joins with Account to include the owning account's kind (human/service),
+    display name, and email (for human accounts) so admins can see which
+    persona each key is linked to.
+    """
+    from farna.db.models.account import Account
+
+    stmt = (
+        select(OrgApiKey, Account.kind, Account.display_name, Account.email)
+        .join(Account, Account.id == OrgApiKey.account_id)
+        .where(OrgApiKey.organisation_id == org_id)
+    )
+    if not include_revoked:
+        stmt = stmt.where(OrgApiKey.revoked_at.is_(None))
+    stmt = stmt.order_by(OrgApiKey.created_at.desc())
+    result = await session.execute(stmt)
+    rows = list(result.all())
+    return [_serialize_key_with_account(k, kind, display_name, email) for k, kind, display_name, email in rows]
+
+
+def _updated_key_role_violation(
+    key: OrgApiKey,
+    role: str | None,
+    team_id: uuid.UUID | object | None,
+) -> str | None:
+    """Return the role refusal for a key's POST-update scope/role, else ``None``.
+
+    The effective values are the post-update state, so setting a team on an
+    existing admin-role user key is refused as well as promoting a team-scoped
+    key to admin. The key's own immutable scope is read, never the caller's.
+    """
+    key_scope = getattr(key, "scope", None)
+    effective_role = role if role is not None else key.role
+    effective_team_id = key.team_id if team_id is _UNSET else team_id
+    return api_key_role_violation(
+        effective_role,
+        key_scope if isinstance(key_scope, str) else KEY_SCOPE_ORG,
+        cast(uuid.UUID | None, effective_team_id),
+    )
+
+
+async def update_api_key(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    role: str | None = None,
+    team_id: uuid.UUID | object | None = _UNSET,
+    expires_at: datetime | None = None,
+) -> OrgApiKey | None:
+    """Update an API key's metadata. Returns None if the key was not found.
+
+    ``team_id`` accepts three states:
+    - ``_UNSET`` (default): leave the current team scope unchanged.
+    - ``None``: clear the team scope (team-scoped key becomes org-wide).
+    - a ``uuid.UUID``: scope the key to that team.
+
+    FAR-620: the key's caller ``scope`` ('org'/'user') is IMMUTABLE post-mint —
+    this function accepts no scope parameter and update payloads carrying one
+    are rejected (422) at the REST surface before reaching here.
+
+    FAR-1478 / ADR 058: setting ``expires_at`` on a SERVICE-owned key is held
+    to the same 365-day ceiling as mint (``ApiKeyTtlError``); the cap reads
+    the key owner's ``Account.kind``, never the caller's.
+    """
+    stmt = select(OrgApiKey).where(
+        OrgApiKey.id == key_id,
+        OrgApiKey.organisation_id == org_id,
+        OrgApiKey.revoked_at.is_(None),
+    )
+    result = await session.execute(stmt)
+    key = result.scalar_one_or_none()
+    if key is None:
+        _log.info("api_key.update_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
+        return None
+    if expires_at is not None:
+        # FAR-1478 / ADR 058: the 365-day service ceiling applies to EXTENSION
+        # as well as mint — otherwise any runner/operator (api_key.revoke
+        # floor) could extend a service-owned key arbitrarily via PUT. The cap
+        # reads the key OWNER's kind, not the caller's, and runs BEFORE any
+        # mutation so a refusal leaves the key completely untouched.
+        await _enforce_service_key_ttl(session, key.account_id, expires_at)
+    if role is not None or team_id is not _UNSET:
+        # FAR-2281: a role change OR a team-scope change is held to the same
+        # scope- and team-aware ceiling as mint. Checked before any mutation
+        # so a refusal leaves the row untouched.
+        role_violation = _updated_key_role_violation(key, role, team_id)
+        if role_violation is not None:
+            raise ApiKeyScopeError(role_violation)
+    if name is not None:
+        key.name = name
+    if role is not None:
+        key.role = role
+    if team_id is not _UNSET:
+        key.team_id = cast(uuid.UUID | None, team_id)
+    if expires_at is not None:
+        key.expires_at = expires_at
+    await session.flush()
+    return key

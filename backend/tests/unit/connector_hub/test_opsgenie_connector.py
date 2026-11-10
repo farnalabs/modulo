@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.opsgenie import OpsgenieConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.opsgenie import OpsgenieConnector
 
 API_KEY = "opsgenie_test_key"
 _BASE = "https://api.opsgenie.com/v2"

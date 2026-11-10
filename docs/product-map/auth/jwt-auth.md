@@ -3,10 +3,10 @@ id: feat-auth-jwt-auth
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/auth/jwt.py
-  - backend/src/modulo/auth/api_key.py
-  - backend/src/modulo/auth/dependencies.py
-  - backend/src/modulo/auth/ws_token.py
+  - backend/src/farna/auth/jwt.py
+  - backend/src/farna/auth/api_key.py
+  - backend/src/farna/auth/dependencies.py
+  - backend/src/farna/auth/ws_token.py
 unit-tests:
   - backend/tests/unit/auth/test_jwt.py
 bdd:

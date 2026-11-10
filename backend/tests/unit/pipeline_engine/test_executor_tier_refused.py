@@ -14,8 +14,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
 
 def _mocked_executor() -> PipelineExecutor:

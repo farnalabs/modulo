@@ -40,9 +40,9 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from modulo.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine import node_runner as nr
 
-_LOGGER = "modulo.core.pipeline_engine.node_runner"
+_LOGGER = "farna.core.pipeline_engine.node_runner"
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _RUN_ID = "run-1"
 
@@ -459,7 +459,7 @@ class TestBoundUsesTheSharedHelper:
         ``Settings.mutation_row_lock_timeout_ms`` — assert a relaxed knob changes
         the recorded ``set_config`` value. The knob is read by the shared helper
         (``db.crud.row_lock``), so the patch targets THAT module."""
-        import modulo.db.crud.row_lock as _row_lock
+        import farna.db.crud.row_lock as _row_lock
 
         monkeypatch.setattr(_row_lock, "get_settings", lambda: SimpleNamespace(mutation_row_lock_timeout_ms=1234))
         session = _PgSession()

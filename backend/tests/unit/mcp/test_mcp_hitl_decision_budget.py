@@ -12,12 +12,12 @@ applying to non-decision actions (claim / reject).
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _dispatch_hitl_action,
     _hitl_decision_client_key,
     _hitl_decision_rate_limited_response,
 )
-from modulo.core.rate_limiter import TokenBucketRegistry
+from farna.core.rate_limiter import TokenBucketRegistry
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -27,7 +27,7 @@ _REVIEW_ID = "gate-1"
 
 class _AuthContext:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_type,
             _ctx_key_id,
             _ctx_key_scope,
@@ -42,7 +42,7 @@ class _AuthContext:
         _ctx_key_scope.set("org")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_type,
             _ctx_key_id,
             _ctx_key_scope,
@@ -64,7 +64,7 @@ class TestHitlDecisionClientKey(_AuthContext):
     def test_user_scoped_api_key_buckets_by_account(self) -> None:
         """FAR-620 contract: a user-scoped key acts as its creator — decisions
         are attributed to the account, so the bucket is the identity bucket."""
-        from modulo.api.mcp_server import _ctx_key_scope
+        from farna.api.mcp_server import _ctx_key_scope
 
         _ctx_key_scope.set("user")
         assert _hitl_decision_client_key() == (
@@ -72,13 +72,13 @@ class TestHitlDecisionClientKey(_AuthContext):
         )
 
     def test_oauth_caller_buckets_by_user(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_type
+        from farna.api.mcp_server import _ctx_auth_type
 
         _ctx_auth_type.set("oauth")
         assert _hitl_decision_client_key() == (f"hitl_decision:{_PLACEHOLDER_ORG_ID}:oauth:user:{_PLACEHOLDER_USER_ID}")
 
     def test_distinct_clients_get_distinct_keys(self) -> None:
-        from modulo.api.mcp_server import _ctx_key_id
+        from farna.api.mcp_server import _ctx_key_id
 
         key_a = _hitl_decision_client_key()
         _ctx_key_id.set(uuid.UUID("00000000-0000-0000-0000-000000000099"))
@@ -94,9 +94,9 @@ class TestHitlDecisionBudgetAllowed(_AuthContext):
         return TokenBucketRegistry(rate=0.0, burst=1)
 
     async def test_allowed_within_burst_then_denied(self) -> None:
-        from modulo.api.mcp_server import _hitl_decision_budget_allowed
+        from farna.api.mcp_server import _hitl_decision_budget_allowed
 
-        with patch("modulo.api.mcp_server._hitl_decision_limiter", self._burst3()):
+        with patch("farna.api.mcp_server._hitl_decision_limiter", self._burst3()):
             assert await _hitl_decision_budget_allowed() is True
             assert await _hitl_decision_budget_allowed() is True
             assert await _hitl_decision_budget_allowed() is True
@@ -106,19 +106,19 @@ class TestHitlDecisionBudgetAllowed(_AuthContext):
         """A limiter defect must never block the human's decision: fail-open
         (availability over enforcement — the REST limiter's registry-failure
         posture)."""
-        from modulo.api.mcp_server import _hitl_decision_budget_allowed
+        from farna.api.mcp_server import _hitl_decision_budget_allowed
 
         with patch(
-            "modulo.api.mcp_server._hitl_decision_limiter",
+            "farna.api.mcp_server._hitl_decision_limiter",
             MagicMock(consume=AsyncMock(side_effect=RuntimeError("limiter down"))),
         ):
             assert await _hitl_decision_budget_allowed() is True
 
     async def test_exhausted_bucket_marks_consumed(self) -> None:
-        from modulo.api.mcp_server import _hitl_decision_budget_allowed
+        from farna.api.mcp_server import _hitl_decision_budget_allowed
 
         limiter = self._burst3()
-        with patch("modulo.api.mcp_server._hitl_decision_limiter", limiter):
+        with patch("farna.api.mcp_server._hitl_decision_limiter", limiter):
             # burst=3: the first three consumes succeed (to 0 tokens), the
             # fourth is denied.
             assert await _hitl_decision_budget_allowed() is True
@@ -135,7 +135,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
         mgr = MagicMock()
         mgr.approve = AsyncMock()
         with patch(
-            "modulo.api.mcp_server._hitl_decision_limiter",
+            "farna.api.mcp_server._hitl_decision_limiter",
             TokenBucketRegistry(rate=1.0, burst=1),
         ) as limiter:
             await limiter.consume(_hitl_decision_client_key())
@@ -159,7 +159,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
         mgr = MagicMock()
         mgr.deliver_manual = AsyncMock()
         with patch(
-            "modulo.api.mcp_server._hitl_decision_limiter",
+            "farna.api.mcp_server._hitl_decision_limiter",
             TokenBucketRegistry(rate=1.0, burst=1),
         ) as limiter:
             await limiter.consume(_hitl_decision_client_key())
@@ -191,7 +191,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
         mgr.reject = AsyncMock(return_value=gate)
 
         with patch(
-            "modulo.api.mcp_server._hitl_decision_limiter",
+            "farna.api.mcp_server._hitl_decision_limiter",
             TokenBucketRegistry(rate=1.0, burst=1),
         ):
             claimed = await _dispatch_hitl_action(

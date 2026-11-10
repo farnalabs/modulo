@@ -35,8 +35,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.pipeline_engine.evidence import write_evidence_row
-from modulo.db.rls import set_rls_org
+from farna.core.pipeline_engine.evidence import write_evidence_row
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

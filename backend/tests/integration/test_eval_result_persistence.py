@@ -20,8 +20,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from farna.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
+from farna.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration

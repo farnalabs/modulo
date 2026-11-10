@@ -289,7 +289,7 @@ def post_feedback(request, reason: str, client, ctx):
     mock_record.needs_human_review = False
 
     with patch(
-        "modulo.api.routes.feedback.FeedbackManager",
+        "farna.api.routes.feedback.FeedbackManager",
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
@@ -335,7 +335,7 @@ def get_feedback_list(client, request):
     mock_item.rejected_output = {}
 
     with patch(
-        "modulo.api.routes.feedback.FeedbackManager",
+        "farna.api.routes.feedback.FeedbackManager",
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
@@ -387,7 +387,7 @@ def patch_feedback_status(request, new_status: str, client, ctx):
     mock_record.feedback_status = new_status
 
     with patch(
-        "modulo.api.routes.feedback.FeedbackManager",
+        "farna.api.routes.feedback.FeedbackManager",
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
@@ -419,7 +419,7 @@ def review_feedback(request, action: str, client, ctx):
     mock_record.feedback_status = "correcting"
 
     with patch(
-        "modulo.api.routes.feedback.FeedbackManager",
+        "farna.api.routes.feedback.FeedbackManager",
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
@@ -463,7 +463,7 @@ def i_have_claimed_gate(review_id: str, ctx):
 def post_deliver_manual_success(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     _ = run_id, review_id  # parsed from step — use ctx for actual values
     mock_gate = MagicMock()
@@ -475,10 +475,10 @@ def post_deliver_manual_success(request, run_id, review_id, ctx, client):
 
     with (
         patch(
-            "modulo.api.routes.hitl.HITLManager",
+            "farna.api.routes.hitl.HITLManager",
             return_value=MagicMock(),
         ) as mock_mgr_cls,
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+        patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
     ):
         mock_mgr = mock_mgr_cls.return_value
         mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
@@ -524,10 +524,10 @@ def post_deliver_manual_expired(request, run_id, review_id, ctx, client):
     ``HITLManager.deliver_manual`` raises ``ClaimTokenExpiredError``, which
     the router maps to a real 410.
     """
-    from modulo.core.hitl_manager import ClaimTokenExpiredError
+    from farna.core.hitl_manager import ClaimTokenExpiredError
 
     _ = run_id, review_id
-    with patch("modulo.api.routes.hitl.HITLManager") as mock_mgr_cls:
+    with patch("farna.api.routes.hitl.HITLManager") as mock_mgr_cls:
         mock_mgr_cls.return_value.deliver_manual = AsyncMock(side_effect=ClaimTokenExpiredError())
         resp = client.post(
             f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/deliver-manual",
@@ -543,7 +543,7 @@ def post_deliver_manual_expired(request, run_id, review_id, ctx, client):
 def post_deliver_manual_empty(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     _ = run_id, review_id
     mock_gate = MagicMock()
@@ -551,10 +551,10 @@ def post_deliver_manual_empty(request, run_id, review_id, ctx, client):
 
     with (
         patch(
-            "modulo.api.routes.hitl.HITLManager",
+            "farna.api.routes.hitl.HITLManager",
             return_value=MagicMock(),
         ) as mock_mgr_cls,
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+        patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
     ):
         mock_mgr = mock_mgr_cls.return_value
         mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
@@ -652,9 +652,9 @@ def submit_manual_output_missing(request, field: str, ctx, client):
     ``DecisionPayloadError`` when the output omits a schema-required field;
     the router maps that to a real 422.
     """
-    from modulo.core.hitl_manager import DecisionPayloadError
+    from farna.core.hitl_manager import DecisionPayloadError
 
-    with patch("modulo.api.routes.hitl.HITLManager") as mock_mgr_cls:
+    with patch("farna.api.routes.hitl.HITLManager") as mock_mgr_cls:
         mock_mgr_cls.return_value.approve = AsyncMock(
             side_effect=DecisionPayloadError(f"Manual output missing required field {field!r}")
         )
@@ -681,7 +681,7 @@ def submit_manual_output(request, ctx, client):
     mock_gate.review_id = ctx.get("review_id", "manual_review-data")
 
     with patch(
-        "modulo.api.routes.hitl.HITLManager",
+        "farna.api.routes.hitl.HITLManager",
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
@@ -746,18 +746,18 @@ def post_claim(request, run_id: str, ctx, client):
     ``ClaimResponse`` shape, and the router's own error mapping for an
     already-claimed gate (``AlreadyClaimedError`` → 409).
     """
-    from modulo.core.hitl_manager import AlreadyClaimedError
+    from farna.core.hitl_manager import AlreadyClaimedError
 
     _ = run_id  # parsed from the step text; the given step owns the UUID
     if ctx.get("gate_claimed_by_other"):
         claim_patch = patch(
-            "modulo.api.routes.hitl.HITLManager.claim",
+            "farna.api.routes.hitl.HITLManager.claim",
             new_callable=AsyncMock,
             side_effect=AlreadyClaimedError(ctx["run_id"], ctx["review_id"]),
         )
     else:
         claim_patch = patch(
-            "modulo.api.routes.hitl.HITLManager.claim",
+            "farna.api.routes.hitl.HITLManager.claim",
             new_callable=AsyncMock,
             return_value=ctx["mock_gate"],
         )
@@ -838,7 +838,7 @@ def post_approve_with_claim_token(request, run_id: str, decision: str, ctx, clie
     the real status code, the ``{"status": "approved", "run_id": ...}`` body,
     and that execution is resumed through the router.
     """
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     _ = run_id  # parsed from the step text; the given step owns the UUID
     ctx["decision"] = decision
@@ -848,8 +848,8 @@ def post_approve_with_claim_token(request, run_id: str, decision: str, ctx, clie
     else:
         mock_mgr.reject = AsyncMock(return_value=ctx["mock_gate"])
     with (
-        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+        patch("farna.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
     ):
         mock_exec_cls.return_value.resume = AsyncMock()
         resp = client.post(
@@ -879,12 +879,12 @@ def post_approve_without_claim_token(request, run_id: str, decision: str, ctx, c
 def post_approve_with_expired_token(request, run_id: str, decision: str, ctx, client):
     """Approve attempt with an expired claim token — the router maps
     ``ClaimTokenExpiredError`` to a real 410."""
-    from modulo.core.hitl_manager import ClaimTokenExpiredError
+    from farna.core.hitl_manager import ClaimTokenExpiredError
 
     _ = run_id
     ctx["decision"] = decision
     with patch(
-        "modulo.api.routes.hitl.HITLManager.approve",
+        "farna.api.routes.hitl.HITLManager.approve",
         new_callable=AsyncMock,
         side_effect=ClaimTokenExpiredError(),
     ):
@@ -899,12 +899,12 @@ def post_approve_with_expired_token(request, run_id: str, decision: str, ctx, cl
 def post_approve_with_specific_token(request, run_id: str, token: str, decision: str, ctx, client):
     """Approve attempt with a token that belongs to another user — the router
     maps ``ClaimTokenInvalidError`` to a real 403."""
-    from modulo.core.hitl_manager import ClaimTokenInvalidError
+    from farna.core.hitl_manager import ClaimTokenInvalidError
 
     _ = run_id
     ctx["decision"] = decision
     with patch(
-        "modulo.api.routes.hitl.HITLManager.approve",
+        "farna.api.routes.hitl.HITLManager.approve",
         new_callable=AsyncMock,
         side_effect=ClaimTokenInvalidError(),
     ):

@@ -8,12 +8,12 @@ explicit gate configs; they must default to the fail-safe human-only posture
 
 from __future__ import annotations
 
-from modulo.core.library_service._seed_data import (
+from farna.core.library_service._seed_data import (
     _INCIDENT_TEMPLATE_EDGES,
     _PR_TEMPLATE_EDGES,
     _RELEASE_TEMPLATE_EDGES,
 )
-from modulo.core.registry import list_registry_primitives
+from farna.core.registry import list_registry_primitives
 
 
 def _seed_gate_configs() -> list[dict]:

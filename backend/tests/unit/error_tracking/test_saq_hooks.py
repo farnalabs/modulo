@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from saq import Status
 
-from modulo.core.error_tracking import saq_hooks
+from farna.core.error_tracking import saq_hooks
 
 RUN_ID = str(uuid.uuid4())
 ORG_ID = str(uuid.uuid4())
@@ -51,7 +51,7 @@ def _mark_session(rowcount: int = 1) -> AsyncMock:
 
 class TestClassify:
     def test_complete_is_noop(self) -> None:
-        out = saq_hooks._classify("modulo.core.saq_worker.execute_run", Status.COMPLETE, None, {"run_id": RUN_ID})
+        out = saq_hooks._classify("farna.core.saq_worker.execute_run", Status.COMPLETE, None, {"run_id": RUN_ID})
         assert out == {"action": "noop"}
 
     @pytest.mark.parametrize(
@@ -60,12 +60,12 @@ class TestClassify:
         ids=["NEW", "QUEUED", "ACTIVE", "ABORTING", "ABORTED", "none", "queued-str", "active-str"],
     )
     def test_transient_and_swept_statuses_are_noop(self, status: Status | None) -> None:
-        out = saq_hooks._classify("modulo.core.saq_worker.execute_run", status, "boom", {"run_id": RUN_ID})
+        out = saq_hooks._classify("farna.core.saq_worker.execute_run", status, "boom", {"run_id": RUN_ID})
         assert out == {"action": "noop"}
 
     def test_execute_failed_marks_run(self) -> None:
         out = saq_hooks._classify(
-            "modulo.core.saq_worker.execute_run",
+            "farna.core.saq_worker.execute_run",
             Status.FAILED,
             "traceback...",
             {"run_id": RUN_ID, "org_id": ORG_ID},
@@ -77,7 +77,7 @@ class TestClassify:
 
     def test_resume_failed_marks_run(self) -> None:
         out = saq_hooks._classify(
-            "modulo.core.saq_worker.resume_run",
+            "farna.core.saq_worker.resume_run",
             "failed",
             "traceback...",
             {"run_id": RUN_ID, "org_id": ORG_ID},
@@ -87,19 +87,19 @@ class TestClassify:
 
     def test_fire_failed_ingests_error(self) -> None:
         out = saq_hooks._classify(
-            "modulo.core.saq_worker.fire_cron_trigger",
+            "farna.core.saq_worker.fire_cron_trigger",
             Status.FAILED,
             "boom",
             {"trigger_id": "t1", "org_id": ORG_ID},
         )
         assert out["action"] == "ingest_error"
-        assert out["function"] == "modulo.core.saq_worker.fire_cron_trigger"
+        assert out["function"] == "farna.core.saq_worker.fire_cron_trigger"
         assert "fire_cron_trigger" in out["message"]
         assert out["error"] == "boom"
 
     def test_report_failed_ingests_error(self) -> None:
         out = saq_hooks._classify(
-            "modulo.core.saq_worker.fire_report_trigger",
+            "farna.core.saq_worker.fire_report_trigger",
             Status.FAILED,
             "delivery boom",
             {"report_id": "r1", "org_id": ORG_ID},
@@ -107,7 +107,7 @@ class TestClassify:
         assert out["action"] == "ingest_error"
 
     def test_run_job_missing_run_id_ingests_error(self) -> None:
-        out = saq_hooks._classify("modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"org_id": ORG_ID})
+        out = saq_hooks._classify("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"org_id": ORG_ID})
         assert out["action"] == "ingest_error"
 
 
@@ -121,15 +121,15 @@ class TestAfterProcess:
     async def test_failed_execute_marks_run_failed_guarded(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()) as get_run,
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock) as record_facts,
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()) as get_run,
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock) as record_facts,
         ):
             factory.side_effect = [
                 MagicMock(return_value=mark_session),
@@ -155,7 +155,7 @@ class TestAfterProcess:
     async def test_failed_execute_preserves_long_error_detail(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run",
+                "farna.core.saq_worker.execute_run",
                 Status.FAILED,
                 "x" * 6000,
                 {"run_id": RUN_ID, "org_id": ORG_ID},
@@ -164,9 +164,9 @@ class TestAfterProcess:
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock),
         ):
             factory.side_effect = [
                 MagicMock(return_value=mark_session),
@@ -184,14 +184,14 @@ class TestAfterProcess:
     @pytest.mark.asyncio
     async def test_failed_execute_none_error_writes_null_detail(self) -> None:
         ctx = {
-            "job": _job("modulo.core.saq_worker.execute_run", Status.FAILED, None, {"run_id": RUN_ID, "org_id": ORG_ID})
+            "job": _job("farna.core.saq_worker.execute_run", Status.FAILED, None, {"run_id": RUN_ID, "org_id": ORG_ID})
         }
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock),
         ):
             factory.side_effect = [
                 MagicMock(return_value=mark_session),
@@ -205,16 +205,14 @@ class TestAfterProcess:
     @pytest.mark.asyncio
     async def test_failed_execute_non_str_error_coerced(self) -> None:
         ctx = {
-            "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, 12345, {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
+            "job": _job("farna.core.saq_worker.execute_run", Status.FAILED, 12345, {"run_id": RUN_ID, "org_id": ORG_ID})
         }
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock),
         ):
             factory.side_effect = [
                 MagicMock(return_value=mark_session),
@@ -230,15 +228,15 @@ class TestAfterProcess:
         leaked = "OpenAI call failed with sk-abc1234567890; auth Bearer tok12345xyz"
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, leaked, {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, leaked, {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock),
         ):
             factory.side_effect = [
                 MagicMock(return_value=mark_session),
@@ -255,15 +253,15 @@ class TestAfterProcess:
     async def test_guard_rejected_rowcount_zero_skips_facts(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         mark_session = _mark_session(rowcount=0)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock),
-            patch("modulo.core.analytics.record_run_facts", new_callable=AsyncMock) as record_facts,
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock),
+            patch("farna.core.analytics.record_run_facts", new_callable=AsyncMock) as record_facts,
         ):
             factory.side_effect = [MagicMock(return_value=mark_session)]
             await saq_hooks.after_process(ctx)
@@ -275,16 +273,16 @@ class TestAfterProcess:
     async def test_facts_failure_is_fail_open_after_mark(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=MagicMock()),
             patch(
-                "modulo.core.analytics.record_run_facts",
+                "farna.core.analytics.record_run_facts",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("facts boom"),
             ),
@@ -305,7 +303,7 @@ class TestAfterProcess:
     async def test_failed_fire_ingests_error_event(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.fire_cron_trigger",
+                "farna.core.saq_worker.fire_cron_trigger",
                 Status.FAILED,
                 "boom",
                 {"trigger_id": "t1", "org_id": ORG_ID},
@@ -313,8 +311,8 @@ class TestAfterProcess:
         }
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.error_tracking.ErrorIngestionService") as ingestion_cls,
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.error_tracking.ErrorIngestionService") as ingestion_cls,
         ):
             session = AsyncMock()
             session.__aenter__ = AsyncMock(return_value=session)
@@ -331,7 +329,7 @@ class TestAfterProcess:
         service.ingest.assert_awaited_once()
         ingest_args = service.ingest.await_args.args
         assert ingest_args[2]["source"] == "saq"
-        assert ingest_args[2]["context_json"]["function"] == "modulo.core.saq_worker.fire_cron_trigger"
+        assert ingest_args[2]["context_json"]["function"] == "farna.core.saq_worker.fire_cron_trigger"
 
     @pytest.mark.asyncio
     async def test_failed_fire_without_org_skips_ingest_for_system_sentinel(self) -> None:
@@ -345,7 +343,7 @@ class TestAfterProcess:
         """
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.fire_cron_trigger",
+                "farna.core.saq_worker.fire_cron_trigger",
                 Status.FAILED,
                 "boom",
                 {},  # no org_id -> SYSTEM_ORG_ID sentinel
@@ -363,7 +361,7 @@ class TestAfterProcess:
     @pytest.mark.asyncio
     async def test_noop_statuses_do_not_touch_db(self) -> None:
         for status in (Status.QUEUED, Status.ACTIVE, Status.ABORTED, Status.COMPLETE):
-            ctx = {"job": _job("modulo.core.saq_worker.execute_run", status, None, {"run_id": RUN_ID})}
+            ctx = {"job": _job("farna.core.saq_worker.execute_run", status, None, {"run_id": RUN_ID})}
             with patch.object(saq_hooks, "_open_factory") as factory:
                 await saq_hooks.after_process(ctx)
             factory.assert_not_called()
@@ -378,7 +376,7 @@ class TestAfterProcess:
     async def test_db_down_logs_and_leaves_for_reconcile(self) -> None:
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         with (
@@ -403,7 +401,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
             ):
                 saq_hooks._get_engine()
             _, kwargs = mock_create.call_args
@@ -427,7 +425,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
             ):
                 saq_hooks._get_engine()
             _, kwargs = mock_create.call_args
@@ -447,7 +445,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
             ):
                 saq_hooks._get_engine()
             kwargs = mock_create.call_args.kwargs
@@ -471,7 +469,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
             ):
                 saq_hooks._get_engine()
             url_arg, kwargs = mock_create.call_args
@@ -491,7 +489,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine"),
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
                 pytest.raises(ValueError, match="sslmode"),
             ):
                 saq_hooks._get_engine()
@@ -512,7 +510,7 @@ class TestGetEnginePrepPing:
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
                 patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch("modulo.settings.get_settings", return_value=settings_mock),
+                patch("farna.settings.get_settings", return_value=settings_mock),
             ):
                 saq_hooks._get_engine()
             _, kwargs = mock_create.call_args
@@ -602,8 +600,8 @@ class TestMarkRunFailedLockBoundFAR1601:
         session = _PgRecordingMarkSession()
         with (
             patch.object(saq_hooks, "_open_factory", return_value=MagicMock(return_value=session)),
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
         ):
             rowcount = await saq_hooks._mark_run_failed(RUN_ID, ORG_ID)
 
@@ -621,8 +619,8 @@ class TestMarkRunFailedLockBoundFAR1601:
         session = _PgRecordingMarkSession()
         with (
             patch.object(saq_hooks, "_open_factory", return_value=MagicMock(return_value=session)),
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("farna.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
         ):
             await saq_hooks._mark_run_failed(RUN_ID, ORG_ID, lock_timeout_ms=2000)
 
@@ -649,7 +647,7 @@ class TestMarkRunFailedLockBoundFAR1601:
 
         ctx = {
             "job": _job(
-                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
             )
         }
         lock_timeout = OperationalError(
@@ -658,7 +656,7 @@ class TestMarkRunFailedLockBoundFAR1601:
             asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout"),
         )
         with patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, side_effect=lock_timeout):
-            caplog.set_level(logging.WARNING, logger="modulo.core.error_tracking.saq_hooks")
+            caplog.set_level(logging.WARNING, logger="farna.core.error_tracking.saq_hooks")
             await saq_hooks.after_process(ctx)  # must NOT raise
 
         messages = [r.message for r in caplog.records]

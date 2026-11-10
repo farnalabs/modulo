@@ -83,12 +83,12 @@ def _post_create_pipeline(client, request, name: str, extra: dict):
         create_return = _make_mock_pipeline_full(name=name)
     with (
         patch(
-            "modulo.api.routes.pipelines.create_pipeline",
+            "farna.api.routes.pipelines.create_pipeline",
             side_effect=create_side_effect,
             return_value=create_return,
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": name, **extra})
     request.node._resp = resp

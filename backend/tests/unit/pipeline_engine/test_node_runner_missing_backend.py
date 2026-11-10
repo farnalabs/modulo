@@ -20,11 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.pipeline_engine.error_codes import class_for, is_retryable, map_legacy_code
-from modulo.core.pipeline_engine.errors import NodeMissingModelBackendError
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.pipeline_engine.node_runner import _COMPLETED_EMISSION_STATUSES
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.pipeline_engine.error_codes import class_for, is_retryable, map_legacy_code
+from farna.core.pipeline_engine.errors import NodeMissingModelBackendError
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.node_runner import _COMPLETED_EMISSION_STATUSES
 
 # ---------------------------------------------------------------------------
 # Helpers

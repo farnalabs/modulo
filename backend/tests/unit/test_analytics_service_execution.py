@@ -36,9 +36,9 @@ import sqlalchemy as sa_
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 
-import modulo.core.analytics.service as svc
-from modulo.core.analytics.builder import AnalyticsDimension, AnalyticsGroupBy, AnalyticsStatus
-from modulo.core.analytics.service import (
+import farna.core.analytics.service as svc
+from farna.core.analytics.builder import AnalyticsDimension, AnalyticsGroupBy, AnalyticsStatus
+from farna.core.analytics.service import (
     EXPORT_COLUMN_NAMES,
     AnalyticsDatabaseError,
     AnalyticsMigrationRequiredError,
@@ -478,7 +478,7 @@ class TestExportFilters:
         # matches every raw code NOT in known_error_codes() via a NOT IN — not
         # an IN-clause over the literal dotted harness.unknown, which would
         # match zero rows while the chart shows the slice populated.
-        from modulo.core.pipeline_engine.error_codes import known_error_codes
+        from farna.core.pipeline_engine.error_codes import known_error_codes
 
         from_, to_ = self._bounds()
         params = svc.AnalyticsParams(error_code="harness.unknown")

@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.db.crud.pipeline_snapshot import _apply_agent_fields
+from farna.core.pipeline_engine import node_runner as nr
+from farna.db.crud.pipeline_snapshot import _apply_agent_fields
 
 # ---------------------------------------------------------------------------
 # Test doubles (reuse pattern from test_native_structured_output.py)
@@ -74,7 +74,7 @@ class TestSchemaRenderingDispatch:
             "required": ["name"],
         }
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -105,7 +105,7 @@ class TestSchemaRenderingDispatch:
             "properties": {"name": {"type": "string", "pattern": "^[a-z]+$"}},
         }
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -125,7 +125,7 @@ class TestSchemaRenderingDispatch:
         hub = _FakeHub(backend)
         schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -144,11 +144,11 @@ class TestSchemaRenderingDispatch:
         schema = {"type": "object", "properties": {"n": {"type": "string"}}}
         with (
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                "farna.core.pipeline_engine.node_runner.render_for_profile",
                 side_effect=RuntimeError("render boom"),
             ),
         ):
@@ -172,7 +172,7 @@ class TestSchemaRenderingDispatch:
         hub = _FakeHub(backend)
         schema: dict[str, Any] = {"$ref": "#/$defs/Foo", "$defs": {"Foo": {"type": "string"}}}
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -285,7 +285,7 @@ class TestBoundsAfterRendering:
             "properties": {"x": {"type": "integer", "minimum": 0}},
         }
         with patch(
-            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            "farna.core.pipeline_engine.decorator.get_model_backend_hub",
             return_value=hub,
         ):
             await nr._invoke_node_model(
@@ -331,9 +331,9 @@ class TestMakeNodeFnSchemaProfile:
             "artifacts": [],
         }
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
         ):
@@ -364,9 +364,9 @@ class TestMakeNodeFnSchemaProfile:
             "artifacts": [],
         }
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
         ):
@@ -520,9 +520,9 @@ class TestAgentDefaultDispatchIntegration:
             "artifacts": [],
         }
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
         ):
@@ -573,15 +573,15 @@ class TestBoundsCheckOrdering:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                "farna.core.pipeline_engine.node_runner._is_safe_schema",
                 side_effect=_mock_is_safe,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                "farna.core.pipeline_engine.node_runner.render_for_profile",
                 return_value=SimpleNamespace(
                     schema=rendered_schema,
                     profile="provider-strict",
@@ -625,15 +625,15 @@ class TestBoundsCheckOrdering:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                "farna.core.pipeline_engine.node_runner._is_safe_schema",
                 side_effect=_mock_is_safe,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                "farna.core.pipeline_engine.node_runner.render_for_profile",
                 return_value=SimpleNamespace(
                     schema=rendered_schema,
                     profile="provider-strict",
@@ -662,15 +662,15 @@ class TestBoundsCheckOrdering:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._is_safe_schema",
+                "farna.core.pipeline_engine.node_runner._is_safe_schema",
                 return_value=(False, "too large"),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.render_for_profile",
+                "farna.core.pipeline_engine.node_runner.render_for_profile",
                 return_value=SimpleNamespace(
                     schema={"type": "string"},
                     profile="provider-strict",

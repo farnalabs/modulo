@@ -12,47 +12,47 @@ implementations sharing a ConnectorType (e.g. the CI runners) stay distinct.
 
 from typing import Any
 
-from modulo.connectors.asana import AsanaConnector
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.base import ConnectorBase, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector
-from modulo.connectors.buildkite import BuildkiteConnector
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner, WoodpeckerCIRunner
-from modulo.connectors.circleci import CircleCIConnector
-from modulo.connectors.codeclimate import CodeClimateConnector
-from modulo.connectors.confluence import ConfluenceConnector
-from modulo.connectors.datadog import DatadogConnector
-from modulo.connectors.discord import DiscordConnector
-from modulo.connectors.dropbox_paper import DropboxPaperConnector
-from modulo.connectors.filesystem import FilesystemConnector
-from modulo.connectors.gitea import GiteaConnector
-from modulo.connectors.github import GitHubConnector
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.grafana import GrafanaConnector
-from modulo.connectors.jenkins import JenkinsConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
-from modulo.connectors.monday import MondayConnector
-from modulo.connectors.n8n import N8NConnector
-from modulo.connectors.notion import NotionConnector
-from modulo.connectors.npm import NpmConnector
-from modulo.connectors.onepassword import OnePasswordConnector
-from modulo.connectors.opsgenie import OpsgenieConnector
-from modulo.connectors.pagerduty import PagerDutyConnector
-from modulo.connectors.plane import PlaneConnector
-from modulo.connectors.pypi import PyPIConnector
-from modulo.connectors.sentry import SentryConnector
-from modulo.connectors.sharepoint import SharePointConnector
-from modulo.connectors.shell import ShellConnector
-from modulo.connectors.shortcut import ShortcutConnector
-from modulo.connectors.slack import SlackConnector
-from modulo.connectors.snyk import SnykConnector
-from modulo.connectors.sonarqube import SonarQubeConnector
-from modulo.connectors.teamcity import TeamCityConnector
-from modulo.connectors.trello import TrelloConnector
-from modulo.connectors.youtrack import YouTrackConnector
+from farna.connectors.asana import AsanaConnector
+from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.azure_repos import AzureReposConnector
+from farna.connectors.base import ConnectorBase, ConnectorType
+from farna.connectors.bitbucket import BitbucketConnector
+from farna.connectors.buildkite import BuildkiteConnector
+from farna.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner, WoodpeckerCIRunner
+from farna.connectors.circleci import CircleCIConnector
+from farna.connectors.codeclimate import CodeClimateConnector
+from farna.connectors.confluence import ConfluenceConnector
+from farna.connectors.datadog import DatadogConnector
+from farna.connectors.discord import DiscordConnector
+from farna.connectors.dropbox_paper import DropboxPaperConnector
+from farna.connectors.filesystem import FilesystemConnector
+from farna.connectors.gitea import GiteaConnector
+from farna.connectors.github import GitHubConnector
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.grafana import GrafanaConnector
+from farna.connectors.jenkins import JenkinsConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.microsoft_teams import MicrosoftTeamsConnector
+from farna.connectors.monday import MondayConnector
+from farna.connectors.n8n import N8NConnector
+from farna.connectors.notion import NotionConnector
+from farna.connectors.npm import NpmConnector
+from farna.connectors.onepassword import OnePasswordConnector
+from farna.connectors.opsgenie import OpsgenieConnector
+from farna.connectors.pagerduty import PagerDutyConnector
+from farna.connectors.plane import PlaneConnector
+from farna.connectors.pypi import PyPIConnector
+from farna.connectors.sentry import SentryConnector
+from farna.connectors.sharepoint import SharePointConnector
+from farna.connectors.shell import ShellConnector
+from farna.connectors.shortcut import ShortcutConnector
+from farna.connectors.slack import SlackConnector
+from farna.connectors.snyk import SnykConnector
+from farna.connectors.sonarqube import SonarQubeConnector
+from farna.connectors.teamcity import TeamCityConnector
+from farna.connectors.trello import TrelloConnector
+from farna.connectors.youtrack import YouTrackConnector
 
 BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase], ConnectorType]] = [
     ("filesystem", {"base_path": "/tmp"}, {}, FilesystemConnector, ConnectorType.FILESYSTEM),

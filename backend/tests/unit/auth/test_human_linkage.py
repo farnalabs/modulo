@@ -10,7 +10,7 @@ MCP gate that consumes it is tested in
 import uuid
 from unittest.mock import AsyncMock, patch
 
-from modulo.auth.human_linkage import (
+from farna.auth.human_linkage import (
     HITL_ACTION_DEFAULT_PERMISSION,
     LINKAGE_NONE,
     LINKAGE_OAUTH_CONSENT,
@@ -18,7 +18,7 @@ from modulo.auth.human_linkage import (
     required_permission_for_action,
     resolve_human_linkage,
 )
-from modulo.db.models.account import KIND_HUMAN, KIND_SERVICE
+from farna.db.models.account import KIND_HUMAN, KIND_SERVICE
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000013")
@@ -52,7 +52,7 @@ async def _resolve(
 
 
 class TestHumanLinkagePositive:
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_consent_derived_human_oauth_token_is_human_linked(self, mock_membership: AsyncMock) -> None:
         """All four conditions hold ⇒ linked, linkage=oauth_consent, kind=human."""
         mock_membership.return_value = ("operator", KIND_HUMAN)
@@ -72,7 +72,7 @@ class TestHumanLinkagePositive:
 
 
 class TestHumanLinkageNegative:
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_service_kind_account_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         """A service principal is structurally incapable of being human-linked."""
         mock_membership.return_value = ("operator", KIND_SERVICE)
@@ -83,7 +83,7 @@ class TestHumanLinkageNegative:
         assert linkage.linkage == LINKAGE_NONE
         assert linkage.principal_kind == KIND_SERVICE
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_inactive_or_absent_membership_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         """No live membership (inactive account / deactivated membership) ⇒ deny."""
         mock_membership.return_value = None
@@ -94,7 +94,7 @@ class TestHumanLinkageNegative:
         assert linkage.linkage == LINKAGE_NONE
         assert linkage.principal_kind is None
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_missing_consent_scope_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         """A live human without the action's consented scope is not linked."""
         mock_membership.return_value = ("operator", KIND_HUMAN)
@@ -105,7 +105,7 @@ class TestHumanLinkageNegative:
         assert linkage.linkage == LINKAGE_NONE
         assert linkage.principal_kind == KIND_HUMAN
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_no_grant_set_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         """A credential with no grant-set (legacy/JWT) fails the scope condition."""
         mock_membership.return_value = ("operator", KIND_HUMAN)
@@ -115,7 +115,7 @@ class TestHumanLinkageNegative:
         assert linkage.linked is False
         assert linkage.principal_kind == KIND_HUMAN
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_api_key_is_excluded_without_a_db_read(self, mock_membership: AsyncMock) -> None:
         """``mk_`` API keys are excluded by construction — no account read."""
         linkage = await _resolve(auth_type="api_key")
@@ -125,7 +125,7 @@ class TestHumanLinkageNegative:
         assert linkage.principal_kind is None
         mock_membership.assert_not_awaited()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_non_oauth_jwt_is_excluded_without_a_db_read(self, mock_membership: AsyncMock) -> None:
         """A browser-class password JWT (FAR-634) is excluded — no account read."""
         linkage = await _resolve(auth_type="jwt")
@@ -134,7 +134,7 @@ class TestHumanLinkageNegative:
         assert linkage.linkage == LINKAGE_NONE
         mock_membership.assert_not_awaited()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_missing_token_family_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         """No signed token family ⇒ condition (a) fails, no account read."""
         linkage = await _resolve(token_family=None)
@@ -143,7 +143,7 @@ class TestHumanLinkageNegative:
         assert linkage.linkage == LINKAGE_NONE
         mock_membership.assert_not_awaited()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_missing_account_id_is_not_human_linked(self, mock_membership: AsyncMock) -> None:
         linkage = await _resolve(account_id=None)
 
@@ -155,7 +155,7 @@ class TestHumanLinkageNegative:
 class TestUserScopedApiKeyLinkage:
     """FAR-2281: a user-scoped mk_ key owned by a live human is human-linked."""
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_user_scoped_human_key_is_human_linked(self, mock_membership: AsyncMock) -> None:
         mock_membership.return_value = ("admin", KIND_HUMAN)
 
@@ -169,7 +169,7 @@ class TestUserScopedApiKeyLinkage:
         # The key's authority is its live-clamped role, not an OAuth consent set.
         mock_membership.assert_awaited_once()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_user_scoped_service_owned_key_is_not_linked(self, mock_membership: AsyncMock) -> None:
         """A user-scoped key OWNED by a service principal is still a machine identity."""
         mock_membership.return_value = ("operator", KIND_SERVICE)
@@ -180,7 +180,7 @@ class TestUserScopedApiKeyLinkage:
         assert linkage.linkage == LINKAGE_NONE
         assert linkage.principal_kind == KIND_SERVICE
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_org_scoped_key_is_excluded_without_a_db_read(self, mock_membership: AsyncMock) -> None:
         linkage = await _resolve(auth_type="api_key", token_family=None, key_scope="org")
 
@@ -188,7 +188,7 @@ class TestUserScopedApiKeyLinkage:
         assert linkage.linkage == LINKAGE_NONE
         mock_membership.assert_not_awaited()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_user_scoped_key_without_account_is_not_linked(self, mock_membership: AsyncMock) -> None:
         linkage = await _resolve(
             auth_type="api_key",
@@ -200,7 +200,7 @@ class TestUserScopedApiKeyLinkage:
         assert linkage.linked is False
         mock_membership.assert_not_awaited()
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_user_scoped_key_with_dead_membership_is_not_linked(self, mock_membership: AsyncMock) -> None:
         mock_membership.return_value = None
 
@@ -209,7 +209,7 @@ class TestUserScopedApiKeyLinkage:
         assert linkage.linked is False
         assert linkage.linkage == LINKAGE_NONE
 
-    @patch("modulo.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
+    @patch("farna.auth.human_linkage.resolve_live_role_and_kind", new_callable=AsyncMock)
     async def test_verification_error_fails_closed(self, mock_membership: AsyncMock) -> None:
         """FAR-2281: any verification error resolves to NOT human-linked."""
         mock_membership.side_effect = RuntimeError("db down")

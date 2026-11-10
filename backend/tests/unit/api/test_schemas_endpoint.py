@@ -10,15 +10,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud.schema import SchemaDeletionProtectedError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud.schema import SchemaDeletionProtectedError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
-_SCHEMA_PATCH_PREFIX = "modulo.api.routes.schemas."
+_SCHEMA_PATCH_PREFIX = "farna.api.routes.schemas."
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -214,12 +214,12 @@ def test_schema_crud(client: TestClient, case: dict[str, object]) -> None:
 
 def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch(
-            "modulo.api.routes.schemas.delete_schema",
+            "farna.api.routes.schemas.delete_schema",
             side_effect=SchemaDeletionProtectedError(_SCHEMA_ID),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{_SCHEMA_ID}")
     assert resp.status_code == 409
@@ -228,9 +228,9 @@ def test_delete_schema_deletion_protected_returns_409(client: TestClient) -> Non
 def test_delete_schema_force_returns_204(client: TestClient) -> None:
     """force=True should delete even when references exist."""
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
-        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_schema()),
+        patch("farna.api.routes.schemas.delete_schema", return_value=True),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{_SCHEMA_ID}?force=true")
     assert resp.status_code == 204
@@ -241,21 +241,21 @@ def test_delete_schema_force_skips_protection(client: TestClient) -> None:
     schema_id = uuid.uuid4()
     # Without force — should raise SchemaDeletionProtectedError
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_schema()),
         patch(
-            "modulo.api.routes.schemas.delete_schema",
+            "farna.api.routes.schemas.delete_schema",
             side_effect=SchemaDeletionProtectedError(schema_id),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{schema_id}")
     assert resp.status_code == 409
 
     # With force=true — should succeed
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
-        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_schema()),
+        patch("farna.api.routes.schemas.delete_schema", return_value=True),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{schema_id}?force=true")
     assert resp.status_code == 204
@@ -351,8 +351,8 @@ def test_get_schema_cross_org_returns_404(client: TestClient) -> None:
     cross_org_schema.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000099")
     assert cross_org_schema.organisation_id != _ORG_ID
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=cross_org_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=cross_org_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_SCHEMA_ID}")
     assert resp.status_code == 404
@@ -384,9 +384,9 @@ def test_migrate_data_returns_200(client: TestClient) -> None:
     page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -407,8 +407,8 @@ def test_migrate_data_returns_200(client: TestClient) -> None:
 
 def test_migrate_data_source_schema_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=None),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -428,9 +428,9 @@ def test_migrate_data_source_cross_org_schema_returns_404(client: TestClient) ->
     from_schema.organisation_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
     to_schema = _make_schema()
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.list_schema_versions", new_callable=AsyncMock) as mock_list,
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.list_schema_versions", new_callable=AsyncMock) as mock_list,
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -453,9 +453,9 @@ def test_migrate_data_target_cross_org_schema_returns_404(client: TestClient) ->
     from_sv = _make_schema_version(from_schema.id)
     from_page = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[from_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[from_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -472,12 +472,12 @@ def test_migrate_data_source_no_versions_returns_404(client: TestClient) -> None
     from_schema = _make_schema()
     to_schema = _make_schema()
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
         patch(
-            "modulo.api.routes.schemas.list_schema_versions",
+            "farna.api.routes.schemas.list_schema_versions",
             return_value=MagicMock(items=[], total=0, page=1, page_size=20),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -506,10 +506,10 @@ def test_migrate_data_records_audit_event(client: TestClient) -> None:
     page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
     ):
         resp = client.post(
             "/api/v1/schemas/migrate",
@@ -551,10 +551,10 @@ def test_migrate_data_dry_run_records_audit_event(client: TestClient) -> None:
     page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append,
     ):
         resp = client.post(
             "/api/v1/schemas/migrate?dry_run=true",
@@ -589,11 +589,11 @@ def test_migrate_data_audit_failure_does_not_break_response(client: TestClient) 
     page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
         patch(
-            "modulo.core.audit_logger.append_audit_event",
+            "farna.core.audit_logger.append_audit_event",
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit chain unavailable"),
         ),
@@ -628,11 +628,11 @@ def test_migrate_data_audit_programming_error_returns_200(client: TestClient) ->
     page_result = MagicMock(items=[from_sv], total=1, page=1, page_size=20)
     to_page = MagicMock(items=[to_sv], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
-        patch("modulo.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", side_effect=[from_schema, to_schema]),
+        patch("farna.api.routes.schemas.list_schema_versions", side_effect=[page_result, to_page]),
+        patch("farna.api.routes.schemas.set_rls_org"),
         patch(
-            "modulo.core.audit_logger.append_audit_event",
+            "farna.core.audit_logger.append_audit_event",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("statement", {}, Exception("missing table")),
         ),
@@ -650,7 +650,7 @@ def test_migrate_data_audit_programming_error_returns_200(client: TestClient) ->
 
 
 def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
+    with patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -674,7 +674,7 @@ def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
 
 
 def test_migration_plan_no_changes(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
+    with patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock):
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -707,7 +707,7 @@ def test_migration_plan_unauthenticated_returns_4xx(unauth_client: TestClient) -
 
 
 def test_migration_plan_records_audit_event(client: TestClient) -> None:
-    with patch("modulo.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append:
+    with patch("farna.api.routes.schemas.append_audit_event_isolated", new_callable=AsyncMock) as mock_append:
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={
@@ -735,7 +735,7 @@ def test_migration_plan_records_audit_event(client: TestClient) -> None:
 
 def test_migration_plan_audit_failure_does_not_break_response(client: TestClient) -> None:
     with patch(
-        "modulo.core.audit_logger.append_audit_event",
+        "farna.core.audit_logger.append_audit_event",
         new_callable=AsyncMock,
         side_effect=RuntimeError("audit boom"),
     ):
@@ -760,9 +760,9 @@ def test_deprecate_schema_returns_200(client: TestClient) -> None:
     schema.deprecated = True
     schema.deprecated_at = _NOW
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.deprecate_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=schema),
+        patch("farna.api.routes.schemas.deprecate_schema", return_value=schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/schemas/{_SCHEMA_ID}/deprecate")
     assert resp.status_code == 200
@@ -771,9 +771,9 @@ def test_deprecate_schema_returns_200(client: TestClient) -> None:
 
 def test_deprecate_schema_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_schema()),
-        patch("modulo.api.routes.schemas.deprecate_schema", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_schema()),
+        patch("farna.api.routes.schemas.deprecate_schema", return_value=None),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/schemas/{uuid.uuid4()}/deprecate")
     assert resp.status_code == 404
@@ -824,10 +824,10 @@ def test_create_schema_integrity_error_returns_409(client: TestClient) -> None:
     """Duplicate schema name per org surfaces as 409 (IntegrityError caught in route)."""
     with (
         patch(
-            "modulo.api.routes.schemas.create_schema",
+            "farna.api.routes.schemas.create_schema",
             side_effect=IntegrityError("INSERT", {}, Exception("duplicate key")),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Dup"})
     assert resp.status_code == 409
@@ -909,9 +909,9 @@ def test_create_schema_auto_creates_latest_placeholder_version(client: TestClien
         return placeholder
 
     with (
-        patch("modulo.api.routes.schemas.create_schema", side_effect=_fake_create_schema) as mock_create,
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+        patch("farna.api.routes.schemas.create_schema", side_effect=_fake_create_schema) as mock_create,
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Explicit Version Schema"})
     assert resp.status_code == 201
@@ -929,8 +929,8 @@ def test_create_schema_rejects_invalid_initial_definition(client: TestClient) ->
     """A structurally-invalid JSON Schema supplied as the initial definition is
     rejected with 422 before any write (closed feat-schemas gap)."""
     with (
-        patch("modulo.api.routes.schemas.create_schema") as mock_create,
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.create_schema") as mock_create,
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas",
@@ -960,9 +960,9 @@ def test_create_schema_with_valid_initial_definition_seeds_latest_version(client
         return placeholder
 
     with (
-        patch("modulo.api.routes.schemas.create_schema", side_effect=_fake_create_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+        patch("farna.api.routes.schemas.create_schema", side_effect=_fake_create_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Initialized Schema", "definition_json": initial})
     assert resp.status_code == 201
@@ -987,9 +987,9 @@ def test_create_schema_with_explicit_empty_definition_is_preserved(client: TestC
         return placeholder
 
     with (
-        patch("modulo.api.routes.schemas.create_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+        patch("farna.api.routes.schemas.create_schema", return_value=schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Empty Schema", "definition_json": {}})
     assert resp.status_code == 201
@@ -1003,9 +1003,9 @@ def test_schema_version_creation_is_explicit_endpoint(client: TestClient) -> Non
     sv.version = "2.0"
     sv.version_number = 2
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
-        patch("modulo.api.routes.schemas.create_schema_version", return_value=sv) as mock_create,
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=schema),
+        patch("farna.api.routes.schemas.create_schema_version", return_value=sv) as mock_create,
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             f"/api/v1/schemas/{schema.id}/versions",
@@ -1028,10 +1028,10 @@ def test_validate_schema_integrity_error_create_returns_409(client: TestClient) 
 
     with (
         patch(
-            "modulo.api.routes.schemas.create_schema",
+            "farna.api.routes.schemas.create_schema",
             side_effect=IntegrityError("stmt", {}, Exception("duplicate")),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Duplicate"})
     assert resp.status_code == 409

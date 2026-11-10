@@ -1,0 +1,2117 @@
+"""HITL (Human-In-The-Loop) API routes.
+
+All HITL operations are scoped to the authenticated user's organisation.
+Claim, approve, and reject require the run to be in ``awaiting_human`` status.
+
+Claim-token-based approve/reject require the token returned from a successful
+claim.  ``human_only`` gates additionally reject claim and decisions made with
+a non-browser credential: the claim route AND the resume routes (approve /
+approve-with-modification / deliver-manual / submit-manual) resolve the gate's
+actual edge config and raise 403 for a non-browser principal (FAR-610 — the
+routes previously performed no ``human_only`` check at all; FAR-609 extended
+the same check to claim). When the config cannot be resolved but the gate
+fired (a claim row exists), non-browser principals are denied too — fail
+closed, since the policy cannot be verified.
+
+These routes resolve principals from browser-login JWTs only
+(``get_current_tenant_user`` decodes a user JWT; an ``mk_`` API key is an MCP
+credential), so the non-browser case here is a programmatic JWT (FAR-634).
+There is deliberately NO human-linked authority on the REST surface: the
+user-scoped human-linked API-key path is an MCP credential and is evaluated
+only by the MCP gate under the default-OFF ``mcp_human_linked_hitl_authority``
+flag (ADR 063 step 1).
+
+``reject_gate`` requires a claim_token, and that token can no longer be
+obtained by a non-browser principal on a ``human_only`` (now the default)
+gate, so non-browser principals can neither claim, decide, NOR reject such a
+gate. Only a principal already holding a claim (e.g. claimed before the
+policy change) can reject; agent-only runs on default ``human_only`` gates
+require browser-human intervention — that is the intended policy, NOT an
+agent escape hatch. The MCP surface (``mcp_server.py``) permits a verified,
+eligible consent-derived human-linked OAuth credential or user-scoped
+human-linked API key only when an organisation admin has explicitly enabled
+the default-OFF ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+Org-, team-, service- and run-scoped API keys and non-OAuth JWTs remain
+denied; normal possession and claim-token requirements still apply.
+``deliver_manual`` stays browser-only regardless.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, NoReturn
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func, nullslast, select, update
+from sqlalchemy.exc import PendingRollbackError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from farna.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from farna.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from farna.api.db_error_reporting import log_service_unavailable
+from farna.api.dependencies import (
+    _get_engine,
+    get_db_session,
+    get_or_create_engine,
+    get_or_create_session_factory,
+    pg_connection_string,
+    require_permission,
+)
+from farna.api.hitl_answer_validation import (
+    AnswerValidationError as SharedValidationError,
+)
+from farna.api.hitl_answer_validation import (
+    validate_hitl_answer,
+)
+from farna.api.models.problem import ProblemException, ProblemType
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event
+from farna.core.cron_helpers import _awaiting_human_has_committed_decision
+from farna.core.hitl_manager import (
+    AlreadyClaimedError,
+    ClaimTokenExpiredError,
+    ClaimTokenInvalidError,
+    DecisionPayloadError,
+    GateAlreadyDecidedError,
+    GateNotFoundError,
+    HITLManager,
+    NotTeamMemberError,
+    RunNotAwaitingError,
+)
+from farna.core.notifier import Notifier
+from farna.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
+from farna.db.crud.hitl_review_config import (
+    EVENT_HUMAN_ONLY_DENIED,
+    edge_source_or_target,
+    hitl_review_exists_but_unresolved,
+    human_only_denial,
+    make_review_id,
+    resolve_hitl_review_config,
+    resolve_review_description,
+    resolve_review_descriptions,
+    snapshot_review_config_map,
+)
+from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+from farna.db.crud.run import get_run, transition_run
+from farna.db.crud.team_scope import account_team_scope_clause, viewer_run_scope_visible
+from farna.db.models.account import Account
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+from farna.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, Run
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+from farna.settings import get_settings
+
+_CODE_HITL_APPROVE = "hitl.approve"
+
+_CODE_HITL_RUN_HITL_MANAGER = "hitl._run_hitl_manager"
+_CODE_HITL_LIST_RUN_PENDING_REVIEWS = "hitl.list_run_pending_reviews"
+_CODE_HITL_LIST_ORG_PENDING_REVIEWS = "hitl.list_org_pending_reviews"
+_CODE_HITL_LIST_ORG_REVIEWS = "hitl.list_org_reviews"
+
+logger = logging.getLogger(__name__)
+
+
+def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
+    """Build a resume executor wired with the ``hitl_awaiting`` notifier.
+
+    Closes the team-hitl-gates Known Gap: a resume that re-interrupts on a
+    further HITL gate must dispatch the webhook/in-app notification, not just
+    the WebSocket broker event. Notifier init is failure-isolated (fail-open —
+    the resume still runs if the notifier cannot be constructed).
+    """
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(engine, get_settings().fernet_key)
+    except Exception:
+        logger.exception("hitl.build_resume_executor.notifier_init_failed")
+    return PipelineExecutor(
+        engine,
+        checkpointer_conn_string=pg_connection_string(get_settings().database_url),
+        notifier=notifier,
+    )
+
+
+router = APIRouter(prefix="/api/v1", tags=["hitl"])
+
+# Repeated log/decorator keys (S1192).
+_CODE_HITL_CLAIM_REVIEW = "hitl.claim_review"
+_PERM_HITL_LIST = "hitl.list"
+
+#: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
+#: MCP) — imported from ``db.crud.hitl_review_config`` (the shared cross-surface
+#: home) so the REST and MCP emitters cannot fork the audit stream on a rename.
+#: Denied-attempt visibility is cheap probe detection (post FAR-611 sweep).
+
+
+class HumanOnlyDenied(HTTPException):
+    """403 raised when a non-browser credential claims or decides a
+    ``human_only`` gate.
+
+    Subclass (not a bare ``HTTPException``) so ``_run_hitl_manager`` — the
+    single choke point of every REST decision route — can distinguish the
+    human_only denial from any other 4xx, emit the failure-isolated denial
+    audit event (FAR-634), and re-raise with byte-identical client behaviour.
+    Carries the denial fields for the audit payload.
+    """
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        run_id: uuid.UUID,
+        review_id: str,
+        action: str,
+        org_id: uuid.UUID,
+        account_id: uuid.UUID,
+        org_role: str,
+        principal_kind: str,
+        client_kind: str,
+    ) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        self.run_id = run_id
+        self.review_id = review_id
+        self.action = action
+        self.org_id = org_id
+        self.account_id = account_id
+        self.org_role = org_role
+        self.principal_kind = principal_kind
+        self.client_kind = client_kind
+        self.reason = detail
+
+
+# ---------------------------------------------------------------------------
+# Request / Response models
+# ---------------------------------------------------------------------------
+
+
+class ClaimRequest(BaseModel):
+    expiry_minutes: int = Field(default=15, ge=1, le=1440)
+
+
+class ClaimResponse(BaseModel):
+    run_id: uuid.UUID
+    review_id: str
+    claim_token: str
+    expires_at: str
+
+
+class ApproveRequest(BaseModel):
+    claim_token: str
+    notes: str | None = None
+    #: FAR-860: optional answer for ``kind: choice`` gates. The answer
+    #: carries ``kind`` (must match the gate's response_contract kind) and
+    #: ``option_id`` (must be a valid option id from the contract).
+    answer: dict[str, Any] | None = None
+
+
+class ApproveWithModificationRequest(BaseModel):
+    claim_token: str
+    modified_output: dict[str, Any]
+    notes: str | None = None
+    #: FAR-907: optional answer for ``kind: choice`` gates, mirroring
+    #: ``ApproveRequest.answer``. A choice gate REQUIRES a valid ``option_id``
+    #: on this path too — without it a reviewer could approve-with-modification
+    #: while skipping the declared choice (the answer becomes
+    #: ``hitl_answer_{review_id}`` in run state for downstream conditional edges).
+    answer: dict[str, Any] | None = None
+
+
+class RejectRequest(BaseModel):
+    claim_token: str
+    reason: str = Field(..., min_length=1)
+
+
+class DeliverManualRequest(BaseModel):
+    claim_token: str
+    output: dict[str, Any]
+
+
+class ManualOutputRequest(BaseModel):
+    claim_token: str
+    output: dict[str, Any]
+
+
+class ReviewResponse(BaseModel):
+    run_id: uuid.UUID
+    review_id: str
+    pipeline_id: uuid.UUID
+    pipeline_name: str | None = None
+    claimed_by: uuid.UUID | None = None
+    claimed_at: str | None = None
+    expires_at: str | None = None
+    decision: str | None = None
+    decision_at: str | None = None
+    #: Human label from the snapshot edge's ``hitl_review_config.label``
+    #: (frontend UUID hygiene — falls back to shortId when absent).
+    label: str | None = None
+    #: FAR-613: the gate config's human description — WHY this gate exists.
+    #: Resolved with the FAR-688 unified precedence (context-first, snapshot
+    #: fallback via ``hitl_review_config.resolve_review_description`` — the same
+    #: rule every briefing surface applies). None for legacy gates → the UI
+    #: renders the muted no-description fallback.
+    #:
+    #: NOTE (kept duplication): the description ALSO rides inside
+    #: ``context.description`` (the fire-time capture). The top-level field
+    #: is the frontend contract — the render source; the two agree under the
+    #: unified precedence and may only differ when the snapshot was edited
+    #: after the gate fired.
+    description: str | None = None
+    #: FAR-613: the fire-time briefing bundle persisted on the claim row
+    #: (condition, FAR-688 matched ``condition_result``, trigger, source
+    #: node, bounded artifacts, reason, pipeline_name). None for legacy
+    #: gates. Shape: ``modulo.core.pipeline_engine.hitl_context.HitlReviewContext``
+    #: (kept as an open dict here — the API contract must accept legacy
+    #: bundles that predate any key).
+    context: dict[str, Any] | None = None
+    #: FAR-691: the claimant's human-readable display name (batched accounts
+    #: lookup). None when the account row is missing — the frontend falls
+    #: back to the raw account UUID.
+    claimed_by_name: str | None = None
+    #: FAR-691: whether the claimant is the caller, stamped server-side from
+    #: the principal (the server knows the caller; no client auth state).
+    #: Drives the frontend's stale-token drop for foreign-claimed gates.
+    claimed_by_me: bool = False
+
+
+class PendingReviewsResponse(BaseModel):
+    reviews: list[ReviewResponse]
+
+
+class ReviewListResponse(BaseModel):
+    """Paginated org review listing (FAR-692) — the repo's standard list envelope."""
+
+    items: list[ReviewResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+#: FAR-692: the ``status`` query param on GET /api/v1/hitl/reviews. A Literal type
+#: (not a bare str) so FastAPI's request validation rejects unknown values with
+#: 422 for free — no hand-rolled validation in the handler.
+ReviewStatusFilter = Literal["undecided", "pending", "claimed", "approved", "rejected", "all"]
+
+#: page_size is clamped (not 422'd) at this ceiling — mirrors the runs-list
+#: convention of a bounded page size without failing the whole request.
+_REVIEW_PAGE_SIZE_MAX = 100
+
+#: The ``status`` values on GET /api/v1/hitl/reviews that view PENDING WORK. The
+#: data-rot fence (FAR-612/FAR-604) applies only to these: like
+#: ``HITLManager.list_pending`` they join ``runs`` and keep only gates whose run
+#: is still actionable. ``approved``/``rejected`` (decided history) and ``all``
+#: (audit view) are deliberately unfenced — see ``list_org_reviews``.
+_PENDING_WORK_REVIEW_STATUSES = frozenset({"undecided", "pending", "claimed"})
+
+
+def _is_sandbox_capacity_exceeded(exc: BaseException) -> bool:
+    """Return whether a resume failure is the capacity-deferred outcome.
+
+    Kept beside the REST handler's exception import so other API adapters can
+    preserve the same mapping without importing the pipeline engine directly.
+    """
+    return isinstance(exc, SandboxCapacityExceededError)
+
+
+async def _session_row_is_f6a_reconcile_candidate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Whether *run_id* is in the F6a reconcile-recoverable shape.
+
+    Recovery is a property of the ROW, not of whether a repair UPDATE matched:
+    a resume that fails BEFORE its claim transaction commits leaves the run in
+    its committed HITL state, which is already a valid F6a candidate. The
+    row must be in an actionable HITL status, dispatched by SAQ, and carry a
+    committed gate decision the reconcile guard accepts.
+    """
+    row = (
+        await session.execute(
+            select(Run.status, Run.dispatcher).where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).first()
+    if row is None:
+        return False
+    status, dispatcher = row
+    if status not in HITL_ACTIONABLE_RUN_STATUSES or dispatcher != "saq":
+        return False
+    return await _awaiting_human_has_committed_decision(session, org_id, run_id)
+
+
+async def _run_is_f6a_reconcile_candidate(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """Open a short RLS session and evaluate the F6a reconcile-candidate state."""
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
+
+
+async def _restore_failed_mcp_resume_for_reconcile(
+    *,
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    claim_token: str,
+) -> bool:
+    """Return this failed inline HITL resume to the F6a reconcile state.
+
+    ``PipelineExecutor.resume`` claims the run as ``running`` before loading
+    setup and compiling the graph. A failure after that claim cannot be left
+    with a fresh heartbeat: dispatcher_reconcile deliberately ignores a fresh
+    running row, so the durable approval would be stranded. The repair is
+    fenced to the exact executor claim token. A later executor/reconcile claim
+    therefore wins the row and this stale failure cannot rewrite it back to
+    ``awaiting_human``.
+
+    Returns whether the row is NOW an F6a reconcile candidate. A pre-claim
+    failure matches no UPDATE (the run never left its HITL status) but is
+    still recoverable, so the row is re-read rather than judging recovery by
+    the UPDATE's rowcount.
+    """
+    stale_seconds = max(1, int(get_settings().saq_job_heartbeat) * 2)
+    stale_heartbeat = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        # FAR-1584/1592/1601/1610 caller-bound convention: this is a
+        # request-path hot-row write, so bound the lock wait at the top of the
+        # transaction — before the repair UPDATE's first lock.
+        await set_mutation_row_lock_timeout(session)
+        await session.execute(
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.organisation_id == org_id,
+                Run.status == "running",
+                Run.claim_token == claim_token,
+            )
+            .values(
+                status=AWAITING_HUMAN_STATUS,
+                heartbeat_at=stale_heartbeat,
+                dispatcher="saq",
+                completed_at=None,
+            )
+        )
+        return await _session_row_is_f6a_reconcile_candidate(session, org_id=org_id, run_id=run_id)
+
+
+def _capacity_deferred_response(run_id: uuid.UUID, action: str) -> dict[str, str]:
+    """Queued-success body for a resume denied by the org sandbox capacity cap.
+
+    FAR-1831: the HITL gate decision is committed BEFORE the resume is
+    attempted, so a full org sandbox cap must never discard the human decision.
+    The inline resume transaction rolls back on the denial (the run stays
+    ``awaiting_human``), and ``dispatcher_reconcile``'s F6a path re-dispatches
+    the resume once a slot frees — so the request is a SUCCESS, not a 409
+    ``Conflict`` (nothing conflicts: the decision was accepted).
+    """
+    logger.info("hitl.resume_capacity_deferred action=%s run=%s", action, run_id)
+    return {"status": "queued", "run_id": str(run_id)}
+
+
+def _client_type(principal: TenantPrincipal) -> str:
+    """The caller's credential kind for HITL audit enrichment (FAR-611).
+
+    FAR-609 fix: the previous implementation returned ``"browser"`` for every
+    JWT — but FAR-634 minted programmatic JWTs (``client_kind !=
+    "browser"``) that can claim explicitly opted-out gates, so a programmatic
+    claim was audited as a browser claim and polluted the FAR-611
+    sweep-alarm input. The audit field now records the principal's ACTUAL
+    credential class: ``"api_key"`` for mk_ principals, the JWT's
+    ``client_kind`` value (typically ``"programmatic"``) for non-browser JWT
+    logins, and ``"browser"`` for browser logins. MCP callers pass ``"mcp"``
+    directly in ``mcp_server.py``.
+    """
+    if principal.via_api_key:
+        return "api_key"
+    if principal.client_kind != CLIENT_KIND_BROWSER:
+        return principal.client_kind
+    return "browser"
+
+
+async def _enforce_human_only_gate(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    action: str,
+) -> None:
+    """Raise 403 when a non-browser credential decides a ``human_only`` gate.
+
+    FAR-610: the decision routes previously performed no ``human_only`` check.
+    The gate's config is resolved from the run's snapshot graph (falling back
+    to the live edges / live HITL-node config) via the shared resolver
+    (:func:`modulo.db.crud.hitl_review_config.resolve_hitl_review_config`) — the
+    gate id maps to exactly one edge by topology, never by position. Runs
+    BEFORE the capacity check and the manager call so a denial has no side
+    effects (fail fast, gate left undecided).
+
+    Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
+    gate actually fired (a claim row exists — see
+    :func:`modulo.db.crud.hitl_review_config.hitl_review_exists_but_unresolved`),
+    the human_only policy cannot be verified, so non-browser principals are
+    denied rather than silently allowed. Browser JWTs pass either way (the
+    UI is their enforcement surface), and manual-node ids short-circuit
+    inside the helper, so ``submit_manual_output`` is unaffected.
+
+    Applied to the claim route AND the resume routes (approve /
+    approve-with-modification / deliver-manual / submit-manual) — FAR-609
+    extended the check to claim, so a non-browser principal can neither
+    CLAIM nor decide a ``human_only`` gate. ``reject_gate`` is exempt
+    mechanically but NOT operationally: reject passes a claim_token, and
+    non-browser principals can no longer claim a default-human_only gate, so
+    they cannot reach reject either; only a principal already holding a claim
+    (e.g. claimed before the policy change) can reject. Agent-only runs on
+    default gates require browser-human intervention — that is the intended
+    policy, not an agent escape hatch.
+
+    Credential semantics (FAR-610 finding + FAR-634 hardening): these routes
+    resolve principals from browser-login JWTs only, so a non-browser principal
+    here is a programmatic JWT (FAR-634), and the browser-class short-circuit
+    above remains the UI enforcement surface. There is deliberately NO
+    human-linked authority on REST: the user-scoped human-linked API-key path
+    is an MCP credential, evaluated only by the MCP gate under the default-OFF
+    ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1). ``deliver_manual``
+    remains browser-only on every surface. Normal possession requirements are
+    unchanged: claim, approve, reject and deliver-manual still require the
+    applicable claim token and gate rules.
+
+    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
+    event (FAR-634) via :func:`_emit_human_only_denial_audit`, invoked by the
+    caller (``_run_hitl_manager``) so the write happens outside the decision
+    transaction that the raise rolls back.
+
+    Hot path (FAR-610 review): the first line short-circuits browser JWTs —
+    they are always allowed, so the resolver's queries never run on the
+    common UI approve flow. The deny policy itself lives in the shared pure
+    verdict :func:`modulo.db.crud.hitl_review_config.human_only_denial`; the
+    fail-closed claim lookup runs only when the config is unresolvable.
+    """
+    non_browser_credential = principal.via_api_key or principal.client_kind != CLIENT_KIND_BROWSER
+    if not non_browser_credential:
+        return
+    config = await resolve_hitl_review_config(
+        session,
+        run_id=run_id,
+        review_id=review_id,
+        org_id=principal.organisation_id,
+    )
+    gate_fired = False
+    if config is None:
+        gate_fired = await hitl_review_exists_but_unresolved(
+            session,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=principal.organisation_id,
+        )
+    # No human-linked authority is resolved here: REST principals are
+    # browser-login JWTs, and a non-browser one is always a programmatic JWT
+    # (FAR-634). The user-scoped human-linked API-key path is an MCP credential
+    # handled by ``mcp_server._check_human_only_gate`` under the default-OFF
+    # ``mcp_human_linked_hitl_authority`` flag (ADR 063 step 1).
+    verdict = human_only_denial(
+        config,
+        non_browser_credential=non_browser_credential,
+        gate_fired=gate_fired,
+    )
+    if verdict is not None:
+        raise HumanOnlyDenied(
+            verdict,
+            run_id=run_id,
+            review_id=review_id,
+            action=action,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            principal_kind="api_key" if principal.via_api_key else "jwt",
+            client_kind=principal.client_kind,
+        )
+
+
+async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
+    """Emit the ``hitl.human_only_denied`` audit event for a REST denial (FAR-634).
+
+    The warning log fires on EVERY denial (denied-attempt visibility is cheap
+    probe detection); the audit event is best-effort. The write runs in a
+    FRESH session + transaction — the denial is raised inside
+    ``_run_hitl_manager``'s decision transaction, which ROLLS BACK on the
+    raise, so an audit write on that session would be lost with it (the same
+    post-append pattern as ``mcp_server._append_mcp_hitl_denial_audit``).
+    Failure-isolated: an audit failure is logged and never changes the denial
+    outcome (it is already a 403).
+    """
+    logger.warning(
+        EVENT_HUMAN_ONLY_DENIED,
+        extra={
+            "run_id": str(exc.run_id),
+            "review_id": exc.review_id,
+            "action": exc.action,
+            "surface": "rest",
+            "principal_kind": exc.principal_kind,
+            "client_kind": exc.client_kind,
+        },
+    )
+    payload: dict[str, Any] = {
+        "run_id": str(exc.run_id),
+        "review_id": exc.review_id,
+        "action": exc.action,
+        "surface": "rest",
+        "principal_kind": exc.principal_kind,
+        "client_kind": exc.client_kind,
+        "reason": exc.reason,
+    }
+    try:
+        engine = get_or_create_engine(get_settings())
+        factory = get_or_create_session_factory(engine)
+        async with factory() as audit_session, audit_session.begin():
+            await set_rls_org(audit_session, exc.org_id)
+            await set_rls_user_context(audit_session, exc.account_id, exc.org_role)
+            await append_audit_event(
+                audit_session,
+                org_id=exc.org_id,
+                event_type=EVENT_HUMAN_ONLY_DENIED,
+                actor_user_id=exc.account_id,
+                resource_type="run",
+                resource_id=exc.run_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "hitl.human_only_denial_audit_failed",
+            extra={"run_id": str(exc.run_id), "review_id": exc.review_id, "action": exc.action},
+            exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# FAR-860: answer validation helper
+# ---------------------------------------------------------------------------
+
+
+class AnswerValidationErrorHTTP(HTTPException):
+    """422 raised when a choice answer fails validation against the response contract.
+
+    Named ``...HTTP`` to stay unambiguous against the shared
+    ``hitl_answer_validation.AnswerValidationError`` (a ``ValueError``) — the
+    two coexist in this module's imports, so a bare ``AnswerValidationError``
+    would grep ambiguously.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+async def _validate_choice_answer(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    answer: dict[str, Any] | None,
+    require_answer: bool = False,
+) -> dict[str, Any] | None:
+    """Validate a HITL answer against the gate's response_contract.
+
+    Delegates to the shared ``validate_hitl_answer`` helper (MINOR-1) and
+    adapts its ``AnswerValidationError`` (ValueError) to the HTTP 422 format
+    expected by the REST layer.
+
+    Returns the validated answer dict, or None when no answer is provided.
+    Raises ``AnswerValidationErrorHTTP`` (422) when the answer is present but
+    invalid: missing ``kind``/``option_id``, unknown kind, or unknown
+    option_id.
+
+    ``require_answer`` (FAR-907) additionally rejects a missing answer on a
+    ``kind: choice`` gate — used by the approve-with-modification path where
+    the reviewer must not bypass the declared choice.
+    """
+    try:
+        return await validate_hitl_answer(
+            session,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=org_id,
+            answer=answer,
+            require_answer=require_answer,
+        )
+    except SharedValidationError as exc:
+        raise AnswerValidationErrorHTTP(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# FAR-1408 / FAR-1464: route-local SQLAlchemyError arms.
+#
+# The session-contract (InvalidRequestError -> 500) half of the old local
+# ``_raise_session_contract_error`` now lives in the SHARED guard
+# ``db_error_handling.raise_session_contract_error`` (FAR-1464 de-duplication:
+# one copy, used by every converted route arm). Each ``except SQLAlchemyError``
+# arm below calls it FIRST.
+#
+# The TRANSIENT half stays local: ``PendingRollbackError`` (the transient
+# subclass of InvalidRequestError) must keep the structured ``db_transient``
+# record with a route label distinct from the session-contract key
+# (FAR-1408 review observation 1, pinned by test_hitl_resilience) — the
+# shared guard deliberately never calls ``log_service_unavailable``, so the
+# record is emitted here, in the dedicated arm below.
+# ---------------------------------------------------------------------------
+
+
+def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> NoReturn:
+    """Report a ``PendingRollbackError`` caught on a route-local arm.
+
+    ``PendingRollbackError`` IS an ``InvalidRequestError``, but it signals a
+    TRANSIENT fault: an earlier statement failed and the session was never
+    rolled back, so the next statement refuses to run — and during a genuine
+    outage that earlier fault (server disconnect, serialization failure, pool
+    timeout) is usually the real cause. Filing it as a non-retryable 500 would
+    invert the FAR-1408 misclassification on a common path, so it maps to 503
+    (``MSG_DB_ERROR_PLEASE_TRY``) with the structured ``db_transient`` record,
+    exactly like the pre-FAR-1464 local helper did.
+
+    ``log_key`` is the BASE route key (e.g. ``"hitl.claim_review"``); the
+    record's route label is ``<log_key>.pending_rollback_error`` — deliberately
+    distinct from the session-contract 500's ``<log_key>.session_contract_error``
+    so the two are never confused in the service-unavailable trail.
+
+    Shared by all five arms so the status, detail and record shape cannot
+    drift per site. ``NoReturn`` keeps mypy's flow analysis correct for the
+    caller's except-chain.
+
+    Logging note: ``error(..., exc_info=exc)`` is ``logger.exception``'s exact
+    behaviour (ERROR level + the raised exception's traceback) spelled for a
+    call sitting in a helper rather than lexically inside an ``except`` block.
+    """
+    transient_key = f"{log_key}.pending_rollback_error"
+    logger.error(transient_key, exc_info=exc)
+    log_service_unavailable(
+        "db_transient",
+        exc,
+        route=transient_key,
+        detail="transient database error (PendingRollbackError)",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=MSG_DB_ERROR_PLEASE_TRY,
+    ) from exc
+
+
+# ---------------------------------------------------------------------------
+# FAR-1610: bounded-lock timeout (SQLSTATE 55P03) on the HITL write routes.
+#
+# ``claim_review`` and ``_run_hitl_manager`` are REQUEST paths on the hot
+# ``runs`` / ``hitl_claims`` rows. FAR-1610 bounds the row-lock wait inside
+# ``HITLManager.claim`` / ``_decide`` with a transaction-scoped
+# ``lock_timeout``, so a contended row now surfaces as SQLSTATE 55P03 instead
+# of waiting unbounded. That is a busy-row CONFLICT, not a database outage: the
+# engine is healthy and re-issuing the request once the other change completes
+# may succeed. Mapping it to the generic 503 (``MSG_DB_ERROR_PLEASE_TRY``) would
+# read as "retry now" and invite a retry storm against the very lock that is
+# busy, so it is answered as an attributable 409 naming the contention -
+# mirroring ``api.routes.runs.cancel_run`` and ``api.db_error_handling``.
+# ---------------------------------------------------------------------------
+
+_MSG_HITL_LOCK_TIMEOUT = (
+    "Timed out waiting for a lock on this review; another change is in progress. "
+    "Re-issue the request once it completes."
+)
+
+
+def _raise_lock_timeout_if(exc: SQLAlchemyError, log_key: str) -> None:
+    """Re-raise *exc* as an attributable 409 when it is a bounded lock timeout.
+
+    The bounded ``lock_timeout`` (``set_mutation_row_lock_timeout``) expiring on
+    a contended hot row surfaces as SQLSTATE 55P03 (``lock_not_available``).
+    This is NOT a database outage, so it must not fall through to the generic
+    503 the surrounding ``except SQLAlchemyError`` arm returns.
+
+    For every other ``SQLAlchemyError`` this returns (a no-op) so the caller's
+    existing 503 handling continues unchanged. ``log_key`` is the BASE route key
+    (e.g. ``"hitl.claim_review"``); the record is ``<log_key>.lock_timeout``.
+    """
+    if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+        return
+    logger.warning("%s.lock_timeout", log_key, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_MSG_HITL_LOCK_TIMEOUT,
+    ) from None
+
+
+# ---------------------------------------------------------------------------
+# Claim
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{review_id}/claim",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_claimed", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors(_CODE_HITL_CLAIM_REVIEW)
+async def claim_review(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: ClaimRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("hitl.claim"),
+) -> ClaimResponse:
+    """Atomically claim a HITL review. Returns a claim_token for approve/reject.
+
+    FAR-609: claim is human_only too — a non-browser credential (API key /
+    non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
+    fail-closed policy as the decision routes applies here (no non-browser
+    principal can claim OR decide any HITL gate). The check runs inside the
+    claim transaction before ``claim``, so a denial has no side effects.
+
+    The post-claim run-status flip to ``claimed`` is fenced to runs still in
+    ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
+    goes terminal between the claim's status pre-check and the flip, the fenced
+    miss no-ops — the terminal status is preserved, the gate drops out of the
+    pending list on the next refresh, and the claim token simply expires
+    unused.
+    """
+    mgr = HITLManager()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                # FAR-609: non-browser principals are denied human_only gates
+                # on claim exactly like on the decision routes. The check
+                # short-circuits browser JWTs before writing anything.
+                await _enforce_human_only_gate(session, principal, run_id, review_id, "claim")
+                gate = await mgr.claim(
+                    session,
+                    run_id=run_id,
+                    review_id=review_id,
+                    org_id=principal.organisation_id,
+                    claimant_id=principal.account_id,
+                    expiry_minutes=req.expiry_minutes,
+                    client_type=_client_type(principal),
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except AlreadyClaimedError as exc:
+                # FAR-645: the three claim conflicts carry distinct problem
+                # types so the frontend can discriminate by ``type`` instead
+                # of substring-matching English prose. Detail text is
+                # unchanged (the i18n keys render the same messages).
+                raise ProblemException(ProblemType.HITL_REVIEW_ALREADY_CLAIMED, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                # A decided gate previously fell through to the generic
+                # Exception backstop (500) on this route; a stale row on
+                # screen makes this reachable, so it is a 409 like the other
+                # claim conflicts.
+                raise ProblemException(ProblemType.HITL_REVIEW_ALREADY_DECIDED, detail=str(exc)) from exc
+            except RunNotAwaitingError as exc:
+                # FAR-612: a terminal/still-executing run must never be flipped
+                # to "claimed" by a stale gate claim -- 409 with the run's
+                # actual status so the operator sees why.
+                raise ProblemException(ProblemType.HITL_RUN_NOT_AWAITING, detail=str(exc)) from exc
+            except NotTeamMemberError as exc:
+                logger.warning("hitl.claim_review.team_access_denied: %s", exc)
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+            # FAR-612: flip the run to "claimed" through the fenced transition
+            # authority, guarded on the source status. A run that is not
+            # awaiting a human decision is never clobbered by a claim: a run
+            # that went terminal between claim()'s status pre-check and this
+            # write no-ops (terminal status preserved — the gate drops out of
+            # the pending list on the next refresh and the claim token simply
+            # expires unused), and a ``hitl_parked`` run stays parked while its
+            # gate is claimed-but-undecided (FAR-604: a claim is not a
+            # decision; the un-park happens at decision time in
+            # ``HITLManager._decide``). The guard lives INSIDE the conditional
+            # UPDATE (``allowed_from``), so the park sweep's concurrent commit
+            # is fenced out the same way ``not_status`` fenced it.
+            await transition_run(
+                session,
+                run_id,
+                principal.organisation_id,
+                target_status="claimed",
+                allowed_from=frozenset({"awaiting_human"}),
+            )
+    except ProgrammingError as exc:
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, _CODE_HITL_CLAIM_REVIEW)
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_HITL_CLAIM_REVIEW)
+        _raise_lock_timeout_if(exc, _CODE_HITL_CLAIM_REVIEW)
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HumanOnlyDenied as exc:
+        # FAR-609: the claim transaction rolled back on the denial — emit the
+        # failure-isolated audit event in a FRESH session, then re-raise the
+        # byte-identical 403 (same contract as _run_hitl_manager).
+        await _emit_human_only_denial_audit(exc)
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.claim_review.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    if gate.claim_token is None or gate.expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="gate_missing_claim_data: Gate claim token or expiry missing after successful claim",
+        )
+    return ClaimResponse(
+        run_id=gate.run_id,
+        review_id=gate.review_id,
+        claim_token=gate.claim_token,
+        expires_at=gate.expires_at.isoformat(),
+    )
+
+
+async def _prepare_hitl_decision(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    *,
+    answer: dict[str, Any] | None,
+    validate_answer: bool,
+    require_answer: bool,
+    enforce_human_only: bool,
+    audit_action: str,
+    call_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    """In-transaction answer validation, payload injection and human-only gate."""
+    if validate_answer:
+        answer = await _validate_choice_answer(
+            session,
+            run_id,
+            review_id,
+            principal.organisation_id,
+            answer,
+            require_answer=require_answer,
+        )
+        payload = call_kwargs.get("decision_payload")
+        if answer is not None and isinstance(payload, dict):
+            payload["answer"] = answer
+    if enforce_human_only:
+        await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
+    return answer
+
+
+async def _invoke_hitl_manager(
+    mgr: Any,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    mgr_method: str,
+    answer: dict[str, Any] | None,
+    call_kwargs: dict[str, Any],
+) -> Any:
+    """Call the manager's decision method, mapping domain errors to HTTP."""
+    try:
+        # FAR-860: forward the answer to the manager for audit enrichment.
+        manager_kwargs = dict(call_kwargs)
+        if answer is not None:
+            manager_kwargs["answer"] = answer
+        return await getattr(mgr, mgr_method)(
+            session,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=principal.organisation_id,
+            actor_id=principal.account_id,
+            **manager_kwargs,
+        )
+    except GateNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except GateAlreadyDecidedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ClaimTokenInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ClaimTokenExpiredError as exc:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except NotTeamMemberError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except DecisionPayloadError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+
+async def _run_hitl_manager(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    review_id: str,
+    *,
+    enforce_human_only: bool,
+    mgr_method: str,
+    action: str | None = None,
+    answer: dict[str, Any] | None = None,
+    validate_answer: bool = False,
+    require_answer: bool = False,
+    **call_kwargs: Any,
+) -> Any:
+    """Open a tenant-scoped transaction and invoke a HITLManager decision method.
+
+    Shared by the approve / approve-with-modification / reject / deliver-manual /
+    submit-manual route handlers so the ``async with session.begin()`` +
+    domain-exception-mapping boilerplate is not copy-pasted into every route.
+    ``org_id`` and ``actor_id`` come from the principal; callers pass only the
+    method-specific kwargs (``claim_token``, ``decision_payload``, ``output`` …).
+
+    ``action`` (FAR-634) is the REST action label for the human_only denial
+    audit event; it defaults to ``mgr_method`` (identical for every route
+    except submit-manual, whose manager call is ``approve``).
+
+    ``validate_answer`` (FAR-1408): run the FAR-860/FAR-907 choice-answer
+    validation HERE, inside the decision transaction and immediately AFTER
+    ``set_rls_org`` — never at route level before this call. Two reasons:
+    the REST DI session is built ``autobegin=False`` (transaction management
+    is left to the caller), so any query issued before ``session.begin()``
+    raises ``InvalidRequestError``; and the validation's resolution read
+    (``resolve_hitl_review_config`` → ``get_run``) is RLS-scoped, so it must
+    run in the SAME transaction whose ``set_rls_org`` set
+    ``app.organisation_id`` — otherwise the predicate filters the claim/run
+    rows away and validation silently FAILS OPEN (a worse bug than the
+    crash). The validated answer is injected into ``decision_payload`` (the
+    very dict the route reuses for the direct ``executor.resume`` injection)
+    and forwarded to the manager as ``answer``, so the validated contract and
+    the committed decision are consistent by construction. ``require_answer``
+    is forwarded to the validator unchanged (approve / approve-with-modification
+    both require a declared choice to be answered), and it IMPLIES
+    ``validate_answer`` — see the note directly below: an enforcement
+    flag must never be able to silently switch its own enforcement off.
+    """
+    audit_action = action or mgr_method
+    # FAR-907: ``require_answer`` is an ENFORCEMENT flag, so it must never be
+    # able to disable the enforcement it belongs to. Until now the flag was
+    # only forwarded inside ``if validate_answer:``, so a caller passing
+    # ``require_answer=True`` on its own got NO validation at all — a silent
+    # enforcement skip, the exact failure class FAR-907 exists to prevent.
+    # Imply validation instead of failing the request: the caller's intent
+    # ("this answer is mandatory") is unambiguous, and turning it into a 500
+    # would break the route rather than honour it.
+    validate_answer = validate_answer or require_answer
+    mgr = HITLManager()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            answer = await _prepare_hitl_decision(
+                session,
+                principal,
+                run_id,
+                review_id,
+                answer=answer,
+                validate_answer=validate_answer,
+                require_answer=require_answer,
+                enforce_human_only=enforce_human_only,
+                audit_action=audit_action,
+                call_kwargs=call_kwargs,
+            )
+            return await _invoke_hitl_manager(
+                mgr,
+                session,
+                principal,
+                run_id,
+                review_id,
+                mgr_method,
+                answer,
+                call_kwargs,
+            )
+    except HumanOnlyDenied as exc:
+        # FAR-634: the decision transaction rolled back on the raise — emit
+        # the denial audit event in a FRESH session (failure-isolated) so the
+        # denied attempt is never lost, then re-raise the byte-identical 403.
+        await _emit_human_only_denial_audit(exc)
+        raise
+    except ProgrammingError as exc:
+        logger.exception(_CODE_HITL_RUN_HITL_MANAGER)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
+        _raise_lock_timeout_if(exc, _CODE_HITL_RUN_HITL_MANAGER)
+        logger.exception(_CODE_HITL_RUN_HITL_MANAGER)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl._run_hitl_manager.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+
+# ---------------------------------------------------------------------------
+# Approve
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{review_id}/approve",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_approved", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("hitl.approve_review")
+async def approve_review(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: ApproveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
+) -> dict[str, str]:
+    """Approve an interrupted HITL gate and resume the run."""
+    # FAR-860/FAR-907: a choice gate REQUIRES a valid answer on this path too
+    # — without it a direct API caller could approve while skipping the
+    # declared choice (mirrors approve-with-modification). The validation is
+    # NOT done here: FAR-1408 proved a route-level call ran before any
+    # transaction was open, and the REST DI session is ``autobegin=False``, so
+    # every request crashed with ``InvalidRequestError`` (surfacing as a 503
+    # "Database temporarily unavailable"). It now runs inside
+    # ``_run_hitl_manager``'s transaction, after ``set_rls_org`` — see that
+    # helper's ``validate_answer`` doc. The raw request answer is handed over;
+    # the validated value is injected into ``resume_data`` (same object) by
+    # the helper before the manager call.
+    # FAR-541: every resume decision is STAMPED with the gate it resolves so a
+    # per-gate consumer (``_hitl_review_resume_result``) can reject a foreign
+    # decision left in state by an earlier gate (decisions are per-RUN but
+    # consumers are per-gate; ``_hitl_decision`` is never cleared). HITLManager._decide
+    # would stamp the persisted payload anyway; this explicit stamp feeds the
+    # DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "approved", "review_id": review_id}
+    if req.notes:
+        resume_data["notes"] = req.notes
+
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        review_id,
+        enforce_human_only=True,
+        mgr_method="approve",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+        client_type=_client_type(principal),
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
+    )
+
+    try:
+        executor = _build_resume_executor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "approve")
+    except Exception as exc:
+        logger.exception("hitl.approve_review.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after approval",
+        ) from exc
+
+    return {"status": "approved", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Approve with modification
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{review_id}/approve-with-modification",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_approved_with_modification",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("hitl.approve_review_with_modification")
+async def approve_review_with_modification(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: ApproveWithModificationRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
+) -> dict[str, str]:
+    """Approve a HITL review with a modified output payload.
+
+    The human reviewer's modified output replaces the agent's original output
+    for downstream nodes.  A ``hitl.output_modified`` audit event is logged
+    documenting the change.
+    """
+    # FAR-907: a choice gate REQUIRES a valid answer on this path — without
+    # it a reviewer could modify-approve while skipping the declared choice
+    # (previously nothing validated, so the requirement was silently
+    # skipped). As on /approve, the validation itself runs INSIDE
+    # ``_run_hitl_manager``'s transaction after ``set_rls_org`` (FAR-1408):
+    # the route hands over the raw request answer and the helper injects the
+    # validated value into ``resume_data`` before the manager call.
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
+    # The real writer contract: action "approved" + "modified_output" (there is
+    # no "approved_with_modification" action). _decide would stamp the persisted
+    # payload anyway; this explicit stamp feeds the DIRECT executor.resume
+    # injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {
+        "action": "approved",
+        "review_id": review_id,
+        "modified_output": req.modified_output,
+    }
+    if req.notes:
+        resume_data["notes"] = req.notes
+    # FAR-907: when present the answer rides in the persisted decision so
+    # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
+    # state exactly as on the plain approve path (injected in-transaction by
+    # ``_run_hitl_manager``, FAR-1408).
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        review_id,
+        enforce_human_only=True,
+        mgr_method="approve_with_modification",
+        claim_token=req.claim_token,
+        modified_output=req.modified_output,
+        decision_payload=resume_data,
+        client_type=_client_type(principal),
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
+    )
+
+    try:
+        executor = _build_resume_executor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "approve_with_modification")
+    except Exception as exc:
+        logger.exception("hitl.approve_with_modification.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after approval with modification",
+        ) from exc
+
+    return {"status": "approved_with_modification", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Reject
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{review_id}/reject",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_rejected", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("hitl.reject_review")
+async def reject_review(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: RejectRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission("hitl.reject"),
+) -> dict[str, str]:
+    """Reject an interrupted HITL gate and route to its reject route.
+
+    The reject route is the gate's reject_target config or a reject-typed
+    edge, when one exists. With no reject route configured on the gate, the
+    run ENDS with the terminal ``rejected`` status (FAR-1487) - unless the
+    gate sets ``on_reject: proceed`` (or declares a ``correction_target``),
+    which continues the run along the normal path.
+    """
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
+    # Reject resumes the graph WITHOUT a sandbox-capacity check
+    # (``check_sandbox_capacity=False``): a human rejection already committed
+    # must never be bounced off the gate by a transient capacity limit. That is
+    # a POLICY choice, not a "no sandbox work follows" claim — a rejection
+    # routes to the gate's reject route when one is configured (downstream
+    # execution resumes); with no reject route the run ENDS ``rejected``
+    # (FAR-1487) unless the gate is explicitly ``on_reject: proceed``. All four
+    # resume actions (approve / approve-with-modification / deliver-manual /
+    # submit-manual) now share the same decision-first contract: the decision
+    # commits, and a capacity-denied resume is queued rather than 409'd
+    # (FAR-1831).
+    #
+    # The human_only guard is not applied mechanically, but it IS effectively
+    # in force: reject requires a claim_token and non-browser principals can
+    # no longer CLAIM a default-human_only gate (FAR-609), so they cannot
+    # reach reject either — only a principal already holding a claim can
+    # reject. Agent-only runs on default gates require browser-human
+    # intervention (intended policy).
+    resume_data: dict[str, Any] = {"action": "rejected", "review_id": review_id, "reason": req.reason}
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        review_id,
+        enforce_human_only=False,
+        mgr_method="reject",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+        client_type=_client_type(principal),
+    )
+
+    # Resume the graph with rejection data: when a reject route is wired
+    # (reject_target config or a reject edge) the gate's router picks that
+    # branch; when unwired the gate's terminate router ENDS the run (finalized
+    # ``rejected``, FAR-1487) unless ``on_reject: proceed`` keeps the plain
+    # edge to the normal target.
+    try:
+        executor = _build_resume_executor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+            check_sandbox_capacity=False,
+        )
+    except Exception as exc:
+        logger.exception("hitl.reject_review.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after rejection",
+        ) from exc
+
+    return {"status": "rejected", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Deliver Manual — human supplies output directly at a HITL review
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/hitl/{review_id}/deliver-manual",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_delivered",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("hitl.deliver_manual_output")
+async def deliver_manual_output(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: DeliverManualRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission("hitl.deliver_manual"),
+) -> dict[str, str]:
+    """Deliver manually-supplied output at a HITL review and resume the run.
+
+    The reviewer provides the output directly instead of routing to a
+    correction run or back to the agent. The output is validated and the
+    run continues past the gate with the manually-supplied value.
+    """
+    if not req.output:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="output must be a non-empty object",
+        )
+
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
+    # _decide would stamp the persisted payload anyway; this explicit stamp
+    # feeds the DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": req.output}
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        review_id,
+        enforce_human_only=True,
+        mgr_method="deliver_manual",
+        claim_token=req.claim_token,
+        output=req.output,
+        decision_payload=resume_data,
+        client_type=_client_type(principal),
+    )
+
+    try:
+        executor = _build_resume_executor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "deliver_manual")
+    except Exception as exc:
+        logger.exception("hitl.deliver_manual_output.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after manual delivery",
+        ) from exc
+
+    return {"status": "delivered_manual", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Manual node output
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/runs/{run_id}/manual/{review_id}/submit",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_submitted",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("hitl.submit_manual_output")
+async def submit_manual_output(
+    run_id: uuid.UUID,
+    review_id: str,
+    req: ManualOutputRequest,
+    session: AsyncSession = Depends(get_db_session),
+    engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
+) -> dict[str, str]:
+    """Submit output for a manual-input node and resume the run."""
+    # FAR-541: stamped with the NODE id being delivered to — the manual node's
+    # consumer (``_manual_node``) resumes only on a decision stamped for it.
+    # _decide would stamp the persisted payload anyway; this explicit stamp
+    # feeds the DIRECT executor.resume injection below, which bypasses _decide.
+    resume_data: dict[str, Any] = {"action": "manual_output", "review_id": review_id, "output": req.output}
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        review_id,
+        enforce_human_only=True,
+        mgr_method="approve",
+        action="submit_manual",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+        client_type=_client_type(principal),
+    )
+
+    try:
+        executor = _build_resume_executor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except SandboxCapacityExceededError:
+        return _capacity_deferred_response(run_id, "submit_manual")
+    except Exception as exc:
+        logger.exception("hitl.submit_manual_output.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after manual output submission",
+        ) from exc
+
+    return {"status": "submitted", "run_id": str(run_id)}
+
+
+# ---------------------------------------------------------------------------
+# Read
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _PendingRunData:
+    """The pending-run read model, resolved inside one RLS transaction."""
+
+    gates: list[HitlClaim]
+    pipeline_name: str | None
+    review_label_map: dict[str, str]
+    review_description_map: dict[str, str | None]
+    claimant_names: dict[uuid.UUID, str]
+
+
+async def _load_pending_pipeline_name(session: AsyncSession, gates: list[HitlClaim]) -> str | None:
+    """The pipeline name for the first pending gate, or None."""
+    if not gates:
+        return None
+    pipeline = await session.get(Pipeline, gates[0].pipeline_id)
+    return pipeline.name if pipeline else None
+
+
+def _gate_description(gate: HitlClaim, config: dict[str, Any] | None) -> str | None:
+    """One gate's description (context-first precedence)."""
+    return resolve_review_description(
+        gate.context_json if isinstance(gate.context_json, dict) else None,
+        config,
+    )
+
+
+async def _describe_gates_from_snapshot(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run: Run,
+    gates: list[HitlClaim],
+) -> tuple[dict[str, str], dict[str, str | None]]:
+    """Snapshot-derived label + description maps (empty when unavailable)."""
+    if not run.snapshot_id:
+        return {}, {}
+    snap_result = await session.execute(
+        select(PipelineSnapshot).where(
+            PipelineSnapshot.id == run.snapshot_id,
+            PipelineSnapshot.organisation_id == principal.organisation_id,
+        )
+    )
+    snapshot = snap_result.scalar_one_or_none()
+    if snapshot is None or not isinstance(snapshot.graph_json, dict):
+        return {}, {}
+    review_label_map = _build_review_label_map(snapshot.graph_json)
+    # FAR-688 unified precedence: the fire-time captured description (the
+    # claim's context) wins; the snapshot config's description is the fallback
+    # — the SAME rule the org-level endpoints apply via
+    # ``resolve_review_descriptions``.
+    review_config_map = snapshot_review_config_map(snapshot.graph_json)
+    review_description_map = {g.review_id: _gate_description(g, review_config_map.get(g.review_id)) for g in gates}
+    return review_label_map, review_description_map
+
+
+def _viewer_account_scope_id(principal: TenantPrincipal) -> uuid.UUID | None:
+    """Return the account id when a viewer read must be team-membership clamped.
+
+    ``hitl.list`` is viewer-reachable and ``hitl_claims`` carries only the
+    org-only RLS policy (migration 0110), so without an explicit predicate a
+    viewer would enumerate gates on team-private pipelines. Org-level and
+    owning-team rows stay visible; the membership clause is the only boundary.
+    """
+    return principal.account_id if principal.org_role == "viewer" else None
+
+
+async def _load_pending_run_data(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> _PendingRunData:
+    """Resolve the run's pending gates and their render maps.
+
+    A viewer is bounded to the runs its team memberships cover; a run outside
+    that boundary is rendered as not-found (never as an empty-gate 200).
+    """
+    # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
+    # explicit filter makes cross-tenant access impossible even if RLS
+    # were misconfigured.
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    viewer_account_id = _viewer_account_scope_id(principal)
+    if viewer_account_id is not None and not await viewer_run_scope_visible(session, run_id, viewer_account_id):
+        # Mirror the MCP ``get_hitl_review`` not-found mapping: the unclamped
+        # existence check above would otherwise answer 200-with-empty-gates for
+        # a foreign team-private run, i.e. a cross-team run-existence oracle.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    gate_stmt = select(HitlClaim).where(
+        HitlClaim.run_id == run_id,
+        HitlClaim.organisation_id == principal.organisation_id,
+        HitlClaim.decision.is_(None),
+    )
+    if viewer_account_id is not None:
+        gate_stmt = (
+            gate_stmt.join(Run, HitlClaim.run_id == Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+            )
+        )
+    result = await session.execute(gate_stmt)
+    gates = list(result.scalars())
+
+    pipeline_name = await _load_pending_pipeline_name(session, gates)
+    review_label_map, review_description_map = await _describe_gates_from_snapshot(session, principal, run, gates)
+
+    if not review_description_map and gates:
+        # FAR-688: when the snapshot is unavailable (no snapshot_id, retention
+        # pruned the row, or a non-dict graph) the context-first pass above
+        # never ran — resolve from the claim row's captured briefing ALONE
+        # (context-first, no snapshot fallback) so this surface agrees with the
+        # org-level ``resolve_review_descriptions`` resolver instead of muting
+        # a description the capture carries.
+        review_description_map = {g.review_id: _gate_description(g, None) for g in gates}
+
+    # FAR-691: batched claimant display names + the caller-owns-claim stamp,
+    # resolved inside the same transaction/RLS context.
+    claimant_names = await _load_claimant_name_map(session, gates)
+    return _PendingRunData(
+        gates=gates,
+        pipeline_name=pipeline_name,
+        review_label_map=review_label_map,
+        review_description_map=review_description_map,
+        claimant_names=claimant_names,
+    )
+
+
+@router.get(
+    "/runs/{run_id}/hitl/pending",
+)
+@handle_db_errors(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+async def list_run_pending_reviews(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
+) -> PendingReviewsResponse:
+    """List all pending (undecided) HITL gates for a specific run."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            data = await _load_pending_run_data(session, principal, run_id)
+    except ProgrammingError as exc:
+        logger.exception(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_run_pending_reviews.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return PendingReviewsResponse(
+        reviews=[
+            _review_to_response(
+                g,
+                pipeline_name=data.pipeline_name,
+                label=data.review_label_map.get(g.review_id),
+                description=data.review_description_map.get(g.review_id),
+                claimed_by_name=data.claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
+            )
+            for g in data.gates
+        ]
+    )
+
+
+@router.get(
+    "/hitl/pending",
+)
+@handle_db_errors(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+async def list_org_pending_reviews(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
+) -> PendingReviewsResponse:
+    """List pending HITL reviews across the organisation.
+
+    Gates on terminal runs are excluded (they are data rot, not pending work):
+    the manager joins ``runs`` and keeps only undecided gates whose run is in
+    ``awaiting_human``, ``claimed``, or ``hitl_parked`` status (FAR-612,
+    FAR-604).
+    """
+    mgr = HITLManager()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # include_claimed (FAR-686): claimed-but-undecided gates stay on
+            # the review page so the reviewer can still act on them. The
+            # account clamp is mandatory for viewer-level hitl.list.
+            gates = await mgr.list_pending(
+                session,
+                principal.organisation_id,
+                include_claimed=True,
+                account_id=_viewer_account_scope_id(principal),
+            )
+
+            pipeline_ids = list({g.pipeline_id for g in gates})
+            pipeline_map: dict[uuid.UUID, str] = {}
+            if pipeline_ids:
+                pipeline_rows = await session.execute(
+                    select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
+                )
+                pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
+
+            # FAR-613: resolve each gate's description from its run's snapshot
+            # graph via the shared batched resolver (two IN queries over the
+            # few pending gates' runs + snapshots — never per-gate walks), so
+            # the org review page gets the briefing without an N+1. Context
+            # comes from the claim row itself (_review_to_response).
+            description_by_review = await resolve_review_descriptions(
+                session, gates=gates, org_id=principal.organisation_id
+            )
+            # FAR-686: also resolve each gate's human label at org level so the
+            # shared gate card shows a readable name (frontend falls back to
+            # shortId when a label is missing).
+            review_label_map = await _load_review_label_map(session, gates)
+            # FAR-691: batched claimant display names + the caller-owns-claim
+            # stamp, resolved inside the same transaction/RLS context.
+            claimant_names = await _load_claimant_name_map(session, gates)
+    except ProgrammingError as exc:
+        logger.exception(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_org_pending_reviews.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    # Org-level: gates span many runs, so per-run snapshot lookups are
+    # expensive. Description IS resolved (FAR-613) and labels (FAR-686) are
+    # both resolved in one batched pass each, keyed by (run_id, review_id)
+    # because gate ids are only unique per run — two runs can reuse the same
+    # gate id with different labels/descriptions. Frontend falls back to
+    # shortId when a label is missing.
+    return PendingReviewsResponse(
+        reviews=[
+            _review_to_response(
+                g,
+                pipeline_name=pipeline_map.get(g.pipeline_id),
+                description=description_by_review.get((g.run_id, g.review_id)),
+                label=review_label_map.get((g.run_id, g.review_id)),
+                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
+            )
+            for g in gates
+        ]
+    )
+
+
+@router.get(
+    "/hitl/reviews",
+)
+@handle_db_errors(_CODE_HITL_LIST_ORG_REVIEWS)
+async def list_org_reviews(
+    status_filter: ReviewStatusFilter = Query(default="undecided", alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
+) -> ReviewListResponse:
+    """Paginated org-wide gate listing including DECIDED gates (FAR-692).
+
+    The review page's status filter was a no-op for approved/rejected because
+    ``GET /api/v1/hitl/pending`` only ever returns undecided gates. This
+    endpoint lists gates in EVERY state:
+
+    - ``undecided`` (DEFAULT): ``decision IS NULL`` — pending AND claimed.
+    - ``pending``: undecided and unclaimed.
+    - ``claimed``: undecided and claimed.
+    - ``approved`` / ``rejected``: the decided history.
+    - ``all``: everything.
+
+    The data-rot fence (FAR-612/FAR-604) applies ONLY to the pending-work
+    statuses — ``undecided``/``pending``/``claimed`` join ``runs`` and keep
+    only gates whose run is still in ``HITL_ACTIONABLE_RUN_STATUSES``
+    (``awaiting_human``/``claimed``/``hitl_parked``), exactly like
+    ``HITLManager.list_pending``: an undecided gate on any other run status
+    is orphaned data rot (e.g. rows left by the since-fixed auto-approve
+    bug), not pending work. History views (``approved``/``rejected``) and
+    the ``all`` audit view are deliberately UNFENCED: a decided gate's run
+    has legitimately moved past ``awaiting_human``, and the audit view must
+    surface data-rot rows.
+
+    ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
+    consumers depend on its undecided-only shape). The response envelope
+    mirrors the repo's standard list convention (items/total/page/page_size,
+    as the runs list uses) with the existing ``ReviewResponse`` items.
+    """
+    decision_filters = _review_decision_filters(status_filter)
+
+    # Pending-work fence (FAR-612/FAR-604): the undecided family must match
+    # HITLManager.list_pending — joined to runs and restricted to runs still
+    # in an actionable status, because an undecided gate on a terminal/
+    # complete run is orphaned data rot, not pending work. History views
+    # (approved/rejected) and the `all` audit view are deliberately unfenced.
+    fenced_to_actionable_runs = status_filter in _PENDING_WORK_REVIEW_STATUSES
+    if fenced_to_actionable_runs:
+        decision_filters.append(Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES))
+
+    # page_size clamps at the ceiling (never 422s) — an oversized client hint
+    # still gets a usable page, matching the "don't fail the request" intent.
+    effective_page_size = min(page_size, _REVIEW_PAGE_SIZE_MAX)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            total, gates = await _fetch_review_page(
+                session,
+                decision_filters=decision_filters,
+                fenced_to_actionable_runs=fenced_to_actionable_runs,
+                page=page,
+                effective_page_size=effective_page_size,
+                account_id=_viewer_account_scope_id(principal),
+            )
+            pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(
+                session, gates=gates, organisation_id=principal.organisation_id
+            )
+    except ProgrammingError as exc:
+        logger.exception(_CODE_HITL_LIST_ORG_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_ORG_REVIEWS)
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_HITL_LIST_ORG_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_ORG_REVIEWS)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_org_reviews.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return ReviewListResponse(
+        items=[
+            _review_to_response(
+                g,
+                pipeline_name=pipeline_map.get(g.pipeline_id),
+                description=description_by_review.get((g.run_id, g.review_id)),
+                label=review_label_map.get((g.run_id, g.review_id)),
+                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
+            )
+            for g in gates
+        ],
+        total=total,
+        page=page,
+        page_size=effective_page_size,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _review_decision_filters(status_filter: ReviewStatusFilter) -> list[Any]:
+    """Decision-column WHERE filters for each ``/hitl/reviews`` status filter (FAR-692).
+
+    ``undecided`` keeps claimed + unclaimed; ``pending`` narrows to unclaimed;
+    ``claimed`` to claimed; ``approved``/``rejected`` surface the decided
+    history; ``all`` applies no decision filter at all.
+    """
+    if status_filter == "all":
+        return []
+    if status_filter == "undecided":
+        return [HitlClaim.decision.is_(None)]
+    if status_filter == "pending":
+        return [HitlClaim.decision.is_(None), HitlClaim.account_id.is_(None)]
+    if status_filter == "claimed":
+        return [HitlClaim.decision.is_(None), HitlClaim.account_id.is_not(None)]
+    if status_filter == "approved":
+        return [HitlClaim.decision == "approved"]
+    # "rejected" — Literal narrows everything else away
+    return [HitlClaim.decision == "rejected"]
+
+
+async def _fetch_review_page(
+    session: AsyncSession,
+    *,
+    decision_filters: list[Any],
+    fenced_to_actionable_runs: bool,
+    page: int,
+    effective_page_size: int,
+    account_id: uuid.UUID | None = None,
+) -> tuple[int, list[HitlClaim]]:
+    """Run the count + page queries for ``/hitl/reviews`` in the caller's transaction.
+
+    Count and page derive from the SAME composed filters; the runs join is
+    part of both so the count matches the fenced page. The page query is
+    skipped entirely when the count is zero.
+
+    *account_id* applies the viewer account-team membership clamp to BOTH
+    statements (the count and the page must agree — ``hitl_claims`` has no
+    team RLS policy, so the app-layer clause is the only boundary).
+    """
+    count_stmt = select(func.count()).select_from(HitlClaim)
+    if fenced_to_actionable_runs:
+        count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+    count_stmt = count_stmt.where(*decision_filters)
+    gates_stmt = select(HitlClaim)
+    if fenced_to_actionable_runs:
+        gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+    if account_id is not None:
+        if not fenced_to_actionable_runs:
+            count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+        membership_clause = account_team_scope_clause(
+            func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id
+        )
+        count_stmt = count_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
+        gates_stmt = gates_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    gates: list[HitlClaim] = []
+    if total:
+        gates_stmt = (
+            gates_stmt.where(*decision_filters)
+            .order_by(
+                nullslast(HitlClaim.decision_at.desc()),
+                nullslast(HitlClaim.claimed_at.desc()),
+                HitlClaim.id.desc(),
+            )
+            .offset((page - 1) * effective_page_size)
+            .limit(effective_page_size)
+        )
+        gates = list((await session.execute(gates_stmt)).scalars())
+    return total, gates
+
+
+async def _load_review_page_enrichment(
+    session: AsyncSession,
+    *,
+    gates: list[HitlClaim],
+    organisation_id: uuid.UUID,
+) -> tuple[
+    dict[uuid.UUID, str],
+    dict[tuple[uuid.UUID, str], str | None],
+    dict[tuple[uuid.UUID, str], str],
+    dict[uuid.UUID, str],
+]:
+    """Batched briefing enrichment for the ``/hitl/reviews`` page (FAR-692).
+
+    Decided gates carry the same enrichment as pending ones: pipeline names,
+    descriptions (FAR-613), human labels (FAR-686 — resolved for decided
+    gates too, keyed by (run_id, review_id)) and claimant display names +
+    the caller-owns-claim stamp (FAR-691), all in batched passes inside the
+    caller's transaction/RLS context.
+    """
+    pipeline_ids = list({g.pipeline_id for g in gates})
+    pipeline_map: dict[uuid.UUID, str] = {}
+    if pipeline_ids:
+        pipeline_rows = await session.execute(select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids)))
+        pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
+
+    description_by_review = await resolve_review_descriptions(session, gates=gates, org_id=organisation_id)
+    review_label_map = await _load_review_label_map(session, gates)
+    claimant_names = await _load_claimant_name_map(session, gates)
+    return pipeline_map, description_by_review, review_label_map, claimant_names
+
+
+async def _load_review_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[tuple[uuid.UUID, str], str]:
+    """Batched ``(run_id, review_id) -> human label`` resolution for the org endpoint.
+
+    Keyed by ``(run_id, review_id)`` — gate ids are unique per run only, so
+    keying by bare review_id would collide across runs sharing an id.
+
+    Resolves each pending gate's run -> snapshot -> ``hitl_review_config.label``
+    with two set-based queries (runs, then snapshots). Graceful degradation:
+    a missing run/snapshot or a non-dict ``graph_json`` simply leaves that
+    gate without a label (frontend falls back to shortId) — one bad snapshot
+    never breaks the whole list. All lookups happen inside the caller's
+    transaction.
+    """
+    if not gates:
+        return {}
+
+    run_ids = list({g.run_id for g in gates})
+    run_rows = (await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))).all()
+    run_to_snapshot: dict[uuid.UUID, uuid.UUID] = {row[0]: row[1] for row in run_rows if row[1] is not None}
+    if not run_to_snapshot:
+        return {}
+
+    snapshot_ids = list(set(run_to_snapshot.values()))
+    snap_rows = (
+        await session.execute(select(SnapModel.id, SnapModel.graph_json).where(SnapModel.id.in_(snapshot_ids)))
+    ).all()
+    labels_by_snapshot: dict[uuid.UUID, dict[str, str]] = {}
+    for snap_id, graph_json in snap_rows:
+        if not isinstance(graph_json, dict):
+            continue
+        try:
+            labels_by_snapshot[snap_id] = _build_review_label_map(graph_json)
+        except Exception:
+            # One corrupted snapshot must not break the whole pending list.
+            logger.exception("hitl.list_org_pending_reviews.label_map_failed")
+
+    review_label_map: dict[tuple[uuid.UUID, str], str] = {}
+    for g in gates:
+        snap_id = run_to_snapshot.get(g.run_id)
+        if snap_id is None:
+            continue
+        label = labels_by_snapshot.get(snap_id, {}).get(g.review_id)
+        if label:
+            review_label_map[(g.run_id, g.review_id)] = label
+    return review_label_map
+
+
+def _build_review_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
+    """Map review_id -> human label from snapshot edges carrying hitl_review_config.
+
+    Gate id format is ``hitl_review_<source>_<target>`` (see
+    ``graph_cache._make_review_id``). Edges without a ``label`` in their
+    ``hitl_review_config`` are omitted so the frontend falls back to shortId.
+    Node-key resolution uses the shared ``edge_source_or_target`` (canonical +
+    persisted key styles) — the same helper the FAR-610 gate-config resolver
+    uses, so labels and enforcement always agree on the gate id derivation.
+    """
+    review_label_map: dict[str, str] = {}
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        hitl_config = edge.get("hitl_review_config")
+        if not isinstance(hitl_config, dict):
+            continue
+        label = hitl_config.get("label")
+        if not label:
+            continue
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
+        if source and target:
+            review_label_map[make_review_id(source, target)] = str(label)
+    return review_label_map
+
+
+def _review_to_response(
+    g: HitlClaim,
+    pipeline_name: str | None = None,
+    label: str | None = None,
+    description: str | None = None,
+    claimed_by_name: str | None = None,
+    claimed_by_me: bool = False,
+) -> ReviewResponse:
+    return ReviewResponse(
+        run_id=g.run_id,
+        review_id=g.review_id,
+        pipeline_id=g.pipeline_id,
+        pipeline_name=pipeline_name,
+        claimed_by=g.account_id,
+        claimed_at=g.claimed_at.isoformat() if g.claimed_at else None,
+        expires_at=g.expires_at.isoformat() if g.expires_at else None,
+        decision=g.decision,
+        decision_at=g.decision_at.isoformat() if g.decision_at else None,
+        label=label,
+        description=description,
+        context=g.context_json if isinstance(g.context_json, dict) else None,
+        claimed_by_name=claimed_by_name,
+        claimed_by_me=claimed_by_me,
+    )
+
+
+async def _load_claimant_name_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[uuid.UUID, str]:
+    """Batched ``account_id -> display name`` resolution for the pending endpoints.
+
+    FAR-691: the review page renders "Claimed by <name>" instead of a raw
+    account UUID. Collects the claimant account ids from the pending gates
+    and resolves them with ONE select on the accounts table — the same
+    batched pattern as :func:`_load_review_label_map`. The best human-readable
+    field wins (``display_name``, falling back to ``email`` when the display
+    name is empty); a missing account row simply leaves that gate without a
+    name (the frontend falls back to the raw UUID). All lookups happen
+    inside the caller's transaction/RLS context.
+    """
+    account_ids = list({g.account_id for g in gates if g.account_id is not None})
+    if not account_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Account.id, Account.display_name, Account.email).where(Account.id.in_(account_ids))
+        )
+    ).all()
+    return {row[0]: row[1] or row[2] or "" for row in rows}

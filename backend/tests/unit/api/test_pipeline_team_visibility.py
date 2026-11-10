@@ -41,11 +41,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -175,9 +175,9 @@ def make_client() -> Generator[Callable[..., tuple[TestClient, _ResolverRow]], N
 
 def _get(client: TestClient, *, membership: bool) -> int:
     with (
-        patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=membership)),
+        patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=membership)),
         patch(
-            "modulo.api.routes.pipelines.get_pipeline",
+            "farna.api.routes.pipelines.get_pipeline",
             new=AsyncMock(return_value=_make_pipeline(owner_team_id=_TEAM_A, visibility="team")),
         ),
     ):
@@ -229,7 +229,7 @@ class TestCrossTeamPipelineVisibility:
     ) -> None:
         client, _ = make_client(org_role="operator", owner_team_id=None, visibility="org")
         with patch(
-            "modulo.api.routes.pipelines.get_pipeline",
+            "farna.api.routes.pipelines.get_pipeline",
             new=AsyncMock(return_value=_make_pipeline(owner_team_id=None, visibility="org")),
         ):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
@@ -294,7 +294,7 @@ class TestConnectorTeamGateAtGraphSave:
         """FAILS without the check: the gate would return without raising."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
 
         connector = _connector_row(visibility="team", owner_team_id=_TEAM_B)
         session = _enforcement_session(connector)
@@ -312,7 +312,7 @@ class TestConnectorTeamGateAtGraphSave:
         """The other half of the team-private rule: no owner team => refused."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
 
         connector = _connector_row(visibility="team", owner_team_id=_TEAM_A)
         session = _enforcement_session(connector)
@@ -331,7 +331,7 @@ class TestConnectorTeamGateAtGraphSave:
         an "is org-only" detail. Org resources stay shared, so the helper must
         complete without raising.
         """
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
 
         connector = _connector_row(visibility="org", owner_team_id=None)
         session = _enforcement_session(connector)
@@ -342,7 +342,7 @@ class TestConnectorTeamGateAtGraphSave:
 
     async def test_org_pipeline_pinning_an_org_visibility_connector_still_saves(self) -> None:
         """Regression guard: the ORG-pipeline rule must not change (FAR-1515)."""
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
 
         connector = _connector_row(visibility="org", owner_team_id=None)
         session = _enforcement_session(connector)
@@ -353,7 +353,7 @@ class TestConnectorTeamGateAtGraphSave:
 
     async def test_team_pipeline_pinning_its_own_team_connector_still_saves(self) -> None:
         """Regression guard: the existing valid binding must not start failing."""
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
 
         connector = _connector_row(visibility="team", owner_team_id=_TEAM_A)
         session = _enforcement_session(connector)
@@ -367,8 +367,8 @@ class TestConnectorTeamGateAtGraphSave:
         the same named ``connector_team_mismatch`` 409 as a real mismatch."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
-        from modulo.core.team_visibility import ConnectorBindingMissingError
+        from farna.api.routes.pipelines import _enforce_connector_team_bindings
+        from farna.core.team_visibility import ConnectorBindingMissingError
 
         session = AsyncMock()
         # FAR-1639: sync ``in_transaction``/``add`` contract typed explicitly
@@ -393,9 +393,9 @@ class TestConnectorTeamGateAtGraphSave:
 # MAJOR 5 (connector visibility/owner re-scope).
 # ---------------------------------------------------------------------------
 
-_PREFIX = "modulo.api.routes.pipelines."
-_LIB_PREFIX = "modulo.api.routes.library."
-_CONN_PREFIX = "modulo.api.routes.connectors."
+_PREFIX = "farna.api.routes.pipelines."
+_LIB_PREFIX = "farna.api.routes.library."
+_CONN_PREFIX = "farna.api.routes.connectors."
 
 
 def _pipeline_row_with_binding(
@@ -635,7 +635,7 @@ class TestConfirmImportRunsConnectorTeamGate:
         self, make_client: Callable[..., tuple[TestClient, Any]]
     ) -> None:
         """FAR-1515 CRITICAL 1: an unresolvable binding is the same named 409."""
-        from modulo.core.team_visibility import ConnectorBindingMissingError
+        from farna.core.team_visibility import ConnectorBindingMissingError
 
         conn_id = uuid.uuid4()
         materialized = {

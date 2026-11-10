@@ -8,12 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.schema_registry import SchemaGenerationError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.schema_registry import SchemaGenerationError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -98,16 +98,16 @@ def test_generate_schema_returns_200(client: TestClient) -> None:
     }
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -148,16 +148,16 @@ def test_generate_schema_threads_session_into_model_backend(client: TestClient) 
         captured_backends.append(kwargs.get("secrets_backend"))
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise", side_effect=spy_initialise),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise", side_effect=spy_initialise),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value={"type": "object"}),
-        patch("modulo.api.routes.schemas.create_secrets_backend", fake_create_backend),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.SchemaGenerationService.generate", return_value={"type": "object"}),
+        patch("farna.api.routes.schemas.create_secrets_backend", fake_create_backend),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -203,19 +203,19 @@ def test_generate_schema_threads_session_into_model_backend_decrypt(client: Test
         events.append(("rls", org_id))
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org", side_effect=spy_set_rls_org) as mock_rls,
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise", fake_hub_init),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org", side_effect=spy_set_rls_org) as mock_rls,
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise", fake_hub_init),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch(
-            "modulo.api.routes.schemas.SchemaGenerationService.generate",
+            "farna.api.routes.schemas.SchemaGenerationService.generate",
             return_value={"type": "object", "properties": {}},
         ),
-        patch("modulo.api.routes.schemas.create_secrets_backend", fake_create_backend),
+        patch("farna.api.routes.schemas.create_secrets_backend", fake_create_backend),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -249,16 +249,16 @@ def test_generate_schema_no_examples_returns_200(client: TestClient) -> None:
     expected_schema = {"type": "object", "properties": {}}
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -273,9 +273,9 @@ def test_generate_schema_no_backends_returns_400(client: TestClient) -> None:
     empty_result = MagicMock(items=[], total=0, page=1, page_size=1)
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=empty_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=empty_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -292,20 +292,20 @@ def test_generate_schema_generation_failure_returns_502(client: TestClient) -> N
     backend_id = uuid.uuid4()
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch(
-            "modulo.api.routes.schemas.SchemaGenerationService.generate",
+            "farna.api.routes.schemas.SchemaGenerationService.generate",
             side_effect=SchemaGenerationError("LLM returned garbage"),
         ),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.core.audit_logger.append_audit_event", return_value=None),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
+        patch("farna.core.audit_logger.append_audit_event", return_value=None),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -365,19 +365,19 @@ def test_generate_schema_forwards_examples_to_generation_service(client: TestCli
     examples = [{"name": "Alice", "email": "alice@example.com"}]
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
         patch(
-            "modulo.api.routes.schemas.SchemaGenerationService.generate",
+            "farna.api.routes.schemas.SchemaGenerationService.generate",
             return_value=expected_schema,
         ) as mock_generate,
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -396,16 +396,16 @@ def test_generate_schema_extra_fields_accepted(client: TestClient) -> None:
     expected_schema = {"type": "object", "properties": {}}
 
     with (
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.SchemaGenerationService.generate", return_value=expected_schema),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -424,10 +424,10 @@ def test_generate_schema_programming_error_returns_501(client: TestClient) -> No
     """Missing DB table (migration not applied) must surface as 501."""
     with (
         patch(
-            "modulo.api.routes.schemas.list_model_backends",
+            "farna.api.routes.schemas.list_model_backends",
             side_effect=ProgrammingError("stmt", {}, Exception("table does not exist")),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
@@ -441,10 +441,10 @@ def test_generate_schema_sqlalchemy_error_returns_503(client: TestClient) -> Non
     """Connection/deadlock failures must surface as 503, not 500."""
     with (
         patch(
-            "modulo.api.routes.schemas.list_model_backends",
+            "farna.api.routes.schemas.list_model_backends",
             side_effect=SQLAlchemyError("connection reset"),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",

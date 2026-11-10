@@ -52,7 +52,7 @@ def _make_session(execute_return: Any | None = None) -> AsyncMock:
 
 async def test_eval_coverage_gaps_includes_deleted_at_filter():
     """_eval_coverage_gaps must add deleted_at IS NULL to the WHERE."""
-    from modulo.api.routes.admin import _eval_coverage_gaps
+    from farna.api.routes.admin import _eval_coverage_gaps
 
     org_id = uuid.uuid4()
 
@@ -100,7 +100,7 @@ async def test_eval_coverage_gaps_soft_deleted_excluded_from_coverage():
     If a soft-deleted eval def covers node-1, the node should still appear
     as a coverage gap because the filter excludes it.
     """
-    from modulo.api.routes.admin import _eval_coverage_gaps
+    from farna.api.routes.admin import _eval_coverage_gaps
 
     org_id = uuid.uuid4()
 
@@ -145,7 +145,7 @@ async def test_eval_coverage_gaps_where_clause_contains_deleted_at():
     This is the direct regression guard: if the filter is dropped, this test
     fails because the WHERE clause string won't contain 'deleted_at'.
     """
-    from modulo.api.routes.admin import _eval_coverage_gaps
+    from farna.api.routes.admin import _eval_coverage_gaps
 
     org_id = uuid.uuid4()
 
@@ -193,7 +193,7 @@ async def test_eval_summary_where_clause_contains_deleted_at():
     This is the direct regression guard: if the filter is dropped, the total
     definitions count on the dashboard includes soft-deleted rows.
     """
-    from modulo.api.routes.admin import _eval_summary
+    from farna.api.routes.admin import _eval_summary
 
     # First call: summary_q (EvalResult counts); second: defs_q (EvalDefinition count)
     summary_result = MagicMock()
@@ -235,7 +235,7 @@ async def test_eval_by_type_where_clause_contains_deleted_at():
     This is the direct regression guard: if the filter is dropped, soft-deleted
     definitions still appear in the type breakdown.
     """
-    from modulo.api.routes.admin import _eval_by_type
+    from farna.api.routes.admin import _eval_by_type
 
     org_id = uuid.uuid4()
 
@@ -305,7 +305,7 @@ async def test_eval_coverage_gaps_reads_evals_not_frozen_snapshot():
     payload: a node whose only eval postdates the cutover is reported by
     ``by_type`` but still listed here as a coverage gap.
     """
-    from modulo.api.routes.admin import _eval_coverage_gaps
+    from farna.api.routes.admin import _eval_coverage_gaps
 
     pipelines_result = _all_result([_pipeline_row([{"id": "node-1"}])])
     session, captured = _recording_session([pipelines_result, _all_result([])])
@@ -324,7 +324,7 @@ async def test_eval_summary_definition_count_reads_evals_not_frozen_snapshot():
     A revert to ``eval_definitions`` makes ``summary.total_definitions`` and
     ``by_type`` disagree inside one ``EvalDashboardResponse``.
     """
-    from modulo.api.routes.admin import _eval_summary
+    from farna.api.routes.admin import _eval_summary
 
     summary_result = MagicMock()
     summary_result.one.return_value = MagicMock(total_results=10, passed=8, failed=2)
@@ -343,7 +343,7 @@ async def test_eval_summary_definition_count_reads_evals_not_frozen_snapshot():
 
 async def test_eval_by_type_reads_evals_not_frozen_snapshot():
     """``by_type`` must read ``evals`` — its guardrail exclusion is a no-op otherwise."""
-    from modulo.api.routes.admin import _eval_by_type
+    from farna.api.routes.admin import _eval_by_type
 
     session, captured = _recording_session([_all_result([])])
 
@@ -363,7 +363,7 @@ async def test_eval_recent_results_reads_evals_and_scopes_the_join_to_the_org():
     the sibling raw-SQL sites in ``regression.py``/``suite_run.py``/``okr.py``:
     the join side must not be trusted to inherit scope from ``er`` alone.
     """
-    from modulo.api.routes.admin import _eval_recent_results
+    from farna.api.routes.admin import _eval_recent_results
 
     session, captured = _recording_session([_all_result([])])
 

@@ -31,7 +31,7 @@ def ctx() -> dict:
 
 @given("a Buildkite connector configured with valid credentials")
 def buildkite_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.buildkite import BuildkiteConnector
+    from farna.connectors.buildkite import BuildkiteConnector
 
     ctx["connector"] = BuildkiteConnector(token=TOKEN)
     ctx["valid"] = True
@@ -39,7 +39,7 @@ def buildkite_connector_valid(ctx: dict) -> None:
 
 @given("a Buildkite connector configured with invalid credentials")
 def buildkite_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.buildkite import BuildkiteConnector
+    from farna.connectors.buildkite import BuildkiteConnector
 
     ctx["connector"] = BuildkiteConnector(token=TOKEN)
     ctx["valid"] = False
@@ -59,7 +59,7 @@ def buildkite_health_check(ctx: dict) -> None:
 
 @when(parsers.parse('the connector triggers a build on branch "{branch}"'))
 def buildkite_trigger_run(branch: str, ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     body = {
         "number": 42,
@@ -83,7 +83,7 @@ def buildkite_trigger_run(branch: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector checks status of build "{build}"'))
 def buildkite_get_run_status(build: str, ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     body = {
         "number": 42,
@@ -174,7 +174,7 @@ def buildkite_build_created(ctx: dict) -> None:
 
 @then("the build status is returned")
 def buildkite_build_status(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     run = ctx["run"]
     assert run is not None, "No run status"
@@ -184,7 +184,7 @@ def buildkite_build_status(ctx: dict) -> None:
 
 @then("the result contains builds")
 def buildkite_result_contains_builds(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     runs = ctx["runs"]
     assert runs is not None, "No listed runs"

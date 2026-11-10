@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import modulo.core.notifier as notifier_mod
+import farna.core.notifier as notifier_mod
 
 
 class _FakeCounter:

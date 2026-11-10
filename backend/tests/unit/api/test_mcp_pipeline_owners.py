@@ -15,8 +15,8 @@ import pytest
 from fastapi import HTTPException as FastAPIHTTPException
 from sqlalchemy.exc import ProgrammingError
 
-import modulo.api.mcp_server as ms
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+import farna.api.mcp_server as ms
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 from tests.unit.api.test_mcp_server_coverage_gaps import _AuthContext
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -101,7 +101,7 @@ class TestSetPipelineOwners(_AuthContext):
     async def test_pipeline_not_found(self) -> None:
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
         ):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
@@ -114,7 +114,7 @@ class TestSetPipelineOwners(_AuthContext):
         pipeline.reliability_owner_id = None
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)) as update,
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)) as update,
         ):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None
@@ -135,7 +135,7 @@ class TestSetPipelineOwners(_AuthContext):
         exc = FastAPIHTTPException(status_code=422, detail="business_owner_id: account x does not exist")
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=exc)),
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=exc)),
         ):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None
@@ -154,7 +154,7 @@ class TestSetPipelineOwners(_AuthContext):
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline.update_pipeline",
+                "farna.db.crud.pipeline.update_pipeline",
                 new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception())),
             ),
         ):
@@ -166,7 +166,7 @@ class TestSetPipelineOwners(_AuthContext):
     async def test_unexpected_error_maps_to_internal_error(self) -> None:
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
@@ -212,7 +212,7 @@ class TestCreatePipelineOwnerParams(_AuthContext):
         pipeline.business_owner_id = _OWNER_ID
         pipeline.reliability_owner_id = None
         pipeline.created_at = None
-        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
+        with patch("farna.db.crud.pipeline.create_pipeline", new=AsyncMock(return_value=pipeline)) as create:
             result = await ms.create_pipeline(name="p", business_owner_id=str(_OWNER_ID), reliability_owner_id=None)
         assert result["business_owner_id"] == str(_OWNER_ID)
         assert result["reliability_owner_id"] is None
@@ -220,7 +220,7 @@ class TestCreatePipelineOwnerParams(_AuthContext):
 
     async def test_eligibility_422_maps_to_validation_failed(self) -> None:
         exc = FastAPIHTTPException(status_code=422, detail="reliability_owner_id: account x is deactivated")
-        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(side_effect=exc)):
+        with patch("farna.db.crud.pipeline.create_pipeline", new=AsyncMock(side_effect=exc)):
             result = await ms.create_pipeline(name="p", reliability_owner_id=str(_OWNER_ID))
         assert result["error"] == "validation_failed"
         assert "deactivated" in result["detail"]
@@ -232,14 +232,14 @@ class TestCreatePipelineOwnerParams(_AuthContext):
 
     async def test_programming_error_maps_to_migration_required(self) -> None:
         with patch(
-            "modulo.db.crud.pipeline.create_pipeline",
+            "farna.db.crud.pipeline.create_pipeline",
             new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception())),
         ):
             result = await ms.create_pipeline(name="p")
         assert result["error"] == "migration_required"
 
     async def test_unexpected_error_maps_to_internal_error(self) -> None:
-        with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        with patch("farna.db.crud.pipeline.create_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))):
             result = await ms.create_pipeline(name="p")
         assert result["error"] == "server_error"
 
@@ -255,7 +255,7 @@ class TestListPipelinesOwnerFields(_AuthContext):
         page = MagicMock(items=[item], total=1, next_cursor=None, has_more=False)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
+            patch("farna.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
         ):
             result = await ms.list_pipelines_tool()
         assert result["data"][0]["business_owner_id"] == str(_OWNER_ID)

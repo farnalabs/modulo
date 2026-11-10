@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
-from modulo.settings import Settings
+from farna.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -49,7 +49,7 @@ def audit_append_spy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     ``test_seed_modulo_user`` / ``test_rehash_existing_user`` tests below.
     """
     spy = AsyncMock(return_value=MagicMock())
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", spy)
     return spy
 
 
@@ -110,8 +110,8 @@ def _patch_db_seams(monkeypatch: pytest.MonkeyPatch, session: AsyncMock) -> None
     factory_cm.__aenter__ = AsyncMock(return_value=session)
     factory_cm.__aexit__ = AsyncMock(return_value=False)
     factory = MagicMock(return_value=factory_cm)
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_engine", lambda _settings: engine)
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_session_factory", lambda _engine: factory)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", lambda _settings: engine)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_session_factory", lambda _engine: factory)
     return factory
 
 
@@ -141,7 +141,7 @@ async def test_seed_modulo_users_no_org() -> None:
 async def test_seed_modulo_users_new_user(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _session_with_results([_result(scalar_one_or_none=org), _result(scalar_one_or_none=None)])
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await seed_modulo_users(_mock_factory(session), "user@example.com:secret1")
     assert session.add.call_count == 2
 
@@ -152,7 +152,7 @@ async def test_seed_modulo_users_seeds_each_entry(monkeypatch: pytest.MonkeyPatc
     session = _session_with_results(
         [_result(scalar_one_or_none=org), _result(scalar_one_or_none=None), _result(scalar_one_or_none=None)]
     )
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await seed_modulo_users(_mock_factory(session), "a@example.com:pw1,b@example.com:pw2")
     assert session.add.call_count == 4  # account + membership per entry
 
@@ -161,7 +161,7 @@ async def test_seed_modulo_users_seeds_each_entry(monkeypatch: pytest.MonkeyPatc
 async def test_seed_modulo_user_admin_email_gets_admin_role(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await seed_modulo_user(session, org, "admin:secret1")
     added_membership = session.add.call_args_list[1].args[0]
     assert added_membership.role == "admin"
@@ -171,7 +171,7 @@ async def test_seed_modulo_user_admin_email_gets_admin_role(monkeypatch: pytest.
 async def test_seed_modulo_user_runner_role(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await seed_modulo_user(session, org, "user@example.com:secret1")
     added_membership = session.add.call_args_list[1].args[0]
     assert added_membership.role == "runner"
@@ -200,7 +200,7 @@ async def test_seed_modulo_user_existing_hashed_noop() -> None:
 async def test_seed_modulo_user_plaintext_gets_hashed(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: f"$2b$12$hashed({pw})")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: f"$2b$12$hashed({pw})")
     await seed_modulo_user(session, org, "admin:secret1")
     added_account = session.add.call_args_list[0].args[0]
     assert added_account.password_hash.startswith("$2b$12$hashed(secret1)")
@@ -251,7 +251,7 @@ async def test_rehash_existing_user_keeps_runner_role() -> None:
 
 def test_main_seam_aliases_are_the_promoted_functions() -> None:
     """The API wrappers are the promoted functions themselves (zero drift)."""
-    import modulo.api.main as main_module
+    import farna.api.main as main_module
 
     assert main_module._seed_modulo_user is seed_modulo_user
     assert main_module._rehash_existing_user is rehash_existing_user
@@ -260,7 +260,7 @@ def test_main_seam_aliases_are_the_promoted_functions() -> None:
 @pytest.mark.anyio
 async def test_main_users_wrapper_resolves_factory_and_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
     """main._seed_modulo_users resolves the API-layer factory and delegates."""
-    import modulo.api.main as main_module
+    import farna.api.main as main_module
 
     called: dict[str, Any] = {}
 
@@ -282,7 +282,7 @@ async def test_main_users_wrapper_skips_empty_users_without_seams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Empty MODULO_USERS returns before any engine/factory resolution."""
-    import modulo.api.main as main_module
+    import farna.api.main as main_module
 
     async def _fail(*_a: object, **_kw: object) -> None:
         raise AssertionError("seeder must not run for an empty MODULO_USERS")
@@ -305,7 +305,7 @@ async def test_seed_modulo_user_records_system_actor_audit(
     SYSTEM actor and an honest ``boot_seed`` actor source."""
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
 
     await seed_modulo_user(session, org, "admin:secret1")
 
@@ -329,7 +329,7 @@ async def test_seed_modulo_user_records_runner_grant_as_runner_role(
     """A non-admin seed records the runner role it actually granted."""
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
 
     await seed_modulo_user(session, org, "user@example.com:secret1")
 
@@ -434,7 +434,7 @@ async def test_audit_failure_never_fails_the_seed(
     audit_append_spy.side_effect = RuntimeError("audit db down")
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
 
     with caplog.at_level("ERROR"):
         await seed_modulo_user(session, org, "admin:secret1")
@@ -452,7 +452,7 @@ async def test_audit_cancellation_is_never_swallowed(
     audit_append_spy.side_effect = asyncio.CancelledError()
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
 
     with pytest.raises(asyncio.CancelledError):
         await seed_modulo_user(session, org, "admin:secret1")

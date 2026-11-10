@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -51,8 +51,8 @@ def _exec_result(scalar_value: Any = None, scalars_list: list[Any] | None = None
 
 class TestCreateAgent:
     async def test_creates_agent_with_org_id_and_defaults(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.agent.Agent", return_value=_make_agent()) as mock_agent_cls:
-            from modulo.db.crud.agent import create_agent
+        with patch("farna.db.crud.agent.Agent", return_value=_make_agent()) as mock_agent_cls:
+            from farna.db.crud.agent import create_agent
 
             result = await create_agent(
                 mock_session,
@@ -74,8 +74,8 @@ class TestCreateAgent:
         assert result is not None
 
     async def test_create_agent_keeps_explicit_lists(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.agent.Agent", return_value=_make_agent()) as mock_agent_cls:
-            from modulo.db.crud.agent import create_agent
+        with patch("farna.db.crud.agent.Agent", return_value=_make_agent()) as mock_agent_cls:
+            from farna.db.crud.agent import create_agent
 
             await create_agent(
                 mock_session,
@@ -98,14 +98,14 @@ class TestGetAgent:
     async def test_returns_agent_when_found(self, mock_session: AsyncMock) -> None:
         agent = _make_agent()
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import get_agent
+        from farna.db.crud.agent import get_agent
 
         result = await get_agent(mock_session, _AGENT_ID)
         assert result is agent
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=None))
-        from modulo.db.crud.agent import get_agent
+        from farna.db.crud.agent import get_agent
 
         result = await get_agent(mock_session, _AGENT_ID)
         assert result is None
@@ -120,7 +120,7 @@ class TestListAgents:
         listing_result.scalars = MagicMock(return_value=list(agents))
         mock_session.execute = AsyncMock(side_effect=[count_result, listing_result])
 
-        from modulo.db.crud.agent import list_agents
+        from farna.db.crud.agent import list_agents
 
         result = await list_agents(mock_session, page=2, page_size=2)
         assert isinstance(result, PageResult)
@@ -131,7 +131,7 @@ class TestListAgents:
 
     async def test_returns_empty_page_on_programming_error(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("missing", None, Exception("boom")))
-        from modulo.db.crud.agent import list_agents
+        from farna.db.crud.agent import list_agents
 
         result = await list_agents(mock_session, page=1, page_size=20)
         assert isinstance(result, PageResult)
@@ -143,10 +143,10 @@ class TestUpdateDeleteAgent:
     async def test_update_agent_applies_updates(self, mock_session: AsyncMock) -> None:
         agent = _make_agent(name="planner")
         with (
-            patch("modulo.db.crud.agent.get_agent", AsyncMock(return_value=agent)),
-            patch("modulo.db.crud.agent.apply_updates") as apply_updates,
+            patch("farna.db.crud.agent.get_agent", AsyncMock(return_value=agent)),
+            patch("farna.db.crud.agent.apply_updates") as apply_updates,
         ):
-            from modulo.db.crud.agent import update_agent
+            from farna.db.crud.agent import update_agent
 
             result = await update_agent(mock_session, _AGENT_ID, {"name": "renamed"})
         apply_updates.assert_called_once_with(agent, {"name": "renamed"})
@@ -154,24 +154,24 @@ class TestUpdateDeleteAgent:
         assert result is agent
 
     async def test_update_agent_returns_none_when_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.agent.get_agent", AsyncMock(return_value=None)):
-            from modulo.db.crud.agent import update_agent
+        with patch("farna.db.crud.agent.get_agent", AsyncMock(return_value=None)):
+            from farna.db.crud.agent import update_agent
 
             result = await update_agent(mock_session, _AGENT_ID, {"name": "renamed"})
         assert result is None
 
     async def test_delete_agent_returns_true(self, mock_session: AsyncMock) -> None:
         agent = _make_agent()
-        with patch("modulo.db.crud.agent.get_agent", AsyncMock(return_value=agent)):
-            from modulo.db.crud.agent import delete_agent
+        with patch("farna.db.crud.agent.get_agent", AsyncMock(return_value=agent)):
+            from farna.db.crud.agent import delete_agent
 
             result = await delete_agent(mock_session, _AGENT_ID)
         assert result is True
         mock_session.delete.assert_awaited_once_with(agent)
 
     async def test_delete_agent_returns_false_when_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.agent.get_agent", AsyncMock(return_value=None)):
-            from modulo.db.crud.agent import delete_agent
+        with patch("farna.db.crud.agent.get_agent", AsyncMock(return_value=None)):
+            from farna.db.crud.agent import delete_agent
 
             result = await delete_agent(mock_session, _AGENT_ID)
         assert result is False
@@ -181,7 +181,7 @@ class TestAddPromptVersion:
     async def test_appends_history_and_updates_template(self, mock_session: AsyncMock) -> None:
         agent = _make_agent(history=[{"version": "v1", "template": "original"}])
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import add_prompt_version
+        from farna.db.crud.agent import add_prompt_version
 
         before = datetime.now(UTC)
         result = await add_prompt_version(mock_session, _AGENT_ID, new_template="new prompt", notes="tuned")
@@ -200,7 +200,7 @@ class TestAddPromptVersion:
     async def test_appends_with_version_label_and_eval_refs(self, mock_session: AsyncMock) -> None:
         agent = _make_agent()
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import add_prompt_version
+        from farna.db.crud.agent import add_prompt_version
 
         er_id = uuid.uuid4()
         result = await add_prompt_version(
@@ -218,7 +218,7 @@ class TestAddPromptVersion:
 
     async def test_returns_none_when_agent_missing(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=None))
-        from modulo.db.crud.agent import add_prompt_version
+        from farna.db.crud.agent import add_prompt_version
 
         result = await add_prompt_version(mock_session, _AGENT_ID, new_template="t")
         assert result is None
@@ -227,14 +227,14 @@ class TestAddPromptVersion:
 class TestGetPromptVersion:
     async def test_returns_none_when_agent_missing(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=None))
-        from modulo.db.crud.agent import get_prompt_version
+        from farna.db.crud.agent import get_prompt_version
 
         assert await get_prompt_version(mock_session, _AGENT_ID, "current") is None
 
     async def test_current_version_returns_active_template(self, mock_session: AsyncMock) -> None:
         agent = _make_agent()
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import get_prompt_version
+        from farna.db.crud.agent import get_prompt_version
 
         entry = await get_prompt_version(mock_session, _AGENT_ID, "current")
         assert entry is not None
@@ -247,7 +247,7 @@ class TestGetPromptVersion:
         entry = {"version": "v1", "template": "old"}
         agent = _make_agent(history=[entry])
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import get_prompt_version
+        from farna.db.crud.agent import get_prompt_version
 
         result = await get_prompt_version(mock_session, _AGENT_ID, "v1")
         assert result == entry
@@ -255,7 +255,7 @@ class TestGetPromptVersion:
     async def test_unknown_version_returns_none(self, mock_session: AsyncMock) -> None:
         agent = _make_agent(history=[{"version": "v1", "template": "old"}])
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import get_prompt_version
+        from farna.db.crud.agent import get_prompt_version
 
         assert await get_prompt_version(mock_session, _AGENT_ID, "v9") is None
 
@@ -270,7 +270,7 @@ class TestRollbackPromptVersion:
         )
         agent.prompt_template = "new prompt"
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         result = await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
         assert result.prompt_template == "old prompt"
@@ -286,7 +286,7 @@ class TestRollbackPromptVersion:
         agent = _make_agent(history=[{"version": "v1", "template": "old prompt"}])
         agent.prompt_template = "old prompt"
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         result = await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
         assert result is agent
@@ -294,21 +294,21 @@ class TestRollbackPromptVersion:
 
     async def test_returns_none_when_agent_missing(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=None))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         assert await rollback_prompt_version(mock_session, _AGENT_ID, "v1") is None
 
     async def test_returns_none_when_target_missing(self, mock_session: AsyncMock) -> None:
         agent = _make_agent(history=[{"version": "v1", "template": "old"}])
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         assert await rollback_prompt_version(mock_session, _AGENT_ID, "v9") is None
 
     async def test_returns_none_when_target_template_empty(self, mock_session: AsyncMock) -> None:
         agent = _make_agent(history=[{"version": "v1", "template": ""}])
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         assert await rollback_prompt_version(mock_session, _AGENT_ID, "v1") is None
 
@@ -321,8 +321,8 @@ class TestRollbackPromptVersion:
         agent = _make_agent(history=[{"version": "v1", "template": _UNPINNED_REF}])
         agent.prompt_template = "new prompt"
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.core.pipeline_engine.git_content import GitContentRefError
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.core.pipeline_engine.git_content import GitContentRefError
+        from farna.db.crud.agent import rollback_prompt_version
 
         with pytest.raises(GitContentRefError):
             await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
@@ -337,7 +337,7 @@ class TestRollbackPromptVersion:
         agent = _make_agent(history=[{"version": "v1", "template": _PINNED_REF}])
         agent.prompt_template = "new prompt"
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import rollback_prompt_version
+        from farna.db.crud.agent import rollback_prompt_version
 
         result = await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
         assert result is agent
@@ -383,7 +383,7 @@ class TestGetEvalResultsWithDefs:
         ed_result.scalars = MagicMock(return_value=ed_scalars)
         mock_session.execute = AsyncMock(side_effect=[er_result, ed_result])
 
-        from modulo.db.crud.agent import get_eval_results_with_defs
+        from farna.db.crud.agent import get_eval_results_with_defs
 
         results_list, definitions = await get_eval_results_with_defs(mock_session, [er_id], _ORG_ID)
         assert results_list == [
@@ -416,7 +416,7 @@ class TestGetEvalResultsWithDefs:
         ed_result.scalars = MagicMock(return_value=ed_scalars)
         mock_session.execute = AsyncMock(side_effect=[er_result, ed_result])
 
-        from modulo.db.crud.agent import get_eval_results_with_defs
+        from farna.db.crud.agent import get_eval_results_with_defs
 
         results_list, _ = await get_eval_results_with_defs(mock_session, [uuid.uuid4()], _ORG_ID)
         assert len(results_list) == 1
@@ -424,7 +424,7 @@ class TestGetEvalResultsWithDefs:
 
     async def test_eval_result_table_missing_returns_empty(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("missing")))
-        from modulo.db.crud.agent import get_eval_results_with_defs
+        from farna.db.crud.agent import get_eval_results_with_defs
 
         results_list, definitions = await get_eval_results_with_defs(mock_session, [uuid.uuid4()], _ORG_ID)
         assert results_list == []
@@ -441,7 +441,7 @@ class TestGetEvalResultsWithDefs:
                 ProgrammingError("42P01", None, Exception("missing")),
             ]
         )
-        from modulo.db.crud.agent import get_eval_results_with_defs
+        from farna.db.crud.agent import get_eval_results_with_defs
 
         results_list, definitions = await get_eval_results_with_defs(mock_session, [uuid.uuid4()], _ORG_ID)
         assert results_list == []
@@ -455,7 +455,7 @@ class TestGetEvalResultsWithDefs:
         ed_result = _exec_result()
         mock_session.execute = AsyncMock(side_effect=[er_result, ed_result])
 
-        from modulo.db.crud.agent import get_eval_results_with_defs
+        from farna.db.crud.agent import get_eval_results_with_defs
 
         results_list, definitions = await get_eval_results_with_defs(mock_session, [uuid.uuid4()], _ORG_ID)
         assert results_list == []
@@ -465,6 +465,6 @@ class TestGetEvalResultsWithDefs:
         agent = _make_agent()
         agent.prompt_version_history = [{"version": "v1", "template": "t"}]
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
-        from modulo.db.crud.agent import get_prompt_version
+        from farna.db.crud.agent import get_prompt_version
 
         assert (await get_prompt_version(mock_session, _AGENT_ID, "v1"))["template"] == "t"

@@ -7,9 +7,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
 from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid4()
@@ -59,7 +59,7 @@ def mock_session():
 
 @pytest.fixture
 def client_sys_admin(mock_session):
-    from modulo.api.main import app
+    from farna.api.main import app
 
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -74,7 +74,7 @@ def client_sys_admin(mock_session):
 
 @pytest.fixture
 def client_regular_admin(mock_session):
-    from modulo.api.main import app
+    from farna.api.main import app
 
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -90,7 +90,7 @@ def client_regular_admin(mock_session):
 @pytest.fixture
 def client_org_less_sys_admin(mock_session):
     """System admin whose JWT carries no organisation claim at all."""
-    from modulo.api.main import app
+    from farna.api.main import app
 
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -117,7 +117,7 @@ class TestAdminListConfig:
 
     @pytest.mark.anyio
     async def test_returns_entries(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         entry = SystemConfig(key="app_name", value="modulo")
         mock_session.execute.return_value.scalars.return_value.all.return_value = [entry]
@@ -130,7 +130,7 @@ class TestAdminListConfig:
 
     @pytest.mark.anyio
     async def test_sensitive_key_value_is_masked(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         entries = [
             SystemConfig(key="slack_api_token", value="xoxb-123"),
@@ -145,7 +145,7 @@ class TestAdminListConfig:
 
     @pytest.mark.anyio
     async def test_non_string_sensitive_value_not_masked(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         entry = SystemConfig(key="feature_flags", value={"analytics": True})
         mock_session.execute.return_value.scalars.return_value.all.return_value = [entry]
@@ -164,7 +164,7 @@ class TestAdminListConfig:
 class TestAdminSetConfig:
     @pytest.mark.anyio
     async def test_system_admin_can_set(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         # New set_config first-write path: SELECT … FOR UPDATE (None → first
         # write), INSERT … ON CONFLICT DO NOTHING, then re-SELECT the stored row
@@ -191,7 +191,7 @@ class TestAdminSetConfig:
 
     @pytest.mark.anyio
     async def test_updates_existing(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         existing = SystemConfig(key="my_key", value="old")
         mock_session.execute.return_value.scalar_one_or_none.return_value = existing
@@ -229,7 +229,7 @@ class TestAdminSetConfig:
 class TestAdminDeleteConfig:
     @pytest.mark.anyio
     async def test_system_admin_can_delete(self, client_sys_admin, mock_session):
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.system_config import SystemConfig
 
         existing = SystemConfig(key="del_key", value="val")
         mock_session.execute.return_value.scalar_one_or_none.return_value = existing
@@ -272,13 +272,13 @@ class TestAuditWrapperNeverGatesAccess:
         client_org_less_sys_admin,
         mock_session,
     ) -> None:
-        from modulo.db.models.organisation import SYSTEM_ORG_ID
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.organisation import SYSTEM_ORG_ID
+        from farna.db.models.system_config import SystemConfig
 
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
         mock_session.execute.return_value.scalar_one.return_value = SystemConfig(key="my_key", value="my_value")
         captured = AsyncMock()
-        with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+        with patch("farna.core.audit_coverage.append_audit_event_isolated", new=captured):
             resp = await client_org_less_sys_admin.put(
                 "/api/v1/system-admin/config/my_key",
                 json={"value": "my_value"},

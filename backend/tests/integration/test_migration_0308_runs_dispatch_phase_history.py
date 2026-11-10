@@ -46,8 +46,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.pipeline_execution import PHASE_LOADING_SETUP, PHASE_STREAMING, DispatchPhaseWriter
+import farna.core.pipeline_execution as pe
+from farna.core.pipeline_execution import PHASE_LOADING_SETUP, PHASE_STREAMING, DispatchPhaseWriter
 
 pytestmark = [pytest.mark.integration]
 
@@ -75,7 +75,7 @@ _CLAIM_TOKEN = "tok-far1714-roundtrip"
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 

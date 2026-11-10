@@ -1,0 +1,1118 @@
+"""Shared analytics query execution service (ADR 020, FAR-102).
+
+The REST route (``modulo.api.routes.analytics``) and the ``query_analytics``
+MCP tool both funnel through this service so the org predicate, rate limit,
+statement timeout, validation, bucketing, and error semantics stay identical
+across surfaces.
+
+Isolation invariant (CRITICAL — carried over from the route): ``modulo_app``
+is NOBYPASSRLS (tenant isolation relies on RLS policies) and the ORM tenant
+filter is NOT registered on Postgres — the explicit ``organisation_id = :org``
+predicate injected by the builder is the PRIMARY isolation control (RLS also
+enforces org scoping). ``set_rls_org`` remains defense-in-depth. The ``factory``
+(sessionmaker over the shared engine) is supplied by
+the caller so this core module never imports ``modulo.api`` (import-linter).
+
+The service never raises FastAPI exceptions — it raises the typed
+``AnalyticsError`` subclasses below, which each caller maps to its surface
+(HTTP status codes / MCP error dicts).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing, asynccontextmanager
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+import sqlalchemy as sa
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from farna.core.analytics.builder import (
+    CONCURRENCY_MAX_RAW_ROWS,
+    HOUR_GROUPBY_MAX_RANGE_DAYS,
+    AnalyticsDimension,
+    AnalyticsGroupBy,
+    AnalyticsQuery,
+    AnalyticsStatus,
+    AnalyticsTriggerType,
+    bucket_concurrency_rows,
+    bucket_rows,
+    build_concurrency_query,
+    build_error_code_condition,
+    build_facts_query,
+    hour_groupby_span_exceeds,
+    resolve_group_by,
+    team_scope_condition,
+    to_utc_aware,
+)
+from farna.db.crud.run import get_org_run_concurrency_limit
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.run import TERMINAL_STATUSES
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.settings import Settings
+
+_log = logging.getLogger(__name__)
+
+__all__ = [
+    "EXPORT_COLUMN_NAMES",
+    "AnalyticsDatabaseError",
+    "AnalyticsError",
+    "AnalyticsMigrationRequiredError",
+    "AnalyticsParams",
+    "AnalyticsQueryTimeoutError",
+    "AnalyticsRateLimitedError",
+    "AnalyticsValidationError",
+    "export_facts",
+    "run_analytics_query",
+    "run_concurrency_query",
+    "stream_export_facts",
+]
+
+# Default statement timeout for analytics queries (ms) — settings-driven via
+# ``analytics_query_statement_timeout_ms`` when configured.
+_DEFAULT_STATEMENT_TIMEOUT_MS = 5000
+
+# Repeated SQL fragments and typed error messages (S1192). Constants are pure
+# aliases — the SQL text and error strings are part of the surface contract.
+_SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
+_SQL_SET_TIMEZONE_UTC = "SELECT set_config('timezone', 'UTC', true)"
+_ERR_DATABASE_UNAVAILABLE = "Database temporarily unavailable."
+_ERR_RATE_LIMIT_EXCEEDED = "Rate limit exceeded"
+_MSG_MIGRATION_REQUIRED = "Feature is not available. Run database migrations to enable it."
+_MSG_QUERY_TIMEOUT = "query exceeded timeout — reduce the date range"
+
+# Max date range accepted by the bucketed query (matches the old route guard).
+_MAX_QUERY_RANGE_DAYS = 365
+
+# Facts-freshness stale threshold (hours): the analytics response is flagged
+# ``facts_stale`` when the org's newest day with a TERMINAL-status fact row is
+# older than this (~36h, matching the ticket's 24-36h window). Facts are
+# materialized asynchronously (live writer at run completion + a daily 01:00
+# UTC backfill cron), so a stale flag is a "the numbers for recent days may be
+# incomplete" signal — the frontend surfaces it as a notice, never a hard block.
+_FRESHNESS_STALE_HOURS = 36
+
+# Export pagination bounds (FAR-102, Part D).
+_EXPORT_DEFAULT_LIMIT = 500
+
+# Server-side scan page size — rows fetched per keyset page. The scan keeps the
+# whole org's response in ONE stream, but the DB is read page-by-page so memory
+# stays bounded for any org size instead of materialising every fact row at once.
+_SCAN_PAGE_SIZE = 1000
+
+# Per-org app-level limiter (simple in-memory): 60 requests/minute. Best-effort
+# and bounded: idle orgs are pruned and the number of tracked orgs is capped, so
+# the dict cannot grow without limit across many orgs. It remains process-local
+# and is therefore ineffective across multiple worker processes — a shared
+# limiter (e.g. Redis) is the production-grade replacement for this fallback.
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_PER_ORG = 60
+_RATE_LIMIT_MAX_ORGS = 1000
+_rate_hits: dict[str, list[float]] = {}
+
+
+class AnalyticsError(Exception):
+    """Base class for typed analytics service errors."""
+
+
+class AnalyticsRateLimitedError(AnalyticsError):
+    """The org exceeded the per-window request budget."""
+
+
+class AnalyticsValidationError(AnalyticsError):
+    """A typed parameter was invalid (bad range, bad granularity, ...)."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class AnalyticsQueryTimeoutError(AnalyticsError):
+    """The statement exceeded the bounded ``statement_timeout``."""
+
+
+class AnalyticsMigrationRequiredError(AnalyticsError):
+    """A required table/column is missing — migrations have not run."""
+
+
+class AnalyticsDatabaseError(AnalyticsError):
+    """An unexpected database failure."""
+
+
+@dataclass(frozen=True)
+class AnalyticsParams:
+    """Typed parameters mirroring the REST / MCP surface (FAR-102, Part C)."""
+
+    group_by: AnalyticsGroupBy = AnalyticsGroupBy.DAY
+    auto_granularity: bool = False
+    dimension: AnalyticsDimension | None = None
+    trigger_type: AnalyticsTriggerType | None = None
+    status: AnalyticsStatus | None = None
+    pipeline_ids: tuple[uuid.UUID, ...] = ()
+    team_id: uuid.UUID | None = None
+    # Caller's own team boundary for non-admin REST callers (#1795) — resolved
+    # by the route under the principal's RLS org context. ``None`` = unscoped
+    # (org admin); empty tuple = member of no teams (fail closed to org-level
+    # rows only). Never derived from untrusted user input.
+    team_ids: tuple[uuid.UUID, ...] | None = None
+    error_code: str | None = None
+    folder_id: uuid.UUID | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    limit: int = 1000
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter (moved verbatim from the old route so both surfaces share it)
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited(org_id: str) -> bool:
+    now = time.monotonic()
+    _prune_rate_hits(now)
+    hits = _rate_hits.setdefault(org_id, [])
+    hits[:] = [t for t in hits if now - t < _RATE_LIMIT_WINDOW_SECONDS]
+    if len(hits) >= _RATE_LIMIT_MAX_PER_ORG:
+        return True
+    hits.append(now)
+    return False
+
+
+def _prune_rate_hits(now: float) -> None:
+    """Drop idle orgs and cap the number of tracked orgs (best-effort bound)."""
+    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+    for oid in [oid for oid, hits in _rate_hits.items() if not hits or hits[-1] <= cutoff]:
+        del _rate_hits[oid]
+    while len(_rate_hits) > _RATE_LIMIT_MAX_ORGS:
+        oldest = min(_rate_hits, key=lambda oid: _rate_hits[oid][-1] if _rate_hits[oid] else 0.0)
+        del _rate_hits[oldest]
+
+
+def _is_query_canceled(exc: DBAPIError) -> bool:
+    """Detect a Postgres statement-timeout cancellation (SQLSTATE 57014)."""
+    names = {"QueryCanceledError", "QueryCanceled"}
+    orig = exc.orig
+    if orig is not None and type(orig).__name__ in names:
+        return True
+    if orig is not None:
+        for candidate in (getattr(orig, "orig", None), getattr(orig, "__cause__", None)):
+            if candidate is not None and type(candidate).__name__ in names:
+                return True
+        if getattr(orig, "sqlstate", None) == "57014":
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Bounds normalisation + validation (moved verbatim from the old route)
+# ---------------------------------------------------------------------------
+
+
+def _normalise_bounds(
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> tuple[datetime, datetime]:
+    """Normalise both bounds to aware UTC, expanding bare dates to the whole day.
+
+    Raises ``AnalyticsValidationError`` for inverted or over-wide ranges and for
+    an explicit hour granularity over a >14-day range (grid amplification).
+    """
+    today = datetime.now(UTC).date()
+    effective_to = date_to or today
+    effective_from = date_from or (effective_to - timedelta(days=364))
+
+    effective_from = to_utc_aware(effective_from)
+    effective_to = to_utc_aware(effective_to, end_of_day=True)
+
+    if effective_from > effective_to:
+        raise AnalyticsValidationError("date_from must be <= date_to")
+    if (effective_to - effective_from).days > _MAX_QUERY_RANGE_DAYS:
+        raise AnalyticsValidationError("date range must be 365 days or less")
+    return effective_from, effective_to
+
+
+def _check_hour_cap(
+    group_by: AnalyticsGroupBy,
+    effective_from: datetime,
+    effective_to: datetime,
+) -> None:
+    if group_by == AnalyticsGroupBy.HOUR and hour_groupby_span_exceeds(effective_from, effective_to):
+        raise AnalyticsValidationError(
+            f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less"
+        )
+
+
+async def _facts_freshness(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> tuple[float | None, bool]:
+    """How long since the org's newest RELIABLE fact day, and whether it is stale.
+
+    ``run_daily_facts`` is materialized asynchronously (the live writer at run
+    completion plus a daily 01:00 UTC backfill cron), so a query for the most
+    recent window can silently return zeros/missing rows while the facts for
+    those days are still being written — or, worse, the writer is broken
+    (FAR-200: facts stamped with the pre-write ``'running'`` status and NULL
+    cost). The freshness signal is the newest ``run_date`` that has AT LEAST ONE
+    TERMINAL-status fact row: a writer that stops producing terminal facts makes
+    this lag even when raw (non-terminal) rows for today exist.
+
+    Returns ``(freshness_hours, stale)``:
+
+    - ``freshness_hours`` — hours since that day's UTC boundary (``0.0`` when
+      the newest reliable day is today; ``None`` when the org has no terminal
+      fact at all — a brand-new/empty org reads as "no data yet", not "stale").
+    - ``stale`` — ``True`` when ``freshness_hours`` exceeds
+      ``_FRESHNESS_STALE_HOURS``.
+
+    Fail-open: any error degrades to ``(None, False)`` with a log, so the
+    staleness indicator can never break the analytics query itself.
+    """
+    try:
+        async with factory() as session:
+            try:
+                async with session.begin():
+                    await set_rls_org(session, org_id)
+                    if account_id is not None:
+                        await set_rls_user_context(session, account_id, org_role or "")
+                    dialect = (await session.connection()).dialect.name
+                    if dialect == "postgresql":
+                        timeout_ms = getattr(
+                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
+                        )
+                        await session.execute(
+                            text(_SQL_SET_STATEMENT_TIMEOUT),
+                            {"ms": str(int(timeout_ms))},
+                        )
+                    newest_terminal_day = (
+                        await session.execute(
+                            sa.select(sa.func.max(RunDailyFact.run_date)).where(
+                                RunDailyFact.organisation_id == org_id,
+                                RunDailyFact.status.in_(TERMINAL_STATUSES),
+                            )
+                        )
+                    ).scalar_one_or_none()
+            except asyncio.CancelledError:
+                raise
+            except SQLAlchemyError:
+                _log.exception("analytics.freshness.db_error", extra={"org_id": str(org_id)})
+                return None, False
+    except Exception:
+        _log.exception("analytics.freshness.unexpected_error", extra={"org_id": str(org_id)})
+        return None, False
+
+    if newest_terminal_day is None:
+        return None, False
+    newest_instant = datetime.combine(newest_terminal_day, datetime.min.time(), tzinfo=UTC)
+    freshness_hours = (datetime.now(UTC) - newest_instant).total_seconds() / 3600.0
+    return round(freshness_hours, 1), freshness_hours > _FRESHNESS_STALE_HOURS
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _guarded_session(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> AsyncIterator[AsyncSession]:
+    """Open a transaction with the RLS context and bounded statement timeout set.
+
+    Every analytics read surface needs the same ``set_rls_org`` (defense-in-depth)
+    plus principal context and the Postgres statement-timeout/timezone preamble, so
+    the setup lives here once rather than being copied per surface.
+    """
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        if account_id is not None:
+            await set_rls_user_context(session, account_id, org_role or "")
+        dialect = (await session.connection()).dialect.name
+        if dialect == "postgresql":
+            timeout_ms = getattr(settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS)
+            await session.execute(text(_SQL_SET_TIMEZONE_UTC))
+            await session.execute(
+                text(_SQL_SET_STATEMENT_TIMEOUT),
+                {"ms": str(int(timeout_ms))},
+            )
+        yield session
+
+
+async def _execute_with_guards(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+    stmt: Any,
+    params: dict[str, Any],
+) -> list[Any]:
+    """Run *stmt* inside a transaction with RLS context + bounded statement timeout.
+
+    Maps database failures to the typed ``AnalyticsError`` subclasses so both
+    the REST route and the MCP tool surface identical semantics.
+    """
+    try:
+        try:
+            async with _guarded_session(
+                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
+            ) as session:
+                result = await session.execute(stmt, params)
+                return list(result.all())
+        except asyncio.CancelledError:
+            raise
+        except ProgrammingError:
+            _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
+        except DBAPIError as exc:
+            if _is_query_canceled(exc):
+                _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
+            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        except SQLAlchemyError:
+            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    except (AnalyticsError, asyncio.CancelledError):
+        raise
+    except Exception:
+        _log.exception("analytics.query.unexpected_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+async def run_analytics_query(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
+) -> dict[str, Any]:
+    """Execute the bucketed analytics query and return the response shape.
+
+    ``team_ids`` is the caller's own team boundary resolved by the route
+    (#1795): ``None`` for an unscoped/org-admin caller, otherwise the tuple of
+    membership team ids the query must stay inside. Raises the typed
+    ``AnalyticsError`` subclasses for rate-limit / validation / DB failures.
+    """
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    effective_group_by = (
+        resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
+    )
+    _check_hour_cap(effective_group_by, effective_from, effective_to)
+
+    query = AnalyticsQuery(
+        org_id=org_id,
+        group_by=effective_group_by,
+        dimension=params.dimension,
+        trigger_type=params.trigger_type,
+        status=params.status,
+        pipeline_ids=params.pipeline_ids,
+        team_id=params.team_id,
+        team_ids=params.team_ids,
+        error_code=params.error_code,
+        folder_id=params.folder_id,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    stmt, bind = build_facts_query(query)
+    rows = await _execute_with_guards(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        stmt=stmt,
+        params=bind,
+    )
+    buckets = bucket_rows(
+        rows,
+        group_by=effective_group_by,
+        dimension=params.dimension,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    freshness_hours, stale = await _facts_freshness(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+    )
+    return {
+        "group_by": effective_group_by.value,
+        "dimension": params.dimension.value if params.dimension is not None else None,
+        "date_from": effective_from.isoformat(),
+        "date_to": effective_to.isoformat(),
+        "facts_freshness_hours": freshness_hours,
+        "facts_stale": stale,
+        "buckets": buckets,
+    }
+
+
+def _pipeline_caps_stmt(org_id: uuid.UUID, pipeline_ids: tuple[uuid.UUID, ...]) -> sa.Select[int]:
+    scope = Pipeline.id.in_(pipeline_ids) if pipeline_ids else sa.true()
+    return sa.select(Pipeline.max_concurrent_runs).where(
+        scope,
+        Pipeline.organisation_id == org_id,
+    )
+
+
+async def _read_pipeline_caps(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> list[int]:
+    rows = (await session.execute(_pipeline_caps_stmt(org_id, pipeline_ids))).scalars()
+    return sorted({int(value) for value in rows if value is not None})
+
+
+def _pool_reference_decision(org_limit: int | None, caps: list[int]) -> int | None:
+    if org_limit is not None:
+        return min(int(org_limit), caps[0]) if caps else int(org_limit)
+    return caps[0] if caps else None
+
+
+async def _resolve_pool_reference_value(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> int | None:
+    scoped_caps: list[int] | None = None
+    if pipeline_ids:
+        scoped_caps = await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
+        if len(pipeline_ids) == 1 and scoped_caps:
+            # Exactly ONE filtered pipeline with a present row:
+            # its own per-pipeline cap is the reference. A
+            # missing row (empty read) falls through to the
+            # org limit below.
+            return scoped_caps[0]
+    # Every other shape (org-wide, mixed/uniform multi-pipeline
+    # filters, missing single row): the org limit ALWAYS
+    # participates — it gates every run in the org.
+    org_limit = await get_org_run_concurrency_limit(session, org_id)
+    # An org-wide query reads the WHOLE org's caps (the caps
+    # statement scopes to sa.true() when no pipeline filter).
+    caps = (
+        scoped_caps
+        if scoped_caps is not None
+        else await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
+    )
+    return _pool_reference_decision(org_limit, caps)
+
+
+async def _resolve_pool_reference(
+    factory: async_sessionmaker[AsyncSession],
+    _settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> int | None:
+    """Best-effort concurrency-cap reference for the response (FAR-134, FAR-604).
+
+    Never raises — a failed reference degrades to ``None`` with a log, never a
+    failed query. A run's enforced ceiling is the MINIMUM of every gate that
+    applies to it (its pipeline's ``max_concurrent_runs`` AND the org's
+    ``run_concurrency_limit``), so the reported reference must never name a cap
+    the runs do not actually bind at. Resolution order:
+
+    * a SINGLE ``pipeline_id`` filter → that pipeline's ``max_concurrent_runs``
+      when its row is present (the column is NOT NULL with a server default, so
+      a present row always yields an int); a missing pipeline row falls through
+      to the org limit;
+    * otherwise the org's ``run_concurrency_limit`` when set, MIN-ed with the
+      tightest pipeline cap in scope when pipelines exist — a uniform shared
+      pipeline cap does NOT bind before the org limit (two pipelines capped at
+      7 still block at an org limit of 5, and an org limit of 20 does not lift
+      a shared 7-cap);
+    * an UNSET org limit (``None`` = no org-level ceiling) leaves the
+      pipelines' own caps as the ceilings — the TIGHTEST (MIN)
+      ``max_concurrent_runs`` in scope is reported as the single reference (the
+      number most likely to explain starvation), and ``None`` only when the org
+      has no pipelines at all.
+
+    Reads use the explicit org predicate because ``modulo_app`` is NOBYPASSRLS
+    (tenant isolation relies on RLS policies) — the predicate is the PRIMARY
+    isolation control (RLS also enforces org scoping), and ``session.get``
+    alone would not scope it.
+    """
+    try:
+        async with factory() as session:
+            try:
+                async with session.begin():
+                    await set_rls_org(session, org_id)
+                    if account_id is not None:
+                        await set_rls_user_context(session, account_id, org_role or "")
+                    return await _resolve_pool_reference_value(session, org_id=org_id, pipeline_ids=pipeline_ids)
+            except asyncio.CancelledError:
+                raise
+            except SQLAlchemyError:
+                _log.exception("analytics.pool_reference.db_error", extra={"org_id": str(org_id)})
+                return None
+    except Exception:
+        _log.exception("analytics.pool_reference.unexpected_error", extra={"org_id": str(org_id)})
+        return None
+
+
+async def run_concurrency_query(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
+) -> dict[str, Any]:
+    """Slot-utilization series: per-bucket max/avg active + queued runs.
+
+    Mirrors ``run_analytics_query`` (rate limit, bounds normalisation,
+    auto-granularity, hour cap, statement timeout) but buckets the overlap of
+    the runs' ``[started_at, completed_at)`` intervals in Python instead of a
+    GROUP BY. ``dimension`` is accepted for surface parity and ignored — there
+    is no per-dimension concurrency split. The raw scan is bounded by
+    ``CONCURRENCY_MAX_RAW_ROWS``: when the filtered scan exceeds the cap the
+    query raises ``AnalyticsValidationError`` telling the caller to narrow the
+    range — it never silently truncates (a partial scan would yield wrong
+    max/avg counts). Returns ``{group_by, date_from, date_to, pool_reference,
+    buckets}`` where each bucket carries ``{date, key: None, max_active,
+    avg_active, max_queued, avg_queued, pool_reference}``.
+    """
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    effective_group_by = (
+        resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
+    )
+    _check_hour_cap(effective_group_by, effective_from, effective_to)
+
+    query = AnalyticsQuery(
+        org_id=org_id,
+        group_by=effective_group_by,
+        dimension=None,
+        trigger_type=params.trigger_type,
+        status=params.status,
+        pipeline_ids=params.pipeline_ids,
+        team_id=params.team_id,
+        team_ids=params.team_ids,
+        error_code=params.error_code,
+        folder_id=params.folder_id,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    stmt, bind = build_concurrency_query(query)
+    rows = await _execute_with_guards(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        stmt=stmt,
+        params=bind,
+    )
+    if len(rows) > CONCURRENCY_MAX_RAW_ROWS:
+        raise AnalyticsValidationError(
+            f"concurrency query exceeded the {CONCURRENCY_MAX_RAW_ROWS}-row raw cap — "
+            "reduce the date range or add pipeline/status filters"
+        )
+    buckets = bucket_concurrency_rows(
+        rows,
+        group_by=effective_group_by,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    pool_reference = await _resolve_pool_reference(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        pipeline_ids=params.pipeline_ids,
+    )
+    return {
+        "group_by": effective_group_by.value,
+        "date_from": effective_from.isoformat(),
+        "date_to": effective_to.isoformat(),
+        "pool_reference": pool_reference,
+        "buckets": [{**bucket, "key": None, "pool_reference": pool_reference} for bucket in buckets],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Export (FAR-102, Part D)
+# ---------------------------------------------------------------------------
+
+# Raw fact rows are exported column-for-column (all fact columns, including the
+# FAR-102 enrichment). ``id``/``organisation_id``/``updated_at`` are omitted —
+# internal plumbing, not analytics surface. Coverage is enforced structurally by
+# ``tests/unit/api/test_analytics_export_contract.py``: a new fact column fails
+# that test until it is exported (or explicitly classified as plumbing), and the
+# JSON response model must carry the same set.
+#
+# APPEND-ONLY: existing entries keep their positions so a positional CSV
+# consumer never sees a column shift; new columns land after ``created_at``.
+_EXPORT_COLUMNS: tuple[Any, ...] = (
+    RunDailyFact.run_id,
+    RunDailyFact.run_date,
+    RunDailyFact.team_id,
+    RunDailyFact.team_name,
+    RunDailyFact.pipeline_id,
+    RunDailyFact.pipeline_name,
+    RunDailyFact.folder_id,
+    RunDailyFact.trigger_type,
+    RunDailyFact.status,
+    RunDailyFact.total_cost_usd,
+    RunDailyFact.total_tokens,
+    RunDailyFact.duration_ms,
+    RunDailyFact.error_code,
+    RunDailyFact.claim_count,
+    RunDailyFact.queue_wait_ms,
+    RunDailyFact.final_idle_ms,
+    RunDailyFact.cancellation_requested,
+    RunDailyFact.dispatcher,
+    RunDailyFact.node_count,
+    RunDailyFact.sandbox_agent_node_count,
+    RunDailyFact.max_node_timeout_seconds,
+    RunDailyFact.parent_run_id,
+    RunDailyFact.snapshot_id,
+    RunDailyFact.run_number,
+    RunDailyFact.output_bytes,
+    RunDailyFact.rate_limited,
+    RunDailyFact.created_at,
+    # Columns added after the export contract was first written were missing
+    # here (found by the export-contract guard alongside FAR-1421): the
+    # FAR-332 batch dimension, the FAR-134 instants + full queue wait, the
+    # FAR-583 byte total, the FAR-802 workspace-input count, the FAR-902
+    # enforcement counters, and the FAR-1421 claim→dispatch provenance.
+    RunDailyFact.batch_id,
+    RunDailyFact.telemetry_bytes,
+    RunDailyFact.dispatched_at,
+    RunDailyFact.started_at,
+    RunDailyFact.completed_at,
+    RunDailyFact.total_queue_wait_ms,
+    RunDailyFact.workspace_inputs_count,
+    RunDailyFact.enforcement_native_count,
+    RunDailyFact.enforcement_verbatim_count,
+    RunDailyFact.enforcement_repair_count,
+    RunDailyFact.enforcement_wasted_count,
+    RunDailyFact.trigger_id,
+    RunDailyFact.dispatch_phase,
+    RunDailyFact.dispatch_phase_entered_at,
+    # FAR-1463: node-deadline watchdog firings — appended so an operator can
+    # see a firing per run (re-dispatch AND terminal-fail) without log access.
+    RunDailyFact.node_deadline_watchdog_fired_count,
+    # FAR-1141 / ADR-042: the run's execution origin ('dispatched' / NULL).
+    # An export is a claim-ready run surface — the CSV/NDJSON an auditor pulls
+    # must be able to separate runs whose work happened on the customer's
+    # substrate from ones Modulo executed, exactly like the bucketed series.
+    RunDailyFact.execution_origin,
+    # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
+    # under — an export consumer must be able to bucket autonomous vs
+    # human-reviewed runs without re-joining the audit chain.
+    RunDailyFact.autonomy_level,
+    # FAR-707: the run's terminal classification was ``benign`` (a
+    # business-expected outcome). Exported so an auditor pulling raw facts can
+    # reproduce the failure-rate figures the analytics surfaces report — the
+    # benign rows are excluded there, so the exported flag is what makes the
+    # exclusion auditable rather than invisible.
+    RunDailyFact.benign,
+)
+
+_EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)
+# Public alias for callers that build CSV/text surfaces from the column list.
+EXPORT_COLUMN_NAMES: tuple[str, ...] = _EXPORT_COLUMN_NAMES
+
+
+def _export_filters(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    effective_from: datetime,
+    effective_to: datetime,
+) -> tuple[list[Any], dict[str, Any], bool]:
+    """Parameterised WHERE clauses + bound params shared by count and page queries.
+
+    The third element is a ``needs_pipeline_join`` flag: when a team boundary
+    is applied the effective owner coalesces the stamped fact team with the
+    pipeline owner, so every statement these conditions attach to must first
+    outerjoin ``Pipeline`` on ``RunDailyFact.pipeline_id``.
+    """
+    team_scoped = False
+    conditions: list[Any] = [RunDailyFact.organisation_id == sa.bindparam("org_id", type_=sa.Uuid)]
+    bind: dict[str, Any] = {"org_id": org_id}
+    conditions.append(RunDailyFact.run_date >= sa.bindparam("date_from", type_=sa.Date))
+    conditions.append(RunDailyFact.run_date <= sa.bindparam("date_to", type_=sa.Date))
+    bind["date_from"] = effective_from.date()
+    bind["date_to"] = effective_to.date()
+    if params.trigger_type is not None:
+        conditions.append(RunDailyFact.trigger_type == sa.bindparam("trigger_type", type_=sa.String))
+        bind["trigger_type"] = params.trigger_type.value
+    if params.status is not None:
+        conditions.append(RunDailyFact.status == sa.bindparam("status", type_=sa.String))
+        bind["status"] = params.status.value
+    if params.pipeline_ids:
+        conditions.append(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+        bind["pipeline_ids"] = list(params.pipeline_ids)
+    if params.error_code is not None:
+        # The facts table stores the RAW DB code while the runs API emits
+        # dotted codes — a filter must match every spelling of the same code.
+        # The aggregate "Unknown error" slice (harness.unknown) is special:
+        # build_error_code_condition turns it into a NOT IN over the complement
+        # of known_error_codes() so it matches the same raw rows the chart
+        # slice shows (see the helper docstring).
+        conditions.append(build_error_code_condition(bind, params.error_code))
+    if params.folder_id is not None:
+        conditions.append(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
+        bind["folder_id"] = params.folder_id
+    if params.team_id is not None or params.team_ids is not None:
+        # Team boundary (#1795) — the same effective-owner coalesce as
+        # build_facts_query: the stamped fact team falls back to the pipeline
+        # owner for NULL-stamped facts, and a scoped caller never widens past
+        # their own teams plus org-level rows. The caller adds the SAME
+        # Pipeline outerjoin to each statement these conditions attach to
+        # (signalled via the needs_pipeline_join flag).
+        merged: list[uuid.UUID] = list(params.team_ids or ())
+        if params.team_id is not None and params.team_id not in merged:
+            merged.append(params.team_id)
+        condition = team_scope_condition(
+            sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id),
+            tuple(merged),
+            bind,
+        )
+        if condition is not None:
+            conditions.append(condition)
+            team_scoped = True
+    return conditions, bind, team_scoped
+
+
+def _serialize_fact_row(row: Any) -> dict[str, Any]:
+    """Serialise one raw fact row to JSON-safe values keyed by column name."""
+    out: dict[str, Any] = {}
+    for name in _EXPORT_COLUMN_NAMES:
+        value = getattr(row, name)
+        if isinstance(value, uuid.UUID):
+            out[name] = str(value)
+        elif isinstance(value, datetime):
+            out[name] = value.isoformat() if value.tzinfo is not None else value.replace(tzinfo=UTC).isoformat()
+        elif isinstance(value, Decimal):
+            out[name] = float(value)
+        elif isinstance(value, date):
+            out[name] = value.isoformat()
+        else:
+            out[name] = value
+    return out
+
+
+async def export_facts(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    offset: int = _EXPORT_DEFAULT_LIMIT,
+    limit: int = _EXPORT_DEFAULT_LIMIT,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
+) -> dict[str, Any]:
+    """Return raw fact rows (no bucketing) filtered by the same typed params.
+
+    Paginated by ``offset``/``limit`` (default 500, max 5000), ordered by
+    ``run_date``, ``created_at`` then ``run_id`` for a stable cursor. ``dimension``
+    is accepted for surface parity but ignored — export has no bucketing.
+    """
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    conditions, bind, needs_pipeline_join = _export_filters(
+        org_id=org_id,
+        params=params,
+        effective_from=effective_from,
+        effective_to=effective_to,
+    )
+
+    count_stmt = sa.select(sa.func.count(RunDailyFact.id))
+    rows_stmt = sa.select(*_EXPORT_COLUMNS)
+    if needs_pipeline_join:
+        # Team boundary coalesce — both statements need the same outerjoin so
+        # the effective owner resolves for NULL-stamped facts (#1795).
+        count_stmt = count_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+    count_stmt = count_stmt.where(*conditions)
+    rows_stmt = (
+        rows_stmt.where(*conditions)
+        .order_by(RunDailyFact.run_date, RunDailyFact.created_at, RunDailyFact.run_id)
+        .offset(offset)
+        .limit(limit)
+    )
+
+    total = 0
+    rows: list[Any] = []
+    try:
+        try:
+            async with _guarded_session(
+                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
+            ) as session:
+                total = int((await session.execute(count_stmt, bind)).scalar_one())
+                result = await session.execute(rows_stmt, bind)
+                rows = list(result.all())
+        except asyncio.CancelledError:
+            raise
+        except ProgrammingError:
+            _log.exception("analytics.export.programming_error", extra={"org_id": str(org_id)})
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
+        except DBAPIError as exc:
+            if _is_query_canceled(exc):
+                _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
+            _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+        except SQLAlchemyError:
+            _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
+            raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    except (AnalyticsError, asyncio.CancelledError):
+        raise
+    except Exception:
+        _log.exception("analytics.export.unexpected_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+    return {
+        "items": [_serialize_fact_row(r) for r in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+def _keyset_conditions(cursor: tuple[date, datetime, uuid.UUID]) -> Any:
+    """Keyset cursor predicate for the scan's next page (portable row-wise compare).
+
+    The scan order is the same stable ``(run_date, created_at, run_id)`` ordering
+    the paginated export uses. The cursor is the LAST row of the previous page, so
+    the next page reads strictly-after rows WITHOUT OFFSET — offset pagination
+    re-scans already-read rows and degrades to O(n^2) total work on a full-org
+    scan, which is exactly what a scan surface must not do (FAR-102 deferral).
+
+    The three-branch OR is written as explicit scalar comparisons rather than a
+    Postgres row-value tuple compare so it compiles on every conformance dialect
+    (SQLite/MariaDB) as well as the supported Postgres primary. Values are bound
+    as named ``sa.bindparam`` (never interpolated) so each page re-binds fresh
+    values against the same statement.
+    """
+    return sa.or_(
+        RunDailyFact.run_date > sa.bindparam("scan_cur_run_date", type_=sa.Date),
+        sa.and_(
+            RunDailyFact.run_date == sa.bindparam("scan_cur_run_date_eq", type_=sa.Date),
+            RunDailyFact.created_at > sa.bindparam("scan_cur_created_at", type_=sa.DateTime),
+        ),
+        sa.and_(
+            RunDailyFact.run_date == sa.bindparam("scan_cur_run_date_eq2", type_=sa.Date),
+            RunDailyFact.created_at == sa.bindparam("scan_cur_created_at_eq", type_=sa.DateTime),
+            RunDailyFact.run_id > sa.bindparam("scan_cur_run_id", type_=sa.Uuid),
+        ),
+    )
+
+
+def _keyset_bind(cursor: tuple[date, datetime, uuid.UUID]) -> dict[str, Any]:
+    """Bound values for every cursor bindparam in ``_keyset_conditions``."""
+    run_date, created_at, run_id = cursor
+    return {
+        "scan_cur_run_date": run_date,
+        "scan_cur_run_date_eq": run_date,
+        "scan_cur_run_date_eq2": run_date,
+        "scan_cur_created_at": created_at,
+        "scan_cur_created_at_eq": created_at,
+        "scan_cur_run_id": run_id,
+    }
+
+
+async def stream_export_facts(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
+    page_size: int = _SCAN_PAGE_SIZE,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield raw fact rows (no bucketing) for the WHOLE org in one scan.
+
+    Server-side scan export (the FAR-102 deferral companion to ``export_facts``):
+    the caller receives every matching row through a single stream instead of
+    offset/limit pages. Internally the scan keyset-paginates over the stable
+    ``(run_date, created_at, run_id)`` order in fixed ``page_size`` batches, so
+    memory stays bounded for any org size while the client sees one uninterrupted
+    response. ``dimension`` is accepted for surface parity and ignored — like the
+    paginated export, a scan has no bucketing.
+
+    The RLS org + principal context, the Postgres statement-timeout/timezone
+    preamble and the typed ``AnalyticsError`` family mirror ``export_facts``
+    exactly, so both surfaces share one contract. One session/transaction spans
+    the whole scan (the read is stable against concurrent fact writes).
+
+    Raises the same typed errors as the rest of the service:
+    ``AnalyticsRateLimitedError`` (per-org budget hit),
+    ``AnalyticsValidationError`` (inverted/over-wide range, ``page_size < 1``),
+    ``AnalyticsMigrationRequiredError`` (missing facts table),
+    ``AnalyticsQueryTimeoutError`` (statement timeout) and
+    ``AnalyticsDatabaseError`` (unexpected DB failure).
+    """
+    if page_size < 1:
+        raise AnalyticsValidationError("page_size must be >= 1")
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    conditions, bind, needs_pipeline_join = _export_filters(
+        org_id=org_id,
+        params=params,
+        effective_from=effective_from,
+        effective_to=effective_to,
+    )
+    rows_stmt = _build_scan_rows_stmt(conditions, needs_pipeline_join)
+
+    try:
+        # ``aclosing`` (not a bare ``async for``) so an early ``aclose()`` of
+        # THIS generator — a client disconnect on the StreamingResponse —
+        # closes the delegated page generator synchronously instead of leaving
+        # it to the event loop's async-generator finalizer.
+        async with aclosing(
+            _stream_scan_pages(
+                rows_stmt,
+                bind,
+                page_size=page_size,
+                factory=factory,
+                settings=settings,
+                org_id=org_id,
+                account_id=account_id,
+                org_role=org_role,
+            )
+        ) as pages:
+            async for payload in pages:
+                yield payload
+    except (AnalyticsError, asyncio.CancelledError):
+        raise
+    except Exception:
+        _log.exception("analytics.scan.unexpected_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+def _build_scan_rows_stmt(conditions: list[Any], needs_pipeline_join: bool) -> sa.Select[Any]:
+    """Build the ordered scan statement (with the team-boundary outerjoin)."""
+    rows_stmt = sa.select(*_EXPORT_COLUMNS)
+    if needs_pipeline_join:
+        # Team boundary coalesce — same outerjoin the paginated export adds so
+        # the effective owner resolves for NULL-stamped facts (#1795).
+        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+    return rows_stmt.where(*conditions).order_by(
+        RunDailyFact.run_date,
+        RunDailyFact.created_at,
+        RunDailyFact.run_id,
+    )
+
+
+async def _stream_scan_pages(
+    rows_stmt: sa.Select[Any],
+    bind: dict[str, Any],
+    *,
+    page_size: int,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Open one guarded session/transaction and stream every scan page.
+
+    Maps the DB failure family onto the typed ``AnalyticsError`` contract
+    (migration-required / query-timeout / database-unavailable); unexpected
+    failures are handled by the caller.
+    """
+    page_bind = dict(bind)
+    try:
+        # Same close-timing contract one level down: the caller's ``aclose()``
+        # must reach ``_guarded_session.__aexit__`` (transaction end + pooled-
+        # connection return) synchronously, so the page generator is closed
+        # explicitly rather than abandoned.
+        async with (
+            _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session,
+            aclosing(_stream_session_pages(session, rows_stmt, page_size, page_bind)) as pages,
+        ):
+            async for payload in pages:
+                yield payload
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
+        raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
+    except DBAPIError as exc:
+        if _is_query_canceled(exc):
+            _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
+            raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
+        _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+    except SQLAlchemyError:
+        _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
+
+
+async def _stream_session_pages(
+    session: AsyncSession,
+    rows_stmt: sa.Select[Any],
+    page_size: int,
+    page_bind: dict[str, Any],
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Yield serialized rows, keyset-paginating over the stable scan order."""
+    page_stmt = rows_stmt
+    while True:
+        result = await session.execute(page_stmt, dict(page_bind))
+        page = list(result.all())
+        for row in page:
+            yield _serialize_fact_row(row)
+        if len(page) < page_size:
+            break
+        last = page[-1]
+        cursor = (last.run_date, last.created_at, last.run_id)
+        page_bind.update(_keyset_bind(cursor))
+        page_stmt = rows_stmt.where(_keyset_conditions(cursor))

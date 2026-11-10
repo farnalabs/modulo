@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
+from farna.core.library.workflows.definitions import DOGFOODING_PIPELINE
 
 from .helpers import assert_step_case_matches, assert_step_ids, step_by_id
 

@@ -9,12 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.runs import _build_fixture_map
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.runs import _build_fixture_map
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -64,8 +64,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-583: record the run the (session-driven) get_run returns and stub
     the repo blob readers to reassemble from it — the mocked session cannot
     serve the real run_node_outputs queries."""
-    import modulo.api.routes.runs as runs_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.routes.runs as runs_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     holder: dict[str, Any] = {}
     real_get_run = runs_module.get_run

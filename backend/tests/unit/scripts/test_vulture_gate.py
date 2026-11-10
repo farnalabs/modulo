@@ -1,6 +1,6 @@
 """Unit tests for the vulture dead-code gate (scripts/run_vulture.py).
 
-The gate wraps ``vulture backend/src/modulo --min-confidence 60`` against the
+The gate wraps ``vulture backend/src/farna --min-confidence 60`` against the
 repo-root ``.vulture_whitelist.py``, with ``--ignore-decorators`` for framework
 registration decorators and ``--ignore-names`` for framework-interface names
 (see the wrapper docstring for the full rationale). The whitelist suppresses
@@ -23,7 +23,7 @@ Coverage here:
   were passing at --min-confidence 80); the import/unreachable probe proves the
   original import-level detection still holds.
 - The probe is staged in a temp directory and handed to the gate as an extra
-  scan target, so it NEVER appears inside ``backend/src/modulo``. Coverage's
+  scan target, so it NEVER appears inside ``backend/src/farna``. Coverage's
   un-executed-source scan walks ``[tool.coverage.run] source`` on save, so a
   probe written into the measured tree can be touched into a shard's coverage
   data and then fails ``coverage combine`` on a fresh checkout with
@@ -51,7 +51,7 @@ if REPO_ROOT is None:
 
 WRAPPER = REPO_ROOT / "scripts" / "run_vulture.py"
 WHITELIST = REPO_ROOT / ".vulture_whitelist.py"
-SRC = REPO_ROOT / "backend" / "src" / "modulo"
+SRC = REPO_ROOT / "backend" / "src" / "farna"
 
 PROBE_FILENAME = "_far252_dead_probe.py"
 
@@ -68,7 +68,7 @@ def _probe_path(directory: Path) -> Path:
 
     This is the single source of truth for where the gate tests stage a probe,
     and it is deliberately a plain ``directory / PROBE_FILENAME``: callers pass
-    pytest's ``tmp_path``, so the probe lives outside ``backend/src/modulo``
+    pytest's ``tmp_path``, so the probe lives outside ``backend/src/farna``
     (the measured coverage source tree) and outside the repo entirely. A probe
     created inside that tree can be recorded in coverage data and later break
     ``coverage combine`` (FAR-2334).
@@ -171,10 +171,10 @@ def test_gate_blocks_unused_import_and_unreachable(tmp_path: Path) -> None:
     ids=["dead-function", "dead-import-unreachable"],
 )
 def test_probe_is_staged_outside_the_measured_source_tree(tmp_path: Path, content: str) -> None:
-    """Regression guard (FAR-2334): probes must never live under ``backend/src/modulo``.
+    """Regression guard (FAR-2334): probes must never live under ``backend/src/farna``.
 
     ``[tool.coverage.run] source = ["src/modulo"]`` makes coverage's
-    un-executed-source scan walk every module below ``backend/src/modulo``. A
+    un-executed-source scan walk every module below ``backend/src/farna``. A
     probe written there — even transiently — is touched into a shard's coverage
     data on save, and ``coverage combine`` then dies on a fresh checkout with
     "No source for code". This pins the gate tests' single probe-staging helper

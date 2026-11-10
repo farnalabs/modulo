@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 from langgraph.errors import GraphInterrupt
 
-from modulo.core.pipeline_engine.decorator import RunCancelledError
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
-from modulo.core.pipeline_engine.retry_compensation import NodeRetryPolicy
-from modulo.core.pipeline_engine.runtime_retry import (
+from farna.core.pipeline_engine.decorator import RunCancelledError
+from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
+from farna.core.pipeline_engine.retry_compensation import NodeRetryPolicy
+from farna.core.pipeline_engine.runtime_retry import (
     _classify_attempt,
     _should_retry,
     make_retrying_node_fn,
@@ -85,7 +85,7 @@ def test_control_flow_fault_tier_refused_does_not_run_compensation() -> None:
     """FAR-592 (D6): the Local-tier refusal is in the control-flow set — a
     compensation edge must NOT absorb a deterministic refusal (the run must
     terminal-fail with ``sandbox.tier_refused``, never continue)."""
-    from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+    from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
     async def run() -> None:
         wrapped, comp_calls = _wrap_with_compensation(SandboxTierRefusedError("tier refused"))
@@ -100,8 +100,8 @@ def test_tier_refused_is_never_retryable_inline() -> None:
     """FAR-592 (D6): the never-retryable set shows the typed refusal (the
     inline node retry must NOT re-execute a node body that can only re-hit
     the same deterministic refusal)."""
-    from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
-    from modulo.core.pipeline_engine.runtime_retry import (
+    from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
+    from farna.core.pipeline_engine.runtime_retry import (
         _CONTROL_FLOW_NO_COMPENSATION_NAMES,
         _NEVER_RETRYABLE_NAMES,
         _is_control_flow_fault,
@@ -319,7 +319,7 @@ def _no_retry_policy() -> NodeRetryPolicy:
 
 
 def _ctx(**overrides: Any) -> Any:
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     base: dict[str, Any] = {
         "raw_fn": _async_noop,
@@ -342,7 +342,7 @@ async def _async_noop(_state: dict[str, Any]) -> dict[str, Any]:
 
 async def test_execute_edge_retry_source_none_when_source_unresolved() -> None:
     """A resolver that cannot resolve the source is a no-op (returns None)."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     ctx = _ctx(raw_fn_resolver=lambda _sid: None)
     result = await rr._execute_edge_retry_source(ctx, {"source_node_id": "src"}, {})
@@ -351,7 +351,7 @@ async def test_execute_edge_retry_source_none_when_source_unresolved() -> None:
 
 async def test_execute_edge_retry_source_none_without_resolver() -> None:
     """A wrapper with no resolver cannot re-execute a source at all."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     result = await rr._execute_edge_retry_source(_ctx(), {"source_node_id": "src"}, {})
     assert result is None
@@ -359,7 +359,7 @@ async def test_execute_edge_retry_source_none_without_resolver() -> None:
 
 async def test_execute_edge_retry_source_passes_merged_state_to_target() -> None:
     """The source output (coerced to a dict) is merged into the target's state."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     seen: dict[str, Any] = {}
 
@@ -380,7 +380,7 @@ async def test_execute_edge_retry_source_passes_merged_state_to_target() -> None
 
 async def test_execute_edge_retry_source_reraises_cancellation() -> None:
     """A CancelledError from the source re-execution propagates unchanged."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     async def _cancelled(_state: dict[str, Any]) -> dict[str, Any]:
         raise asyncio.CancelledError
@@ -392,7 +392,7 @@ async def test_execute_edge_retry_source_reraises_cancellation() -> None:
 
 async def test_execute_edge_retry_source_breaks_on_non_retryable_failure() -> None:
     """A non-retryable source failure exhausts the edge budget without retrying."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     calls: list[int] = []
 
@@ -410,7 +410,7 @@ async def test_execute_edge_retry_source_breaks_on_non_retryable_failure() -> No
 
 
 async def test_edge_retry_skips_fail_closed_source(monkeypatch) -> None:
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     monkeypatch.setattr(rr.rc, "edge_retry_reattempts_source", lambda _edge: True)
     monkeypatch.setattr(rr, "_source_fail_closed", lambda _edge, _node_defs: True)
@@ -419,7 +419,7 @@ async def test_edge_retry_skips_fail_closed_source(monkeypatch) -> None:
 
 
 async def test_edge_retry_skips_without_resolver(monkeypatch) -> None:
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     monkeypatch.setattr(rr.rc, "edge_retry_reattempts_source", lambda _edge: True)
     monkeypatch.setattr(rr, "_source_fail_closed", lambda _edge, _node_defs: False)
@@ -428,7 +428,7 @@ async def test_edge_retry_skips_without_resolver(monkeypatch) -> None:
 
 
 async def test_handle_compensation_false_when_target_unresolved(monkeypatch) -> None:
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     monkeypatch.setattr(rr, "resolve_compensation_target", lambda _node_id, _edges: "comp")
     ctx = _ctx(raw_fn_resolver=lambda _sid: None, outgoing_edges=[{"on_failure_target": "comp"}])
@@ -436,7 +436,7 @@ async def test_handle_compensation_false_when_target_unresolved(monkeypatch) -> 
 
 
 async def test_handle_compensation_reraises_cancellation(monkeypatch) -> None:
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     async def _cancelled(_state: dict[str, Any]) -> dict[str, Any]:
         raise asyncio.CancelledError
@@ -449,7 +449,7 @@ async def test_handle_compensation_reraises_cancellation(monkeypatch) -> None:
 
 async def test_handle_compensation_reraises_never_retryable(monkeypatch) -> None:
     """A never-retryable compensation failure is re-raised, not wrapped."""
-    from modulo.core.pipeline_engine import runtime_retry as rr
+    from farna.core.pipeline_engine import runtime_retry as rr
 
     async def _never_retryable(_state: dict[str, Any]) -> dict[str, Any]:
         raise RunCancelledError("cancelled")

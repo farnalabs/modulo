@@ -13,8 +13,8 @@ from functools import partial
 
 import pytest
 
-from modulo.util import callable_label, is_valid_http_url, sanitise_log_value
-from modulo.util.uuid import coerce_uuid
+from farna.util import callable_label, is_valid_http_url, sanitise_log_value
+from farna.util.uuid import coerce_uuid
 
 
 class TestSanitiseLogValue:
@@ -115,13 +115,13 @@ class TestBackwardCompatShim:
     """The deprecated ``modulo.utils`` package must keep re-exporting ``coerce_uuid``."""
 
     def test_utils_package_re_exports_coerce_uuid(self) -> None:
-        from modulo.utils import coerce_uuid as shim_pkg
+        from farna.utils import coerce_uuid as shim_pkg
 
         assert shim_pkg is coerce_uuid
         assert shim_pkg("12345678-1234-5678-1234-567812345678") == uuid.UUID("12345678-1234-5678-1234-567812345678")
 
     def test_utils_uuid_module_re_exports_coerce_uuid(self) -> None:
-        from modulo.utils.uuid import coerce_uuid as shim_mod
+        from farna.utils.uuid import coerce_uuid as shim_mod
 
         assert shim_mod is coerce_uuid
         assert shim_mod(None) is None

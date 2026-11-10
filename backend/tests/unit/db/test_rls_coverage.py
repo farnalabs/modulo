@@ -26,7 +26,7 @@ import importlib.util
 import re
 from pathlib import Path
 
-from modulo.db.models import Base
+from farna.db.models import Base
 
 # The root tenant entity is intentionally never row-level-secured: it is read
 # before an org context is established.
@@ -42,7 +42,7 @@ from modulo.db.models import Base
 # exclusion: a table that is intentionally read/written pre-org-context.
 _EXCLUDED_TABLES = frozenset({"organisations", "invitations"})
 
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _RLS_ENABLE_MARKER = "ENABLE ROW LEVEL SECURITY"
 

@@ -30,10 +30,10 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.db.models.account import Account
+from farna.db.models.account import Account
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0315_service_accounts_lifecycle"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0314_external_agents_mcp_servers"

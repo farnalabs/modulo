@@ -22,8 +22,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from openai import APIConnectionError, AuthenticationError, InternalServerError
 
-from modulo.model_backends.opencode import OpenCodeBackend, ProviderUnavailableError
-from modulo.version import get_version
+from farna.model_backends.opencode import OpenCodeBackend, ProviderUnavailableError
+from farna.version import get_version
 
 _CHAT_URL = "https://opencode.ai/zen/go/v1/chat/completions"
 
@@ -34,7 +34,7 @@ def _request() -> httpx.Request:
 
 @pytest.fixture
 def backend():
-    with patch("modulo.model_backends.module.ChatOpenAI"):
+    with patch("farna.model_backends.module.ChatOpenAI"):
         return OpenCodeBackend(api_key="sk-test", model_id="opencode-go/deepseek-v4-flash")
 
 
@@ -52,7 +52,7 @@ def test_backend_id(backend):
 
 
 def test_constructor_uses_zen_gateway_base_url():
-    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+    with patch("farna.model_backends.module.ChatOpenAI") as mock_chat:
         OpenCodeBackend(api_key="sk-test", model_id="opencode-go/deepseek-v4-flash")
     mock_chat.assert_called_once_with(
         model="opencode-go/deepseek-v4-flash",
@@ -64,7 +64,7 @@ def test_constructor_uses_zen_gateway_base_url():
 
 
 def test_constructor_api_key_placeholder_uses_provider_name():
-    with patch("modulo.model_backends.module.ChatOpenAI") as mock:
+    with patch("farna.model_backends.module.ChatOpenAI") as mock:
         OpenCodeBackend(api_key=None, model_id="opencode-go/deepseek-v4-flash")
     assert mock.call_args[1]["api_key"] == "opencode"
 
@@ -270,7 +270,7 @@ async def test_non_opencode_provider_no_session_header():
 
 def test_opencode_session_id_is_uuid():
     """FAR-1139: session ID is a valid UUID generated per backend instance."""
-    with patch("modulo.model_backends.module.ChatOpenAI"):
+    with patch("farna.model_backends.module.ChatOpenAI"):
         b1 = OpenCodeBackend(api_key="sk-test", model_id="glm-5.3-flash")
         b2 = OpenCodeBackend(api_key="sk-test", model_id="glm-5.3-flash")
 
@@ -284,7 +284,7 @@ def test_opencode_session_id_is_uuid():
 
 def test_opencode_backend_default_headers_include_both():
     """FAR-1139: the default_headers dict sent to ChatOpenAI has both keys."""
-    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+    with patch("farna.model_backends.module.ChatOpenAI") as mock_chat:
         OpenCodeBackend(api_key="sk-test", model_id="glm-5.3-flash")
     headers = mock_chat.call_args[1]["default_headers"]
     assert "x-opencode-session" in headers
@@ -321,7 +321,7 @@ async def test_headers_reach_wire_through_real_backend():
     recording_client = httpx.AsyncClient(transport=transport)
 
     with patch(
-        "modulo.model_backends.module.pinned_async_client_sync",
+        "farna.model_backends.module.pinned_async_client_sync",
         return_value=recording_client,
     ):
         backend = OpenCodeBackend(
@@ -353,7 +353,7 @@ async def test_session_id_stable_across_real_backend_calls():
     recording_client = httpx.AsyncClient(transport=transport)
 
     with patch(
-        "modulo.model_backends.module.pinned_async_client_sync",
+        "farna.model_backends.module.pinned_async_client_sync",
         return_value=recording_client,
     ):
         backend = OpenCodeBackend(

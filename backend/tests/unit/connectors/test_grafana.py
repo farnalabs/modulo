@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.grafana import GrafanaConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.grafana import GrafanaConnector
 
 TOKEN = "glc_test_token"
 _BASE = "http://localhost:3000"

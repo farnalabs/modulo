@@ -13,7 +13,7 @@ from contextlib import ExitStack
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _SANDBOX_LOG_PATH,
     make_sandbox_agent_fn,
 )
@@ -83,11 +83,11 @@ def _bridge_patches(stack: ExitStack, sandbox: MagicMock, server: MagicMock) -> 
     stack.enter_context(patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)))
     stack.enter_context(
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=AsyncMock(return_value=[MagicMock()]),
         )
     )
-    stack.enter_context(patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server))
+    stack.enter_context(patch("farna.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server))
 
 
 async def test_bridge_handoff_command_file_writes_single_line_command():
@@ -145,7 +145,7 @@ async def test_bridge_cmd_file_write_failure_falls_back_to_plain_command(caplog)
     server = _bridge_server_mock()
     with ExitStack() as stack:
         _bridge_patches(stack, sandbox, server)
-        stack.enter_context(caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"))
+        stack.enter_context(caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"))
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
     assert any("loop_intercept_setup_failed" in m for m in caplog.messages)

@@ -1,0 +1,972 @@
+"""Runtime provider abstraction for agent execution environments.
+
+Supports creating ephemeral or persistent workspaces (containers, VMs,
+sandboxed processes) and executing commands within them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import importlib
+import logging
+import os
+import posixpath
+import shlex
+import uuid
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from farna.util import WorkspaceNetworkValidationError, validate_workspace_network
+
+_log = logging.getLogger(__name__)
+
+# Re-export for callers that import from this module.
+__all__ = [
+    "ArtifactTooLargeError",
+    "BackendUnreachableError",
+    "ExecProcess",
+    "ExecResult",
+    "ExecStreamChunk",
+    "IsolationPolicy",
+    "ProviderCapabilityUnsupportedError",
+    "ProviderNotConfiguredError",
+    "ProvisionTimeoutError",
+    "RateLimitedError",
+    "RuntimeProvider",
+    "RuntimeProviderError",
+    "SdkMissingError",
+    "StreamingUnsupportedError",
+    "UnknownProviderTypeError",
+    "UnknownRefError",
+    "WorkspaceFileInfo",
+    "WorkspaceGoneError",
+    "WorkspaceListEntry",
+    "WorkspaceMetrics",
+    "WorkspaceNetworkValidationError",
+    "WorkspaceSpec",
+    "build_hub",
+    "create_default_hub",
+    "egress_tier_for_provider_type",
+    "env_var_for_provider_type",
+    "validate_workspace_network",
+]
+
+if TYPE_CHECKING:
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
+
+
+class ProviderNotConfiguredError(RuntimeError):
+    """A profile's ``provider_type`` is known but has no registered runtime provider.
+
+    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
+    ``provider_type`` is a valid vocabulary member but the matching provider
+    is not registered because its enabling environment variable is unset.
+    Carries the env var that would register the provider, so callers can
+    surface remediation copy instead of a silent fallback.
+    """
+
+    def __init__(self, provider_type: str, env_var: str | None = None) -> None:
+        self.provider_type = provider_type
+        self.env_var = env_var
+        if env_var and env_var in _DOCKER_ENV_VARS:
+            message = (
+                f"No runtime provider registered for provider_type '{provider_type}'. "
+                "Set MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, "
+                "or choose a different provider type for the profile."
+            )
+        elif env_var:
+            message = (
+                f"No runtime provider registered for provider_type '{provider_type}'. "
+                f"Set the {env_var} environment variable (and restart) to enable it, "
+                f"or choose a different provider type for the profile."
+            )
+        else:
+            message = f"No runtime provider registered for provider_type '{provider_type}'."
+        super().__init__(message)
+
+
+class UnknownProviderTypeError(ProviderNotConfiguredError):
+    """A profile's ``provider_type`` is not in the known provider vocabulary.
+
+    Subclasses :class:`ProviderNotConfiguredError` so that every existing
+    ``except ProviderNotConfiguredError`` handler automatically catches
+    unknown-type errors too — the two failure modes (unknown type vs. known
+    but unregistered) share the same remediation surface (update the profile).
+
+    Raised by :meth:`RuntimeProviderHub.resolve` when the profile's explicit
+    ``provider_type`` does not match any value in the ``PROVIDER_TYPES``
+    vocabulary.  This is distinct from a plain
+    :class:`ProviderNotConfiguredError` (a known type whose registration env
+    var is unset) in carrying the ``valid_types`` vocabulary for actionable
+    remediation copy.
+    """
+
+    def __init__(self, provider_type: str, valid_types: frozenset[str]) -> None:
+        self.valid_types = valid_types
+        sorted_types = ", ".join(sorted(valid_types))
+        message = (
+            f"Unknown provider_type '{provider_type}'. "
+            f"Valid types are: {sorted_types}. "
+            "Update the environment profile to use a valid provider type."
+        )
+        # Initialise parent to set self.provider_type and self.env_var,
+        # then override the message with the more specific unknown-type copy.
+        super().__init__(provider_type, env_var=None)
+        self.args = (message,)
+
+
+# ---------------------------------------------------------------------------
+# RuntimeProviderError family (ADR 040 "Error family") — NEW members only
+# ---------------------------------------------------------------------------
+#
+# DELIBERATE DUAL HIERARCHY: the pre-existing ProviderNotConfiguredError /
+# UnknownProviderTypeError tree above is intentionally NOT re-parented under
+# RuntimeProviderError. Unifying them would change the control flow of every
+# existing ``except ProviderNotConfiguredError`` handler (they would start
+# catching runtime-failure members they were never meant to catch), so ADR 040
+# records the unification as a separate, GA-gated ticket. Until that gate
+# closes, new-family members are admitted ONLY under RuntimeProviderError —
+# they are siblings of the configuration-error tree, not subclasses. Handlers
+# catching ProviderNotConfiguredError will NOT catch these, and vice versa;
+# each call site was reconciled explicitly when this family landed
+# (FAR-1050 slice 1).
+
+
+class RuntimeProviderError(RuntimeError):
+    """Base class for NEW runtime-provider failure members (ADR 040).
+
+    Raised for mechanism/runtime failures during provider operations
+    (capability refusals, workspace-gone, streaming-unsupported, artefact
+    limits, rate limits, missing SDK, provision timeouts, unknown refs,
+    unreachable backends). Configuration-resolution failures keep their own
+    separate hierarchy (:class:`ProviderNotConfiguredError` and its subclass
+    :class:`UnknownProviderTypeError`) — see the dual-hierarchy note above.
+    """
+
+
+class ProviderCapabilityUnsupportedError(RuntimeProviderError):
+    """The provider cannot enforce a requested control (ADR 040 isolation).
+
+    Terminal, named-code refusal — e.g. a node-level egress-allowlist /
+    read-only-seal / git-credential-scoping request on a tier that cannot
+    express it. Never a silent downgrade.
+    """
+
+
+class WorkspaceGoneError(RuntimeProviderError):
+    """The workspace/ref no longer exists on the substrate.
+
+    Distinct from an unknown-ref at lookup time: the workspace was tracked
+    and is now gone (destroyed, reclaimed, or expired out from under the
+    caller).
+    """
+
+
+class StreamingUnsupportedError(RuntimeProviderError):
+    """The provider does not implement ``exec_command_stream`` (ADR 040).
+
+    Raised by the ABC's default implementation and by any dispatch that
+    *requires* streaming against a non-overriding provider. The buffered
+    collect-then-return route (:meth:`RuntimeProvider.exec_command`) remains
+    available to callers that can use it.
+    """
+
+
+class ArtifactTooLargeError(RuntimeProviderError):
+    """An artefact exceeds the provider or retention size limit."""
+
+
+class RateLimitedError(RuntimeProviderError):
+    """The substrate rate-limited or quota-capped the request."""
+
+
+class SdkMissingError(RuntimeProviderError):
+    """The provider's backing SDK is not installed in this environment."""
+
+
+class ProvisionTimeoutError(RuntimeProviderError):
+    """Workspace provisioning exceeded its timeout without becoming ready."""
+
+
+class UnknownRefError(RuntimeProviderError):
+    """The supplied workspace ref is not recognised by the provider."""
+
+
+class BackendUnreachableError(RuntimeProviderError):
+    """The provider's backend/endpoint could not be reached."""
+
+
+# ---------------------------------------------------------------------------
+# Provider-registration environment signals (single source of truth, FAR-587)
+# ---------------------------------------------------------------------------
+#
+# Every documented signal lives here once; ``build_hub``'s registration gates
+# and :func:`env_var_for_provider_type` (the remediation-copy mapping) both
+# derive from these constants so the documented behaviour and the implemented
+# behaviour can never drift apart.
+
+_DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
+_E2B_ENV_VAR = "MODULO_E2B_API_KEY"
+_KUBERNETES_ENV_VAR = "MODULO_KUBERNETES_ENABLED"
+
+# Falsy spellings that deliberately DO NOT register the provider — any other
+# non-empty value does (presence-style opt-in, consistent with the docker
+# signals; the explicit negatives keep ``MODULO_KUBERNETES_ENABLED=false``
+# from opting an operator in by accident).
+_ENV_FLAG_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+# Per-command bound for the exec-based file-I/O default bodies (FAR-1050
+# R2a) — mirrors the bundled-runner file helpers' 30s exec bound.
+_FILE_IO_CMD_TIMEOUT = 30
+
+# Documented unconfigured behaviour (ADR 029 / FAR-587): every
+# ``ck_env_profiles_provider_type`` CHECK value maps either to a provider that
+# is always registered ("local") or to the env var whose presence registers
+# the provider (docker-family types: _DOCKER_ENV_VARS; e2b: _E2B_ENV_VAR;
+# kubernetes: _KUBERNETES_ENV_VAR).
+# Assertion tests pin this mapping against the model's CHECK.
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "e2b": _E2B_ENV_VAR,
+    "runner_docker": _DOCKER_ENV_VARS[0],
+    "docker": _DOCKER_ENV_VARS[0],
+    "local_docker": _DOCKER_ENV_VARS[0],
+    "kubernetes": _KUBERNETES_ENV_VAR,
+}
+
+
+def env_var_for_provider_type(provider_type: str) -> str | None:
+    """Return the env var that registers ``provider_type``, if one is documented."""
+    return _PROVIDER_ENV_VARS.get(provider_type.strip().lower())
+
+
+# Provider class -> canonical egress-tier sources (FAR-1065 / FAR-1085,
+# FAR-1051). The tier a profile dispatches on is read from the runtime-provider
+# classes THEMSELVES (provider_id + provider_aliases) rather than restated here,
+# so a new provider alias cannot drift from the egress tier it maps to — the
+# same single-source rule ``_PROVIDER_ENV_VARS`` applies to remediation copy.
+_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("farna.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
+    ("farna.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
+    ("farna.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+    # FAR-1051: without this entry a ``kubernetes`` (or its ``k8s`` alias)
+    # profile falls through to the raw provider_type as the tier, so the alias
+    # reads as an unknown tier and a supported profile refuses.
+    ("farna.core.runtime_provider.k8s", "KubernetesRuntimeProvider", "kubernetes"),
+)
+
+
+def egress_tier_for_provider_type(provider_type: str) -> str | None:
+    """Return the canonical egress tier for a profile ``provider_type``.
+
+    Single source of truth for the provider_type -> tier mapping (the
+    ``_TIER_ENFORCEMENT`` key a dispatch's egress resolution must run under).
+    An optional provider dependency that cannot be imported is SKIPPED, never
+    fatal: a profile bound to that provider cannot have resolved either, and a
+    later dispatch surfaces the typed config error. Returns ``None`` for an
+    unrecognised provider type; callers fail closed by passing the raw value
+    through as the tier, which :func:`modulo.core.pipeline_engine.egress.resolve_egress`
+    refuses as an unknown tier rather than silently defaulting to an
+    enforceable one.
+    """
+    normalized = (provider_type or "").strip().lower()
+    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
+        try:
+            provider_cls = getattr(importlib.import_module(module_name), class_name)
+        except ImportError:
+            # Optional provider dependency not installed — skip; the provider
+            # cannot have been resolved for this profile anyway.
+            continue
+        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
+            return tier
+    return None
+
+
+def _env_flag_enabled(env_var: str) -> bool:
+    """Return whether an operator opt-in flag env var is set to an enabling value."""
+    value = (os.environ.get(env_var) or "").strip().lower()
+    return bool(value) and value not in _ENV_FLAG_OFF_VALUES
+
+
+@dataclass
+class WorkspaceSpec:
+    """Parameters for creating a new workspace from an EnvironmentProfile.
+
+    Field semantics are provider-specific (FAR-595 contract, pinned on the
+    :class:`RuntimeProvider` ABC):
+
+    - ``labels``: environment-variable injection — Docker and Kubernetes map
+      it to the container Env. E2B and Local ignore it (they have no
+      env-injection carrier at provision time).
+    - ``workspace_metadata``: provider-neutral metadata carrier — Docker
+      maps it to container Labels, Kubernetes to pod annotations (raw) plus
+      sanitised pod labels, E2B to sandbox metadata, Local ignores it.
+    - ``repo_url`` / ``repo_ref``: first-class clone inputs (FAR-595) —
+      E2B clones into ``/home/user/repo`` and optionally checks out
+      ``repo_ref``; Local clones into the workspace directory (``repo_ref``
+      is not honoured on this tier); Docker and Kubernetes ignore both (the
+      bundled runner image handles code sync). Deliberately NOT carried in
+      ``labels`` — a consumer setting labels for env-injection on an
+      E2B/Local profile must never silently trigger a clone.
+    """
+
+    environment_profile_id: uuid.UUID
+    organisation_id: uuid.UUID
+    run_id: uuid.UUID | None = None
+    image_ref: str = ""
+    capabilities: list[str] = field(default_factory=list)
+    timeout_seconds: int = 3600
+    resource_limits: dict[str, Any] = field(default_factory=dict)
+    egress_policy: str | None = None
+    persistence_policy: str = "ephemeral"
+    labels: dict[str, str] = field(default_factory=dict)
+    # Provider-neutral metadata attached to the workspace itself (Docker maps
+    # it to container Labels, E2B to sandbox metadata, Local ignores it).
+    # Deliberately separate from ``labels`` (Docker env-var injection) and
+    # from ``repo_url``/``repo_ref`` (clone semantics).
+    workspace_metadata: dict[str, str] = field(default_factory=dict)
+    # Dedicated workspace network name (D4): the Docker provider attaches the
+    # container to THIS bridge network (never the compose/backend network).
+    # None -> provider default. The `none` opt-in is expressed via
+    # ``egress_policy == "none"``.
+    workspace_network: str | None = None
+    # First-class repo-clone inputs (FAR-595). Previously smuggled through
+    # ``labels["repo_url"]``/``labels["repo_ref"]``, which collided with
+    # Docker's labels-as-Env semantics. See the class docstring for the
+    # per-provider semantics.
+    repo_url: str = ""
+    repo_ref: str = ""
+    # FAR-1036: root-user opt-in.  When True the Docker provider skips the
+    # non-root user stamp (uid 1001) — for images that genuinely cannot run
+    # as an arbitrary uid.  The default is False (non-root), so every
+    # workspace runs as a non-root uid unless the profile explicitly opts
+    # in to root.  Used only by the Docker and Kubernetes providers; E2B/Local ignore it.
+    allow_root_user: bool = False
+
+
+@dataclass(frozen=True)
+class IsolationPolicy:
+    """The named in-sandbox isolation controls (ADR 040) + the guard flag.
+
+    Carrier for :meth:`RuntimeProvider.apply_isolation` — the single owner
+    of in-sandbox enforcement among the three named controls:
+
+    1. git-credential scoping (``scoped`` / ``none``, single- and multi-host),
+    2. the selected-mode egress allowlist,
+    3. the read-only seal.
+
+    ``single_pr_per_run`` (FAR-1273) is the explicit trigger for the FAR-1264
+    one-PR-per-run ``gh`` guard: it rides THIS typed carrier from node_runner's
+    policy call site to the provider's ``apply_isolation`` (the single carrier
+    — never a ``workspace_metadata`` key), and gates the guard install inside
+    ``apply_sandbox_policy``. It defaults to ``False``, so a policy built
+    without it installs no guard.
+
+    Field semantics mirror the legacy engine-side
+    ``sandbox_policy.apply_sandbox_policy`` keyword arguments exactly (the
+    FAR-1050 R3 parity requirement): ``egress_allowlist`` entries may carry
+    a pre-resolved ``_resolved_ip`` key; ``allowed_hosts`` threads the
+    node's validated multi-host mapping (host -> env-var name) for
+    ``scoped`` credentials; ``command_timeout`` bounds each in-sandbox
+    step.
+
+    ``guard_owner`` (FAR-1315) is the identity of the NODE claiming the
+    run's one-PR guard slot (the node id). It rides this carrier alongside
+    ``single_pr_per_run`` so ``sandbox_policy``'s run ledger can tell
+    "the same node re-claiming its own slot" (allowed - node retries) from
+    "a different node of the same run" (denied - installed as a
+    pre-planted refusal). Optional and default ``None``, so every policy
+    built without it behaves exactly as before (unowned claim).
+    """
+
+    read_only: bool = False
+    git_credentials: str | None = None
+    egress_policy: str | None = None
+    egress_allowlist: list[dict[str, Any]] | None = None
+    allowed_hosts: dict[str, str] | None = None
+    command_timeout: float = 60.0
+    single_pr_per_run: bool = False
+    guard_owner: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceFileInfo:
+    """Filesystem metadata for a workspace path (FAR-1050 R2a).
+
+    Carrier for :meth:`RuntimeProvider.get_info`: the provider-neutral
+    minimum every tier can report — the path as addressed, the byte size
+    (for directories the entry's own size, as reported by the substrate),
+    and whether the path is a directory.
+    """
+
+    path: str
+    size: int
+    is_dir: bool
+
+
+@dataclass(frozen=True)
+class WorkspaceMetrics:
+    """Provider-neutral resource-usage sample for a workspace (FAR-1050 R6).
+
+    Carrier for :meth:`RuntimeProvider.get_metrics` — the observable
+    metrics the platform-side resource-cap killer compares against a
+    node's ``resource_limits``:
+
+    - ``cpu_used_pct``: CPU usage as a 0-100 PERCENTAGE (never a core
+      count - a core count is not a threshold);
+    - ``mem_used`` / ``mem_total``: memory in BYTES;
+    - ``disk_used`` / ``disk_total``: disk in BYTES;
+    - ``cpu_count``: core count, INFORMATIONAL ONLY — never enforced as a
+      percentage (the historical core-count-vs-percentage trap).
+
+    Every field is ``None`` when the substrate does not report it. A cap
+    whose metric is ``None`` is simply unobservable on that sample: the
+    resource-cap killer skips that cap (fail open for the measurement,
+    never a crash and never a kill on a missing number).
+    """
+
+    cpu_used_pct: float | None = None
+    cpu_count: int | None = None
+    mem_used: float | None = None
+    mem_total: float | None = None
+    disk_used: float | None = None
+    disk_total: float | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceListEntry:
+    """One identity-scoped workspace entry (FAR-1275).
+
+    Carrier for :meth:`RuntimeProvider.list_workspaces_by_identity`:
+
+    - ``provider_ref``: the ref :meth:`RuntimeProvider.destroy_workspace_by_ref`
+      addresses for reclamation;
+    - ``run_id``: the run attribution the orphan sweep cross-references
+      against active runs — ``""`` when the workspace carries no run
+      attribution, in which case the CALLER decides whether an
+      unattributed workspace is a destroy candidate (the sweep skips it,
+      exactly as on Docker/Kubernetes);
+    - ``created_age_s``: seconds since the provider's creation marker —
+      ``0.0`` when the substrate reports none, which the sweep reads as
+      "cannot establish a grace age" and therefore never destroys.
+    """
+
+    provider_ref: str
+    run_id: str = ""
+    created_age_s: float = 0.0
+
+
+@dataclass
+class ExecResult:
+    """Result of executing a command in a workspace."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class ExecStreamChunk:
+    """One decoded output chunk from a streaming exec (D4 primitive)."""
+
+    stream: str  # "stdout" | "stderr"
+    data: str
+
+
+class ExecProcess:
+    """Streaming-exec handle (FAR-590 D4): async output chunks + a kill handle.
+
+    The provider yields decoded chunks as :class:`ExecStreamChunk` values via
+    ``chunks`` — the caller (script-mode dispatch) consumes them for live-log
+    streaming and stall detection exactly as E2B's background command stream.
+    An engine/proxy drop mid-stream is delivered as a stream ERROR (via
+    ``error``, never a fabricated ``exit_code == 0``).
+
+    Lifecycle contract:
+      - ``done`` events fire when the stream ended (normally or by error);
+      - ``exit_code`` stays ``None`` until the END of a healthy stream — a
+        consumer that finishes on a stream ERROR must treat the process as
+        failed, never as a success (no zero-exit fabrication);
+      - ``error`` carries the stream failure description (engine/proxy drop),
+        or stays None.
+    """
+
+    def __init__(self, chunks: AsyncIterator[ExecStreamChunk], kill: Callable[[], Awaitable[None]]) -> None:
+        self.chunks = chunks
+        self._kill = kill
+        self.done = asyncio.Event()
+        self.exit_code: int | None = None
+        self.error: str | None = None
+
+    async def kill(self) -> None:
+        """Terminate the exec stream + underlying command best-effort."""
+        await self._kill()
+
+
+def _file_io_failure(operation: str, path: str, result: ExecResult) -> RuntimeProviderError:
+    """Build the typed failure raised by the exec-based file-I/O defaults (FAR-1050 R2a)."""
+    detail = (result.stderr or result.stdout or "").strip()
+    return RuntimeProviderError(
+        f"Runtime provider {operation} failed for {path!r} "
+        f"(exit {result.exit_code})" + (f": {detail[:200]}" if detail else "")
+    )
+
+
+class RuntimeProvider(ABC):
+    """Abstract base for a runtime backend (Docker, K8s, sandbox, etc.)."""
+
+    provider_id = ""
+    provider_aliases: frozenset[str] = frozenset()
+
+    @abstractmethod
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:  # NOSONAR S7503 - async provider ABC contract
+        """Provision a new workspace and return its provider-specific reference.
+
+        WorkspaceSpec semantics every implementation must honour (FAR-595):
+
+        - ``spec.labels``: env-var injection only. Docker and Kubernetes map
+          it to the container Env; E2B and Local ignore it. Never read clone
+          inputs out of it — those are the first-class ``spec.repo_url`` /
+          ``spec.repo_ref`` fields.
+        - ``spec.workspace_metadata``: provider-neutral metadata. Docker ->
+          container Labels, Kubernetes -> pod annotations (raw) + sanitised
+          pod labels, E2B -> sandbox metadata, Local -> ignored.
+        - ``spec.repo_url`` / ``spec.repo_ref``: clone semantics. E2B clones
+          into ``/home/user/repo`` (+ optional checkout); Local clones into
+          the workspace directory; Docker and Kubernetes ignore both.
+        """
+        ...
+
+    @abstractmethod
+    async def exec_command(  # NOSONAR S7503 - async provider ABC contract
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        cmd_timeout: int | None = None,
+    ) -> ExecResult:
+        """Run a command inside an existing workspace (collect-then-return)."""
+        ...
+
+    async def exec_command_stream(  # NOSONAR S7503 - async provider ABC contract
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+    ) -> ExecProcess:
+        """Stream a command's output as async chunks with a kill handle (D4).
+
+        The streaming primitive alongside collect-then-return
+        :meth:`exec_command` so script-mode's live-log drain + stall/no-output
+        detection work on every provider exactly as on E2B. Optional
+        base-class method (ADR 040 "Streaming parity"): providers that do not
+        override it keep the collect-then-return contract, and the default
+        raises the typed :class:`StreamingUnsupportedError` — not a raw
+        ``NotImplementedError`` (ADR 040 "Error honesty": an explicit
+        carve-out from the contract freeze). A dispatch that *requires*
+        streaming fails terminally with this error.
+        """
+        raise StreamingUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement exec_command_stream"
+        )
+
+    @abstractmethod
+    async def destroy_workspace(self, provider_ref: str) -> None:  # NOSONAR S7503 - async provider ABC contract
+        """Tear down a workspace and release all associated resources."""
+        ...
+
+    async def destroy_workspace_by_ref(self, provider_ref: str) -> bool:  # NOSONAR S7503 - async provider ABC contract
+        """Destroy a workspace using only its provider reference (ADR 040).
+
+        Substrate-level destroy for reclamation paths: the caller supplies a
+        ref persisted elsewhere (e.g. ``runs.sandbox_id``), so this must work
+        after a process restart or from another process — it may never depend
+        on in-process tracking of live workspace handles.
+
+        Contract:
+          - **Idempotent**: destroying an already-destroyed or foreign ref is
+            a no-op success, not an error;
+          - returns ``True`` when the ref is confirmed gone (killed by this
+            call, or already gone) and ``False`` when the destroy could not
+            be confirmed — the failure is logged and swallowed
+            (best-effort), never raised;
+          - two-phase destroy-marker semantics (``destroy_intent`` /
+            ``confirmed``) are the CALLER's concern, not this primitive's —
+            they are delivered in a later slice (ADR 040 workspace-lifetime
+            clause);
+          - optional base-class method: providers that do not override it
+            raise the typed :class:`ProviderCapabilityUnsupportedError` —
+            never a raw ``NotImplementedError`` (ADR 040 "Error honesty",
+            the same carve-out as the :meth:`exec_command_stream` default).
+
+        ``destroy_workspace``'s existing contract is unchanged — the
+        never-tracked-but-live case is served by this primitive.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
+        )
+
+    async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:  # NOSONAR S7503
+        """Read the workspace log tail as raw bytes (ADR 040).
+
+        Valid from provisioning until substrate reclamation; where the
+        substrate retains post-kill logs, valid post-destroy for a bounded
+        retention window. ``max_bytes`` caps how much of the NEWEST end of
+        the log is returned; the bound is applied as a character slice on the
+        decoded tail text before re-encoding (matching the legacy probe), not
+        on the encoded byte length.
+
+        Optional base-class method: providers that do not override it
+        raise the typed :class:`ProviderCapabilityUnsupportedError` —
+        never a raw ``NotImplementedError`` (ADR 040 "Error honesty",
+        the same carve-out as the :meth:`exec_command_stream` and
+        :meth:`destroy_workspace_by_ref` defaults). Callers that need a
+        log tail on a non-overriding provider surface the refusal as a
+        terminal named failure; they must never fall back to a
+        provider-specific direct call.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
+        )
+
+    async def apply_isolation(  # NOSONAR S7503 - async provider ABC contract
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> str | None:
+        """Enforce the three named in-sandbox isolation controls (ADR 040).
+
+        ``apply_isolation`` is the single owner of in-sandbox enforcement
+        among the three named controls carried by *policy* (ADR 040
+        "Isolation enforcement"): git-credential scoping, the selected-mode
+        egress allowlist, and the read-only seal. ``provider_ref``
+        addresses the workspace — the same ref-first convention as
+        :meth:`read_log_tail` / :meth:`exec_command` (the ADR's
+        ``apply_isolation(spec, policy)`` shorthand names the two domain
+        arguments; the ref is the addressing primitive every workspace-
+        taking method carries) — and ``spec`` carries the workspace
+        attribution context.
+
+        FAR-1315 return contract (an additive widening of the ADR 040
+        ``-> None`` shape, not a redesign): implementations return the one-PR
+        guard's INSTALL STATUS (``installed``/``pre_planted``/``absent``/
+        ``failed``) when ``policy.single_pr_per_run`` armed the guard, else
+        ``None``. The dispatch ``finally`` threads it into
+        ``settle_run_pr_guard`` — only a LIVE install makes a definitive
+        ``receipt=False`` mean "confirmed no create" (an ``absent``/``failed``
+        install leaves the receipt meaningless, since the probe then runs
+        against a path no shim ever wrote). Providers that never install a
+        guard simply return ``None``.
+
+        Optional base-class method (ADR 040 "Error honesty": the same
+        carve-out from the contract freeze as :meth:`exec_command_stream`,
+        :meth:`destroy_workspace_by_ref` and :meth:`read_log_tail`):
+        providers that do not override it raise the typed
+        :class:`ProviderCapabilityUnsupportedError` — never a raw
+        ``NotImplementedError``. Callers surface that refusal as a
+        TERMINAL named-code run failure (a deterministic refusal must
+        never retry-loop); they must never silently downgrade to a
+        provider-specific direct call.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement apply_isolation"
+        )
+
+    # ------------------------------------------------------------------
+    # File-I/O primitives (FAR-1050 R2a)
+    # ------------------------------------------------------------------
+    #
+    # Exec-based defaults built on the exec_command primitive, so every
+    # provider gets them for free: bytes travel base64-encoded (binary-safe
+    # over the text exec channel), every path is shlex.quote'd into the shell
+    # snippet, and each call is bounded by _FILE_IO_CMD_TIMEOUT. Providers
+    # with a native files API (E2B) override these with the SDK call.
+
+    async def read_file(self, provider_ref: str, path: str) -> bytes:
+        """Read a workspace file as raw bytes (FAR-1050 R2a).
+
+        Exec-based default: the file is base64-encoded inside the workspace
+        (``base64 < path``) so arbitrary binary content survives the text
+        exec channel, then decoded here. A non-zero command exit — missing
+        file, unreadable path, provider exec failure — raises the typed
+        :class:`RuntimeProviderError` (never a silent empty read).
+
+        Providers with a native files API override this (E2B uses
+        ``sandbox.files.read``).
+        """
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", f"base64 < {shlex.quote(path)}"],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("read_file", path, result)
+        # Whitespace-tolerant decode: base64 wraps output at 76 columns.
+        return base64.b64decode("".join(result.stdout.split()))
+
+    async def write_file(self, provider_ref: str, path: str, data: bytes) -> None:
+        """Write *data* to a workspace file, creating parent directories (FAR-1050 R2a).
+
+        Exec-based default: the payload is base64-encoded and piped through
+        ``base64 -d`` into the target (same shape as the bundled-runner file
+        write), so arbitrary bytes are safe on the exec channel. Parent
+        directories are created first, mirroring E2B's native ``files.write``
+        behaviour. A non-zero command exit raises the typed
+        :class:`RuntimeProviderError`.
+
+        The payload rides on the command line, so this default suits
+        modest files; providers with a native files API override it for
+        large payloads (E2B uses ``sandbox.files.write``).
+        """
+        payload = base64.b64encode(data).decode("ascii")
+        parent = posixpath.dirname(path) or "."
+        script = (
+            f"mkdir -p {shlex.quote(parent)} && printf '%s' {shlex.quote(payload)} | base64 -d > {shlex.quote(path)}"
+        )
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", script],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("write_file", path, result)
+
+    async def list_files(self, provider_ref: str, path: str) -> list[str]:
+        """List the entries directly inside the directory *path* (FAR-1050 R2a).
+
+        Returns the full path of each immediate child (files and
+        directories, hidden entries included; ``.``/``..`` excluded),
+        sorted by path so the result is deterministic across providers.
+        ``path`` must be a directory; a non-zero command exit (missing
+        directory, permission denied) raises the typed
+        :class:`RuntimeProviderError`.
+
+        Exec-based default: ``ls -1A`` with the names joined back onto
+        *path*; E2B uses ``sandbox.files.list``.
+        """
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", f"ls -1A {shlex.quote(path)}"],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("list_files", path, result)
+        base = path.rstrip("/") or "/"
+        return sorted(
+            posixpath.join(base, name) for name in result.stdout.splitlines() if name and name not in {".", ".."}
+        )
+
+    async def get_info(self, provider_ref: str, path: str) -> WorkspaceFileInfo:
+        """Stat *path* and return its :class:`WorkspaceFileInfo` (FAR-1050 R2a).
+
+        ``is_dir`` is True only for directories (symlinks are reported as
+        their own type — the substrate's ``stat`` does not follow them);
+        ``size`` is the byte size the substrate reports (for directories,
+        the directory entry's own size). The returned ``path`` echoes the
+        *path* as addressed, so the contract is identical on every tier.
+
+        Exec-based default: ``stat -c '%F<TAB>%s'``; a non-zero command
+        exit (missing path) raises the typed :class:`RuntimeProviderError`.
+        E2B uses ``sandbox.files.get_info``.
+        """
+        script = f"stat -c {shlex.quote('%F\t%s')} {shlex.quote(path)}"
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", script],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("get_info", path, result)
+        kind, sep, size_text = result.stdout.strip().partition("\t")
+        if not sep:
+            raise RuntimeProviderError(f"get_info could not parse stat output for {path}: {result.stdout!r}")
+        try:
+            size = int(size_text.strip())
+        except ValueError as exc:
+            raise RuntimeProviderError(f"get_info could not parse stat size for {path}: {size_text!r}") from exc
+        return WorkspaceFileInfo(path=path, size=size, is_dir=kind.strip() == "directory")
+
+    # ------------------------------------------------------------------
+    # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
+    # ------------------------------------------------------------------
+
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:  # NOSONAR S7503
+        """Return resource-usage samples for *provider_ref* (FAR-1050 R6).
+
+        The poll the platform-side resource-cap killer drives: each sample
+        carries the observable caps (``cpu_used_pct`` percentage,
+        ``mem_used`` / ``disk_used`` bytes) that ``resource_limits``
+        compares against, newest-last so callers can take the latest
+        instantaneous reading. Empty list means "no samples yet" — a
+        measurement gap, never an error.
+
+        Optional base-class method (ADR 040 "Error honesty": the same
+        carve-out from the contract freeze as :meth:`exec_command_stream`,
+        :meth:`destroy_workspace_by_ref`, :meth:`read_log_tail` and
+        :meth:`apply_isolation`): providers that do not override it raise
+        the typed :class:`ProviderCapabilityUnsupportedError` — never a raw
+        ``NotImplementedError``.
+
+        Callers MUST treat that refusal as "metrics unavailable" and FAIL
+        OPEN: resource-cap enforcement is best-effort monitoring, so a
+        provider that cannot report metrics must never crash or kill a
+        run — it degrades to a single, explicit warning naming the gap
+        (the ``sandbox_agent.resource_caps_not_enforced_via_provider``
+        site in the watchdog). The ADR 040 freeze means "no contract
+        redesign", not "never add a primitive" — this primitive is the
+        additive close of the metrics gap the R4 dispatch recorded.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement get_metrics"
+        )
+
+    # ------------------------------------------------------------------
+    # Identity-scoped enumeration primitive (FAR-1275 — non-Docker orphan
+    # reclamation)
+    # ------------------------------------------------------------------
+
+    async def list_workspaces_by_identity(self, identity: str) -> list[WorkspaceListEntry]:  # NOSONAR S7503
+        """Enumerate THIS deployment's workspaces on the substrate (FAR-1275).
+
+        The listing primitive behind non-Docker orphan reclamation: the
+        caller supplies the deployment identity (``modulo.machine.id`` —
+        the same value ``MODULO_RUNNER_MACHINE_ID``/hostname stamps onto
+        every workspace the provider creates) and every returned entry is a
+        workspace this deployment provisioned. It is the enumeration
+        counterpart to :meth:`destroy_workspace_by_ref`: the reconciler
+        cross-references the returned ``run_id`` values against ACTIVE
+        runs, then destroys the orphans through the same by-ref primitive.
+
+        Contract:
+
+        - **Identity-scoped, fail-closed**: a workspace whose identity
+          marker does not EXACTLY match *identity* is never returned — two
+          Modulo deployments sharing one substrate (one E2B account, one
+          Docker engine, one namespace) must never see, and therefore never
+          destroy, each other's workspaces. A caller-supplied empty or
+          whitespace identity returns no entries at all rather than
+          enumerating unattributed workspaces;
+        - entries may carry ``run_id == ""`` (no run attribution) and
+          ``created_age_s == 0.0`` (no creation marker); the enumeration
+          does NOT apply the sweep's skip policy — the caller owns the
+          cross-reference and grace/max-lifetime rules;
+        - **listing failures PROPAGATE**: a configured-but-unreachable
+          substrate surfaces as a reported sweep failure
+          (``ReconcilerSweepError``), never a silent empty list (an empty
+          list means "no workspaces", never "could not list");
+        - optional base-class method (ADR 040 "Error honesty": the same
+          carve-out from the contract freeze as ``exec_command_stream``,
+          ``destroy_workspace_by_ref``, ``read_log_tail``,
+          ``apply_isolation`` and ``get_metrics``): providers that do not
+          override it raise the typed
+          :class:`ProviderCapabilityUnsupportedError` — never a raw
+          ``NotImplementedError``.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement list_workspaces_by_identity"
+        )
+
+    @abstractmethod
+    async def get_workspace_status(self, provider_ref: str) -> str:  # NOSONAR S7503 - async provider ABC contract
+        """Return the current status string for the workspace."""
+        ...
+
+    def matches_provider_type(self, provider_type: str) -> bool:
+        """Return whether this provider implements an explicit profile type."""
+        normalized = provider_type.strip().lower()
+        return bool(normalized) and normalized in {self.provider_id, *self.provider_aliases}
+
+    async def close(self) -> None:  # NOSONAR S7503 - async provider lifecycle contract
+        """Destroy provider-tracked live workspaces best-effort, then release owned clients.
+
+        Invoked by :meth:`RuntimeProviderHub.aclose` (hub-aclose disposal,
+        ADR 029). Implementations must not raise for individual workspace
+        failures; the hub is itself best-effort per provider and owns no
+        live state after this returns.
+        """
+        _log.debug("Runtime provider close has no base cleanup")
+
+
+def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
+    """Build a fresh RuntimeProviderHub from the process environment.
+
+    A new factory instance is returned on every call — the hub holds no
+    process-global state and provider-owned clients are released explicitly
+    via :meth:`RuntimeProviderHub.aclose` (per-provision disposal, ADR 029).
+
+    Registration matrix (env-gated, operator opt-in = consent):
+
+    - ``local`` — always registered (host-process fallback tier).
+    - ``e2b`` — registered when ``MODULO_E2B_API_KEY`` is set (env var or
+      runtime override — both resolved via ``key_bridge.get_e2b_api_key``,
+      the same bridge the node-runner enforcement check uses, FAR-1159).
+    - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
+      when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set.  An unrelated
+      ``MODULO_RUNNER_*`` variable does NOT register Docker (FAR-996).
+    - ``kubernetes`` (alias ``k8s``) — registered when
+      ``MODULO_KUBERNETES_ENABLED`` is set to an enabling value (any value
+      except ``0``/``false``/``no``/``off``); operator opt-in = consent
+      (FAR-1051). If the ``kubernetes-asyncio`` client SDK is missing, a
+      warning is logged and the provider stays unregistered — boot never
+      crashes.
+    """
+    if max_local_concurrency < 1:
+        _log.warning(
+            "max_local_concurrency=%d is invalid, falling back to 2",
+            max_local_concurrency,
+        )
+        max_local_concurrency = 2
+
+    from farna.core.runtime_config.key_bridge import get_e2b_api_key
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
+    from farna.core.runtime_provider.local import LocalRuntimeProvider
+
+    hub = RuntimeProviderHub()
+
+    local = LocalRuntimeProvider(max_concurrency=max_local_concurrency)
+    hub.register("local", local)
+
+    if get_e2b_api_key():
+        try:
+            from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+
+            e2b = E2BRuntimeProvider()
+            hub.register("e2b", e2b)
+        except ImportError:
+            _log.warning("E2B dependency not installed; skipping E2B provider")
+
+    if any(os.environ.get(var) for var in _DOCKER_ENV_VARS):
+        try:
+            from farna.core.runtime_provider.docker import DockerRuntimeProvider
+
+            docker = DockerRuntimeProvider()
+            hub.register("runner_docker", docker)
+        except ImportError:
+            _log.warning("Docker dependency not installed; skipping Docker provider")
+        except ValueError as exc:
+            # FAR-1038: TLS validation failure during provider registration
+            # is a configuration error — surface it as a warning (the provider
+            # stays unregistered; a dispatch attempt later raises
+            # ProviderNotConfiguredError with remediation).
+            _log.warning("Docker provider not registered (TLS required): %s", exc)
+
+    if _env_flag_enabled(_KUBERNETES_ENV_VAR):
+        try:
+            from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
+
+            kubernetes_provider = KubernetesRuntimeProvider()
+            hub.register("kubernetes", kubernetes_provider)
+        except ImportError:
+            _log.warning("Kubernetes dependency (kubernetes-asyncio) not installed; skipping Kubernetes provider")
+
+    return hub
+
+
+# Backwards-compatible alias — the factory concept is unchanged; new callers
+# should prefer :func:`build_hub`.
+create_default_hub = build_hub

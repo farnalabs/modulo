@@ -11,13 +11,13 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.models.problem import ProblemDetail
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.models.problem import ProblemDetail
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -228,15 +228,15 @@ class TestAuthEndpointSchemas:
         fake_membership.role = "admin"
 
         with (
-            patch("modulo.api.routes.auth.get_account_by_email", return_value=account),
-            patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-            patch("modulo.api.routes.auth.update_last_login"),
+            patch("farna.api.routes.auth.get_account_by_email", return_value=account),
+            patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+            patch("farna.api.routes.auth.update_last_login"),
             patch(
-                "modulo.api.routes.auth.list_memberships_for_account",
+                "farna.api.routes.auth.list_memberships_for_account",
                 return_value=[fake_membership],
             ),
             patch(
-                "modulo.api.routes.auth.create_family",
+                "farna.api.routes.auth.create_family",
                 return_value=MagicMock(family_id=uuid.uuid4()),
             ),
         ):
@@ -246,12 +246,12 @@ class TestAuthEndpointSchemas:
             )
 
         assert resp.status_code == 200
-        from modulo.api.routes.auth import LoginResponse
+        from farna.api.routes.auth import LoginResponse
 
         validate_shape(resp.json(), LoginResponse)
 
     def test_login_failure_schema(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.auth.get_account_by_email", return_value=None):
+        with patch("farna.api.routes.auth.get_account_by_email", return_value=None):
             resp = client.post(
                 "/api/v1/auth/login",
                 json={"email": "nobody", "password": "wrong"},
@@ -263,16 +263,16 @@ class TestAuthEndpointSchemas:
     def test_me_schema(self, client: TestClient) -> None:
         account = _make_mock_account()
         with (
-            patch("modulo.api.routes.auth.get_account_by_id", return_value=account),
+            patch("farna.api.routes.auth.get_account_by_id", return_value=account),
             patch(
-                "modulo.api.routes.auth.resolve_role_from_membership",
+                "farna.api.routes.auth.resolve_role_from_membership",
                 new=AsyncMock(return_value="admin"),
             ),
         ):
             resp = client.get("/api/v1/auth/me")
 
         assert resp.status_code == 200
-        from modulo.api.routes.auth import MeResponse
+        from farna.api.routes.auth import MeResponse
 
         validate_shape(resp.json(), MeResponse)
 
@@ -281,8 +281,8 @@ class TestAuthEndpointSchemas:
         # resolves the authz-enforce kill switch through the DI session. Provide a
         # session whose execute returns a scalar (enforce=True) plus a tenant
         # principal override so the test does not touch a real database.
-        from modulo.auth.dependencies import get_current_tenant_user
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.auth.dependencies import get_current_tenant_user
+        from farna.auth.jwt import TenantPrincipal
 
         mock_session = configure_mock_session(AsyncMock())
         begin_cm = MagicMock()
@@ -303,7 +303,7 @@ class TestAuthEndpointSchemas:
         with (
             patch("redis.asyncio.Redis.from_url") as mock_redis_factory,
             patch(
-                "modulo.api.routes.auth.resolve_role_from_membership",
+                "farna.api.routes.auth.resolve_role_from_membership",
                 new=AsyncMock(return_value="admin"),
             ),
         ):
@@ -313,7 +313,7 @@ class TestAuthEndpointSchemas:
             mock_redis_factory.return_value = mock_redis
             resp = client.post("/api/v1/auth/ws-token")
         assert resp.status_code == 200
-        from modulo.api.routes.auth import WsTokenResponse
+        from farna.api.routes.auth import WsTokenResponse
 
         validate_shape(resp.json(), WsTokenResponse)
 
@@ -333,14 +333,14 @@ class TestPipelineEndpointSchemas:
         page_result.next_cursor = None
 
         with (
-            patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipelines")
 
         assert resp.status_code == 200
-        from modulo.api.routes.pipelines import PipelineListResponse
+        from farna.api.routes.pipelines import PipelineListResponse
 
         validate_shape(resp.json(), PipelineListResponse)
 
@@ -348,14 +348,14 @@ class TestPipelineEndpointSchemas:
         pipeline = _make_mock_pipeline()
 
         with (
-            patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/pipelines", json={"name": "Test"})
 
         assert resp.status_code == 201
-        from modulo.api.routes.pipelines import PipelineResponse
+        from farna.api.routes.pipelines import PipelineResponse
 
         validate_shape(resp.json(), PipelineResponse)
 
@@ -363,22 +363,22 @@ class TestPipelineEndpointSchemas:
         pipeline = _make_mock_pipeline()
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline.id}")
 
         assert resp.status_code == 200
-        from modulo.api.routes.pipelines import PipelineResponse
+        from farna.api.routes.pipelines import PipelineResponse
 
         validate_shape(resp.json(), PipelineResponse)
 
     def test_get_pipeline_404_schema(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
@@ -389,23 +389,23 @@ class TestPipelineEndpointSchemas:
         pipeline = _make_mock_pipeline()
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/pipelines/{pipeline.id}", json={"name": "Updated"})
 
         assert resp.status_code == 200
-        from modulo.api.routes.pipelines import PipelineResponse
+        from farna.api.routes.pipelines import PipelineResponse
 
         validate_shape(resp.json(), PipelineResponse)
 
     def test_get_pipeline_graph_404_schema(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=None),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=None),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}/graph")
 
@@ -424,26 +424,26 @@ class TestApiKeyEndpointSchemas:
 
         with (
             patch(
-                "modulo.api.routes.api_keys.create_api_key",
+                "farna.api.routes.api_keys.create_api_key",
                 return_value=(key_mock, "mk_test_full_key"),
             ),
-            patch("modulo.api.routes.api_keys.set_rls_org"),
+            patch("farna.api.routes.api_keys.set_rls_org"),
             patch(
-                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                "farna.api.routes.api_keys.resolve_role_from_membership",
                 new=AsyncMock(return_value="admin"),
             ),
         ):
             resp = client.post("/api/v1/api-keys", json={"name": "Test Key"})
 
         assert resp.status_code == 201
-        from modulo.api.routes.api_keys import ApiKeyCreatedResponse
+        from farna.api.routes.api_keys import ApiKeyCreatedResponse
 
         validate_shape(resp.json(), ApiKeyCreatedResponse)
 
     def test_mcp_config_schema(self, client: TestClient) -> None:
         resp = client.get("/api/v1/api-keys/mcp-config")
         assert resp.status_code == 200
-        from modulo.api.routes.api_keys import McpConfigResponse
+        from farna.api.routes.api_keys import McpConfigResponse
 
         validate_shape(resp.json(), McpConfigResponse)
 
@@ -459,15 +459,15 @@ class TestApiKeyEndpointSchemas:
 
         with (
             patch(
-                "modulo.api.routes.api_keys.revoke_api_key",
+                "farna.api.routes.api_keys.revoke_api_key",
                 new=AsyncMock(return_value=revoked_key),
             ),
-            patch("modulo.api.routes.api_keys.set_rls_org"),
+            patch("farna.api.routes.api_keys.set_rls_org"),
         ):
             resp = client.delete(f"/api/v1/api-keys/{key_id}")
 
         assert resp.status_code == 200
-        from modulo.api.routes.api_keys import ApiKeyRevokeResponse
+        from farna.api.routes.api_keys import ApiKeyRevokeResponse
 
         validate_shape(resp.json(), ApiKeyRevokeResponse)
 
@@ -477,15 +477,15 @@ class TestPipelineSnapshotSchemas:
         pipeline_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_mock_pipeline(id=pipeline_id)),
-            patch("modulo.api.routes.pipelines.list_snapshots", new=AsyncMock(return_value=([], 0))),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=_make_mock_pipeline(id=pipeline_id)),
+            patch("farna.api.routes.pipelines.list_snapshots", new=AsyncMock(return_value=([], 0))),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline_id}/snapshots")
 
         assert resp.status_code == 200
-        from modulo.api.routes.pipelines import SnapshotListResponse
+        from farna.api.routes.pipelines import SnapshotListResponse
 
         validate_shape(resp.json(), SnapshotListResponse)
 
@@ -494,9 +494,9 @@ class TestPipelineSnapshotSchemas:
         snapshot_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail", new=AsyncMock(return_value=None)),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_snapshot_detail", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 
@@ -514,14 +514,14 @@ class TestConnectorEndpointSchemas:
         page.next_cursor = None
 
         with (
-            patch("modulo.api.routes.connectors.list_connector_instances", return_value=page),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.list_connector_instances", return_value=page),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/connectors")
 
         assert resp.status_code == 200
-        from modulo.api.routes.connectors import ConnectorListResponse
+        from farna.api.routes.connectors import ConnectorListResponse
 
         validate_shape(resp.json(), ConnectorListResponse)
 
@@ -546,10 +546,10 @@ class TestConnectorEndpointSchemas:
         connector.validation_level = None
 
         with (
-            patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
-            patch("modulo.api.routes.connectors._encrypt", return_value=b"encrypted"),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.create_connector_instance", return_value=connector),
+            patch("farna.api.routes.connectors._encrypt", return_value=b"encrypted"),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.post(
                 "/api/v1/connectors",
@@ -563,7 +563,7 @@ class TestConnectorEndpointSchemas:
             )
 
         assert resp.status_code == 201
-        from modulo.api.routes.connectors import ConnectorResponse
+        from farna.api.routes.connectors import ConnectorResponse
 
         validate_shape(resp.json(), ConnectorResponse)
 
@@ -577,13 +577,13 @@ class TestSchemaEndpointSchemas:
         page.page_size = 20
 
         with (
-            patch("modulo.api.routes.schemas.list_schemas", return_value=page),
-            patch("modulo.api.routes.schemas.set_rls_org"),
+            patch("farna.api.routes.schemas.list_schemas", return_value=page),
+            patch("farna.api.routes.schemas.set_rls_org"),
         ):
             resp = client.get("/api/v1/schemas")
 
         assert resp.status_code == 200
-        from modulo.api.routes.schemas import SchemaListResponse
+        from farna.api.routes.schemas import SchemaListResponse
 
         validate_shape(resp.json(), SchemaListResponse)
 
@@ -597,14 +597,14 @@ class TestModelBackendEndpointSchemas:
         page.page_size = 20
 
         with (
-            patch("modulo.api.routes.model_backends.list_model_backends", return_value=page),
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.list_model_backends", return_value=page),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/model-backends")
 
         assert resp.status_code == 200
-        from modulo.api.routes.model_backends import ModelBackendListResponse
+        from farna.api.routes.model_backends import ModelBackendListResponse
 
         validate_shape(resp.json(), ModelBackendListResponse)
 
@@ -617,9 +617,9 @@ class TestModelBackendEndpointSchemas:
 class TestErrorResponseShapes:
     def test_404_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
@@ -647,7 +647,7 @@ class TestErrorResponseShapes:
         original_override = app.dependency_overrides.get(get_current_user)
         app.dependency_overrides[get_current_user] = lambda: viewer
 
-        with patch("modulo.api.routes.admin.set_rls_org"):
+        with patch("farna.api.routes.admin.set_rls_org"):
             resp = client.get("/api/v1/admin/search?q=test")
 
         if original_override is not None:

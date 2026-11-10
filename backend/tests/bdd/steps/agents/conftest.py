@@ -16,7 +16,7 @@ from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double
 
 
 def make_settings():
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -41,11 +41,11 @@ def make_mock_session() -> AsyncMock:
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     mock_session = make_mock_session()
 

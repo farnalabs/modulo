@@ -19,12 +19,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud.team import TeamUpdateOutcome
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud.team import TeamUpdateOutcome
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -38,7 +38,7 @@ _SQL = SQLAlchemyError("boom")
 _INTEGRITY = IntegrityError("s", {}, Exception())
 _RUNTIME = RuntimeError("kaboom")
 
-_PREFIX = "modulo.api.routes.teams."
+_PREFIX = "farna.api.routes.teams."
 
 
 def _make_settings() -> Settings:
@@ -210,7 +210,7 @@ def test_create_team_audit_failure_does_not_block(client: tuple[TestClient, Asyn
     with (
         patch(f"{_PREFIX}get_team_by_name", new=AsyncMock(return_value=None)),
         patch(f"{_PREFIX}create_team", new=AsyncMock(return_value=team)),
-        patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
+        patch("farna.core.audit_logger.append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
     ):
         resp = http.post("/api/v1/teams", json={"name": "New Team"})
 
@@ -252,7 +252,7 @@ def test_update_team_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -
 
 
 async def test_apply_team_update_success_none_row_returns_404() -> None:
-    from modulo.api.routes.teams import _apply_team_update
+    from farna.api.routes.teams import _apply_team_update
 
     session = _make_session()
     with (
@@ -263,7 +263,7 @@ async def test_apply_team_update_success_none_row_returns_404() -> None:
 
 
 def test_update_team_request_accepts_explicit_none_name() -> None:
-    from modulo.api.routes.teams import UpdateTeamRequest
+    from farna.api.routes.teams import UpdateTeamRequest
 
     req = UpdateTeamRequest(name=None, description="d")
     assert req.name is None
@@ -435,7 +435,7 @@ def test_add_member_role_above_operator_caller_ceiling_returns_422() -> None:
     """A team-operator caller cannot grant a role above their own team role."""
     import asyncio
 
-    from modulo.api.routes.teams import _add_team_member_checked
+    from farna.api.routes.teams import _add_team_member_checked
 
     caller = TenantPrincipal(username="op@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator")
     runner_membership = MagicMock()
@@ -456,7 +456,7 @@ def test_change_role_above_operator_caller_ceiling_returns_422() -> None:
     """A team-operator caller cannot promote a member above their own role."""
     import asyncio
 
-    from modulo.api.routes.teams import _change_member_role_checked
+    from farna.api.routes.teams import _change_member_role_checked
 
     caller = TenantPrincipal(username="op@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator")
     runner_membership = MagicMock()

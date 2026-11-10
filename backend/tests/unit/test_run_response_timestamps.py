@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from modulo.api.routes.runs import (
+from farna.api.routes.runs import (
     _build_list_item,
     _build_run_response,
     _ListPageContext,
@@ -152,7 +152,7 @@ def test_run_response_known_fixes_empty_when_detail_absent() -> None:
 def test_run_response_known_fixes_empty_when_serialisation_fails() -> None:
     """Defensive contract: if serialising a matched fix raises, the run detail
     response still succeeds with an empty known_fixes list — never a 500."""
-    from modulo.api.routes import runs as runs_module
+    from farna.api.routes import runs as runs_module
 
     def _boom(_detail: object) -> object:
         raise RuntimeError("boom")

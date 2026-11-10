@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.events import event_bus as eb
-from modulo.core.events import relay as relay_mod
-from modulo.core.events.event_bus import LOCAL_PRODUCER_ID, EventBus
-from modulo.core.events.relay import EventRelay
+from farna.core.events import event_bus as eb
+from farna.core.events import relay as relay_mod
+from farna.core.events.event_bus import LOCAL_PRODUCER_ID, EventBus
+from farna.core.events.relay import EventRelay
 
 _ORG = "org-relay"
 
@@ -463,7 +463,7 @@ class _NoClosePubSub:
 def test_start_without_running_loop_is_fail_open(caplog: pytest.LogCaptureFixture) -> None:
     """start() reached without a loop logs and returns (fail-open)."""
     relay = EventRelay(broker=MagicMock(), bus=EventBus(), has_clients=lambda _o: True)
-    with caplog.at_level("WARNING", logger="modulo.core.events.relay"):
+    with caplog.at_level("WARNING", logger="farna.core.events.relay"):
         relay.start()
     assert relay._sweeper is None
     assert "event_relay.start_skipped_no_loop" in caplog.text
@@ -490,7 +490,7 @@ async def test_close_pubsub_none_is_noop() -> None:
 
 
 async def test_close_pubsub_unsubscribe_exception_swallowed(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("DEBUG", logger="modulo.core.events.relay"):
+    with caplog.at_level("DEBUG", logger="farna.core.events.relay"):
         await relay_mod._close_pubsub(_UnsubRaisesPubSub(RuntimeError("boom")))
     assert "event_relay.pubsub_unsubscribe_failed" in caplog.text
 
@@ -507,13 +507,13 @@ async def test_close_pubsub_falls_back_to_close_without_aclose() -> None:
 
 
 async def test_close_pubsub_close_exception_swallowed(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("DEBUG", logger="modulo.core.events.relay"):
+    with caplog.at_level("DEBUG", logger="farna.core.events.relay"):
         await relay_mod._close_pubsub(_CloseOnlyPubSub(RuntimeError("close boom")))
     assert "event_relay.pubsub_close_failed" in caplog.text
 
 
 async def test_close_pubsub_aclose_exception_swallowed(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("DEBUG", logger="modulo.core.events.relay"):
+    with caplog.at_level("DEBUG", logger="farna.core.events.relay"):
         await relay_mod._close_pubsub(_AcloseRaisesPubSub())
     assert "event_relay.pubsub_close_failed" in caplog.text
 
@@ -547,7 +547,7 @@ async def test_handle_payload_drops_non_string_and_non_object(
     relay = _make_relay(broker, bus)
     q = await bus.subscribe(_ORG)
     try:
-        with caplog.at_level("WARNING", logger="modulo.core.events.relay"):
+        with caplog.at_level("WARNING", logger="farna.core.events.relay"):
             await relay._handle_payload(_ORG, 12345)  # non-string data
             await relay._handle_payload(_ORG, json.dumps([1, 2, 3]))  # non-object JSON
             await relay._handle_payload(_ORG, json.dumps(_message(_ORG, producer="web-b", event_id="ok", rid="r-ok")))
@@ -673,7 +673,7 @@ async def test_subscribe_error_before_established_skips_backfill(
 
     relay = _make_relay(broker, bus, backfill_loader=loader)
     try:
-        with caplog.at_level("WARNING", logger="modulo.core.events.relay"):
+        with caplog.at_level("WARNING", logger="farna.core.events.relay"):
             relay.acquire(_ORG)
             await asyncio.wait_for(broker.subscribed.wait(), timeout=5)  # retry succeeded
         assert loader_calls == []  # never established -> no backfill

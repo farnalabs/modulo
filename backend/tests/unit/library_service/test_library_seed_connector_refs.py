@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.core.library_service import _MODULO_PRIMITIVES
+from farna.core.library_service import _MODULO_PRIMITIVES
 
 
 def _seeded_agent_entries() -> list[tuple[str, dict[str, Any]]]:

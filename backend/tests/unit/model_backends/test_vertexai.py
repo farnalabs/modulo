@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from modulo.model_backends.vertexai import VERTEXAI_DEFAULT_LOCATION, VertexAIBackend
+from farna.model_backends.vertexai import VERTEXAI_DEFAULT_LOCATION, VertexAIBackend
 
 
 def test_default_location_constant():
@@ -10,7 +10,7 @@ def test_default_location_constant():
 
 
 def test_constructor_with_custom_location():
-    with patch("modulo.model_backends.vertexai.ChatVertexAI"):
+    with patch("farna.model_backends.vertexai.ChatVertexAI"):
         backend = VertexAIBackend(
             project="other-project",
             model_id="claude-3-sonnet@20240229",
@@ -20,7 +20,7 @@ def test_constructor_with_custom_location():
 
 
 def test_constructor_passes_default_params():
-    with patch("modulo.model_backends.vertexai.ChatVertexAI") as mock_chat:
+    with patch("farna.model_backends.vertexai.ChatVertexAI") as mock_chat:
         VertexAIBackend(
             project="p",
             model_id="gemini-2.0-flash-001",

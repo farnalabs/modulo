@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from modulo.settings import Settings, break_glass_boot_findings, validate_break_glass_boot
+from farna.settings import Settings, break_glass_boot_findings, validate_break_glass_boot
 
 _SECRET = "p" * 32
 _STANDBY = "s" * 32

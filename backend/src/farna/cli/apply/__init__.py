@@ -1,0 +1,324 @@
+"""``modulo apply`` orchestration + CLI registration (FAR-681, slices 1-3).
+
+Declarative configuration: ``modulo apply -f config.yaml`` plans name-based
+upserts against the live org and executes them idempotently. Slices 1+2
+cover schemas (+versions), model_backends, pipelines (agent name-refs in
+graphs) and triggers ((pipeline, name) identity); slice 3 adds --diff.
+Exit-code semantics:
+- dry-run (--dry-run/--plan): always exit 0
+- drift mode (--diff): exit 0 when the org matches the config (all
+  unchanged), exit 1 when drift is detected (created/updated/blocked) so
+  CI can gate on config drift
+- real apply: exit 1 if any entity was blocked or failed, else 0
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+import click
+import httpx
+
+from farna.cli.apply.executor import ApplyHttpError
+from farna.cli.apply.loader import ApplyLoadError, load_apply_file
+from farna.cli.apply.models import ApplyConfig
+from farna.cli.apply.plan import has_blockers
+
+_log = logging.getLogger(__name__)
+
+_ENV_URL = "MODULO_URL"
+_ENV_API_KEY = "MODULO_API_KEY"
+
+
+def run_apply(
+    config: ApplyConfig,
+    *,
+    base_url: str,
+    api_key: str,
+    dry_run: bool,
+    client: Any = None,
+    refresh_secrets: bool = False,
+    drift: bool = False,
+) -> dict[str, Any]:
+    """Plan (and unless dry-run, execute) an ApplyConfig; returns the report."""
+    from farna.cli.apply.executor import ApplyExecutor
+
+    executor = ApplyExecutor(base_url, api_key, client=client)
+    try:
+        return executor.run(config, dry_run=dry_run, refresh_secrets=refresh_secrets, drift=drift)
+    finally:
+        executor.close()
+
+
+def _http_error_message(exc: ApplyHttpError) -> str:
+    """Actionable message for executor-phase HTTP failures."""
+    if exc.status_code == 401:
+        return "API key rejected: check MODULO_API_KEY (an org API key, mk_..., with operator role is required)"
+    if exc.status_code == 404:
+        target = exc.path or str(exc)
+        return f"server does not expose endpoint {target} - is it running an older version?"
+    return str(exc)
+
+
+_GATE_CHANGE_VERBS = {"added": "add", "changed": "change", "removed": "remove"}
+
+
+def _render_policy_gate_change(entry: dict[str, Any], *, scope: str | None) -> str:
+    """One human-readable line for a node-attached policy-gate change (FAR-1109).
+
+    Renders the change as a distinct class (gate add / change / remove) on a
+    named node with its action, so an operator never has to infer a gate change
+    from a generic "graph updated".
+    """
+    verb = _GATE_CHANGE_VERBS.get(str(entry.get("change")), str(entry.get("change")))
+    if entry.get("change") == "changed":
+        detail = f"{entry.get('previous_action')}->{entry.get('action')}"
+    else:
+        detail = f"{entry.get('action')}, eval {entry.get('eval_id')}"
+    return f"gate {verb} pipeline {scope!r} node {entry.get('node')} ({detail})"
+
+
+def _render_policy_gate_changes(entries: Iterable[dict[str, Any]], *, scope: str | None = None) -> list[str]:
+    """Render every node-attached policy-gate change for one report section.
+
+    ``scope`` pins the pipeline label for all entries (drift-detail mode, where
+    the section key is the pipeline); when omitted each entry carries its own
+    ``pipeline`` (apply-report mode). Keeps ``render_table`` under the
+    SonarCloud cognitive-complexity threshold by owning the per-entry loop.
+    """
+    return [
+        _render_policy_gate_change(entry, scope=scope if scope is not None else entry.get("pipeline"))
+        for entry in entries
+    ]
+
+
+def _render_change_lines(report: dict[str, Any], *, drift_mode: bool) -> list[str]:
+    """Create/update/block/fail/unchanged lines for a plan, apply or drift report."""
+    verbs = {
+        "created": "drift create" if drift_mode else "create",
+        "updated": "drift update" if drift_mode else "update",
+        "blocked": "block",
+    }
+    lines: list[str] = []
+    for status, verb in verbs.items():
+        for entry in report.get(status, []):
+            line = f"{verb} {entry['kind']} {entry['name']!r}"
+            if status == "blocked":
+                line += f" ({entry['reason']})"
+            lines.append(line)
+    lines.extend(f"fail {entry['kind']} {entry['name']!r}: {entry['error']}" for entry in report.get("failed", []))
+    lines.extend(f"unchanged {entry['kind']} {entry['name']!r}" for entry in report.get("unchanged", []))
+    return lines
+
+
+def _counts(section: dict[str, list[str]]) -> str:
+    return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
+
+
+def _render_drift_detail(report: dict[str, Any]) -> list[str]:
+    """Per-entity drift breakdown lines, plus apply-report gate changes.
+
+    Drifted pipelines get a graph breakdown line (plus per-field git-sourced
+    content commit moves, FAR-220); drifted schemas / model backends /
+    triggers get a managed-field breakdown line. FAR-1109 gate changes render
+    as their own line — the node-level aggregate cannot tell a gate change
+    from any other node modification.
+    """
+    lines: list[str] = []
+    for key, breakdown in sorted((report.get("drift_detail") or {}).items()):
+        if "fields" in breakdown:
+            kind, _, name = key.partition(":")
+            lines.append(f"drift detail {kind} {name!r}: {_counts(breakdown['fields'])} fields")
+            continue
+        nodes, edges = breakdown["nodes"], breakdown["edges"]
+        lines.append(f"drift detail pipeline {key!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
+        # FAR-220: full current -> desired values (the pinned commit SHAs)
+        # so the operator sees the actual commit move, not just the node id.
+        lines.extend(
+            f"drift detail git-content {key!r} node {entry['node']} {entry['field']}: "
+            f"{entry['current']!r} -> {entry['desired']!r}"
+            for entry in breakdown.get("git_content") or ()
+        )
+        # FAR-1109: gate changes render as their own drift-detail line (the
+        # node-level aggregate above cannot tell a gate change from any other
+        # node modification).
+        lines.extend(_render_policy_gate_changes(breakdown.get("policy_gates") or (), scope=key))
+    # FAR-1109: an APPLY report lists gate changes as a distinct change class.
+    lines.extend(_render_policy_gate_changes(report.get("gate_changes") or ()))
+    return lines
+
+
+def render_table(report: dict[str, Any]) -> str:
+    """Human-friendly plan/apply/drift report rendering.
+
+    Drift reports (``mode == "drift"``) are explicitly labelled: each verb
+    is prefixed (``drift create`` / ``drift update``), the summary line reads
+    ``drift summary``, and ``drift_detail`` renders a graph breakdown line
+    for drifted pipelines (plus per-field git-sourced content commit moves,
+    FAR-220) and a managed-field breakdown line for drifted schemas / model
+    backends / triggers.
+    """
+    drift_mode = report.get("mode") == "drift"
+    lines = _render_change_lines(report, drift_mode=drift_mode)
+    lines.extend(_render_drift_detail(report))
+    counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
+    label = "drift summary" if drift_mode else "summary"
+    lines.append(
+        f"{label}: {counts['created']} created, {counts['updated']} updated, "
+        f"{counts['unchanged']} unchanged, {counts['blocked']} blocked, {counts['failed']} failed"
+    )
+    return "\n".join(lines)
+
+
+def register_apply(group: click.Group) -> None:
+    """Attach the ``apply`` subcommand to a click group."""
+
+    @group.command("apply")
+    @click.option(
+        "--file",
+        "-f",
+        "config_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        required=True,
+        help="YAML apply config (multi-document accepted)",
+    )
+    @click.option(
+        "--dry-run",
+        "--plan",
+        "dry_run",
+        is_flag=True,
+        default=False,
+        help="Compute and report the plan without applying changes",
+    )
+    @click.option(
+        "--refresh-secrets",
+        "refresh_secrets",
+        is_flag=True,
+        default=False,
+        help=(
+            "Always re-send secret-bearing declarations: config_json for "
+            "triggers and the resolved graph for pipelines declaring "
+            "secret-shaped entries (FAR-1232). The server masks stored "
+            "secrets on read, so a rotated ${env:SECRET} value is invisible "
+            "to the drift hash (the plan reports 'unchanged' and no write "
+            "is sent) — this flag re-sends those declarations every run."
+        ),
+    )
+    @click.option(
+        "--diff",
+        "diff_mode",
+        is_flag=True,
+        default=False,
+        help=(
+            "Drift mode: read-only comparison of the live org against the config "
+            "(same managed-field hashes as the plan). Writes NOTHING. Exit code 0 "
+            "when the org matches the config, 1 when drift is detected "
+            "(created/updated/blocked) so CI can gate on config drift."
+        ),
+    )
+    @click.option(
+        "--output",
+        "output_format",
+        type=click.Choice(["json", "table"]),
+        default="table",
+        help="Report output format",
+    )
+    @click.option(
+        "--json",
+        "json_flag",
+        is_flag=True,
+        default=False,
+        help="Alias for --output json",
+    )
+    def apply_cmd(
+        config_path: Path,
+        dry_run: bool,
+        refresh_secrets: bool,
+        diff_mode: bool,
+        output_format: str,
+        json_flag: bool,
+    ) -> None:
+        """Apply a declarative config file (schemas, model backends, pipelines, triggers)."""
+        config = _load_config_or_fail(config_path)
+        base_url, api_key = _require_env_credentials()
+        report = _apply_or_fail(
+            config,
+            base_url=base_url,
+            api_key=api_key,
+            dry_run=dry_run,
+            refresh_secrets=refresh_secrets,
+            diff_mode=diff_mode,
+        )
+        _emit_apply_report(report, output_format=output_format, json_flag=json_flag)
+        _exit_for_apply(report, diff_mode=diff_mode, dry_run=dry_run)
+
+
+def _load_config_or_fail(config_path: Path) -> ApplyConfig:
+    """Load the apply config, surfacing load errors as ClickExceptions."""
+    try:
+        return load_apply_file(config_path)
+    except ApplyLoadError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
+def _require_env_credentials() -> tuple[str, str]:
+    """Read MODULO_URL / MODULO_API_KEY, refusing when either is absent."""
+    base_url = os.environ.get(_ENV_URL)
+    api_key = os.environ.get(_ENV_API_KEY)
+    if not base_url or not api_key:
+        msg = f"{_ENV_URL} and {_ENV_API_KEY} environment variables are required"
+        raise click.ClickException(msg)
+    return base_url, api_key
+
+
+def _apply_or_fail(
+    config: ApplyConfig,
+    *,
+    base_url: str,
+    api_key: str,
+    dry_run: bool,
+    refresh_secrets: bool,
+    diff_mode: bool,
+) -> dict[str, Any]:
+    """Run the apply, translating executor failures into ClickExceptions."""
+    try:
+        return run_apply(
+            config,
+            base_url=base_url,
+            api_key=api_key,
+            dry_run=dry_run,
+            refresh_secrets=refresh_secrets,
+            drift=diff_mode,
+        )
+    except ApplyHttpError as exc:
+        raise click.ClickException(_http_error_message(exc)) from None
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise click.ClickException(f"apply failed: {exc}") from None
+
+
+def _emit_apply_report(report: dict[str, Any], *, output_format: str, json_flag: bool) -> None:
+    """Echo the report as JSON or a rendered table."""
+    if json_flag:
+        output_format = "json"
+    if output_format == "json":
+        click.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        click.echo(render_table(report))
+
+
+def _exit_for_apply(report: dict[str, Any], *, diff_mode: bool, dry_run: bool) -> None:
+    """Apply the command's exit-code contract after the report is echoed."""
+    if diff_mode:
+        from farna.cli.apply.drift import has_drift
+
+        if has_drift(report):
+            ctx = click.get_current_context()
+            ctx.exit(1)
+    elif not dry_run and has_blockers(report):
+        ctx = click.get_current_context()
+        ctx.exit(1)

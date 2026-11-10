@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from modulo.launcher.doctor import DoctorProbes
+from farna.launcher.doctor import DoctorProbes
 
 _UPGRADE_SIGNING_KEY_HEX = "101acdeda0cd35fdb51f4dae6eff9838b2d07c97641e41a09deb72a2a1a2254d"
 
@@ -123,8 +123,8 @@ def clock_steps(*samples: float) -> Callable[[], float]:
 def launcher_state_reset() -> Iterator[None]:
     """Snapshot boundaries for the pinned env file / first-boot guard and
     the get_settings cache (yield from inside a per-file autouse fixture)."""
-    import modulo.settings as settings_module
-    from modulo.settings import get_settings
+    import farna.settings as settings_module
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
     yield
@@ -151,10 +151,10 @@ def _upgrade_release_fixture(staging: Path, target_version: str = "1.2.0") -> Si
     import json as json_module
     import tarfile as tarfile_module
 
-    from modulo.launcher import manifest as manifest_module
+    from farna.launcher import manifest as manifest_module
 
     bundle_root = staging / f"modulo-{target_version}-linux-amd64"
-    (bundle_root / "backend" / "src" / "modulo" / "db" / "migrations").mkdir(parents=True)
+    (bundle_root / "backend" / "src" / "farna" / "db" / "migrations").mkdir(parents=True)
     (bundle_root / "VERSION").write_text(f"bundle-v{target_version}\n", encoding="utf-8")
     (bundle_root / "launcher").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     for extra in ("pg/bin/postgres", "redis/redis-server"):
@@ -225,7 +225,7 @@ def _upgrade_dump_seam(data_dir: Path, *, recorded_heads: list[str] | None = Non
     """The ENFORCED pre-upgrade dump seam (a verified, non-empty snapshot)."""
     import json as json_module
 
-    from modulo.launcher.upgrade import PreUpgradeSnapshot
+    from farna.launcher.upgrade import PreUpgradeSnapshot
 
     def _dump(data_dir, *, bin_dir=None):
         snapshot_dir = data_dir / "pre-upgrade-dump-fake-1"
@@ -269,7 +269,7 @@ def _upgrade_seed_data_dir(data_dir: Path) -> None:
     """A bootstrapped-shaped data dir (state.json + secrets + pgdata)."""
     import json as json_module
 
-    from modulo.launcher.state import LauncherState, save_state
+    from farna.launcher.state import LauncherState, save_state
 
     hmac_key = bytes(range(32))
     data_dir.mkdir()

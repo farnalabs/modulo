@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.pipeline_engine.classify import (
+from farna.core.pipeline_engine.classify import (
     DELIVERY_CONFIDENCE_AGENT_REPORTED,
     DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY,
     DELIVERY_CONFIDENCE_VALUES,
@@ -43,7 +43,7 @@ from modulo.core.pipeline_engine.classify import (
     PR_URL_PROVENANCE_VALUES,
     classify_run,
 )
-from modulo.core.work_item_enrichment import _to_item
+from farna.core.work_item_enrichment import _to_item
 
 _PR = "https://github.com/farnalabs/modulo/pull/123"
 

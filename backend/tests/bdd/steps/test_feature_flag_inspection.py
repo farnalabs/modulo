@@ -80,13 +80,13 @@ def _make_mock_session() -> Any:
 
 
 def _setup_client(ctx: dict[str, Any]) -> None:
-    from modulo.api.dependencies import _get_engine as _eng
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.core.license import clear_license, store_license
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine as _eng
+    from farna.api.dependencies import get_db_session
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.core.license import clear_license, store_license
+    from farna.settings import Settings, get_settings
 
     # Hermetic tier resolution: a stored license from another licensing
     # scenario must not leak into the feature-flag tier/has_license_key payload.
@@ -160,7 +160,7 @@ def ctx() -> dict[str, Any]:
 def client() -> Any:
     from fastapi.testclient import TestClient
 
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return TestClient(app)
 
@@ -188,8 +188,8 @@ def signed_license_stored(ctx: dict[str, Any]) -> None:
     the parsed data via ``store_license`` — the in-memory rung of the licence
     ladder the public ``/api/v1/license`` surface now reads.
     """
-    from modulo.core.license import LicenseData, set_public_key
-    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+    from farna.core.license import LicenseData, set_public_key
+    from farna.core.registry.crypto import generate_keypair, sign_primitive
 
     keypair = generate_keypair()
     set_public_key(keypair["public_key"])

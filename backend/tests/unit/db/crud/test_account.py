@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud.account import create_service_account
-from modulo.db.models.account import KIND_SERVICE
+from farna.db.crud.account import create_service_account
+from farna.db.models.account import KIND_SERVICE
 
 
 @pytest.mark.asyncio

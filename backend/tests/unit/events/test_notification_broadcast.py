@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-import modulo.core.notifier as notifier_mod
-from modulo.core.events.notification_events import NOTIFIER_SESSION_KEY, _isoformat
-from modulo.core.notifier import Notifier
+import farna.core.notifier as notifier_mod
+from farna.core.events.notification_events import NOTIFIER_SESSION_KEY, _isoformat
+from farna.core.notifier import Notifier
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.events._helpers import drain_background_tasks
 
@@ -58,7 +58,7 @@ class TestFireBroadcast:
     async def test_publishes_exactly_once_without_content(self) -> None:
         fake_bus = AsyncMock()
         notification = _notification()
-        with patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus):
+        with patch("farna.core.events.event_bus.get_event_bus", return_value=fake_bus):
             notifier_mod._fire_notification_sse_broadcast(_ORG, notification)
             await _drain_broadcast_tasks()
 
@@ -86,8 +86,8 @@ class TestFireBroadcast:
     def test_no_running_loop_skips_without_raising(self, caplog: pytest.LogCaptureFixture) -> None:
         fake_bus = AsyncMock()
         with (
-            patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
-            caplog.at_level("WARNING", logger="modulo.core.notifier"),
+            patch("farna.core.events.event_bus.get_event_bus", return_value=fake_bus),
+            caplog.at_level("WARNING", logger="farna.core.notifier"),
         ):
             notifier_mod._fire_notification_sse_broadcast(_ORG, _notification())
 
@@ -123,8 +123,8 @@ def _wired_dispatch(
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
         patch.object(notifier, "_session_factory", factory),
-        patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
-        patch("modulo.core.events.event_bus.get_event_bus", return_value=fake_bus),
+        patch("farna.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper),
+        patch("farna.core.events.event_bus.get_event_bus", return_value=fake_bus),
     ):
         wiring.session = factory.return_value.__aenter__.return_value
         yield wiring
@@ -160,7 +160,7 @@ class TestDispatchInlineWiring:
 
         with (
             _wired_dispatch(mapper, fake_bus) as wiring,
-            patch("modulo.core.notifier._log.exception"),
+            patch("farna.core.notifier._log.exception"),
         ):
             results = await wiring.notifier.dispatch_event(_ORG, "run_failed", {"run_id": str(uuid.uuid4())})
 
@@ -194,7 +194,7 @@ class TestSseBroadcastDoneCallback:
             await task
         notifier_mod._sse_broadcast_tasks.add(task)
 
-        with caplog.at_level("WARNING", logger="modulo.core.notifier"):
+        with caplog.at_level("WARNING", logger="farna.core.notifier"):
             notifier_mod._on_sse_broadcast_done(task)
 
         assert task not in notifier_mod._sse_broadcast_tasks
@@ -209,7 +209,7 @@ class TestSseBroadcastDoneCallback:
             await task
         notifier_mod._sse_broadcast_tasks.add(task)
 
-        with caplog.at_level("WARNING", logger="modulo.core.notifier"):
+        with caplog.at_level("WARNING", logger="farna.core.notifier"):
             notifier_mod._on_sse_broadcast_done(task)
 
         assert task not in notifier_mod._sse_broadcast_tasks
@@ -231,7 +231,7 @@ def test_notification_event_fields_falls_back_to_now_when_created_at_missing() -
     The fallback must be a real UTC timestamp — ``is not None`` alone would
     pass for any junk value the helper could return.
     """
-    from modulo.core.events.notification_events import notification_event_fields
+    from farna.core.events.notification_events import notification_event_fields
 
     target = MagicMock()
     target.created_at = None
@@ -256,7 +256,7 @@ def test_notification_event_fields_keeps_populated_created_at() -> None:
     server default has not been fetched back yet, so the populated case must
     NOT be re-stamped with "now".
     """
-    from modulo.core.events.notification_events import notification_event_fields
+    from farna.core.events.notification_events import notification_event_fields
 
     committed = datetime(2026, 9, 23, 12, 0, 0, tzinfo=UTC)
     target = MagicMock()

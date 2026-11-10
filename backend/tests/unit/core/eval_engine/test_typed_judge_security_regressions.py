@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
-from modulo.core.pipeline_engine import llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
+from farna.core.pipeline_engine import llm_judge
 
 _BACKEND_ID = uuid.uuid4()
 

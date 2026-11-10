@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool, StaticPool
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes.lifecycle_maps import (
+from farna.api.dependencies import get_db_session
+from farna.api.routes.lifecycle_maps import (
     GraduateStageRequest,
     LifecycleMapCreate,
     LifecycleMapUpdate,
@@ -33,13 +33,13 @@ from modulo.api.routes.lifecycle_maps import (
     update_lifecycle_map_endpoint,
     update_lifecycle_map_version_endpoint,
 )
-from modulo.api.routes.lifecycle_maps import (
+from farna.api.routes.lifecycle_maps import (
     router as lifecycle_maps_router,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.core.lifecycle_map.service import (
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.core.lifecycle_map.advancement import advance_journeys
+from farna.core.lifecycle_map.service import (
     _check_pipeline_uniqueness,
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -50,19 +50,19 @@ from modulo.core.lifecycle_map.service import (
     save_map_version,
     update_lifecycle_map,
 )
-from modulo.core.lifecycle_map.validation import (
+from farna.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     LifecycleMapPipelineConflictError,
     clean_legacy_content,
     normalize_content,
 )
-from modulo.db.lifecycle_refs import canonical_work_item_id
-from modulo.db.models.base import Base
-from modulo.db.models.journey import Journey
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.organisation import Organisation
-from modulo.settings import get_settings
+from farna.db.lifecycle_refs import canonical_work_item_id
+from farna.db.models.base import Base
+from farna.db.models.journey import Journey
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.organisation import Organisation
+from farna.settings import get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -1030,7 +1030,7 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
 async def test_create_lifecycle_map_stamps_updated_by_as_account_id(session: AsyncMock) -> None:
     """Create stamps the creator as the initial version actor."""
     created = _make_map()
-    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
+    with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
         result = await create_lifecycle_map(
             session,
             org_id=_ORG_ID,
@@ -1467,7 +1467,7 @@ async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(sessio
     session.execute.return_value = MagicMock(all=MagicMock(return_value=[(_PIPE_ID,)]))
 
     with (
-        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created),
+        patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created),
         pytest.raises(LifecycleMapPipelineConflictError, match="already a stage of another active lifecycle map"),
     ):
         await create_lifecycle_map(
@@ -1482,7 +1482,7 @@ async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(sessio
 async def test_create_lifecycle_map_without_pipeline_ids_skips_uniqueness_query(session: AsyncMock) -> None:
     created = _make_map(content_json={"stages": [{"id": "s1", "name": "Manual", "type": "manual"}]})
 
-    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
+    with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
         result = await create_lifecycle_map(
             session,
             org_id=_ORG_ID,
@@ -1574,8 +1574,8 @@ def _route_session() -> AsyncMock:
 
 async def _assert_conflict_409(handler: object, *args: object, **kwargs: object) -> None:
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         pytest.raises(HTTPException) as excinfo,
     ):
         await handler(*args, **kwargs)  # type: ignore[misc]
@@ -1585,7 +1585,7 @@ async def _assert_conflict_409(handler: object, *args: object, **kwargs: object)
 
 async def test_save_version_route_maps_pipeline_conflict_to_409() -> None:
     with patch(
-        "modulo.api.routes.lifecycle_maps.save_map_version",
+        "farna.api.routes.lifecycle_maps.save_map_version",
         AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
     ):
         await _assert_conflict_409(
@@ -1600,11 +1600,11 @@ async def test_save_version_route_maps_pipeline_conflict_to_409() -> None:
 async def test_update_route_maps_pipeline_conflict_to_409() -> None:
     with (
         patch(
-            "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.get_lifecycle_map",
             AsyncMock(return_value=_make_map()),
         ),
         patch(
-            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.update_lifecycle_map",
             AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
         ),
     ):
@@ -1619,7 +1619,7 @@ async def test_update_route_maps_pipeline_conflict_to_409() -> None:
 
 async def test_graduate_route_maps_pipeline_conflict_to_409() -> None:
     with patch(
-        "modulo.api.routes.lifecycle_maps.graduate_stage",
+        "farna.api.routes.lifecycle_maps.graduate_stage",
         AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
     ):
         await _assert_conflict_409(
@@ -1635,7 +1635,7 @@ async def test_graduate_route_maps_pipeline_conflict_to_409() -> None:
 
 async def test_create_route_maps_pipeline_conflict_to_409() -> None:
     with patch(
-        "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+        "farna.api.routes.lifecycle_maps.create_lifecycle_map",
         AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
     ):
         await _assert_conflict_409(
@@ -1652,11 +1652,11 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
     reachable for genuine shape errors."""
     with (
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(side_effect=LifecycleMapContentError("content_json.stages must be an array")),
         ),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         pytest.raises(HTTPException) as excinfo,
     ):
         await save_lifecycle_map_version_endpoint(
@@ -1675,13 +1675,13 @@ async def test_save_version_route_stamps_updated_by_actor() -> None:
     lm = _make_map(updated_by=_RoutePrincipal.account_id)
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(return_value=lm),
         ) as mock_save,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
     ):
         resp = await save_lifecycle_map_version_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1699,13 +1699,13 @@ async def test_update_version_route_stamps_updated_by_actor() -> None:
     lm = _make_map(updated_by=_RoutePrincipal.account_id)
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(return_value=lm),
         ) as mock_save,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
     ):
         await update_lifecycle_map_version_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1724,13 +1724,13 @@ async def test_update_route_stamps_updated_by_actor() -> None:
     lm = _make_map(updated_by=_RoutePrincipal.account_id)
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.update_lifecycle_map",
             AsyncMock(return_value=lm),
         ) as mock_update,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
     ):
         resp = await update_lifecycle_map_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1751,13 +1751,13 @@ async def test_graduate_route_stamps_updated_by_actor() -> None:
     )
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.graduate_stage",
+            "farna.api.routes.lifecycle_maps.graduate_stage",
             AsyncMock(return_value=lm),
         ) as mock_graduate,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
     ):
         await graduate_lifecycle_map_stage_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1776,13 +1776,13 @@ async def test_restore_route_stamps_updated_by_actor() -> None:
     lm = _make_map(updated_by=_RoutePrincipal.account_id)
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.restore_lifecycle_map",
             AsyncMock(return_value=lm),
         ) as mock_restore,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
     ):
         resp = await restore_lifecycle_map_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1799,11 +1799,11 @@ async def test_update_version_route_maps_content_error_to_422() -> None:
     the same save_map_version path."""
     with (
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(side_effect=LifecycleMapContentError("lifecycle-map stage #1: duplicate stage id 's1'")),
         ),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         pytest.raises(HTTPException) as excinfo,
     ):
         await update_lifecycle_map_version_endpoint(
@@ -1821,15 +1821,15 @@ async def test_create_route_maps_content_error_to_422_when_content_provided() ->
     the route maps the content validator's LifecycleMapContentError to 422."""
     with (
         patch(
-            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.create_lifecycle_map",
             AsyncMock(
                 side_effect=LifecycleMapContentError(
                     "lifecycle-map edge/transition #0: source stage 'ghost' is not defined"
                 )
             ),
         ),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         pytest.raises(HTTPException) as excinfo,
     ):
         await create_lifecycle_map_endpoint(
@@ -1853,13 +1853,13 @@ async def test_create_route_writes_audit_event() -> None:
     created = _make_map()
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.create_lifecycle_map",
             AsyncMock(return_value=created),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         resp = await create_lifecycle_map_endpoint(
             req=LifecycleMapCreate(name="SDLC", content_json={"stages": []}),
@@ -1878,13 +1878,13 @@ async def test_create_route_writes_audit_event() -> None:
 async def test_update_route_writes_audit_event() -> None:
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.update_lifecycle_map",
             AsyncMock(return_value=_make_map()),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         await update_lifecycle_map_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1902,13 +1902,13 @@ async def test_update_route_writes_audit_event() -> None:
 async def test_delete_route_writes_audit_event() -> None:
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.delete_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.delete_lifecycle_map",
             AsyncMock(return_value=True),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         result = await delete_lifecycle_map_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1925,13 +1925,13 @@ async def test_delete_route_writes_audit_event() -> None:
 async def test_graduate_route_writes_audit_event() -> None:
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.graduate_stage",
+            "farna.api.routes.lifecycle_maps.graduate_stage",
             AsyncMock(return_value=_make_map()),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         await graduate_lifecycle_map_stage_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1955,13 +1955,13 @@ async def test_save_version_route_writes_audit_event() -> None:
     lm = _make_map()
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(return_value=lm),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         await save_lifecycle_map_version_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -1989,13 +1989,13 @@ async def test_update_version_route_writes_audit_event() -> None:
     lm = _make_map()
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.save_map_version",
+            "farna.api.routes.lifecycle_maps.save_map_version",
             AsyncMock(return_value=lm),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         await update_lifecycle_map_version_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -2024,13 +2024,13 @@ async def test_restore_route_writes_audit_event() -> None:
     lm = _make_map(name="Restored Map")
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.restore_lifecycle_map",
             AsyncMock(return_value=lm),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
     ):
         await restore_lifecycle_map_endpoint(
             lifecycle_map_id=_MAP_ID,
@@ -2051,13 +2051,13 @@ async def test_restore_route_404_does_not_write_audit_event() -> None:
     audit event — there is no mutation to record."""
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.restore_lifecycle_map",
             AsyncMock(return_value=None),
         ),
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
         pytest.raises(HTTPException) as excinfo,
     ):
         await restore_lifecycle_map_endpoint(
@@ -2073,14 +2073,14 @@ async def test_create_route_audit_failure_does_not_fail_create() -> None:
     """Audit is fail-open: a write failure must never turn create into an error."""
     session = _route_session()
     with (
-        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
         patch(
-            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            "farna.api.routes.lifecycle_maps.create_lifecycle_map",
             AsyncMock(return_value=_make_map()),
         ),
         patch(
-            "modulo.api.routes.lifecycle_maps.append_audit_event",
+            "farna.api.routes.lifecycle_maps.append_audit_event",
             AsyncMock(side_effect=RuntimeError("audit down")),
         ),
     ):

@@ -2,9 +2,9 @@
 
 from cryptography.fernet import Fernet
 
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes.triggers import _encrypt_trigger_config_secrets
-from modulo.auth.secret_storage import decode_stored_secret
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.api.routes.triggers import _encrypt_trigger_config_secrets
+from farna.auth.secret_storage import decode_stored_secret
 
 _FERNET_KEY = Fernet.generate_key().decode()
 
@@ -55,7 +55,7 @@ def test_encrypt_trigger_config_secrets_empty_config_returns_empty() -> None:
 def test_encrypt_trigger_config_secrets_fails_closed_on_bad_key() -> None:
     """FAR-1732: an unusable Fernet key must abort the write — re-raise — not
     silently leave the plaintext secret intact in the returned config."""
-    from modulo.auth.secret_storage import InvalidFernetKeyError
+    from farna.auth.secret_storage import InvalidFernetKeyError
 
     try:
         _encrypt_trigger_config_secrets({"hmac_secret": "plaintext"}, "a" * 32)

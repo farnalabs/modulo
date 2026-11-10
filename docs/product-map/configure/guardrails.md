@@ -3,14 +3,14 @@ id: feat-guardrails
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/guardrails/__init__.py
-  - backend/src/modulo/core/guardrails/output_intercept.py
-  - backend/src/modulo/core/guardrails/redaction_mode.py
-  - backend/src/modulo/core/guardrails/config.py
-  - backend/src/modulo/core/guardrails/loop_intercept.py
-  - backend/src/modulo/core/guardrails/compensation.py
-  - backend/src/modulo/core/guardrails/correction.py
-  - backend/src/modulo/api/routes/guardrail_config.py
+  - backend/src/farna/core/guardrails/__init__.py
+  - backend/src/farna/core/guardrails/output_intercept.py
+  - backend/src/farna/core/guardrails/redaction_mode.py
+  - backend/src/farna/core/guardrails/config.py
+  - backend/src/farna/core/guardrails/loop_intercept.py
+  - backend/src/farna/core/guardrails/compensation.py
+  - backend/src/farna/core/guardrails/correction.py
+  - backend/src/farna/api/routes/guardrail_config.py
   - frontend/src/views/SettingsGuardrailsView.vue
 unit-tests:
   - backend/tests/unit/core/test_guardrails.py
@@ -147,7 +147,7 @@ compensation, and single-node self-correction. Built on the eval engine
       the pin is stored as a clean snapshot (drift reads clean), a
       `guardrail_config.imported` audit event records the hash/count/diff, and
       re-imports are idempotent
-      (`backend/src/modulo/api/routes/guardrail_config.py`,
+      (`backend/src/farna/api/routes/guardrail_config.py`,
       `backend/tests/integration/test_guardrail_config_api.py`,
       `backend/tests/bdd/features/evals/guardrail_config.feature`)
 - [x] The in-page Import control ships on `/settings/guardrails`: an
@@ -174,9 +174,9 @@ compensation, and single-node self-correction. Built on the eval engine
       failure-evidence path; input-point defs and unknown
       ``interception_point`` values are KEPT at the input pass (unknown values
       fail closed in strict validation)
-      (`backend/src/modulo/core/guardrails/output_intercept.py`,
-      `backend/src/modulo/core/pipeline_engine/executor.py`,
-      `backend/src/modulo/db/crud/run.py`)
+      (`backend/src/farna/core/guardrails/output_intercept.py`,
+      `backend/src/farna/core/pipeline_engine/executor.py`,
+      `backend/src/farna/db/crud/run.py`)
 - [x] Destroy redaction mode (FAR-209 Track B): `mode: destroy` replaces each
       candidate - the detection regex's matches inside a string leaf (the
       untouched surroundings of a match stay readable), else the whole leaf -
@@ -188,7 +188,7 @@ compensation, and single-node self-correction. Built on the eval engine
       ``GuardrailRedactionMechanismError`` which the executor converts to a
       terminal block (fail closed) - never a masks-only fallback and never an
       unredacted persist
-      (`backend/src/modulo/core/guardrails/redaction_mode.py`)
+      (`backend/src/farna/core/guardrails/redaction_mode.py`)
 
 ## Known Gaps
 

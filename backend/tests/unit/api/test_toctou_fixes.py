@@ -15,11 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "a" * 32
@@ -91,9 +91,9 @@ class TestCreateUserIntegrityErrorMapping:
     """When a concurrent duplicate-email race fires IntegrityError,
     the endpoint must return 409 Conflict, not fall through to 503."""
 
-    @patch("modulo.api.routes.admin._existing_account_or_conflict", new_callable=AsyncMock, return_value=None)
-    @patch("modulo.api.routes.admin._create_or_adopt_account", new_callable=AsyncMock)
-    @patch("modulo.api.routes.admin.hash_password", return_value="hashed")
+    @patch("farna.api.routes.admin._existing_account_or_conflict", new_callable=AsyncMock, return_value=None)
+    @patch("farna.api.routes.admin._create_or_adopt_account", new_callable=AsyncMock)
+    @patch("farna.api.routes.admin.hash_password", return_value="hashed")
     def test_integrity_error_returns_409(
         self,
         mock_hash: MagicMock,
@@ -116,9 +116,9 @@ class TestCreateUserIntegrityErrorMapping:
         )
         assert resp.status_code == 409, f"Expected 409, got {resp.status_code}: {resp.text}"
 
-    @patch("modulo.api.routes.admin._existing_account_or_conflict", new_callable=AsyncMock, return_value=None)
-    @patch("modulo.api.routes.admin._create_or_adopt_account", new_callable=AsyncMock)
-    @patch("modulo.api.routes.admin.hash_password", return_value="hashed")
+    @patch("farna.api.routes.admin._existing_account_or_conflict", new_callable=AsyncMock, return_value=None)
+    @patch("farna.api.routes.admin._create_or_adopt_account", new_callable=AsyncMock)
+    @patch("farna.api.routes.admin.hash_password", return_value="hashed")
     def test_sqlalchemy_error_still_returns_503(
         self,
         mock_hash: MagicMock,
@@ -151,7 +151,7 @@ class TestRotationGuardRedisLock:
     release on failure."""
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_acquire_lock_succeeds_when_free(
         self,
         mock_redis_cls: MagicMock,
@@ -161,7 +161,7 @@ class TestRotationGuardRedisLock:
         The acquire returns a unique owner token (not a bare sentinel) so
         release can discriminate owners.
         """
-        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+        from farna.api.routes.admin_rotation import _acquire_rotation_lock
 
         mock_r = AsyncMock()
         mock_r.set = AsyncMock(return_value=True)  # SET NX succeeded
@@ -180,13 +180,13 @@ class TestRotationGuardRedisLock:
         assert mock_r.set.call_args[1]["ex"] == 1800
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_acquire_lock_fails_when_held(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """SET NX returns None when the lock key already exists."""
-        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+        from farna.api.routes.admin_rotation import _acquire_rotation_lock
 
         mock_r = AsyncMock()
         mock_r.set = AsyncMock(return_value=None)  # SET NX failed (key exists)
@@ -198,7 +198,7 @@ class TestRotationGuardRedisLock:
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_acquire_lock_redis_error_returns_503(
         self,
         mock_redis_cls: MagicMock,
@@ -206,7 +206,7 @@ class TestRotationGuardRedisLock:
         """A Redis blip during acquire must surface as 503, not an unhandled 500."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+        from farna.api.routes.admin_rotation import _acquire_rotation_lock
 
         mock_r = AsyncMock()
         mock_r.set = AsyncMock(side_effect=ConnectionError("redis down"))
@@ -219,13 +219,13 @@ class TestRotationGuardRedisLock:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_release_lock_calls_lua_script(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Release uses a Lua script to atomically delete only if owned."""
-        from modulo.api.routes.admin_rotation import _release_rotation_lock
+        from farna.api.routes.admin_rotation import _release_rotation_lock
 
         mock_r = AsyncMock()
         mock_r.eval = AsyncMock(return_value=1)  # delete succeeded
@@ -242,26 +242,26 @@ class TestRotationGuardRedisLock:
         assert call_args[0][3] == "owner-token-abc"
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_release_lock_noop_when_no_redis(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Release is a no-op when Redis is not configured."""
-        from modulo.api.routes.admin_rotation import _release_rotation_lock
+        from farna.api.routes.admin_rotation import _release_rotation_lock
 
         settings = _make_settings(redis_url="")
         await _release_rotation_lock(settings, "owner-token-abc")
         mock_redis_cls.from_url.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_is_rotation_active_checks_redis(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Status check reads from Redis."""
-        from modulo.api.routes.admin_rotation import _is_rotation_active
+        from farna.api.routes.admin_rotation import _is_rotation_active
 
         mock_r = AsyncMock()
         mock_r.exists = AsyncMock(return_value=1)  # lock exists
@@ -284,7 +284,7 @@ class TestRotationGuardInMemoryFallback:
 
     @pytest.fixture(autouse=True)
     def _reset_in_memory_guard(self) -> Generator[None, None, None]:
-        from modulo.api.routes import admin_rotation
+        from farna.api.routes import admin_rotation
 
         admin_rotation._rotation_owner = None
         yield
@@ -292,7 +292,7 @@ class TestRotationGuardInMemoryFallback:
 
     @pytest.mark.asyncio
     async def test_second_acquire_fails_while_held_without_redis(self) -> None:
-        from modulo.api.routes.admin_rotation import _acquire_rotation_lock
+        from farna.api.routes.admin_rotation import _acquire_rotation_lock
 
         settings = _make_settings(redis_url="")
         first = await _acquire_rotation_lock(settings)
@@ -303,8 +303,8 @@ class TestRotationGuardInMemoryFallback:
 
     @pytest.mark.asyncio
     async def test_is_rotation_active_reports_in_memory_guard(self) -> None:
-        from modulo.api.routes import admin_rotation
-        from modulo.api.routes.admin_rotation import _is_rotation_active
+        from farna.api.routes import admin_rotation
+        from farna.api.routes.admin_rotation import _is_rotation_active
 
         settings = _make_settings(redis_url="")
         assert await _is_rotation_active(settings) is False
@@ -313,7 +313,7 @@ class TestRotationGuardInMemoryFallback:
 
     @pytest.mark.asyncio
     async def test_release_clears_guard_only_for_owner(self) -> None:
-        from modulo.api.routes.admin_rotation import (
+        from farna.api.routes.admin_rotation import (
             _acquire_rotation_lock,
             _is_rotation_active,
             _release_rotation_lock,
@@ -336,7 +336,7 @@ def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
     event for a rotation that never runs."""
     from collections.abc import AsyncGenerator
 
-    from modulo.api.routes import admin_rotation
+    from farna.api.routes import admin_rotation
 
     admin_rotation._rotation_owner = "held-by-another-rotation"
 
@@ -363,8 +363,8 @@ def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
     try:
         tc = TestClient(app)
         with (
-            patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()) as mock_audit,
-            patch("modulo.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()) as mock_bg,
+            patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()) as mock_audit,
+            patch("farna.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()) as mock_bg,
         ):
             resp = tc.post(
                 "/api/v1/admin/rotation/rotate-key",
@@ -426,13 +426,13 @@ class TestRotationLockOwnership:
     """
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_stale_owner_cannot_release_successors_lock(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Rotation A's stale release must not delete rotation B's lock."""
-        from modulo.api.routes.admin_rotation import (
+        from farna.api.routes.admin_rotation import (
             _ROTATION_LOCK_KEY,
             _acquire_rotation_lock,
             _release_rotation_lock,
@@ -464,13 +464,13 @@ class TestRotationLockOwnership:
         assert _ROTATION_LOCK_KEY not in fake_store.store
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_tokens_are_unique_per_acquisition(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Successive acquisitions must produce distinct ownership tokens."""
-        from modulo.api.routes.admin_rotation import (
+        from farna.api.routes.admin_rotation import (
             _acquire_rotation_lock,
             _release_rotation_lock,
         )
@@ -492,15 +492,15 @@ class TestRotationLockOwnership:
         assert token_2 != token_1
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.admin_rotation.aioredis.Redis")
+    @patch("farna.api.routes.admin_rotation.aioredis.Redis")
     async def test_background_task_releases_with_acquired_token(
         self,
         mock_redis_cls: MagicMock,
     ) -> None:
         """Wiring proof: rotate_key's token reaches the background task and is
         used for release — the lock key is gone after the background completes."""
-        from modulo.api.routes import admin_rotation
-        from modulo.api.routes.admin_rotation import (
+        from farna.api.routes import admin_rotation
+        from farna.api.routes.admin_rotation import (
             _ROTATION_LOCK_KEY,
             _acquire_rotation_lock,
         )
@@ -565,15 +565,15 @@ class TestNoRedisInProcessGuard:
         test_client.app.dependency_overrides[get_current_user] = lambda: _principal(is_system_admin=True)
 
     def test_second_concurrent_rotate_key_without_redis_409(self, client: TestClient) -> None:
-        from modulo.api.routes import admin_rotation
+        from farna.api.routes import admin_rotation
 
         self._install_no_redis_settings(client)
 
         try:
             with (
-                patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
+                patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
                 patch(
-                    "modulo.api.routes.admin_rotation._run_rotation_background",
+                    "farna.api.routes.admin_rotation._run_rotation_background",
                     new=AsyncMock(),
                 ),
             ):
@@ -600,7 +600,7 @@ class TestNoRedisInProcessGuard:
         """The guard's scope covers the ENTIRE background rotation: it is only
         cleared by _run_rotation_background's finally, alongside the lock
         release."""
-        from modulo.api.routes import admin_rotation
+        from farna.api.routes import admin_rotation
 
         monkeypatch.setattr(admin_rotation, "_rotation_owner", None)
         token = await admin_rotation._acquire_rotation_lock(_no_redis_settings())
@@ -673,9 +673,9 @@ class TestTemplatePipelineCreateReadInsideTxn:
         }
         return p
 
-    @patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock)
-    @patch("modulo.api.routes.library.create_pipeline", new_callable=AsyncMock)
-    @patch("modulo.api.routes.library._set_rls_context", new_callable=AsyncMock)
+    @patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock)
+    @patch("farna.api.routes.library.create_pipeline", new_callable=AsyncMock)
+    @patch("farna.api.routes.library._set_rls_context", new_callable=AsyncMock)
     def test_missing_primitive_returns_404_not_creates_pipeline(
         self,
         mock_rls: AsyncMock,
@@ -686,7 +686,7 @@ class TestTemplatePipelineCreateReadInsideTxn:
         the endpoint returns 404 without calling create_pipeline."""
         from fastapi.testclient import TestClient
 
-        from modulo.api.main import app as _app
+        from farna.api.main import app as _app
 
         mock_get_primitive.return_value = None  # primitive deleted concurrently
 
@@ -723,9 +723,9 @@ class TestTemplatePipelineCreateReadInsideTxn:
         finally:
             _app.dependency_overrides.clear()
 
-    @patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock)
-    @patch("modulo.api.routes.library.create_pipeline", new_callable=AsyncMock)
-    @patch("modulo.api.routes.library._set_rls_context", new_callable=AsyncMock)
+    @patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock)
+    @patch("farna.api.routes.library.create_pipeline", new_callable=AsyncMock)
+    @patch("farna.api.routes.library._set_rls_context", new_callable=AsyncMock)
     def test_wrong_primitive_type_returns_400(
         self,
         mock_rls: AsyncMock,
@@ -735,7 +735,7 @@ class TestTemplatePipelineCreateReadInsideTxn:
         """When the primitive is not a pipeline_template, 400 is returned."""
         from fastapi.testclient import TestClient
 
-        from modulo.api.main import app as _app
+        from farna.api.main import app as _app
 
         prim = self._make_primitive()
         prim.primitive_type = "workflow"  # wrong type

@@ -16,8 +16,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from modulo.core.feature_flags import LicenseKeyTier
-from modulo.core.license import (
+from farna.core.feature_flags import LicenseKeyTier
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     LICENCE_GRACE_DAYS,
     LicenseData,
@@ -27,8 +27,8 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.license_signing import TEAM_FEATURES, build_team_payload, encode_license_key
-from modulo.core.registry.crypto import generate_keypair
+from farna.core.license_signing import TEAM_FEATURES, build_team_payload, encode_license_key
+from farna.core.registry.crypto import generate_keypair
 
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
 

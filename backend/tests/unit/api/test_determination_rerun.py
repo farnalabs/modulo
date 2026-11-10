@@ -19,18 +19,18 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.connectors.base import ConnectorType
-from modulo.core.audit_coverage import audit_session
-from modulo.core.connector_hub import ConnectorDecryptError
-from modulo.determination.inference import build_proposal_contract
-from modulo.determination.models import ProposalContract
-from modulo.determination.rerun import ProposalRerunRequest
-from modulo.determination.scanner import ScanSample
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.connectors.base import ConnectorType
+from farna.core.audit_coverage import audit_session
+from farna.core.connector_hub import ConnectorDecryptError
+from farna.determination.inference import build_proposal_contract
+from farna.determination.models import ProposalContract
+from farna.determination.rerun import ProposalRerunRequest
+from farna.determination.scanner import ScanSample
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -147,7 +147,7 @@ def audits() -> Generator[list[dict[str, Any]], None, None]:
     async def fake_audit(_session: Any, **kwargs: Any) -> None:
         calls.append(kwargs)
 
-    with patch("modulo.core.audit_logger.append_audit_event", new=fake_audit):
+    with patch("farna.core.audit_logger.append_audit_event", new=fake_audit):
         yield calls
 
 
@@ -180,15 +180,15 @@ def _scan_environment(
 ) -> Generator[None, None, None]:
     with (
         patch(
-            "modulo.api.routes.determination.list_connector_instances",
+            "farna.api.routes.determination.list_connector_instances",
             return_value=_mock_page([_mock_connector_instance()]),
         ),
-        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
-        patch("modulo.api.routes.determination.create_secrets_backend"),
-        patch("modulo.api.routes.determination.ConnectorHub", _mock_hub_context()),
+        patch("farna.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.determination.create_secrets_backend"),
+        patch("farna.api.routes.determination.ConnectorHub", _mock_hub_context()),
         patch(
-            "modulo.api.routes.determination.run_scan",
+            "farna.api.routes.determination.run_scan",
             new_callable=AsyncMock,
             return_value=samples,
             side_effect=scan_error,
@@ -370,9 +370,9 @@ def test_rerun_error_mapping(
 @contextmanager
 def _connector_listing_error(error: BaseException) -> Generator[None, None, None]:
     with (
-        patch("modulo.api.routes.determination.list_connector_instances", side_effect=error),
-        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.determination.list_connector_instances", side_effect=error),
+        patch("farna.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.determination.set_rls_user_context", new=AsyncMock()),
     ):
         yield
 
@@ -386,13 +386,13 @@ def _hub_initialise_error(error: BaseException) -> Generator[None, None, None]:
     cm.__aexit__ = AsyncMock(return_value=False)
     with (
         patch(
-            "modulo.api.routes.determination.list_connector_instances",
+            "farna.api.routes.determination.list_connector_instances",
             return_value=_mock_page([_mock_connector_instance()]),
         ),
-        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
-        patch("modulo.api.routes.determination.create_secrets_backend"),
-        patch("modulo.api.routes.determination.ConnectorHub", MagicMock(return_value=cm)),
+        patch("farna.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.determination.create_secrets_backend"),
+        patch("farna.api.routes.determination.ConnectorHub", MagicMock(return_value=cm)),
     ):
         yield
 
@@ -435,7 +435,7 @@ class TestRerunErrorHandlingDetails:
     def test_cancelled_error_propagates(self) -> None:
         request = ProposalRerunRequest(prior_proposal=build_proposal_contract([_available_sample()]))
 
-        from modulo.api.routes.determination import rerun_determination
+        from farna.api.routes.determination import rerun_determination
 
         with (
             _scan_environment(None, scan_error=asyncio.CancelledError()),

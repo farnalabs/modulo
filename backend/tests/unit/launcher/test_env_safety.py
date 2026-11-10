@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher.env_safety import (
+from farna.launcher.env_safety import (
     AMBIENT_SERVICE_URL_VARS,
     SCRUB_EXACT_NAMES,
     SCRUB_PREFIXES,

@@ -29,14 +29,14 @@ import pytest
 from e2b.exceptions import NotFoundException
 from e2b.sandbox.commands.command_handle import CommandExitException
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecStreamChunk,
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     RuntimeProviderError,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 # ---------------------------------------------------------------------------
 # Fakes with the SDK's shape (e2b 2.6.1 — no network)

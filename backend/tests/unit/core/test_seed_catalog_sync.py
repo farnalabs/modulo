@@ -8,8 +8,8 @@ DB-backed rows. Any flag present in ``_KNOWN_FLAGS`` but missing from
 behind the gate even on the right tier. These tests prevent that drift.
 """
 
-from modulo.core.feature_flags import _KNOWN_FLAGS
-from modulo.core.seed_data.catalog import FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS
+from farna.core.seed_data.catalog import FLAGS
 
 # Flags added to the seed catalog in FAR-114 (previously absent from the DB seed).
 # ``pipeline_diff_rollback`` was retired (FAR-1819) and dropped from this set

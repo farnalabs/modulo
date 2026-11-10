@@ -8,8 +8,8 @@ import pytest
 import respx
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.onepassword import OnePasswordConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.onepassword import OnePasswordConnector
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/onepassword.feature")

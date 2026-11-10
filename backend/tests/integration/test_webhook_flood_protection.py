@@ -17,18 +17,18 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.run_admission import has_in_flight_ci_failure_run
-from modulo.core.trigger_engine import (
+from farna.core.run_admission import has_in_flight_ci_failure_run
+from farna.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
     TimestampExpiredError,
     TriggerEngine,
 )
-from modulo.core.trigger_engine.pre_guardrail import canonical_payload_hash
-from modulo.db.crud.run import CI_FAILURE_COALESCE_KEY_FIELD
-from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from farna.core.trigger_engine.pre_guardrail import canonical_payload_hash
+from farna.db.crud.run import CI_FAILURE_COALESCE_KEY_FIELD
+from farna.db.models.run import Run
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

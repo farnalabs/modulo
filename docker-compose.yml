@@ -92,7 +92,7 @@ services:
   # pipeline execution.
   saq-runner:
     build: ./backend
-    command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
+    command: ["python", "-m", "saq", "farna.core.saq_worker.runs_settings"]
     depends_on:
       db:
         condition: service_healthy
@@ -128,7 +128,7 @@ services:
   # 127.0.0.1:8081 via the custom runner.
   saq-system:
     build: ./backend
-    command: ["python", "-m", "modulo.core.saq_worker"]
+    command: ["python", "-m", "farna.core.saq_worker"]
     depends_on:
       db:
         condition: service_healthy

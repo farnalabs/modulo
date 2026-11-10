@@ -25,25 +25,25 @@ from sqlalchemy import Table, create_engine, event, select, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run_node_outputs import OutputsRlsMismatch, read_run_outputs_map
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.variant_group import VariantGroup
+from farna.db.crud.run_node_outputs import OutputsRlsMismatch, read_run_outputs_map
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-0000000000f9")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000f2")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000f3")
 _MIGRATION_PATH = (
-    Path(__file__).parents[3] / "src/modulo/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
+    Path(__file__).parents[3] / "src/farna/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
 )
 
 
@@ -461,7 +461,7 @@ class TestLegacyAgentVerdictExtraction:
     """Test the agent-verdict extraction from outputs_json."""
 
     def test_engine_status_alone_is_not_a_self_reported_verdict(self) -> None:
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -475,7 +475,7 @@ class TestLegacyAgentVerdictExtraction:
     @pytest.mark.parametrize("field", ["agent_status", "agent_outcome"])
     def test_extract_failed_self_reported_verdict(self, field: str) -> None:
         """Extract 'failed' only from explicit agent self-report fields."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -491,7 +491,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_extract_failed_agent_outcome(self) -> None:
         """Extract 'failed' verdict from agent_outcome == 'failed'."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -506,7 +506,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_no_verdict_when_success(self) -> None:
         """No verdict extracted when agent_status/outcome is success."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -521,7 +521,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_no_verdict_for_non_dict_output(self) -> None:
         """No verdict when output is not a dict."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -533,7 +533,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_no_verdict_for_empty_outputs(self) -> None:
         """No verdict for empty or None outputs_json."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         assert _extract_legacy_agent_verdict(None) is None
         assert _extract_legacy_agent_verdict({}) is None
@@ -541,7 +541,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_first_failed_verdict_returned(self) -> None:
         """First failed verdict is returned when multiple nodes have failed."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         outputs_json = {
             "node1": {
@@ -568,7 +568,7 @@ class TestLegacyAgentVerdictExtraction:
 
     def test_verdict_only_for_failed_not_other_statuses(self) -> None:
         """Only 'failed' status triggers verdict, not other statuses."""
-        from modulo.api.routes.runs import _extract_legacy_agent_verdict
+        from farna.api.routes.runs import _extract_legacy_agent_verdict
 
         for status in ["completed", "running", "pending", "cancelled"]:
             outputs_json = {
@@ -689,7 +689,7 @@ async def test_read_run_outputs_map_returns_empty_for_no_run_ids(engine: AsyncEn
 
 
 async def test_load_legacy_outputs_reads_a_whole_page_in_one_query(engine: AsyncEngine, session: AsyncSession) -> None:
-    from modulo.api.routes.runs import _load_legacy_outputs
+    from farna.api.routes.runs import _load_legacy_outputs
 
     await _seed_org(session)
     first_run_id = uuid.uuid4()
@@ -754,7 +754,7 @@ def _patch_outputs_deps(
     read_result: Any = None,
     read_error: BaseException | None = None,
 ) -> tuple[AsyncMock, AsyncMock]:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     read_mock = AsyncMock(return_value=read_result)
     if read_error is not None:
@@ -766,7 +766,7 @@ def _patch_outputs_deps(
 
 
 async def test_do_get_run_outputs_returns_the_run_projection(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     run_id = uuid.uuid4()
     session = _FakeOutputsSession()
@@ -787,7 +787,7 @@ async def test_do_get_run_outputs_returns_the_run_projection(monkeypatch: pytest
 async def test_do_get_run_outputs_returns_none_when_the_run_has_no_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     run_id = uuid.uuid4()
     _patch_outputs_deps(monkeypatch, read_result={run_id: None})
@@ -804,7 +804,7 @@ async def test_do_get_run_outputs_returns_none_when_the_run_has_no_rows(
 async def test_do_get_run_outputs_degrades_to_none_on_transient_db_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     run_id = uuid.uuid4()
     _patch_outputs_deps(monkeypatch, read_error=OperationalError("SELECT 1", {}, RuntimeError("connection lost")))
@@ -821,7 +821,7 @@ async def test_do_get_run_outputs_degrades_to_none_on_transient_db_error(
 async def test_do_get_run_outputs_reraises_cancelled_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     _patch_outputs_deps(monkeypatch, read_error=asyncio.CancelledError())
 
@@ -834,7 +834,7 @@ async def test_do_get_run_outputs_reraises_cancelled_error(monkeypatch: pytest.M
 
 
 async def test_do_get_run_outputs_reraises_programming_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     _patch_outputs_deps(monkeypatch, read_error=ProgrammingError("SELECT 1", {}, RuntimeError("bad query")))
 
@@ -847,7 +847,7 @@ async def test_do_get_run_outputs_reraises_programming_error(monkeypatch: pytest
 
 
 async def test_do_get_run_outputs_reraises_rls_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.runs as runs_routes
+    import farna.api.routes.runs as runs_routes
 
     _patch_outputs_deps(monkeypatch, read_error=OutputsRlsMismatch("session org != row org"))
 

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorPayload,
     ConnectorPermissionError,
     ConnectorQuery,
@@ -18,11 +18,11 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.core.connector_hub import (
+from farna.core.connector_hub import (
     ConnectorHub,
     ConnectorNotFoundError,
 )
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.core.secrets_backend import create_secrets_backend
 
 from .secrets_helpers import SHARED_FERNET_KEY as _KEY
 from .secrets_helpers import encrypt_credentials, encrypt_raw_str
@@ -205,8 +205,8 @@ async def test_unknown_connector_type_skips(connector_type_id):
 
 async def test_initialise_plugin_fallback_connector():
     """When a connector type is not built-in, hub falls back to the plugin registry."""
-    from modulo.connectors.base import ConnectorBase
-    from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+    from farna.connectors.base import ConnectorBase
+    from farna.core.plugin_registry import PluginManifest, PluginRegistry
 
     class _PluginConnector(ConnectorBase):
         @property
@@ -214,7 +214,7 @@ async def test_initialise_plugin_fallback_connector():
             return ConnectorType.CUSTOM
 
         async def health_check(self) -> "HealthResult":
-            from modulo.connectors.base import HealthResult
+            from farna.connectors.base import HealthResult
 
             return HealthResult(ok=True)
 
@@ -242,7 +242,7 @@ async def test_initialise_plugin_fallback_connector():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", return_value="{}"),
-        patch("modulo.core.connector_hub.get_plugin_registry", return_value=reg),
+        patch("farna.core.connector_hub.get_plugin_registry", return_value=reg),
     ):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
@@ -408,7 +408,7 @@ async def test_initialise_ciphertext_fallback_uses_column():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -429,7 +429,7 @@ async def test_initialise_ciphertext_fallback_skip_on_bad_key():
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         settings = get_settings.return_value
         settings.fernet_key = other_key
@@ -497,7 +497,7 @@ async def test_initialise_double_guard_inside_lock_warns(tmp_path, caplog):
 
     with (
         patch.object(backend, "get_secret", return_value="{}"),
-        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        caplog.at_level(logging.WARNING, logger="farna.core.connector_hub"),
     ):
         await hub.initialise([ci])
 
@@ -536,7 +536,7 @@ async def test_initialise_programming_bug_logs_error():
     with (
         patch.object(backend, "get_secret", return_value="{}"),
         patch(
-            "modulo.core.connector_hub.FilesystemConnector",
+            "farna.core.connector_hub.FilesystemConnector",
             side_effect=RuntimeError("boom"),
         ),
     ):
@@ -677,7 +677,7 @@ async def test_skip_warning_dedup_full_traceback_once_per_process(caplog):
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        caplog.at_level(logging.WARNING, logger="farna.core.connector_hub"),
         patch.object(backend, "get_secret", return_value="{}"),
     ):
         hub1 = ConnectorHub(secrets_backend=backend)
@@ -703,7 +703,7 @@ async def test_skip_warning_dedup_different_instance_id_logs_traceback(caplog):
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
+        caplog.at_level(logging.WARNING, logger="farna.core.connector_hub"),
         patch.object(backend, "get_secret", return_value="{}"),
     ):
         ci_a = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=encrypt_credentials({}))
@@ -754,7 +754,7 @@ def test_acl_unknown_connector_raises():
 
 async def test_get_checks_operation_acl(tmp_path):
     """get() with an operation not in allowed_operations raises ConnectorPermissionError."""
-    from modulo.connectors.base import ConnectorPermissionError
+    from farna.connectors.base import ConnectorPermissionError
 
     ci = _FakeCI(
         id=uuid.uuid4(),
@@ -791,7 +791,7 @@ async def test_sample_propagates_query_results(tmp_path):
 
 async def test_sample_enforces_read_acl(tmp_path):
     """sample() raises ConnectorPermissionError when 'read' is not allowed."""
-    from modulo.connectors.base import ConnectorPermissionError
+    from farna.connectors.base import ConnectorPermissionError
 
     ci = _FakeCI(
         id=uuid.uuid4(),
@@ -836,7 +836,7 @@ async def test_initialise_creates_shell_connector():
 async def test_acl_blocks_write(tmp_path):
     """ConnectorACL is enforced by _TracedConnector — writes are blocked when
     allowed_operations omits 'write'."""
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     ci_id = uuid.uuid4()
     ci = _FakeCI(
@@ -894,7 +894,7 @@ async def test_hub_rejects_mis_typed_legacy_allowlist_entry(tmp_path):
     wrong surface. The ACL is built from the row, so this proves the
     construction-site wiring — not just the ACL class in isolation.
     """
-    from modulo.connectors.base import ConnectorPermissionError
+    from farna.connectors.base import ConnectorPermissionError
 
     ci_id = uuid.uuid4()
     ci = _FakeCI(
@@ -948,7 +948,7 @@ async def test_initialise_shell_no_runtime_provider_creates_connector():
         config_json={"allowed_commands": ["echo"]},
         credentials_ciphertext=encrypt_credentials({}),
     )
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
@@ -979,7 +979,7 @@ async def test_initialise_bare_token_ciphertext_wraps_under_type_key_github():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -1008,8 +1008,8 @@ async def test_initialise_bare_token_ciphertext_rest_keeps_api_key_wrap():
     factory = MagicMock()
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.connector_hub.RestConnector", factory),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.connector_hub.RestConnector", factory),
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -1035,8 +1035,8 @@ async def test_initialise_bare_token_ciphertext_jira_keeps_api_key_wrap():
     factory = MagicMock()
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.connector_hub.JiraConnector", factory),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.connector_hub.JiraConnector", factory),
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -1056,7 +1056,7 @@ async def test_initialise_json_dict_ciphertext_used_as_is_for_token_keyed_type()
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -1090,7 +1090,7 @@ async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         settings = get_settings.return_value
         settings.fernet_key = _KEY
@@ -1109,19 +1109,19 @@ async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
 def test_shared_redis_client_fails_closed_and_is_sticky():
     """FAR-439: once a tenant-path shared Redis construction fails, EVERY later
     call re-raises instead of degrading to the per-process local bucket."""
-    from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+    from farna.connectors._rate_bucket import SharedBudgetUnavailableError
 
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend, org_id="org-1")
     with patch(
-        "modulo.core.connector_hub.resolve_shared_rate_limit_redis",
+        "farna.core.connector_hub.resolve_shared_rate_limit_redis",
         side_effect=SharedBudgetUnavailableError("boom"),
     ):
         with pytest.raises(SharedBudgetUnavailableError):
             hub._shared_redis_client()
         # The recorded error is sticky: a resolver that would now succeed is never consulted.
         with (
-            patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+            patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
             pytest.raises(SharedBudgetUnavailableError),
         ):
             hub._shared_redis_client()
@@ -1132,7 +1132,7 @@ def test_shared_redis_client_resolved_once():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend, org_id="org-1")
     sentinel = object()
-    with patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=sentinel) as resolver:
+    with patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=sentinel) as resolver:
         assert hub._shared_redis_client() is sentinel
         assert hub._shared_redis_client() is sentinel
         resolver.assert_called_once_with("org-1")

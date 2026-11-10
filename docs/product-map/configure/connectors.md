@@ -3,17 +3,17 @@ id: feat-connectors
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/connectors.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/api/routes/library.py
-  - backend/src/modulo/core/connector_hub
-  - backend/src/modulo/core/team_visibility.py
-  - backend/src/modulo/db/crud/team_scope.py
-  - backend/src/modulo/connectors/base.py
-  - backend/src/modulo/connectors/rest
-  - backend/src/modulo/core/guardrails/conformance.py
-  - backend/src/modulo/core/graph_validator/__init__.py
+  - backend/src/farna/api/routes/connectors.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/api/routes/library.py
+  - backend/src/farna/core/connector_hub
+  - backend/src/farna/core/team_visibility.py
+  - backend/src/farna/db/crud/team_scope.py
+  - backend/src/farna/connectors/base.py
+  - backend/src/farna/connectors/rest
+  - backend/src/farna/core/guardrails/conformance.py
+  - backend/src/farna/core/graph_validator/__init__.py
   - frontend/src/views/AdminConnectorsView.vue
 unit-tests:
   - backend/tests/unit/api/test_connectors_endpoint.py
@@ -86,14 +86,14 @@ and per-destination rate limiting.
 - [x] A REST connector is creatable with a declarative endpoint (base_url + path
       + method) and auth credential profile (bearer / api_key / basic);
       credentials are Fernet-encrypted at rest and never exposed in responses
-      (`backend/src/modulo/api/routes/connectors.py`,
+      (`backend/src/farna/api/routes/connectors.py`,
       `backend/tests/unit/api/test_connectors_endpoint.py`)
 - [x] query() is the read surface and write() is the write surface; mutating
       verbs retry only when an idempotency_header is declared
-      (`backend/src/modulo/connectors/rest`)
+      (`backend/src/farna/connectors/rest`)
 - [x] Non-2xx/3xx responses surface typed RESTStatusError with status_code,
       location, and Retry-After metadata; response body capped at max_response_size
-      (`backend/src/modulo/connectors/rest`)
+      (`backend/src/farna/connectors/rest`)
 - [x] Per-destination rate limiting enforces one budget per tenant:destination:
       a Redis-atomic shared bucket when a `redis_client` is wired at the
       composition root (fleet-wide), otherwise the connector-local per-process
@@ -112,7 +112,7 @@ and per-destination rate limiting.
       connector config (base_url, method, credentials, advanced JSON)
       (`frontend/src/views/AdminConnectorsView.vue`)
 - [x] ConnectorHub registers and manages 30+ native connector types with
-      per-connector BDD features (`backend/src/modulo/core/connector_hub`,
+      per-connector BDD features (`backend/src/farna/core/connector_hub`,
       `backend/tests/unit/connector_hub/`)
 - [x] The Sentry connector is BDD-exercised against the real `SentryConnector`
       (respx-mocked Sentry API): token validation via `/` (200 => healthy, 401
@@ -245,10 +245,10 @@ and per-destination rate limiting.
       allowlist (there is no explicit deny-all; removing the connector is the
       lock), and any MALFORMED non-list value fails CLOSED to the empty
       allowlist so every operation is denied - malformed input restricts, never
-      grants (`backend/src/modulo/connectors/base.py`,
-      `backend/src/modulo/core/graph_validator/__init__.py`,
-      `backend/src/modulo/core/guardrails/conformance.py`;
-      `backend/src/modulo/core/connector_hub/health_sweep.py` references the
+      grants (`backend/src/farna/connectors/base.py`,
+      `backend/src/farna/core/graph_validator/__init__.py`,
+      `backend/src/farna/core/guardrails/conformance.py`;
+      `backend/src/farna/core/connector_hub/health_sweep.py` references the
       ACL-denial semantics in comments only and does not read the predicate;
       `unit-tests: test_acl.py, test_connectors_endpoint.py,
       test_guardrail_conformance_midrun.py`)
@@ -279,8 +279,8 @@ and per-destination rate limiting.
       list entry is dropped silently; a string entry that is not a capability is
       dropped with a log - both grant nothing), while a non-list value yields the
       empty set matching the fail-closed FAR-1564 treatment
-      (`backend/src/modulo/connectors/base.py`,
-      `backend/src/modulo/core/guardrails/conformance.py`;
+      (`backend/src/farna/connectors/base.py`,
+      `backend/src/farna/core/guardrails/conformance.py`;
       `unit-tests: test_acl.py, test_guardrail_conformance_midrun.py`)
 - [x] A connector binding that crosses a team boundary is refused at graph
       save with 409 `connector_team_mismatch` (FAR-1515, PRD §9.3, model
@@ -317,12 +317,12 @@ and per-destination rate limiting.
       caller-RLS-hidden row as `connector_not_found`, while the team-blind read
       behind the graph-save / import / MCP-graph-update paths fails closed as
       `ConnectorBindingMissingError`)
-      (`backend/src/modulo/core/team_visibility.py`,
-      `backend/src/modulo/db/crud/team_scope.py`,
-      `backend/src/modulo/api/routes/pipelines.py`,
-      `backend/src/modulo/api/mcp_server.py`,
-      `backend/src/modulo/api/routes/library.py`,
-      `backend/src/modulo/api/routes/connectors.py`;
+      (`backend/src/farna/core/team_visibility.py`,
+      `backend/src/farna/db/crud/team_scope.py`,
+      `backend/src/farna/api/routes/pipelines.py`,
+      `backend/src/farna/api/mcp_server.py`,
+      `backend/src/farna/api/routes/library.py`,
+      `backend/src/farna/api/routes/connectors.py`;
       `unit-tests: test_pipeline_team_visibility.py,
       test_team_visibility.py, test_team_binding_enforcement.py,
       test_team_scope.py`; `integration: test_pipeline_team_gate_parity.py`)

@@ -16,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.guardrails.config import GuardrailPin
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.guardrails.config import GuardrailPin
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -129,7 +129,7 @@ def _patched(
                 {"new_callable": AsyncMock, "return_value": (MagicMock(), {})},
             ),
         ]:
-            mocks[name] = stack.enter_context(patch(f"modulo.api.routes.guardrail_config.{target}", **kwargs))
+            mocks[name] = stack.enter_context(patch(f"farna.api.routes.guardrail_config.{target}", **kwargs))
         yield mocks
 
 
@@ -268,7 +268,7 @@ def test_apply_collision_with_node_bound_row_returns_409(admin_client: TestClien
     with (
         _patched(pin=_proposed_pin()),
         patch(
-            "modulo.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
+            "farna.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
             new_callable=AsyncMock,
             return_value=(pipeline, {"no-aws-keys": colliding_row}),
         ),
@@ -355,7 +355,7 @@ def test_import_collision_with_node_bound_row_returns_409(admin_client: TestClie
     with (
         _patched(pin=None),
         patch(
-            "modulo.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
+            "farna.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
             new_callable=AsyncMock,
             return_value=(pipeline, {"no-aws-keys": colliding_row}),
         ),
@@ -413,7 +413,7 @@ def test_drift_clean_pin_stays_clean(admin_client: TestClient) -> None:
 def test_drift_get_is_read_only_no_writes(admin_client: TestClient) -> None:
     with (
         _patched(pin=_clean_pin()) as mocks,
-        patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
+        patch("farna.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
     ):
         resp = admin_client.get(f"{_BASE}/drift")
 
@@ -427,7 +427,7 @@ def test_drift_get_is_read_only_no_writes(admin_client: TestClient) -> None:
 def test_drift_check_transition_clean_to_drift_persists_pin(admin_client: TestClient) -> None:
     with (
         _patched(pin=_clean_pin()) as mocks,
-        patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
+        patch("farna.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
     ):
         resp = admin_client.post(f"{_BASE}/drift/check")
 
@@ -458,7 +458,7 @@ def test_drift_check_denied_for_operator(operator_client: TestClient) -> None:
 def test_drift_proposed_pin_stays_proposed(admin_client: TestClient) -> None:
     with (
         _patched(pin=_proposed_pin()),
-        patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
+        patch("farna.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
     ):
         resp = admin_client.get(f"{_BASE}/drift")
 
@@ -477,12 +477,12 @@ def test_drift_without_pin_reports_clean(admin_client: TestClient) -> None:
 
 
 def test_drift_config_error_fails_closed_422(admin_client: TestClient) -> None:
-    from modulo.core.guardrails.config import GuardrailConfigError
+    from farna.core.guardrails.config import GuardrailConfigError
 
     with (
         _patched(pin=_clean_pin()),
         patch(
-            "modulo.api.routes.guardrail_config.check_guardrail_drift",
+            "farna.api.routes.guardrail_config.check_guardrail_drift",
             side_effect=GuardrailConfigError("bad legacy name"),
         ),
     ):
@@ -509,12 +509,12 @@ def test_config_without_pin_reports_clean_empty_config(admin_client: TestClient)
 
 
 def test_config_config_error_fails_closed_422(admin_client: TestClient) -> None:
-    from modulo.core.guardrails.config import GuardrailConfigError
+    from farna.core.guardrails.config import GuardrailConfigError
 
     with (
         _patched(pin=_clean_pin()),
         patch(
-            "modulo.api.routes.guardrail_config.check_guardrail_drift",
+            "farna.api.routes.guardrail_config.check_guardrail_drift",
             side_effect=GuardrailConfigError("bad legacy name"),
         ),
     ):
@@ -524,12 +524,12 @@ def test_config_config_error_fails_closed_422(admin_client: TestClient) -> None:
 
 
 def test_elevated_config_error_fails_closed_422(admin_client: TestClient) -> None:
-    from modulo.core.guardrails.config import GuardrailConfigError
+    from farna.core.guardrails.config import GuardrailConfigError
 
     with (
         _patched(pin=_clean_pin()),
         patch(
-            "modulo.api.routes.guardrail_config.check_guardrail_drift",
+            "farna.api.routes.guardrail_config.check_guardrail_drift",
             side_effect=GuardrailConfigError("bad legacy name"),
         ),
     ):
@@ -544,7 +544,7 @@ def test_elevated_config_error_fails_closed_422(admin_client: TestClient) -> Non
 
 
 def test_applied_config_set_degrades_on_invalid_snapshot() -> None:
-    from modulo.api.routes.guardrail_config import _applied_config_set
+    from farna.api.routes.guardrail_config import _applied_config_set
 
     broken = _clean_pin()
     broken.serialized_snapshot = "not: [valid: yaml"
@@ -553,7 +553,7 @@ def test_applied_config_set_degrades_on_invalid_snapshot() -> None:
 
 
 def test_effective_config_set_uses_proposal_while_pending() -> None:
-    from modulo.api.routes.guardrail_config import _effective_config_set
+    from farna.api.routes.guardrail_config import _effective_config_set
 
     config_set = _effective_config_set(_proposed_pin())
     assert len(config_set.guardrails) == 1
@@ -561,7 +561,7 @@ def test_effective_config_set_uses_proposal_while_pending() -> None:
 
 
 def test_effective_config_set_empty_without_serialized_state() -> None:
-    from modulo.api.routes.guardrail_config import _effective_config_set
+    from farna.api.routes.guardrail_config import _effective_config_set
 
     empty_pin = GuardrailPin(org_id=_ORG_ID, status="proposed")
     assert not _effective_config_set(empty_pin).guardrails
@@ -569,8 +569,8 @@ def test_effective_config_set_empty_without_serialized_state() -> None:
 
 
 def test_diff_summary_counts_by_action() -> None:
-    from modulo.api.routes.guardrail_config import _diff_summary
-    from modulo.core.guardrails.config import ConfigChange
+    from farna.api.routes.guardrail_config import _diff_summary
+    from farna.core.guardrails.config import ConfigChange
 
     changes = [
         ConfigChange(action="add", id="a", name="A"),
@@ -589,7 +589,7 @@ def test_diff_summary_counts_by_action() -> None:
 async def test_load_pipeline_guardrail_rows_by_name_reads_evals() -> None:
     """The org-level guardrail load reads the ``evals`` table and keys live
     rows by name, dropping nameless rows."""
-    from modulo.api.routes.guardrail_config import _load_pipeline_guardrail_rows_by_name
+    from farna.api.routes.guardrail_config import _load_pipeline_guardrail_rows_by_name
 
     session = AsyncMock()
     named = MagicMock()
@@ -618,8 +618,8 @@ async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
     — the pipeline-creation seed shares it), so the collaborators are patched
     there; the route entry point keeps its historical name and signature.
     """
-    from modulo.api.routes.guardrail_config import _apply_guardrail_upserts
-    from modulo.core.guardrails.config import GuardrailConfigSet
+    from farna.api.routes.guardrail_config import _apply_guardrail_upserts
+    from farna.core.guardrails.config import GuardrailConfigSet
 
     session = AsyncMock()
     existing = MagicMock()
@@ -630,9 +630,9 @@ async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
     pipeline.id = uuid.uuid4()
 
     with (
-        patch("modulo.core.guardrails.materialise.to_eval_config", return_value={"action": "block"}),
+        patch("farna.core.guardrails.materialise.to_eval_config", return_value={"action": "block"}),
         patch(
-            "modulo.core.guardrails.materialise.create_or_update_eval",
+            "farna.core.guardrails.materialise.create_or_update_eval",
             new_callable=AsyncMock,
         ) as mock_upsert,
     ):

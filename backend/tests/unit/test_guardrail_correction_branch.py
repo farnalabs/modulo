@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalResult
-from modulo.core.guardrails.correction import (
+from farna.core.eval_engine import EvalDefinition, EvalResult
+from farna.core.guardrails.correction import (
     CorrectionConfigError,
     CorrectionDefinition,
     CorrectionDetectorFamily,
@@ -378,7 +378,7 @@ def test_resolve_redaction_leaf_single_segment():
 
 def test_redact_payload_applies_regex():
     """Pattern matches → replacement applied."""
-    from modulo.core.guardrails import REDACTION_MASK
+    from farna.core.guardrails import REDACTION_MASK
 
     patterns = [CorrectionRedactionPattern(path="email", pattern=r"[a-z]+@")]
     result = redact_payload({"email": "alice@example.com"}, patterns)
@@ -431,7 +431,7 @@ def test_redact_payload_nested_path_missing():
 
 def test_redact_payload_deeply_nested():
     """Deeply nested path → replacement applied."""
-    from modulo.core.guardrails import REDACTION_MASK
+    from farna.core.guardrails import REDACTION_MASK
 
     patterns = [CorrectionRedactionPattern(path="a.b.secret", pattern=r"\d+")]
     result = redact_payload({"a": {"b": {"secret": "code123"}}}, patterns)
@@ -754,7 +754,7 @@ def test_resume_revalidation_failure_budget_not_exhausted():
 
 def test_redaction_pattern_default_replacement():
     """Default replacement is REDACTION_MASK."""
-    from modulo.core.guardrails import REDACTION_MASK
+    from farna.core.guardrails import REDACTION_MASK
 
     p = CorrectionRedactionPattern(path="a.b", pattern=".*")
     assert p.replacement == REDACTION_MASK

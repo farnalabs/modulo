@@ -11,14 +11,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories.generic import GenericRepository
-from modulo.db.repositories.locks import (
+from farna.db.repositories.generic import GenericRepository
+from farna.db.repositories.locks import (
     PostgresLock,
     _build_lock_service,
     _generic_locks,
     _generic_owners,
 )
-from modulo.db.repositories.postgres import PostgresRepository
+from farna.db.repositories.postgres import PostgresRepository
 
 # ---------------------------------------------------------------------------
 # Register feature file
@@ -211,7 +211,7 @@ def database_urls(ctx) -> None:
 
 @when("the migration env.py configures the backend")
 def configure_migration_backend(ctx) -> None:
-    from modulo.db.migrations.env import _detect_backend
+    from farna.db.migrations.env import _detect_backend
 
     detected = {}
     for name, url in ctx["urls"].items():

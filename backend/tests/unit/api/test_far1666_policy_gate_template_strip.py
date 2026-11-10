@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-from modulo.api.routes.library import _build_pipeline_from_template
-from modulo.api.routes.templates import _resolve_template_nodes
+from farna.api.routes.library import _build_pipeline_from_template
+from farna.api.routes.templates import _resolve_template_nodes
 
 _EVAL_ID = str(uuid.uuid4())
 
@@ -54,7 +54,7 @@ class TestLibraryInstallFromTemplateStrip:
             content_json={"agents": [], "graph_nodes": [_gate_node(), _plain_node()], "edges": []},
         )
 
-        with caplog.at_level(logging.WARNING, logger="modulo.api.routes.library"):
+        with caplog.at_level(logging.WARNING, logger="farna.api.routes.library"):
             _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(
                 primitive, None, None
             )
@@ -72,7 +72,7 @@ class TestLibraryInstallFromTemplateStrip:
             content_json={"agents": [], "graph_nodes": [_plain_node()], "edges": []},
         )
 
-        with caplog.at_level(logging.WARNING, logger="modulo.api.routes.library"):
+        with caplog.at_level(logging.WARNING, logger="farna.api.routes.library"):
             _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(
                 primitive, None, None
             )
@@ -83,7 +83,7 @@ class TestLibraryInstallFromTemplateStrip:
 
 class TestTemplatesCreateFromTemplateStrip:
     def test_declared_gate_is_stripped_and_warned(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.api.routes.templates"):
+        with caplog.at_level(logging.WARNING, logger="farna.api.routes.templates"):
             nodes = _resolve_template_nodes([_gate_node(), _plain_node()], [], {})
 
         assert all("policy_gate" not in node for node in nodes)
@@ -92,7 +92,7 @@ class TestTemplatesCreateFromTemplateStrip:
         assert "template-node-1" in caplog.text
 
     def test_gate_free_template_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.api.routes.templates"):
+        with caplog.at_level(logging.WARNING, logger="farna.api.routes.templates"):
             nodes = _resolve_template_nodes([_plain_node()], [], {})
 
         assert len(nodes) == 1

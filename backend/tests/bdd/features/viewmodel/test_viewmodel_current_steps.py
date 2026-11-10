@@ -16,7 +16,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from tests.bdd.conftest import ORG_ID, _active_client, _shared_state
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 scenarios("viewmodel_current.feature")
 
@@ -131,32 +131,32 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
             mock_session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
 
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.viewmodel.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.viewmodel.set_rls_user_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.viewmodel.get_organisation",
+            "farna.api.routes.viewmodel.get_organisation",
             new_callable=AsyncMock,
             return_value=org,
             side_effect=org_side_effect,
         ),
-        patch("modulo.api.routes.viewmodel.get_account_by_id", new_callable=AsyncMock, return_value=account),
+        patch("farna.api.routes.viewmodel.get_account_by_id", new_callable=AsyncMock, return_value=account),
         patch(
-            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            "farna.api.routes.viewmodel.list_team_memberships_for_account",
             new_callable=AsyncMock,
             return_value=memberships,
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_pipelines",
+            "farna.api.routes.viewmodel.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=pipelines, total=len(pipelines), page=1, page_size=20),
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_runs",
+            "farna.api.routes.viewmodel.list_runs",
             new_callable=AsyncMock,
             return_value=PageResult(items=runs, total=len(runs), page=1, page_size=10),
         ),
         patch(
-            "modulo.api.routes.viewmodel.resolve_plan_context",
+            "farna.api.routes.viewmodel.resolve_plan_context",
             new_callable=AsyncMock,
             # FAR-1806: the viewmodel reads ``list_all_features`` (full set +
             # org overlay via effective_feature_flags), not the active-only
@@ -166,7 +166,7 @@ def _get_viewmodel(client: Any, ctx: dict[str, Any], params: dict[str, str] | No
                 list_all_features=MagicMock(return_value=plan_flags),
             ),
         ),
-        patch("modulo.api.routes.viewmodel._resolve_tier", return_value="team"),
+        patch("farna.api.routes.viewmodel._resolve_tier", return_value="team"),
     ):
         return client.get("/api/v1/viewmodel/current", params=params or {})
 
@@ -267,7 +267,7 @@ def _when_get_viewmodel_current(request, ctx, mock_session) -> None:
 
 @when("I GET /api/v1/viewmodel/current without authentication")
 def _when_get_viewmodel_current_unauth(request, unauth_client) -> None:
-    from modulo.auth.dependencies import get_current_user
+    from farna.auth.dependencies import get_current_user
 
     unauth_client.app.dependency_overrides.pop(get_current_user, None)
     request.node._resp = unauth_client.get("/api/v1/viewmodel/current")

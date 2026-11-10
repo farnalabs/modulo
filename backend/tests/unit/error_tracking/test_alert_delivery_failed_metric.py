@@ -14,8 +14,8 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import modulo.core.error_tracking.metrics as metrics_mod
-from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
+import farna.core.error_tracking.metrics as metrics_mod
+from farna.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -77,9 +77,9 @@ class TestDispatchAllForwarderError:
         session = AsyncMock(spec=AsyncSession)
 
         with (
-            patch("modulo.core.error_tracking.alerting.dispatch_alert", AsyncMock(side_effect=RuntimeError("boom"))),
-            patch("modulo.core.error_tracking.alerting.record_error_alert") as recorded,
-            patch("modulo.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
+            patch("farna.core.error_tracking.alerting.dispatch_alert", AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.core.error_tracking.alerting.record_error_alert") as recorded,
+            patch("farna.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
         ):
             await engine.dispatch_all(_ORG_ID, [alert], session)
 
@@ -101,8 +101,8 @@ class TestDispatchAllForwarderError:
         session = AsyncMock(spec=AsyncSession)
 
         with (
-            patch("modulo.core.error_tracking.alerting.dispatch_alert", AsyncMock()) as dispatched,
-            patch("modulo.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
+            patch("farna.core.error_tracking.alerting.dispatch_alert", AsyncMock()) as dispatched,
+            patch("farna.core.error_tracking.alerting.record_alert_delivery_failed") as failed,
         ):
             await engine.dispatch_all(_ORG_ID, [alert], session)
 
@@ -112,7 +112,7 @@ class TestDispatchAllForwarderError:
 
 class TestWebhookFailurePath:
     async def test_request_failure_fires_metric(self) -> None:
-        from modulo.core.error_tracking import alert_dispatcher as dispatcher_mod
+        from farna.core.error_tracking import alert_dispatcher as dispatcher_mod
 
         alert = TriggeredAlert(
             rule_id=uuid.uuid4(),
@@ -137,7 +137,7 @@ class TestWebhookFailurePath:
             patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
             patch.object(dispatcher_mod, "pinned_async_client", new=AsyncMock(return_value=client)),
         ):
-            from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+            from farna.core.error_tracking.alert_dispatcher import dispatch_alert
 
             await dispatch_alert(_ORG_ID, alert, session, error_group)
 
@@ -145,7 +145,7 @@ class TestWebhookFailurePath:
         failed.assert_called_once_with(str(alert.rule_id), "webhook")
 
     async def test_http_error_fires_metric(self) -> None:
-        from modulo.core.error_tracking import alert_dispatcher as dispatcher_mod
+        from farna.core.error_tracking import alert_dispatcher as dispatcher_mod
 
         alert = TriggeredAlert(
             rule_id=uuid.uuid4(),
@@ -174,7 +174,7 @@ class TestWebhookFailurePath:
             patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
             patch.object(dispatcher_mod, "pinned_async_client", new=AsyncMock(return_value=client)),
         ):
-            from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+            from farna.core.error_tracking.alert_dispatcher import dispatch_alert
 
             await dispatch_alert(_ORG_ID, alert, session, error_group)
 

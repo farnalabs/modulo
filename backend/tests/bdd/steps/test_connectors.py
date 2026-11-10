@@ -11,12 +11,12 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.connectors.base import HealthResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.connectors.base import HealthResult
+from farna.settings import Settings, get_settings
 from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
@@ -163,14 +163,14 @@ def _health_route_patchers(ctx) -> list[Any]:
     hub_cm.__aenter__ = AsyncMock(return_value=hub)
     hub_cm.__aexit__ = AsyncMock(return_value=False)
     return [
-        patch("modulo.api.routes.connectors.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.connectors.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.connectors.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.connectors.set_rls_user_context", new=AsyncMock()),
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             return_value=_make_mock_connector_instance(ctx),
         ),
-        patch("modulo.api.routes.connectors.create_secrets_backend", new=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub", new=MagicMock(return_value=hub_cm)),
+        patch("farna.api.routes.connectors.create_secrets_backend", new=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", new=MagicMock(return_value=hub_cm)),
     ]
 
 
@@ -293,7 +293,7 @@ def step_github_connector(ctx):
     mock_connector.connector_type = "github"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "repos":
@@ -442,7 +442,7 @@ def step_github_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_github_query_resource_limit(resource, limit, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, limit=limit)
@@ -459,7 +459,7 @@ def step_github_query_resource_limit(resource, limit, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and path "{path}"'))
 def step_github_query_file_with_filters(resource, repo, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
@@ -479,7 +479,7 @@ def step_github_query_file_with_filters(resource, repo, path, ctx):
 
 @when(parsers.parse('I query GitHub tree for repo "{repo}" with path "{path}" and recursive'))
 def step_github_query_tree_recursive(repo, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
@@ -521,7 +521,7 @@ def step_github_write_error_contains(text, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_github_query_pulls_with_filters(resource, repo, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
@@ -541,7 +541,7 @@ def step_github_query_pulls_with_filters(resource, repo, state, ctx):
 
 @when('I query resource "invalid"')
 def step_github_query_invalid(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource="invalid")
@@ -558,7 +558,7 @@ def step_github_query_invalid(ctx):
 
 @when(parsers.parse('I write resource "{resource}" with content "{content}" and path "{path}"'))
 def step_github_write_file(resource, content, path, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -583,7 +583,7 @@ def step_github_write_file(resource, content, path, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with head "{head}" and base "{base}"'))
 def step_github_write_pr(resource, head, base, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -603,7 +603,7 @@ def step_github_write_pr(resource, head, base, ctx):
 
 @when(parsers.parse('I write resource "{resource}" on pull number {number:d}'))
 def step_github_write_on_pr(resource, number, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -628,7 +628,7 @@ def step_github_write_on_pr(resource, number, ctx):
 
 @when(parsers.parse('I write resource "{resource}" on issue number {number:d}'))
 def step_github_write_on_issue(resource, number, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -652,7 +652,7 @@ def step_github_write_on_issue(resource, number, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and pull number {number:d}'))
 def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"repo": repo, "pull_number": str(number)})
@@ -669,7 +669,7 @@ def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with search query "{search_query}"'))
 def step_github_query_search(resource, search_query, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"q": search_query})
@@ -759,7 +759,7 @@ def step_result_exposes_rate_limit_budget(ctx):
 def step_connector_raises_value_error_with_quota(expected, header, ctx):
     import asyncio
 
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     loop = asyncio.new_event_loop()
@@ -829,7 +829,7 @@ def step_github_api_exhausted_429_with_quota(quota, ctx):
 def step_connector_raises_value_error(expected, ctx):
     import asyncio
 
-    from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+    from farna.connectors.base import ConnectorPayload, ConnectorQuery
 
     connector = ctx["connector"]
     operation = ctx.get("_expected_operation", "query")
@@ -860,7 +860,7 @@ def step_connector_raises_value_error(expected, ctx):
 
 @when("the GitHub API returns HTTP 401 with an expired token")
 def step_github_api_401_expired_token(ctx):
-    from modulo.connectors.github import GitHubAuthError
+    from farna.connectors.github import GitHubAuthError
 
     connector = ctx["connector"]
 
@@ -878,7 +878,7 @@ def step_github_api_401_expired_token(ctx):
 
 @when("the GitHub API returns HTTP 429 with exhausted quota")
 def step_github_api_429_exhausted_quota(ctx):
-    from modulo.connectors.github import GitHubRateLimitError
+    from farna.connectors.github import GitHubRateLimitError
 
     connector = ctx["connector"]
 
@@ -895,7 +895,7 @@ def step_github_api_429_exhausted_quota(ctx):
 
 @given("the GitHub connector circuit is open")
 def step_github_circuit_open(ctx):
-    from modulo.connectors.github import GitHubCircuitOpenError
+    from farna.connectors.github import GitHubCircuitOpenError
 
     connector = ctx["connector"]
 
@@ -936,8 +936,8 @@ def step_github_circuit_state_open(ctx):
 def step_connector_raises_github_error_code(code, ctx):
     import asyncio
 
-    from modulo.connectors.base import ConnectorQuery
-    from modulo.connectors.github import GitHubError
+    from farna.connectors.base import ConnectorQuery
+    from farna.connectors.github import GitHubError
 
     connector = ctx["connector"]
     loop = asyncio.new_event_loop()
@@ -955,7 +955,7 @@ def step_connector_raises_github_error_code(code, ctx):
 
 @given("a GitHub connector whose health check reports an expired token")
 def step_github_health_expired_token(ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
@@ -965,7 +965,7 @@ def step_github_health_expired_token(ctx):
 
 @given(parsers.parse('a GitHub connector whose health check reports missing scope "{scope}"'))
 def step_github_health_missing_scope(scope, ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(
@@ -993,7 +993,7 @@ def step_health_detail_contains(text, ctx):
 
 @given("a GitHub connector with a fine-grained token")
 def step_github_fine_grained_connector(ctx):
-    from modulo.connectors.github import GitHubConnector
+    from farna.connectors.github import GitHubConnector
 
     ctx["connector"] = GitHubConnector(token="github_pat_11test")
 
@@ -1067,7 +1067,7 @@ def step_github_write_returns_error(status_code, reason, ctx):
 
 @when(parsers.parse('I write GitHub files batch for repo "{repo}"'))
 def step_github_write_files_batch(repo, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="commit",
@@ -1094,7 +1094,7 @@ def step_github_write_files_batch(repo, ctx):
 
 @when(parsers.parse('I write GitHub files batch for repo "{repo}" with no actions'))
 def step_github_write_files_batch_no_actions(repo, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="commit",
@@ -1113,7 +1113,7 @@ def step_github_write_files_batch_no_actions(repo, ctx):
 
 @when(parsers.parse('I write GitHub files batch for repo "{repo}" with traversal path "{path}"'))
 def step_github_write_files_batch_traversal(repo, path, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="commit",
@@ -1152,7 +1152,7 @@ def step_jira_connector(ctx):
     mock_connector.connector_type = "jira"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "issue":
@@ -1360,7 +1360,7 @@ def step_jira_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with issue_key "{key}"'))
 def step_jira_query_issue(resource, key, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"issue_key": key})
     import asyncio
@@ -1376,7 +1376,7 @@ def step_jira_query_issue(resource, key, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with JQL "{jql}"'))
 def step_jira_query_search(resource, jql, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"jql": jql, "max_results": 50})
     import asyncio
@@ -1392,7 +1392,7 @@ def step_jira_query_search(resource, jql, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with summary "{summary}" and project "{project}"'))
 def step_jira_write_issue(resource, summary, project, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -1415,7 +1415,7 @@ def step_jira_write_issue(resource, summary, project, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with issue_key "{key}" and updated fields'))
 def step_jira_update_issue(resource, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -1437,7 +1437,7 @@ def step_jira_update_issue(resource, key, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without issue_key'))
 def step_jira_query_without_key(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
     import asyncio
@@ -1453,7 +1453,7 @@ def step_jira_query_without_key(resource, ctx):
 
 @when(parsers.parse('I query field metadata for project "{project}"'))
 def step_jira_query_field_metadata(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="field_metadata", filters={"project": project})
     import asyncio
@@ -1469,7 +1469,7 @@ def step_jira_query_field_metadata(project, ctx):
 
 @when("I query field metadata without a project")
 def step_jira_query_field_metadata_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="field_metadata", filters={})
     import asyncio
@@ -1485,7 +1485,7 @@ def step_jira_query_field_metadata_no_project(ctx):
 
 @when("I query all Jira fields")
 def step_jira_query_fields(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="fields")
     import asyncio
@@ -1501,7 +1501,7 @@ def step_jira_query_fields(ctx):
 
 @when(parsers.parse('I query statuses for project "{project}"'))
 def step_jira_query_statuses(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="statuses", filters={"project": project})
     import asyncio
@@ -1517,7 +1517,7 @@ def step_jira_query_statuses(project, ctx):
 
 @when("I query statuses without a project")
 def step_jira_query_statuses_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="statuses", filters={})
     import asyncio
@@ -1564,7 +1564,7 @@ def step_jira_records_issue_type_statuses(ctx):
 def step_jira_connector_api_errors(ctx):
     from unittest.mock import AsyncMock
 
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = "jira"
@@ -1587,7 +1587,7 @@ def step_jira_connector_api_errors(ctx):
 
 @when(parsers.parse('I write resource "{resource}" with empty data'))
 def step_jira_write_empty_data(resource, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={})
     import asyncio
@@ -1605,7 +1605,7 @@ def step_jira_write_empty_data(resource, ctx):
 def step_jira_connector_rate_limited(ctx):
     from unittest.mock import AsyncMock
 
-    from modulo.connectors.base import ConnectorResult
+    from farna.connectors.base import ConnectorResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = "jira"
@@ -1634,7 +1634,7 @@ def step_jira_connector_rate_limited(ctx):
 def step_jira_connector_rate_limited_error(ctx):
     from unittest.mock import AsyncMock
 
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = "jira"
@@ -1678,7 +1678,7 @@ def step_jira_error_reports_quota(ctx):
 
 @when(parsers.parse('I assign issue "{key}" to account "{account_id}"'))
 def step_jira_assign_issue(key, account_id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_assign",
@@ -1697,7 +1697,7 @@ def step_jira_assign_issue(key, account_id, ctx):
 
 @when(parsers.parse('I unassign issue "{key}"'))
 def step_jira_unassign_issue(key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_assign",
@@ -1716,7 +1716,7 @@ def step_jira_unassign_issue(key, ctx):
 
 @when(parsers.parse('I update labels on issue "{key}" adding "{add}" and removing "{remove}"'))
 def step_jira_update_labels(key, add, remove, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_label",
@@ -1735,7 +1735,7 @@ def step_jira_update_labels(key, add, remove, ctx):
 
 @when(parsers.parse('I delete issue "{key}"'))
 def step_jira_delete_issue(key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_delete",
@@ -1784,7 +1784,7 @@ def step_jira_write_returns_deletion(key, ctx):
 
 @when(parsers.parse('I query attachments on issue "{key}"'))
 def step_jira_query_attachments(key, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="issue_attachments", filters={"issue_key": key})
     import asyncio
@@ -1800,7 +1800,7 @@ def step_jira_query_attachments(key, ctx):
 
 @when(parsers.parse('I upload attachment "{filename}" to issue "{key}" with content'))
 def step_jira_upload_attachment(filename, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_attachment",
@@ -1819,7 +1819,7 @@ def step_jira_upload_attachment(filename, key, ctx):
 
 @when(parsers.parse('I upload attachment "{filename}" with content "{content}" to issue "{key}"'))
 def step_jira_upload_attachment_with_content(filename, content, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="attachment",
@@ -1838,7 +1838,7 @@ def step_jira_upload_attachment_with_content(filename, content, key, ctx):
 
 @when(parsers.parse('I upload an attachment to issue "{key}" without content'))
 def step_jira_upload_attachment_no_content(key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_attachment",
@@ -1857,7 +1857,7 @@ def step_jira_upload_attachment_no_content(key, ctx):
 
 @when(parsers.parse('I upload attachment "{filename}" with no content to issue "{key}"'))
 def step_jira_upload_attachment_with_no_content(filename, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="attachment",
@@ -1895,7 +1895,7 @@ def step_jira_write_returns_attachment(ctx):
 
 @when(parsers.parse('I list remote links on issue "{key}"'))
 def step_jira_list_remote_links(key, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="issue_remote_links", filters={"issue_key": key})
     import asyncio
@@ -1921,7 +1921,7 @@ def step_jira_records_remote_links(ctx):
 
 @when(parsers.parse('I add remote link "{url}" to issue "{key}"'))
 def step_jira_add_remote_link(url, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_remote_link",
@@ -1947,7 +1947,7 @@ def step_jira_write_returns_remote_link(ctx):
 
 @when(parsers.parse('I delete remote link "{link_id}" from issue "{key}"'))
 def step_jira_delete_remote_link(link_id, key, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="remote_link_delete",
@@ -1974,7 +1974,7 @@ def step_jira_write_returns_remote_link_deletion(key, ctx):
 
 @when(parsers.parse('I query components for project "{project}"'))
 def step_jira_query_components(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="project_components", filters={"project": project})
     import asyncio
@@ -1990,7 +1990,7 @@ def step_jira_query_components(project, ctx):
 
 @when("I query components without a project")
 def step_jira_query_components_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="project_components", filters={})
     import asyncio
@@ -2016,7 +2016,7 @@ def step_jira_result_lists_components(ctx):
 
 @when(parsers.parse('I query versions for project "{project}"'))
 def step_jira_query_versions(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="project_versions", filters={"project": project})
     import asyncio
@@ -2032,7 +2032,7 @@ def step_jira_query_versions(project, ctx):
 
 @when("I query versions without a project")
 def step_jira_query_versions_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="project_versions", filters={})
     import asyncio
@@ -2058,7 +2058,7 @@ def step_jira_result_lists_versions(ctx):
 
 @when(parsers.parse('I query attachments for issue "{key}"'))
 def step_jira_query_attachments_for_issue(key, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="attachments", filters={"issue_key": key})
     import asyncio
@@ -2074,7 +2074,7 @@ def step_jira_query_attachments_for_issue(key, ctx):
 
 @when("I query attachments without an issue key")
 def step_jira_query_attachments_without_key(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="attachments", filters={})
     import asyncio
@@ -2090,7 +2090,7 @@ def step_jira_query_attachments_without_key(ctx):
 
 @when(parsers.parse('I query attachment "{attachment_id}"'))
 def step_jira_query_attachment(attachment_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="attachment", filters={"attachment_id": attachment_id})
     import asyncio
@@ -2106,7 +2106,7 @@ def step_jira_query_attachment(attachment_id, ctx):
 
 @when("I query attachment content without an id")
 def step_jira_query_attachment_without_id(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="attachment", filters={})
     import asyncio
@@ -2181,7 +2181,7 @@ def step_slack_connector(ctx):
     mock_connector.connector_type = "slack"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "channels":
@@ -2377,7 +2377,7 @@ def step_slack_connector(ctx):
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
     async def mock_health_check():
-        from modulo.connectors.base import HealthResult
+        from farna.connectors.base import HealthResult
 
         return HealthResult(ok=True)
 
@@ -2390,7 +2390,7 @@ def step_slack_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_slack_query_resource(resource, limit, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, limit=limit)
     if resource == "messages":
@@ -2408,7 +2408,7 @@ def step_slack_query_resource(resource, limit, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with channel "{channel}"'))
 def step_slack_query_messages(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"channel": channel})
     import asyncio
@@ -2424,7 +2424,7 @@ def step_slack_query_messages(resource, channel, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without channel filter'))
 def step_slack_query_messages_no_channel(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
     import asyncio
@@ -2440,7 +2440,7 @@ def step_slack_query_messages_no_channel(resource, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and text "{text}"'))
 def step_slack_post_message(resource, channel, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2463,7 +2463,7 @@ def step_slack_post_message(resource, channel, text, ctx):
     )
 )
 def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2482,7 +2482,7 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with user "{user}"'))
 def step_slack_query_user(resource, user, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"user": user})
     import asyncio
@@ -2498,7 +2498,7 @@ def step_slack_query_user(resource, user, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with email "{email}"'))
 def step_slack_query_user_email(resource, email, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"email": email})
     import asyncio
@@ -2514,7 +2514,7 @@ def step_slack_query_user_email(resource, email, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with query "{query}"'))
 def step_slack_query_message_search(resource, query, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query})
     import asyncio
@@ -2530,7 +2530,7 @@ def step_slack_query_message_search(resource, query, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without a query filter'))
 def step_slack_query_message_search_no_query(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
     import asyncio
@@ -2546,7 +2546,7 @@ def step_slack_query_message_search_no_query(resource, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and post_at "{post_at}"'))
 def step_slack_schedule_message(resource, channel, post_at, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2565,7 +2565,7 @@ def step_slack_schedule_message(resource, channel, post_at, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no post_at'))
 def step_slack_schedule_message_no_post_at(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Scheduled"})
     import asyncio
@@ -2581,7 +2581,7 @@ def step_slack_schedule_message_no_post_at(resource, channel, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with filename "{filename}" and content "{content}"'))
 def step_slack_file_upload(resource, filename, content, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2600,7 +2600,7 @@ def step_slack_file_upload(resource, filename, content, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with filename "{filename}" but no content'))
 def step_slack_file_upload_no_content(resource, filename, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"filename": filename})
     import asyncio
@@ -2616,7 +2616,7 @@ def step_slack_file_upload_no_content(resource, filename, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and scheduled_message_id "{id}"'))
 def step_slack_delete_scheduled_message(resource, channel, id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2635,7 +2635,7 @@ def step_slack_delete_scheduled_message(resource, channel, id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no scheduled_message_id'))
 def step_slack_delete_scheduled_message_no_id(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel})
     import asyncio
@@ -2651,7 +2651,7 @@ def step_slack_delete_scheduled_message_no_id(resource, channel, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
 def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2670,7 +2670,7 @@ def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}" and text "{text}"'))
 def step_slack_update_message(resource, channel, ts, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2689,7 +2689,7 @@ def step_slack_update_message(resource, channel, ts, text, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}"'))
 def step_slack_delete_message(resource, channel, ts, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -2708,7 +2708,7 @@ def step_slack_delete_message(resource, channel, ts, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}"'))
 def step_slack_channel_write(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel})
     import asyncio
@@ -2724,7 +2724,7 @@ def step_slack_channel_write(resource, channel, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no user'))
 def step_slack_ephemeral_no_user(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Hello"})
     import asyncio
@@ -2750,7 +2750,7 @@ def step_records_contain_channel_metadata(ctx):
     parsers.parse('I query resource "{resource}" with channel "{channel}" and oldest "{oldest}" and latest "{latest}"')
 )
 def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(
         resource=resource,
@@ -2769,7 +2769,7 @@ def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx)
 
 @when(parsers.parse('I query resource "{resource}" with cursor "{cursor}"'))
 def step_slack_query_with_cursor(resource, cursor, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, cursor=cursor)
     if resource == "messages":
@@ -2787,7 +2787,7 @@ def step_slack_query_with_cursor(resource, cursor, ctx):
 
 @when(parsers.re(r'I query resource "(?P<resource>[^"]+)"$'))
 def step_slack_query_unknown(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource)
     import asyncio
@@ -2803,7 +2803,7 @@ def step_slack_query_unknown(resource, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with no channel'))
 def step_slack_write_no_channel(resource, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"text": "Hello"})
     import asyncio
@@ -2830,7 +2830,7 @@ def step_slack_connector_invalid(ctx):
     mock_connector.connector_type = "slack"
 
     async def mock_health_check():
-        from modulo.connectors.base import HealthResult
+        from farna.connectors.base import HealthResult
 
         return HealthResult(ok=False, detail="invalid_auth")
 
@@ -2840,7 +2840,7 @@ def step_slack_connector_invalid(ctx):
 
 @given("the Slack connector health check passes")
 def step_slack_health_check_passes(ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(ok=True, detail="Bot is in at least one channel")
@@ -2850,7 +2850,7 @@ def step_slack_health_check_passes(ctx):
 
 @given("the Slack connector health check reports the bot is not in any channel")
 def step_slack_health_check_not_in_channel(ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(ok=False, detail="Bot is not in any channel")
@@ -2867,7 +2867,7 @@ def step_health_result_indicates_failure(ctx):
 
 @when("the API returns non-JSON response")
 def step_slack_non_json_response(ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(ok=False, detail="Non-JSON response from Slack API")
@@ -2898,7 +2898,7 @@ def step_gitlab_connector(ctx):
     mock_connector.connector_type = "gitlab"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "projects":
@@ -3068,7 +3068,7 @@ def step_gitlab_connector(ctx):
                 raise ValueError(f"Unsupported GitLab write: {payload.resource!r}")
 
     async def mock_health_check():
-        from modulo.connectors.base import HealthResult
+        from farna.connectors.base import HealthResult
 
         return HealthResult(ok=True, detail="testuser (GitLab 17.5.0)")
 
@@ -3083,7 +3083,7 @@ def step_gitlab_connector(ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and state "{state}"'))
 def step_gitlab_query_with_state(resource, project, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "state": state})
     import asyncio
@@ -3099,7 +3099,7 @@ def step_gitlab_query_with_state(resource, project, state, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}"'))
 def step_gitlab_query_project(resource, project, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project})
     import asyncio
@@ -3115,7 +3115,7 @@ def step_gitlab_query_project(resource, project, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and iid "{iid}"'))
 def step_gitlab_query_with_iid(resource, project, iid, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
     import asyncio
@@ -3131,7 +3131,7 @@ def step_gitlab_query_with_iid(resource, project, iid, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" on page "{page}"'))
 def step_gitlab_query_project_page(resource, page, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, cursor=page)
     import asyncio
@@ -3147,7 +3147,7 @@ def step_gitlab_query_project_page(resource, page, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and label_id "{label_id}"'))
 def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "label_id": label_id})
     import asyncio
@@ -3163,7 +3163,7 @@ def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and name "{name}"'))
 def step_gitlab_query_with_name(resource, project, name, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "name": name})
     import asyncio
@@ -3179,7 +3179,7 @@ def step_gitlab_query_with_name(resource, project, name, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and pipeline_id "{pipeline_id}"'))
 def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "pipeline_id": pipeline_id})
     import asyncio
@@ -3195,7 +3195,7 @@ def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
 
 @when(parsers.parse('I write GitLab issue with project "{project}" and title "{title}"'))
 def step_gitlab_write_issue(project, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue", data={"project": project, "title": title})
     import asyncio
@@ -3215,7 +3215,7 @@ def step_gitlab_write_issue(project, title, ctx):
     )
 )
 def step_gitlab_update_issue(iid, project, state_event, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_update",
@@ -3234,7 +3234,7 @@ def step_gitlab_update_issue(iid, project, state_event, ctx):
 
 @when(parsers.parse('I write GitLab issue_note for issue "{iid}" with project "{project}" and body "{body}"'))
 def step_gitlab_write_note(iid, project, body, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_note",
@@ -3253,7 +3253,7 @@ def step_gitlab_write_note(iid, project, body, ctx):
 
 @when(parsers.parse('I write GitLab issue_label for issue "{iid}" with project "{project}" and labels "{labels}"'))
 def step_gitlab_write_label(iid, project, labels, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="issue_label",
@@ -3272,7 +3272,7 @@ def step_gitlab_write_label(iid, project, labels, ctx):
 
 @when(parsers.parse('I write GitLab label with project "{project}" and name "{name}"'))
 def step_gitlab_write_project_label(project, name, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="label",
@@ -3291,7 +3291,7 @@ def step_gitlab_write_project_label(project, name, ctx):
 
 @when(parsers.parse('I write GitLab milestone with project "{project}" and title "{title}"'))
 def step_gitlab_write_milestone(project, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="milestone",
@@ -3310,7 +3310,7 @@ def step_gitlab_write_milestone(project, title, ctx):
 
 @when(parsers.parse('I write GitLab pipeline_run with project "{project}" and ref "{ref}"'))
 def step_gitlab_trigger_pipeline(project, ref, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="pipeline_run",
@@ -3329,7 +3329,7 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
 
 @when(parsers.parse('I write GitLab file_delete for project "{project}" and path "{path}"'))
 def step_gitlab_write_file_delete(project, path, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="file_delete",
@@ -3348,7 +3348,7 @@ def step_gitlab_write_file_delete(project, path, ctx):
 
 @when(parsers.parse('I write GitLab file for project "{project}" and path "{path}"'))
 def step_gitlab_write_file(project, path, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="file",
@@ -3367,7 +3367,7 @@ def step_gitlab_write_file(project, path, ctx):
 
 @when(parsers.parse('I write GitLab mr_merge for project "{project}" and iid "{iid}"'))
 def step_gitlab_write_mr_merge(project, iid, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="mr_merge",
@@ -3386,7 +3386,7 @@ def step_gitlab_write_mr_merge(project, iid, ctx):
 
 @when(parsers.parse('I write GitLab mr_approve for project "{project}" and iid "{iid}"'))
 def step_gitlab_write_mr_approve(project, iid, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="mr_approve",
@@ -3405,7 +3405,7 @@ def step_gitlab_write_mr_approve(project, iid, ctx):
 
 @when(parsers.parse('I write GitLab mr_comment for project "{project}" and iid "{iid}" and body "{body}"'))
 def step_gitlab_write_mr_comment(project, iid, body, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="mr_comment",
@@ -3424,7 +3424,7 @@ def step_gitlab_write_mr_comment(project, iid, body, ctx):
 
 @when(parsers.parse('I query GitLab tree for project "{project}" with path "{path}" and recursive'))
 def step_gitlab_query_tree_recursive(project, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(
         resource="tree",
@@ -3451,7 +3451,7 @@ def step_gitlab_tree_nested(ctx):
 
 @when(parsers.parse('I write GitLab files batch for project "{project}"'))
 def step_gitlab_write_files_batch(project, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="files",
@@ -3484,7 +3484,7 @@ def step_gitlab_batch_commit_id(ctx):
 
 @when(parsers.parse('I write GitLab files batch for project "{project}" with traversal path "{path}"'))
 def step_gitlab_write_files_traversal(project, path, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="files",
@@ -3510,7 +3510,7 @@ def step_gitlab_write_files_traversal(project, path, ctx):
     ),
 )
 def step_gitlab_write_mr_approval_request(project, iid, user_ids, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     parsed_ids = [int(uid) for uid in user_ids.split(",") if uid.strip()]
     payload = ConnectorPayload(
@@ -3538,7 +3538,7 @@ def step_gitlab_approval_request_users(ctx):
 
 @when(parsers.parse('I write GitLab mr_approval_request for project "{project}" and iid "{iid}" with no users'))
 def step_gitlab_write_mr_approval_request_no_users(project, iid, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="mr_approval_request",
@@ -3565,7 +3565,7 @@ def step_gitlab_approval_request_missing_users(ctx):
 def step_gitlab_connector_invalid_token(ctx):
     from unittest.mock import AsyncMock
 
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = "gitlab"
@@ -3623,7 +3623,7 @@ def step_health_result_reports_version(ctx):
 
 @when("the GitLab API is unreachable")
 def step_gitlab_api_unreachable(ctx):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     async def mock_health_check():
         return HealthResult(ok=False, detail="Connection refused")
@@ -3683,7 +3683,7 @@ def step_gitlab_api_returns_429_issues(ctx):
 def step_write_result_is_error_with(message, ctx):
     import asyncio
 
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     try:
         result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="issue", data={"title": "x"})))
@@ -3701,7 +3701,7 @@ def step_write_result_is_error_with(message, ctx):
 def step_query_result_is_error_with(message, ctx):
     import asyncio
 
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     try:
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="issues", filters={"project": "p"})))
@@ -3730,7 +3730,7 @@ def step_gitea_connector(ctx):
     mock_connector.connector_type = "gitea"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "repos":
@@ -3806,7 +3806,7 @@ def step_gitea_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_gitea_query_pulls_issues(resource, repo, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
@@ -3826,7 +3826,7 @@ def step_gitea_query_pulls_issues(resource, repo, state, ctx):
 
 @when(parsers.parse('I write Gitea resource "{resource}" with title "{title}" head "{head}" and base "{base}"'))
 def step_gitea_create_pr(resource, title, head, base, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -3851,7 +3851,7 @@ def step_gitea_create_pr(resource, title, head, base, ctx):
 
 @when(parsers.parse('I write Gitea resource "{resource}" with title "{title}"'))
 def step_gitea_create_issue(resource, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     payload = ConnectorPayload(
@@ -3890,7 +3890,7 @@ def step_monday_connector(ctx):
         return HealthResult(ok=True, detail="Test User")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "boards":
@@ -4008,7 +4008,7 @@ def step_monday_boards_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "boards":
             return ConnectorResult(
@@ -4028,7 +4028,7 @@ def step_monday_board_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "board":
             return ConnectorResult(
@@ -4051,7 +4051,7 @@ def step_monday_items_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "items":
             return ConnectorResult(
@@ -4071,7 +4071,7 @@ def step_monday_item_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "item":
             return ConnectorResult(
@@ -4087,7 +4087,7 @@ def step_monday_users_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "users":
             return ConnectorResult(
@@ -4107,7 +4107,7 @@ def step_monday_workspaces_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "workspaces":
             return ConnectorResult(
@@ -4177,7 +4177,7 @@ def step_monday_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_monday_query_with_board_id(resource, board_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"board_id": int(board_id)})
     import asyncio
@@ -4193,7 +4193,7 @@ def step_monday_query_with_board_id(resource, board_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with item_id "{item_id}"'))
 def step_monday_query_with_item_id(resource, item_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"item_id": int(item_id)})
     import asyncio
@@ -4209,7 +4209,7 @@ def step_monday_query_with_item_id(resource, item_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with name "{name}" and board_id "{board_id}"'))
 def step_monday_create_item(resource, name, board_id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4228,7 +4228,7 @@ def step_monday_create_item(resource, name, board_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for item "{item_id}" with column values {column_values}'))
 def step_monday_update_column_values(resource, item_id, column_values, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4247,7 +4247,7 @@ def step_monday_update_column_values(resource, item_id, column_values, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for item "{item_id}" with column_id "{col_id}" and value {value}'))
 def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4266,7 +4266,7 @@ def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for item "{item_id}" with body "{body}"'))
 def step_monday_add_update(resource, item_id, body, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4310,7 +4310,7 @@ def step_trello_connector(ctx):
         return HealthResult(ok=True, detail="Test User")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "boards":
@@ -4409,7 +4409,7 @@ def step_trello_boards_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "boards":
             return ConnectorResult(
@@ -4429,7 +4429,7 @@ def step_trello_lists_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "lists":
             return ConnectorResult(
@@ -4449,7 +4449,7 @@ def step_trello_cards_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "cards":
             return ConnectorResult(
@@ -4469,7 +4469,7 @@ def step_trello_single_card(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "card":
             return ConnectorResult(
@@ -4516,7 +4516,7 @@ def step_trello_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_trello_query_with_board_id(resource, board_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"board_id": board_id})
     import asyncio
@@ -4532,7 +4532,7 @@ def step_trello_query_with_board_id(resource, board_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with card_id "{card_id}"'))
 def step_trello_query_with_card_id(resource, card_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"card_id": card_id})
     import asyncio
@@ -4548,7 +4548,7 @@ def step_trello_query_with_card_id(resource, card_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with name "{name}" and list_id "{list_id}"'))
 def step_trello_create_card(resource, name, list_id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4567,7 +4567,7 @@ def step_trello_create_card(resource, name, list_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for card "{card_id}" with text "{text}"'))
 def step_trello_add_comment(resource, card_id, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -4643,7 +4643,7 @@ def step_asana_connector(ctx):
         return HealthResult(ok=True, detail="Test User")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "workspaces":
@@ -4764,7 +4764,7 @@ def step_shortcut_connector(ctx):
         return HealthResult(ok=True, detail="testuser")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "stories":
@@ -4908,7 +4908,7 @@ def step_asana_workspaces_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "workspaces":
             return ConnectorResult(
@@ -4928,7 +4928,7 @@ def step_shortcut_stories_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "stories":
             return ConnectorResult(
@@ -4948,7 +4948,7 @@ def step_asana_projects_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "projects":
             return ConnectorResult(
@@ -4968,7 +4968,7 @@ def step_shortcut_single_story(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "story":
             return ConnectorResult(
@@ -4990,7 +4990,7 @@ def step_shortcut_projects_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "projects":
             return ConnectorResult(
@@ -5010,7 +5010,7 @@ def step_asana_single_project(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "project":
             return ConnectorResult(
@@ -5026,7 +5026,7 @@ def step_asana_tasks_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "tasks":
             return ConnectorResult(
@@ -5046,7 +5046,7 @@ def step_shortcut_epics_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "epics":
             return ConnectorResult(
@@ -5066,7 +5066,7 @@ def step_asana_sections_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "sections":
             return ConnectorResult(
@@ -5171,7 +5171,7 @@ def step_shortcut_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with workspace "{workspace}"'))
 def step_asana_query_with_workspace(resource, workspace, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"workspace": workspace})
     import asyncio
@@ -5187,7 +5187,7 @@ def step_asana_query_with_workspace(resource, workspace, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with project_id "{project_id}"'))
 def step_asana_query_with_project_id(resource, project_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project_id": project_id})
     import asyncio
@@ -5203,7 +5203,7 @@ def step_asana_query_with_project_id(resource, project_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with story_id "{story_id}"'))
 def step_shortcut_query_with_story_id(resource, story_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"story_id": story_id})
     import asyncio
@@ -5219,7 +5219,7 @@ def step_shortcut_query_with_story_id(resource, story_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with name "{name}" and project "{project}"'))
 def step_asana_create_task(resource, name, project, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -5238,7 +5238,7 @@ def step_asana_create_task(resource, name, project, ctx):
 
 @when(parsers.parse('I write resource "{resource}" with name "{name}" and project_id "{project_id}"'))
 def step_shortcut_create_story(resource, name, project_id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -5257,7 +5257,7 @@ def step_shortcut_create_story(resource, name, project_id, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for task "{task_id}" with text "{text}"'))
 def step_asana_add_comment(resource, task_id, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -5276,7 +5276,7 @@ def step_asana_add_comment(resource, task_id, text, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for story "{story_id}" with new name "{name}"'))
 def step_shortcut_update_story(resource, story_id, name, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -5328,7 +5328,7 @@ def step_asana_section_metadata(ctx):
 
 @when(parsers.parse('I write resource "{resource}" for story "{story_id}" with text "{text}"'))
 def step_shortcut_add_comment(resource, story_id, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -5395,7 +5395,7 @@ def step_youtrack_connector(ctx):
     mock_connector.connector_type = "youtrack"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "issues":
@@ -5470,7 +5470,7 @@ def step_notion_connector(ctx):
         return HealthResult(ok=True, detail="2 users accessible")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "databases":
@@ -5545,7 +5545,7 @@ def step_confluence_connector(ctx):
     mock_connector.connector_type = "confluence"
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "pages":
@@ -5626,7 +5626,7 @@ def step_confluence_connector(ctx):
                 raise ValueError(f"Unsupported Confluence write resource: {payload.resource!r}")
 
     async def mock_health_check():
-        from modulo.connectors.base import HealthResult
+        from farna.connectors.base import HealthResult
 
         return HealthResult(ok=True, detail="testuser")
 
@@ -5648,7 +5648,7 @@ def step_google_docs_connector(ctx):
         return HealthResult(ok=True)
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "documents":
@@ -5718,7 +5718,7 @@ def step_google_docs_connector(ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}"'))
 def step_youtrack_query_resource(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource)
     import asyncio
@@ -5734,7 +5734,7 @@ def step_youtrack_query_resource(resource, ctx):
 
 @when(parsers.parse('I query resource "pages" with space_id "{space_id}"'))
 def step_confluence_query_pages(space_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="pages", filters={"space_id": space_id})
     import asyncio
@@ -5774,7 +5774,7 @@ def step_google_docs_health_401(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with database_id "{db_id}"'))
 def step_notion_query_with_database_id(resource, db_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"database_id": db_id})
     import asyncio
@@ -5790,7 +5790,7 @@ def step_notion_query_with_database_id(resource, db_id, ctx):
 
 @when(parsers.parse('I query resource "page" with page_id "{page_id}"'))
 def step_confluence_query_page(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="page", filters={"page_id": page_id})
     import asyncio
@@ -5809,7 +5809,7 @@ def step_google_docs_documents_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "documents":
             return ConnectorResult(
@@ -5830,7 +5830,7 @@ def step_google_docs_single_document(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "document":
             return ConnectorResult(records=[{"documentId": "d1", "title": "My Document", "body": {"content": []}}])
@@ -5844,7 +5844,7 @@ def step_google_docs_files_available(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "files":
             return ConnectorResult(
@@ -5864,7 +5864,7 @@ def step_google_docs_single_file(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         if q.resource == "file":
             return ConnectorResult(records=[{"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf"}])
@@ -5913,7 +5913,7 @@ def step_google_docs_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with document_id "{document_id}"'))
 def step_google_docs_query_with_document_id(resource, document_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"document_id": document_id})
     import asyncio
@@ -5929,7 +5929,7 @@ def step_google_docs_query_with_document_id(resource, document_id, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"'))
 def step_youtrack_query_issues(resource, query_text, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query_text})
     import asyncio
@@ -5945,7 +5945,7 @@ def step_youtrack_query_issues(resource, query_text, ctx):
 
 @when(parsers.parse('I query resource "spaces" with type "{space_type}"'))
 def step_confluence_query_spaces(space_type, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="spaces", filters={"type": space_type})
     import asyncio
@@ -5961,7 +5961,7 @@ def step_confluence_query_spaces(space_type, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with file_id "{file_id}"'))
 def step_google_docs_query_with_file_id(resource, file_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"file_id": file_id})
     import asyncio
@@ -5977,7 +5977,7 @@ def step_google_docs_query_with_file_id(resource, file_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with page_id "{page_id}"'))
 def step_notion_query_with_page_id(resource, page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"page_id": page_id})
     import asyncio
@@ -5993,7 +5993,7 @@ def step_notion_query_with_page_id(resource, page_id, ctx):
 
 @when(parsers.parse('I query resource "content" with cql "{cql}"'))
 def step_confluence_query_content(cql, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="content", filters={"cql": cql})
     import asyncio
@@ -6009,7 +6009,7 @@ def step_confluence_query_content(cql, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" with issue_id "{issue_id}"'))
 def step_youtrack_query_issue(resource, issue_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"issue_id": issue_id})
     import asyncio
@@ -6025,7 +6025,7 @@ def step_youtrack_query_issue(resource, issue_id, ctx):
 
 @when(parsers.parse('I query resource "children" with page_id "{page_id}"'))
 def step_confluence_query_children(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="children", filters={"page_id": page_id})
     import asyncio
@@ -6041,7 +6041,7 @@ def step_confluence_query_children(page_id, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" without issue_id'))
 def step_youtrack_query_without_id(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
     import asyncio
@@ -6057,7 +6057,7 @@ def step_youtrack_query_without_id(resource, ctx):
 
 @when(parsers.parse('I query resource "labels" with page_id "{page_id}"'))
 def step_confluence_query_labels(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="labels", filters={"page_id": page_id})
     import asyncio
@@ -6073,7 +6073,7 @@ def step_confluence_query_labels(page_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without database_id filter'))
 def step_notion_query_without_database_id(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
     import asyncio
@@ -6089,7 +6089,7 @@ def step_notion_query_without_database_id(resource, ctx):
 
 @when(parsers.parse('I write YouTrack resource "{resource}" with summary "{summary}" and project "{project}"'))
 def step_youtrack_write_issue(resource, summary, project, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -6108,7 +6108,7 @@ def step_youtrack_write_issue(resource, summary, project, ctx):
 
 @when(parsers.parse('I write resource "page" in space "{space_id}" with title "{title}"'))
 def step_confluence_create_page(space_id, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="page",
@@ -6127,7 +6127,7 @@ def step_confluence_create_page(space_id, title, ctx):
 
 @when(parsers.parse('I write Notion resource "{resource}" with database_id "{db_id}" and title "{title}"'))
 def step_notion_write_page(resource, db_id, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -6149,7 +6149,7 @@ def step_notion_write_page(resource, db_id, title, ctx):
 
 @when(parsers.re(r'I write resource "(?P<resource>[^"]+)" with title "(?P<title>[^"]+)"'))
 def step_google_docs_write_document(resource, title, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"title": title})
     import asyncio
@@ -6165,7 +6165,7 @@ def step_google_docs_write_document(resource, title, ctx):
 
 @when(parsers.parse('I write resource "label" on page "{page_id}" with name "{label}"'))
 def step_confluence_add_label(page_id, label, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="label",
@@ -6184,7 +6184,7 @@ def step_confluence_add_label(page_id, label, ctx):
 
 @when(parsers.parse('I write resource "{resource}" for document "{document_id}" with text "{text}"'))
 def step_google_docs_write_document_update(resource, document_id, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"document_id": document_id, "text": text})
     import asyncio
@@ -6200,7 +6200,7 @@ def step_google_docs_write_document_update(resource, document_id, text, ctx):
 
 @when(parsers.parse('I write YouTrack resource "{resource}" with issue_id "{issue_id}" and updated fields'))
 def step_youtrack_update_issue(resource, issue_id, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -6219,7 +6219,7 @@ def step_youtrack_update_issue(resource, issue_id, ctx):
 
 @when(parsers.parse('I write YouTrack resource "{resource}" with issue_id "{issue_id}" and text "{text}"'))
 def step_youtrack_write_comment(resource, issue_id, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource=resource,
@@ -6342,7 +6342,7 @@ def step_datadog_connector_valid(ctx):
         return HealthResult(ok=True, detail="Datadog API key validated")
 
     async def mock_query(q):
-        from modulo.connectors.base import ConnectorResult
+        from farna.connectors.base import ConnectorResult
 
         match q.resource:
             case "monitors":
@@ -6440,7 +6440,7 @@ def step_datadog_health_check(ctx):
 
 @when("the connector queries monitors")
 def step_datadog_query_monitors(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="monitors")
     import asyncio
@@ -6456,7 +6456,7 @@ def step_datadog_query_monitors(ctx):
 
 @when("the connector queries events")
 def step_datadog_query_events(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="events")
     import asyncio
@@ -6472,7 +6472,7 @@ def step_datadog_query_events(ctx):
 
 @when("the connector queries timeseries metrics")
 def step_datadog_query_metrics(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="metrics")
     import asyncio
@@ -6488,7 +6488,7 @@ def step_datadog_query_metrics(ctx):
 
 @when("the connector queries dashboards")
 def step_datadog_query_dashboards(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="dashboards")
     import asyncio
@@ -6504,7 +6504,7 @@ def step_datadog_query_dashboards(ctx):
 
 @when("the connector searches logs")
 def step_datadog_search_logs(ctx):
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="logs")
     import asyncio
@@ -6520,7 +6520,7 @@ def step_datadog_search_logs(ctx):
 
 @when(parsers.parse('the connector writes an event with title "{title}" and text "{text}"'))
 def step_datadog_write_event(title, text, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="event", data={"title": title, "text": text})
     import asyncio
@@ -6536,7 +6536,7 @@ def step_datadog_write_event(title, text, ctx):
 
 @when(parsers.parse('the connector creates a monitor with type "{monitor_type}"'))
 def step_datadog_create_monitor(monitor_type, ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="monitor",
@@ -6555,7 +6555,7 @@ def step_datadog_create_monitor(monitor_type, ctx):
 
 @when("the connector mutes a monitor")
 def step_datadog_mute_monitor(ctx):
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(
         resource="monitor_status",
@@ -6695,8 +6695,8 @@ def step_initialise_with_instance(ctx):
 
     from cryptography.fernet import Fernet
 
-    from modulo.core.connector_hub import ConnectorHub
-    from modulo.core.secrets_backend import create_secrets_backend
+    from farna.core.connector_hub import ConnectorHub
+    from farna.core.secrets_backend import create_secrets_backend
 
     key = ctx["fernet_key"]
     connector_id = ctx["connector_id"]

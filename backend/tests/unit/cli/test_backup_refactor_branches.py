@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import pytest
 
-from modulo.cli.backup import (
+from farna.cli.backup import (
     _launcher_snapshot_files,
     _read_and_validate_manifest,
 )

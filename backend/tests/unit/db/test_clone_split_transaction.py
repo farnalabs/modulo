@@ -19,7 +19,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
-from modulo.db.crud.pipeline import _clone_edges, _resolve_read_session_factory, clone_pipeline
+from farna.db.crud.pipeline import _clone_edges, _resolve_read_session_factory, clone_pipeline
 from tests.unit.api.mock_session import configure_mock_session
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -165,7 +165,7 @@ class TestResolveReadSessionFactorySslContract:
     def test_require_url_yields_fail_closed_clone_engine(self) -> None:
 
         session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=require"))
-        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+        with patch("farna.db.crud.pipeline.create_async_engine") as mock_create:
             factory, engine = _resolve_read_session_factory(session, read_factory=None)
 
         assert engine is mock_create.return_value
@@ -180,7 +180,7 @@ class TestResolveReadSessionFactorySslContract:
         engine = MagicMock(spec=AsyncEngine)
         session = MagicMock(spec=AsyncSession)
         session.bind = engine
-        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+        with patch("farna.db.crud.pipeline.create_async_engine") as mock_create:
             factory, read_engine = _resolve_read_session_factory(session, read_factory=None)
         assert read_engine is None
         mock_create.assert_not_called()
@@ -189,14 +189,14 @@ class TestResolveReadSessionFactorySslContract:
     def test_absent_sslmode_is_explicit_plaintext(self) -> None:
 
         session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db"))
-        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+        with patch("farna.db.crud.pipeline.create_async_engine") as mock_create:
             _resolve_read_session_factory(session, read_factory=None)
         assert mock_create.call_args[1]["connect_args"] == {"ssl": False}
 
     def test_verify_full_is_translate_fail_closed(self) -> None:
 
         session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=verify-full"))
-        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+        with patch("farna.db.crud.pipeline.create_async_engine") as mock_create:
             _resolve_read_session_factory(session, read_factory=None)
         assert mock_create.call_args[1]["connect_args"] == {"ssl": "verify-full"}
 
@@ -204,7 +204,7 @@ class TestResolveReadSessionFactorySslContract:
 
         session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=prefer"))
         with (
-            patch("modulo.db.crud.pipeline.create_async_engine") as mock_create,
+            patch("farna.db.crud.pipeline.create_async_engine") as mock_create,
             pytest.raises(ValueError, match="sslmode"),
         ):
             _resolve_read_session_factory(session, read_factory=None)
@@ -213,7 +213,7 @@ class TestResolveReadSessionFactorySslContract:
     def test_non_postgres_binding_gets_no_ssl_arg(self) -> None:
 
         session = _session_bound_to_url(make_url("sqlite+aiosqlite:///./test.db"))
-        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+        with patch("farna.db.crud.pipeline.create_async_engine") as mock_create:
             _resolve_read_session_factory(session, read_factory=None)
         kw = mock_create.call_args[1]
         assert "ssl" not in kw["connect_args"]
@@ -238,7 +238,7 @@ def _gated_edge() -> _Row:
 
 async def test_step_a_commits_before_step_b_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     events: list[str] = []
     source = _make_source()
     read_session = _make_read_session(
@@ -323,9 +323,9 @@ async def test_clone_bounds_postgres_lock_wait_before_for_share(
     be prepended (``pre_results``).
     """
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline.get_dialect_name",
+        "farna.db.crud.pipeline.get_dialect_name",
         AsyncMock(return_value="postgresql"),
     )
     source = _make_source()
@@ -369,7 +369,7 @@ async def test_clone_bounds_postgres_lock_wait_before_for_share(
 
 async def test_step_b_uses_step_a_snapshot_not_a_live_reread(monkeypatch: pytest.MonkeyPatch) -> None:
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     source = _make_source()
     events: list[str] = []
 
@@ -439,7 +439,7 @@ async def test_clone_emits_one_batched_gate_audit_event(monkeypatch: pytest.Monk
     main_session = _make_main_session()
 
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     await clone_pipeline(
         main_session,
@@ -459,7 +459,7 @@ async def test_clone_emits_one_batched_gate_audit_event(monkeypatch: pytest.Monk
 
 async def test_clone_preserves_non_default_edge_ports(monkeypatch: pytest.MonkeyPatch) -> None:
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     source = _make_source()
     custom_edge = _Row(
         id=uuid.uuid4(),
@@ -510,7 +510,7 @@ async def test_clone_edges_coalesces_null_ports_to_default(monkeypatch: pytest.M
     default only fires when the key is *missing*, so a present ``None`` flows
     through) and passes with ``edge.get("source_port") or "out"``.
     """
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", AsyncMock())
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", AsyncMock())
     session = _make_main_session()
     edges = [
         {
@@ -545,7 +545,7 @@ async def test_clone_falls_back_to_default_ports_when_source_ports_null(monkeypa
     row carries NULL ``source_port``/``target_port``.
     """
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     source = _make_source()
     null_edge = _Row(
         id=uuid.uuid4(),
@@ -606,7 +606,7 @@ async def test_clone_no_gate_edges_emits_no_gate_audit(monkeypatch: pytest.Monke
     factory = _read_factory(read_session)
     main_session = _make_main_session()
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
 
     await clone_pipeline(
         main_session,

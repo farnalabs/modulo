@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.core.error_tracking import (
+from farna.core.error_tracking import (
     _dispatch_forwarders,
     _dispatch_one_forwarder,
     _load_per_org_configs,
 )
-from modulo.core.error_tracking.forwarders import (
+from farna.core.error_tracking.forwarders import (
     DatadogErrorForwarder,
     ForwarderRegistry,
     LokiErrorForwarder,
@@ -33,7 +33,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 def _patch_pinned(module: str, **kwargs: object) -> object:
     """Patch a forwarder module's pinned-client SSRF seam with an async mock."""
     return patch(
-        f"modulo.core.error_tracking.forwarders.{module}.pinned_async_client",
+        f"farna.core.error_tracking.forwarders.{module}.pinned_async_client",
         new_callable=AsyncMock,
         **kwargs,  # type: ignore[arg-type]
     )
@@ -657,7 +657,7 @@ class TestForwarderFailureIsolation:
             assert result is False
 
     async def test_dispatch_forwarders_swallows_all_exceptions(self) -> None:
-        from modulo.core.error_tracking import _DEFAULT_FORWARDER_CONFIGS, _dispatch_forwarders, configure_forwarders
+        from farna.core.error_tracking import _DEFAULT_FORWARDER_CONFIGS, _dispatch_forwarders, configure_forwarders
 
         original_configs = _DEFAULT_FORWARDER_CONFIGS
         try:
@@ -762,14 +762,14 @@ class TestForwarderDispatchConfig:
         # result and the test passes under the very bug it claims to catch.
         with (
             patch(
-                "modulo.core.error_tracking._DEFAULT_FORWARDER_CONFIGS",
+                "farna.core.error_tracking._DEFAULT_FORWARDER_CONFIGS",
                 {"sentry": {"dsn": "default-dsn"}},
             ),
             patch(
-                "modulo.core.error_tracking._load_per_org_configs",
+                "farna.core.error_tracking._load_per_org_configs",
                 new=AsyncMock(return_value={"datadog": {"api_key": "org-key"}}),
             ),
-            patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
+            patch("farna.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
         ):
             await _dispatch_forwarders(_ORG_ID, make_group(), make_event(), {}, session=object())
 
@@ -781,8 +781,8 @@ class TestForwarderDispatchConfig:
     async def test_dispatch_forwarders_falls_back_to_default_without_session(self) -> None:
         default_config = {"loki": {"push_url": "https://loki.example.com/push"}}
         with (
-            patch("modulo.core.error_tracking._DEFAULT_FORWARDER_CONFIGS", default_config),
-            patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
+            patch("farna.core.error_tracking._DEFAULT_FORWARDER_CONFIGS", default_config),
+            patch("farna.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
         ):
             await _dispatch_forwarders(_ORG_ID, make_group(), make_event(), {})
 

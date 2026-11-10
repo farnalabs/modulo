@@ -26,11 +26,11 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+import farna.core.pipeline_execution as pe
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 pytestmark = [
     pytest.mark.integration,
@@ -228,9 +228,9 @@ async def test_conformance_run_completes(
     non-superuser RLS role -> PipelineExecutor.execute drives a 1-node
     StubModelBackend graph -> the run row reaches ``complete`` with
     ``completed_at`` set (a silent wrong-success would leave it ``running``)."""
-    from modulo.core import dispatch as dispatch_mod
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.settings import get_settings
+    from farna.core import dispatch as dispatch_mod
+    from farna.core.pipeline_engine.executor import PipelineExecutor
+    from farna.settings import get_settings
 
     org_id = await _seed_org(db_engine, "ConformRun")
     account_id = await _seed_account(db_engine, org_id, "conform-run@test.local")
@@ -243,7 +243,7 @@ async def test_conformance_run_completes(
     # Dispatch: real DB path (dispatched_at + dispatcher='saq' + job id), the
     # SAQ broker itself is stubbed (no Redis in this container).
     enqueue_stub = AsyncMock(return_value=("saq:job:runs:conform", False))
-    with patch("modulo.core.dispatch._enqueue_saq", new=enqueue_stub):
+    with patch("farna.core.dispatch._enqueue_saq", new=enqueue_stub):
         outcome, job_id = await dispatch_mod.dispatch_run(str(run_id), str(org_id))
     assert outcome == "enqueued"
     assert job_id == "saq:job:runs:conform"

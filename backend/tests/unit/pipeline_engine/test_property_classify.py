@@ -15,7 +15,7 @@ from __future__ import annotations
 import hypothesis.strategies as st
 from hypothesis import HealthCheck, given, settings
 
-from modulo.core.pipeline_engine.classify import (
+from farna.core.pipeline_engine.classify import (
     _COUNTABLE_NO_DELIVERY_STATUSES,
     _DELIVERABLE_STATUSES,
     _EXCLUDED_STATUSES,
@@ -254,7 +254,7 @@ class TestClassifyRunProperties:
     @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_needs_human_codes_produce_needs_human_reason(self, error_code: str) -> None:
         """Error codes with 'hitl'/'human' or in _NEEDS_HUMAN_CODES."""
-        from modulo.core.pipeline_engine.classify import REASON_NEEDS_HUMAN
+        from farna.core.pipeline_engine.classify import REASON_NEEDS_HUMAN
 
         result = classify_run("failed", error_code)
         assert result.value == RunClassificationValue.no_delivery
@@ -266,7 +266,7 @@ class TestClassifyRunProperties:
     @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_source_error_codes_produce_source_error_reason(self, error_code: str) -> None:
         """Source/infra error codes produce source_error reason."""
-        from modulo.core.pipeline_engine.classify import REASON_SOURCE_ERROR
+        from farna.core.pipeline_engine.classify import REASON_SOURCE_ERROR
 
         result = classify_run("failed", error_code)
         assert result.value == RunClassificationValue.no_delivery
@@ -285,7 +285,7 @@ class TestClassifyRunProperties:
     @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_delivery_done_marker_yields_delivered(self, markers: dict) -> None:
         """A 'complete' run with delivery_done marker -> delivered."""
-        from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL
+        from farna.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL
 
         result = classify_run("complete", None, raw_output_markers=markers)
         assert result.value == RunClassificationValue.delivered
@@ -303,7 +303,7 @@ class TestClassifyRunProperties:
     @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_parse_error_marker_yields_parse_error_reason(self, status: str, markers: dict) -> None:
         """A marker with parse_error -> parse_error reason."""
-        from modulo.core.pipeline_engine.classify import REASON_PARSE_ERROR
+        from farna.core.pipeline_engine.classify import REASON_PARSE_ERROR
 
         result = classify_run(status, None, raw_output_markers=markers)
         assert result.value == RunClassificationValue.no_delivery

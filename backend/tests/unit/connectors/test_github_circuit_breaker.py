@@ -12,8 +12,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.github import (
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.github import (
     GitHubAPIError,
     GitHubCircuitOpenError,
     GitHubConnector,
@@ -38,8 +38,8 @@ def connector():
 def fast_clock(monkeypatch):
     """Freeze ``time.monotonic`` and make retry sleeps instant."""
     clock = [1000.0]
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", _noop_sleep)
-    monkeypatch.setattr("modulo.connectors.github.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", _noop_sleep)
+    monkeypatch.setattr("farna.connectors.github.time.monotonic", lambda: clock[0])
     return clock
 
 

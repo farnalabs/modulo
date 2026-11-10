@@ -25,8 +25,8 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from modulo.core.manifest import get_manifest
-from modulo.db.models import (
+from farna.core.manifest import get_manifest
+from farna.db.models import (
     Account,
     ConnectorInstance,
     ModelBackend,
@@ -34,7 +34,7 @@ from modulo.db.models import (
     OrgMembership,
     Pipeline,
 )
-from modulo.settings import get_settings
+from farna.settings import get_settings
 
 _log = logging.getLogger(__name__)
 

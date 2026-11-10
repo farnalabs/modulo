@@ -14,7 +14,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.error_tracking import upsert_error_group
+from farna.db.crud.error_tracking import upsert_error_group
 
 pytestmark = pytest.mark.integration
 

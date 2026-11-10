@@ -62,7 +62,7 @@ _STANDARD_TIERS = [
     },
 ]
 
-_TIERS_PATCH_TARGET = "modulo.api.routes.admin_tiers.list_tiers"
+_TIERS_PATCH_TARGET = "farna.api.routes.admin_tiers.list_tiers"
 
 
 _TIERS_MOCK_ATTR = "_tiers_catalog_mock"
@@ -102,7 +102,7 @@ def _bdd_get_tiers(request) -> None:
     with (
         patch(_TIERS_PATCH_TARGET, tiers_mock),
         patch(
-            "modulo.api.routes.admin_tiers.Redis.from_url",
+            "farna.api.routes.admin_tiers.Redis.from_url",
             side_effect=RuntimeError("no redis in hermetic BDD scenarios"),
         ),
     ):

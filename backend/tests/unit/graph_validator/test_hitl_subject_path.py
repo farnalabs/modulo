@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graph_validator import (
+from farna.core.graph_validator import (
     HITL_SUBJECT_PATH_MAX_LENGTH,
     GraphValidator,
 )
@@ -198,35 +198,35 @@ class TestCheckHitlSubjectPath:
     """Direct unit tests for ``GraphValidator._check_hitl_subject_path``."""
 
     def test_none_config_skipped(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path(None, "node 'x'", result)
         assert not result.issues
 
     def test_no_subject_path_skipped(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path({"label": "g"}, "node 'x'", result)
         assert not result.issues
 
     def test_valid_jmespath(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path({"subject_path": "result.summary"}, "node 'x'", result)
         assert not result.issues
 
     def test_invalid_jmespath(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path({"subject_path": "bad[["}, "node 'x'", result)
         assert "HITL_SUBJECT_PATH_INVALID_JMESPATH" in _codes(result)
 
     def test_over_length(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path(
@@ -238,14 +238,14 @@ class TestCheckHitlSubjectPath:
 
     @pytest.mark.parametrize("blank", ["", "   "])
     def test_empty_string_skipped(self, blank):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path({"subject_path": blank}, "node 'x'", result)
         assert not result.issues
 
     def test_non_string_skipped(self):
-        from modulo.core.graph_validator import ValidationResult
+        from farna.core.graph_validator import ValidationResult
 
         result = ValidationResult()
         GraphValidator._check_hitl_subject_path({"subject_path": 42}, "node 'x'", result)

@@ -30,7 +30,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.cost_controller import (
+from farna.core.cost_controller import (
     _NUMERIC_STRING_RE,
     _SQL_COST_COMPONENT_BUCKETS,
     _SQL_COST_LEGACY_TOTAL,
@@ -41,7 +41,7 @@ from modulo.core.cost_controller import (
     _safe_int,
     build_cost_report_buckets,
 )
-from modulo.db.crud.team import create_team
+from farna.db.crud.team import create_team
 
 pytestmark = pytest.mark.integration
 

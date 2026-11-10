@@ -15,13 +15,13 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import modulo.cli.main as cli_main
+import farna.cli.main as cli_main
 
 REF_SHAPE = re.compile(r"MSB-[0-9]+-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
 
 
 def _no_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("modulo.support.bundle._session_factory", lambda sources: None)
+    monkeypatch.setattr("farna.support.bundle._session_factory", lambda sources: None)
 
 
 def test_support_builds_a_bundle_and_prints_the_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,21 +76,21 @@ def test_support_json_payload_carries_ref_and_ref_line(tmp_path: Path, monkeypat
 def test_launcher_data_dir_or_none_resolves_and_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert cli_main._launcher_data_dir_or_none(tmp_path) == tmp_path
 
-    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("farna.launcher.entry.default_data_dir", lambda: tmp_path)
     assert cli_main._launcher_data_dir_or_none(None) == tmp_path
 
-    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", lambda: tmp_path / "missing")
+    monkeypatch.setattr("farna.launcher.entry.default_data_dir", lambda: tmp_path / "missing")
     assert cli_main._launcher_data_dir_or_none(None) is None
 
     def _boom() -> Path:
         raise RuntimeError("no home directory")
 
-    monkeypatch.setattr("modulo.launcher.entry.default_data_dir", _boom)
+    monkeypatch.setattr("farna.launcher.entry.default_data_dir", _boom)
     assert cli_main._launcher_data_dir_or_none(None) is None
 
 
 def test_support_command_reports_a_gate_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.support.bundle as bundle
+    import farna.support.bundle as bundle
 
     async def _refuse(*_args: object, **_kwargs: object) -> None:
         raise bundle.RedactionGateError("logs/app.log.tail", ["seeded secret value still present"])
@@ -107,7 +107,7 @@ def test_support_command_reports_a_gate_refusal(tmp_path: Path, monkeypatch: pyt
 
 
 def test_support_command_reports_a_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.support.bundle as bundle
+    import farna.support.bundle as bundle
 
     async def _fail(*_args: object, **_kwargs: object) -> None:
         raise OSError("disk full")

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.pipeline_engine.event_broker import get_registry
+from farna.core.pipeline_engine.event_broker import get_registry
 
 # ---------------------------------------------------------------------------
 # Active features
@@ -65,7 +65,7 @@ def observability_configured(ctx):
 @when("I request GET /api/v1/settings/observability")
 def get_observability_settings(client, ctx, request):
     with patch(
-        "modulo.api.routes.observability.get_otel_config",
+        "farna.api.routes.observability.get_otel_config",
         new_callable=AsyncMock,
         return_value={
             "otlp_endpoint": "",
@@ -83,7 +83,7 @@ def get_observability_settings(client, ctx, request):
 def put_observability_settings(client, ctx, request):
     with (
         patch(
-            "modulo.api.routes.observability.get_otel_config",
+            "farna.api.routes.observability.get_otel_config",
             new_callable=AsyncMock,
             return_value={
                 "otlp_endpoint": "http://otel-collector:4318",
@@ -93,7 +93,7 @@ def put_observability_settings(client, ctx, request):
             },
         ),
         patch(
-            "modulo.api.routes.observability.update_otel_config",
+            "farna.api.routes.observability.update_otel_config",
             new_callable=AsyncMock,
             return_value={
                 "otlp_endpoint": "http://otel-collector:4318",
@@ -115,7 +115,7 @@ def put_observability_settings(client, ctx, request):
 def step_otel_connection(client, ctx, request):
     endpoint = ctx.get("otlp_endpoint", "http://otel-collector:4318")
     with patch(
-        "modulo.api.routes.observability.pinned_async_client",
+        "farna.api.routes.observability.pinned_async_client",
         new_callable=AsyncMock,
     ) as mock_pinned:
         mock_client = MagicMock()
@@ -137,7 +137,7 @@ def step_otel_connection(client, ctx, request):
 @when("I request GET /api/v1/settings/observability/preview")
 def get_export_preview(client, request, ctx):
     with patch(
-        "modulo.api.routes.observability.get_otel_config",
+        "farna.api.routes.observability.get_otel_config",
         new_callable=AsyncMock,
         return_value={
             "otlp_endpoint": "http://otel-collector:4318",
@@ -201,7 +201,7 @@ def _build_otel_harness(ctx: dict[str, Any], enabled: bool) -> None:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from modulo.otel_bridge.handler import LangGraphOtelBridge
+    from farna.otel_bridge.handler import LangGraphOtelBridge
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -521,19 +521,19 @@ def fetch_run_detail_via_api(client, request, ctx):
     run_id = request.node._run_id
     run = request.node._run
     with (
-        patch("modulo.api.routes.runs._do_get_run_with_gate", new_callable=AsyncMock, return_value=(run, False)),
+        patch("farna.api.routes.runs._do_get_run_with_gate", new_callable=AsyncMock, return_value=(run, False)),
         patch(
-            "modulo.api.routes.runs._do_get_child_run_rollup",
+            "farna.api.routes.runs._do_get_child_run_rollup",
             new_callable=AsyncMock,
             return_value=(Decimal("0.000000"), 0),
         ),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch("farna.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
         patch(
-            "modulo.api.routes.runs._do_get_run_observability",
+            "farna.api.routes.runs._do_get_run_observability",
             new_callable=AsyncMock,
             return_value=(ctx["trigger_actor"], ctx["capacity"], ctx["child_runs"]),
         ),
-        patch("modulo.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
     ):
         resp = client.get(f"/api/v1/runs/{run_id}")
     request.node._resp = resp
@@ -543,7 +543,7 @@ def fetch_run_detail_via_api(client, request, ctx):
 @when("I fetch the run event stream via the API")
 def fetch_run_event_stream_via_api(client, request):
     run_id = request.node._run_id
-    with patch("modulo.api.routes.runs._do_get_run", new_callable=AsyncMock, return_value=request.node._run):
+    with patch("farna.api.routes.runs._do_get_run", new_callable=AsyncMock, return_value=request.node._run):
         resp = client.get(f"/api/v1/runs/{run_id}/events")
     request.node._resp = resp
     assert resp.status_code == 200, resp.text

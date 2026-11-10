@@ -16,8 +16,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from modulo.otel_bridge.handler import LangGraphOtelBridge, _anonymise_id, _error_category_for_export
-from modulo.otel_bridge.trace_id import trace_id_int_for_thread
+from farna.otel_bridge.handler import LangGraphOtelBridge, _anonymise_id, _error_category_for_export
+from farna.otel_bridge.trace_id import trace_id_int_for_thread
 
 
 @pytest.fixture
@@ -636,7 +636,7 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge, caplog: p
     silently never reaching their span-lookup branch.
     """
     run_id = uuid.uuid4()
-    with caplog.at_level(logging.WARNING, logger="modulo.otel_bridge.handler"):
+    with caplog.at_level(logging.WARNING, logger="farna.otel_bridge.handler"):
         bridge.on_chain_end({}, run_id=run_id)
         bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
         bridge.on_tool_end("x", run_id=run_id)
@@ -649,7 +649,7 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge, caplog: p
 def test_error_without_start_does_not_raise(bridge: LangGraphOtelBridge, caplog: pytest.LogCaptureFixture) -> None:
     """Error callbacks for unknown run_ids must be logged no-ops, not raise."""
     run_id = uuid.uuid4()
-    with caplog.at_level(logging.WARNING, logger="modulo.otel_bridge.handler"):
+    with caplog.at_level(logging.WARNING, logger="farna.otel_bridge.handler"):
         bridge.on_chain_error(ValueError("boom"), run_id=run_id)
         bridge.on_llm_error(ValueError("boom"), run_id=run_id)
         bridge.on_chat_model_error(ValueError("boom"), run_id=run_id)
@@ -795,7 +795,7 @@ def test_span_finalization_errors_are_swallowed(
     broken_span = bridge._spans[str(run_id)]
     setattr(broken_span, broken_method, _boom(RuntimeError("boom")))
 
-    with caplog.at_level(logging.ERROR, logger="modulo.otel_bridge.handler"):
+    with caplog.at_level(logging.ERROR, logger="farna.otel_bridge.handler"):
         _drive_end(bridge, kind, run_id)  # must not raise
 
     # The broken span must no longer be the live one (dropped for chain/llm,

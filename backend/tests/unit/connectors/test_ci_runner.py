@@ -4,11 +4,11 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunStatus, ConnectorType
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
-from modulo.connectors.ci_runner.base import ConnectorTypeError
-from modulo.connectors.ci_runner.github_actions import _GitHubActionsTestDouble
-from modulo.connectors.ci_runner.gitlab_ci import _GitLabCITestDouble
+from farna.connectors.base import CIRunStatus, ConnectorType
+from farna.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from farna.connectors.ci_runner.base import ConnectorTypeError
+from farna.connectors.ci_runner.github_actions import _GitHubActionsTestDouble
+from farna.connectors.ci_runner.gitlab_ci import _GitLabCITestDouble
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -118,7 +118,7 @@ async def test_gh_trigger_run_unresolvable_run_fails_loud(gh_runner, monkeypatch
     times (GitHub's runs listing is eventually consistent right after a
     dispatch), then a clear ValueError surfaces — never an empty id.
     """
-    from modulo.connectors.ci_runner import github_actions as gh_mod
+    from farna.connectors.ci_runner import github_actions as gh_mod
 
     monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
     respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
@@ -154,7 +154,7 @@ async def test_gh_trigger_run_never_hands_back_a_pre_dispatch_run(gh_runner, mon
     """
     from datetime import UTC, datetime
 
-    from modulo.connectors.ci_runner import github_actions as gh_mod
+    from farna.connectors.ci_runner import github_actions as gh_mod
 
     monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
     respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(

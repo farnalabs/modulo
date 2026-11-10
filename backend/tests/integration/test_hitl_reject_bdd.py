@@ -23,7 +23,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import tests.integration.test_hitl_resume_roundtrip as rt
-from modulo.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
+from farna.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
 
 pytestmark = [pytest.mark.integration]
 
@@ -148,8 +148,8 @@ def _run_waiting(
 
 
 def _reject_and_resume(ctx: dict[str, Any], db_engine: AsyncEngine, reason: str) -> None:
-    from modulo.core.cron_helpers import _committed_decision_resume_data
-    from modulo.db.rls import set_rls_org
+    from farna.core.cron_helpers import _committed_decision_resume_data
+    from farna.db.rls import set_rls_org
 
     async def _go() -> None:
         org_id, run_id = ctx["org_id"], ctx["run_id"]

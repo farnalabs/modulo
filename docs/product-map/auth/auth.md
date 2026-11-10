@@ -3,8 +3,8 @@ id: feat-auth
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/auth.py
-  - backend/src/modulo/api/routes/sso.py
+  - backend/src/farna/api/routes/auth.py
+  - backend/src/farna/api/routes/sso.py
   - frontend/src/views/LoginView.vue
   - frontend/src/views/AcceptInviteView.vue
   - frontend/src/views/ForceChangePasswordView.vue
@@ -41,7 +41,7 @@ clients.
 - [x] Login authenticates credentials, resolves org membership, and mints JWT
       access+refresh token pairs via token families; break-glass credentials are
       consumed with compare-and-swap; brute-force rate limiting applies exponential
-      backoff per IP (`backend/src/modulo/api/routes/auth.py`,
+      backoff per IP (`backend/src/farna/api/routes/auth.py`,
       `backend/tests/unit/api/test_auth_routes_coverage.py`)
 - [x] Demo auto-login mints short-lived tokens (2h TTL, 4h hard cap) with no
       refresh token; all failures return 404 to hide the feature
@@ -52,7 +52,7 @@ clients.
       reuse-interval replay: the family advances normally and mints new tokens
       (reuse_replay=True for logging). Reuse outside the window, ahead of max, or
       from a blacklisted family blacklists the family as theft
-      (`backend/src/modulo/db/crud/token_family.py`)
+      (`backend/src/farna/db/crud/token_family.py`)
 - [x] Cross-tab refresh serialization: the refresh token rides the httpOnly
       `modulo_refresh` cookie (FAR-1197 - no longer persisted in localStorage),
       which the browser shares across tabs, so a rotation by one tab is
@@ -68,8 +68,8 @@ clients.
       the window, ahead of max, or from a blacklisted family the server answers
       401 and the client treats the session as dead. The family is NOT
       blacklisted on a within-window reuse
-      (`backend/src/modulo/db/crud/token_family.py`,
-      `backend/src/modulo/api/routes/auth.py`)
+      (`backend/src/farna/db/crud/token_family.py`,
+      `backend/src/farna/api/routes/auth.py`)
 - [x] Logout blacklists the token family so all tokens from that session are
       invalidated
 - [x] `/me` returns the authenticated user's profile with `must_change_password`
@@ -97,9 +97,9 @@ clients.
       on the next API call, so they cannot list pipelines or view runs, and a
       removed member's refresh token is rejected 401 ("Account no longer has
       access to this organization") BEFORE the family sequence advances
-      (`backend/src/modulo/auth/dependencies.py` `_verify_identity` /
-      `get_current_tenant_user`, `backend/src/modulo/api/routes/auth.py`
-      `_advance_refresh_sequence`, `backend/src/modulo/db/crud/org_membership.py`)
+      (`backend/src/farna/auth/dependencies.py` `_verify_identity` /
+      `get_current_tenant_user`, `backend/src/farna/api/routes/auth.py`
+      `_advance_refresh_sequence`, `backend/src/farna/db/crud/org_membership.py`)
 
 ## QA History
 - 2026-10-02: **Improve Architecture product-map walk**: closed

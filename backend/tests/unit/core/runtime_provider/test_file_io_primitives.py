@@ -27,14 +27,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from e2b import FileType
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     RuntimeProvider,
     RuntimeProviderError,
     WorkspaceFileInfo,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 _BINARY = bytes(range(256)) * 4  # every byte value, incl. NUL / 0xFF
 
@@ -420,7 +420,7 @@ def test_workspace_file_info_is_frozen() -> None:
 
 
 def test_workspace_file_info_exported_in_all() -> None:
-    import modulo.core.runtime_provider as pkg
+    import farna.core.runtime_provider as pkg
 
     assert "WorkspaceFileInfo" in pkg.__all__
     assert pkg.WorkspaceFileInfo is WorkspaceFileInfo

@@ -21,7 +21,7 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
-from modulo.core.trigger_validation import validate_ongoing_config
+from farna.core.trigger_validation import validate_ongoing_config
 
 
 def _raise_detail(exc: HTTPException) -> str:

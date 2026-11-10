@@ -22,12 +22,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
+from farna.api.middleware.correlation_id import REQUEST_ID_HEADER
 
 
 @pytest.fixture
 def app() -> FastAPI:
-    from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
+    from farna.api.middleware.correlation_id import CorrelationIdMiddleware
 
     app = FastAPI()
 
@@ -91,7 +91,7 @@ async def test_correlation_id_consistent(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
-    from modulo.core.logging_config import correlation_id_var
+    from farna.core.logging_config import correlation_id_var
 
     seen: dict[str, str] = {}
 
@@ -164,7 +164,7 @@ async def test_response_header_present_on_error(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_contextvar_cleared_when_handler_raises(app: FastAPI) -> None:
-    from modulo.core.logging_config import correlation_id_var
+    from farna.core.logging_config import correlation_id_var
 
     seen: dict[str, str] = {}
 

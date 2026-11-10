@@ -2,7 +2,7 @@
 
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models import AssistantSkill, Base, ChatMessage, ChatSession, OrgScoped
+from farna.db.models import AssistantSkill, Base, ChatMessage, ChatSession, OrgScoped
 
 
 class TestChatSession:

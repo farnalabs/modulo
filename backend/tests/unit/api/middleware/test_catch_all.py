@@ -30,12 +30,12 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from modulo.api.middleware.catch_all import (
+from farna.api.middleware.catch_all import (
     CatchAllMiddleware,
     _make_500_response,
 )
 
-_PATH = "modulo.api.middleware.catch_all"
+_PATH = "farna.api.middleware.catch_all"
 
 
 def _request(method: str = "GET", path: str = "/boom", **state: Any) -> SimpleNamespace:
@@ -47,14 +47,14 @@ def _request(method: str = "GET", path: str = "/boom", **state: Any) -> SimpleNa
 
 
 def _get_unhandled_exception_count() -> int:
-    import modulo.api.middleware.catch_all as module
+    import farna.api.middleware.catch_all as module
 
     with module._unhandled_count_lock:
         return module._unhandled_exception_count
 
 
 def _reset_counter() -> None:
-    import modulo.api.middleware.catch_all as module
+    import farna.api.middleware.catch_all as module
 
     with module._unhandled_count_lock:
         module._unhandled_exception_count = 0
@@ -178,8 +178,8 @@ class TestIngestUnhandledError:
         return session, factory, service, ingest_calls
 
     async def test_ingest_success_with_org(self) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
-        from modulo.core.logging_config import correlation_id_var
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.core.logging_config import correlation_id_var
 
         session, factory, service, ingest_calls = await self._fixtures()
         set_rls = mock.AsyncMock()
@@ -187,11 +187,11 @@ class TestIngestUnhandledError:
 
         try:
             with (
-                mock.patch("modulo.api.dependencies.get_or_create_engine"),
-                mock.patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
-                mock.patch("modulo.settings.get_settings", return_value=SimpleNamespace()),
-                mock.patch("modulo.db.rls.set_rls_org", set_rls),
-                mock.patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
+                mock.patch("farna.api.dependencies.get_or_create_engine"),
+                mock.patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
+                mock.patch("farna.settings.get_settings", return_value=SimpleNamespace()),
+                mock.patch("farna.db.rls.set_rls_org", set_rls),
+                mock.patch("farna.core.error_tracking.ErrorIngestionService", return_value=service),
             ):
                 await _ingest_unhandled_error(
                     _request(method="POST", path="/x", organisation_id="org-1", user_id="user-1")
@@ -215,17 +215,17 @@ class TestIngestUnhandledError:
         assert event["environment"] == os.environ.get("MODULO_ENV", "development")
 
     async def test_ingest_skips_ingestion_when_no_org(self) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         session, factory, service, ingest_calls = await self._fixtures()
         set_rls = mock.AsyncMock()
 
         with (
-            mock.patch("modulo.api.dependencies.get_or_create_engine"),
-            mock.patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
-            mock.patch("modulo.settings.get_settings", return_value=SimpleNamespace()),
-            mock.patch("modulo.db.rls.set_rls_org", set_rls),
-            mock.patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
+            mock.patch("farna.api.dependencies.get_or_create_engine"),
+            mock.patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
+            mock.patch("farna.settings.get_settings", return_value=SimpleNamespace()),
+            mock.patch("farna.db.rls.set_rls_org", set_rls),
+            mock.patch("farna.core.error_tracking.ErrorIngestionService", return_value=service),
         ):
             await _ingest_unhandled_error(_request(user_id="user-1"))
 
@@ -233,16 +233,16 @@ class TestIngestUnhandledError:
         assert ingest_calls == []
 
     async def test_ingest_without_user_id(self) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         _, factory, service, ingest_calls = await self._fixtures()
 
         with (
-            mock.patch("modulo.api.dependencies.get_or_create_engine"),
-            mock.patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
-            mock.patch("modulo.settings.get_settings", return_value=SimpleNamespace()),
-            mock.patch("modulo.db.rls.set_rls_org", mock.AsyncMock()),
-            mock.patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
+            mock.patch("farna.api.dependencies.get_or_create_engine"),
+            mock.patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
+            mock.patch("farna.settings.get_settings", return_value=SimpleNamespace()),
+            mock.patch("farna.db.rls.set_rls_org", mock.AsyncMock()),
+            mock.patch("farna.core.error_tracking.ErrorIngestionService", return_value=service),
         ):
             await _ingest_unhandled_error(_request(organisation_id="org-1"))
 
@@ -250,28 +250,28 @@ class TestIngestUnhandledError:
         assert event["context_json"]["user_id"] is None
 
     async def test_ingest_failure_is_logged_and_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         with (
-            mock.patch("modulo.settings.get_settings", side_effect=RuntimeError("settings boom")),
-            caplog.at_level("ERROR", logger="modulo.api.middleware.catch_all"),
+            mock.patch("farna.settings.get_settings", side_effect=RuntimeError("settings boom")),
+            caplog.at_level("ERROR", logger="farna.api.middleware.catch_all"),
         ):
             await _ingest_unhandled_error(_request(organisation_id="org-1"))
 
         assert any("middleware.error_ingest_failed" in rec.message for rec in caplog.records)
 
     async def test_ingest_failure_within_body_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.api.middleware.catch_all import _ingest_unhandled_error
+        from farna.api.middleware.catch_all import _ingest_unhandled_error
 
         _, factory, _, _ = await self._fixtures()
 
         with (
-            mock.patch("modulo.api.dependencies.get_or_create_engine"),
-            mock.patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
-            mock.patch("modulo.settings.get_settings", return_value=SimpleNamespace()),
-            mock.patch("modulo.db.rls.set_rls_org", mock.AsyncMock()),
-            mock.patch("modulo.core.error_tracking.ErrorIngestionService", side_effect=RuntimeError("service boom")),
-            caplog.at_level("ERROR", logger="modulo.api.middleware.catch_all"),
+            mock.patch("farna.api.dependencies.get_or_create_engine"),
+            mock.patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
+            mock.patch("farna.settings.get_settings", return_value=SimpleNamespace()),
+            mock.patch("farna.db.rls.set_rls_org", mock.AsyncMock()),
+            mock.patch("farna.core.error_tracking.ErrorIngestionService", side_effect=RuntimeError("service boom")),
+            caplog.at_level("ERROR", logger="farna.api.middleware.catch_all"),
         ):
             await _ingest_unhandled_error(_request(organisation_id="org-1"))
 
@@ -292,7 +292,7 @@ class TestMake500Response:
     def test_falls_back_when_problem_detail_construction_fails(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             mock.patch(f"{_PATH}.ProblemDetail.from_type", side_effect=RuntimeError("model boom")),
-            caplog.at_level("ERROR", logger="modulo.api.middleware.catch_all"),
+            caplog.at_level("ERROR", logger="farna.api.middleware.catch_all"),
         ):
             response = _make_500_response("req-xyz")
         assert response.status_code == 500
@@ -304,7 +304,7 @@ class TestCounterAccessor:
         assert _get_unhandled_exception_count() == 0
 
     def test_counter_exposed_after_increment(self) -> None:
-        import modulo.api.middleware.catch_all as module
+        import farna.api.middleware.catch_all as module
 
         with module._unhandled_count_lock:
             module._unhandled_exception_count = 7

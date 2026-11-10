@@ -3,15 +3,15 @@ id: feat-pipelines-pipeline-versioning
 prd: 8.13
 adr: []
 code:
-  - backend/src/modulo/db/models/pipeline_snapshot.py
-  - backend/src/modulo/db/crud/pipeline_snapshot.py
-  - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
-  - backend/src/modulo/db/crud/pipeline.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/api/routes/runs.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/core/release_channels.py
-  - backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - backend/src/farna/db/models/pipeline_snapshot.py
+  - backend/src/farna/db/crud/pipeline_snapshot.py
+  - backend/src/farna/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/farna/db/crud/pipeline.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/api/routes/runs.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/core/release_channels.py
+  - backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
   - frontend/src/components/pipeline/PipelineVersionChip.vue
@@ -70,9 +70,9 @@ annotate, delete, rollback, diff) is the data layer under
       reconciliation. A save whose incoming graph is semantically identical to
       the live one records no snapshot, and an allocation failure rolls the
       whole save back rather than committing unversioned
-      (`backend/src/modulo/db/crud/pipeline.py::replace_pipeline_graph` +
+      (`backend/src/farna/db/crud/pipeline.py::replace_pipeline_graph` +
       `_record_edit_snapshot_if_needed`,
-      `backend/src/modulo/db/crud/pipeline_snapshot.py::create_snapshot_edit`)
+      `backend/src/farna/db/crud/pipeline_snapshot.py::create_snapshot_edit`)
 - [x] The editor opens a saved version READ-ONLY from `?snapshot=<uuid>` (the
       canonical deep link) or `?version=<n>` (an alias resolved against the
       version-descending snapshot list; `snapshot` wins when both are present),
@@ -91,7 +91,7 @@ annotate, delete, rollback, diff) is the data layer under
       `snapshot_version`. A legacy run with no snapshot links to the live editor
       and renders no chip, and a deleted pipeline renders plain text
       (`frontend/src/components/runs/RunPipelineVersionLink.vue`,
-      `backend/src/modulo/api/routes/runs.py`,
+      `backend/src/farna/api/routes/runs.py`,
       `frontend/src/__tests__/RunPipelineVersionLink.spec.ts`)
 - [x] Snapshot save, list, get, diff and rollback are Community-tier: the
       `pipeline_diff_rollback` plan gate is RETIRED (FAR-1819): the
@@ -100,12 +100,12 @@ annotate, delete, rollback, diff) is the data layer under
       `0317_drop_retired_pipeline_diff_rollback_flag` sweeps the stale
       `feature_flag_catalog` row so no admin surface advertises a flag that
       gates nothing (`backend/tests/unit/api/test_pipeline_snapshot_gating.py`,
-      `backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py`)
+      `backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py`)
 - [x] Snapshots carry FAR-402 P6 live-edit history + release-channel tagging:
       `version_kind` (`edit` vs `run`), `created_kind` (`initial`/`edit`/
       `rollback`/`run`), `draft` auto-saves, and `channel` (`none`/`stable`/
       `canary`); the save-edit endpoint rejects an invalid channel with 422
-      (`backend/src/modulo/core/release_channels.py`,
+      (`backend/src/farna/core/release_channels.py`,
       `backend/tests/unit/api/test_pipeline_snapshot_gating.py`)
 - [x] A trigger bound to a routable channel (`stable`/`canary` in its
       `config_json.release_channel`) resolves to the LATEST non-draft snapshot
@@ -113,8 +113,8 @@ annotate, delete, rollback, diff) is the data layer under
       `snapshot_version` first, org/pipeline-scoped); unbound, bogus-channel, or
       channel-without-snapshot triggers resolve to `None` and the caller pins
       the live graph, preserving current behavior
-      (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py`,
-      `backend/src/modulo/core/trigger_engine/__init__.py::resolve_snapshot_id_for_trigger`,
+      (`backend/src/farna/db/crud/pipeline_snapshot_versioning.py`,
+      `backend/src/farna/core/trigger_engine/__init__.py::resolve_snapshot_id_for_trigger`,
       `backend/tests/unit/db/crud/test_snapshot_versioning_far402.py::TestResolveSnapshotForChannel`,
       `::TestResolveSnapshotIdForTrigger`)
 

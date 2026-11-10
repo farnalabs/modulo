@@ -9,7 +9,7 @@ import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -212,14 +212,14 @@ def step_error_mentions(text: str, request: pytest.FixtureRequest) -> None:
 
 def _patch_runs_trigger(patches, pipeline, snapshot) -> None:
     """Wire the run-trigger route's DB calls to the given pipeline/snapshot mocks."""
-    patcher = patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock)
+    patcher = patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock)
     patcher.start()
     patches.append(patcher)
-    patcher = patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
+    patcher = patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
     patcher.start()
     patches.append(patcher)
     patcher = patch(
-        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        "farna.api.routes.runs.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
         return_value=snapshot,
     )
@@ -302,9 +302,9 @@ def step_set_weak_password(password: str, client, request: pytest.FixtureRequest
     the account lookup with a real bcrypt hash for the current password so the
     route reaches the strength check.
     """
-    from modulo.auth.passwords import hash_password
+    from farna.auth.passwords import hash_password
 
-    with patch("modulo.api.routes.me.get_account_by_id") as mock_get_account:
+    with patch("farna.api.routes.me.get_account_by_id") as mock_get_account:
         account = MagicMock()
         account.password_hash = hash_password("correct-horse-battery")
         mock_get_account.return_value = account
@@ -335,7 +335,7 @@ def step_access_pipelines(org: str, client, alt_org_client, mock_session):
     from unittest.mock import patch
 
     test_client = alt_org_client if org == "other-org" else client
-    with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
+    with patch("farna.api.routes.pipelines.list_pipelines") as mock_list:
         mock_list.return_value = SimpleNamespace(
             items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False
         )
@@ -360,7 +360,7 @@ def step_access_cross_org_pipeline(pipeline_id: str, org: str, alt_org_client, m
     """GET /api/v1/pipelines/{id} with alt org — simulates cross-org access returning 404."""
     from unittest.mock import patch
 
-    with patch("modulo.api.routes.pipelines.get_pipeline") as mock_get:
+    with patch("farna.api.routes.pipelines.get_pipeline") as mock_get:
         mock_get.return_value = None
         return alt_org_client.get(f"/api/v1/pipelines/{pipeline_id}")
 

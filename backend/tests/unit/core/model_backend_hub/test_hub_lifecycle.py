@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.model_backend_hub import (
+from farna.core.model_backend_hub import (
     BackendDecryptError,
     BackendNotFoundError,
     BackendUnavailableError,
     ModelBackendHub,
 )
-from modulo.model_backends.base import HealthResult
-from modulo.model_backends.stub import StubModelBackend
+from farna.model_backends.base import HealthResult
+from farna.model_backends.stub import StubModelBackend
 
 
 @pytest.fixture
@@ -231,7 +231,7 @@ async def test_health_check_timeout_marks_unhealthy(
 
     fake.health_check = _slow
     hub.register(bid, fake)
-    monkeypatch.setattr("modulo.core.model_backend_hub._HEALTH_CHECK_TIMEOUT", 0.05)
+    monkeypatch.setattr("farna.core.model_backend_hub._HEALTH_CHECK_TIMEOUT", 0.05)
     result = await hub.health_check(bid)
     assert result == HealthResult(ok=False, detail="Health check timed out")
     assert hub._healthy[bid] is False

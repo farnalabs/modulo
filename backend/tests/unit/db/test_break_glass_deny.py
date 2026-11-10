@@ -14,7 +14,7 @@ from pathlib import Path
 
 from sqlalchemy.dialects import postgresql
 
-from modulo.db.crud.break_glass_deny import (
+from farna.db.crud.break_glass_deny import (
     BREAK_GLASS_COLUMNS,
     denied_predicate,
     is_break_glass_denied,
@@ -22,7 +22,7 @@ from modulo.db.crud.break_glass_deny import (
     live_predicate,
     render_sql,
 )
-from modulo.db.models.account import Account
+from farna.db.models.account import Account
 from tests.unit._source_scan import iter_source_text
 
 _BACKEND_ROOT = Path(__file__).parents[3]
@@ -159,7 +159,7 @@ MEMBERSHIP_LOOKUP_SITES: dict[str, str] = {
     "modulo/db/crud/scim.py": "fold — membership lookup only (SCIM CRUD), no role grant",
 }
 
-_IMPORT_MODULES = ("modulo.auth.dependencies", "modulo.db.crud.org_membership")
+_IMPORT_MODULES = ("farna.auth.dependencies", "farna.db.crud.org_membership")
 _ALLOWED_DENY_STATUS = {"401", "403", "422", "409", "503", "deny"}
 
 
@@ -181,7 +181,7 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
         except SyntaxError:
             continue
         # Local names bound to the org_membership module (e.g. the
-        # `from modulo.db.crud import org_membership as crud_org_membership`
+        # `from farna.db.crud import org_membership as crud_org_membership`
         # alias used to keep crud attributes patchable in unit tests).
         org_membership_aliases: set[str] = set()
         for node in ast.walk(tree):
@@ -191,7 +191,7 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
                     role_sites.add(rel)
                 if "get_membership_by_account_and_org" in names:
                     lookup_sites.add(rel)
-            elif isinstance(node, ast.ImportFrom) and node.module == "modulo.db.crud":
+            elif isinstance(node, ast.ImportFrom) and node.module == "farna.db.crud":
                 for alias in node.names:
                     if alias.name == "org_membership":
                         org_membership_aliases.add(alias.asname or alias.name)

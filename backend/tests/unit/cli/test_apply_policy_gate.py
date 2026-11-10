@@ -36,18 +36,18 @@ import pytest
 import respx
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import (
+from farna.api.routes.pipelines import (
     PipelineGraphNode,
     PipelineGraphUpdate,
     _graph_response,
     _prepare_graph_write,
 )
-from modulo.cli.apply import pipeline_apply, render_table
-from modulo.cli.apply.drift import build_drift_detail, policy_gate_changes
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.models import ApplyGraphNode, ApplyGraphPolicyGate, PipelineEntity
-from modulo.cli.apply.plan import KIND_PIPELINE, plan_entity
+from farna.cli.apply import pipeline_apply, render_table
+from farna.cli.apply.drift import build_drift_detail, policy_gate_changes
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.models import ApplyGraphNode, ApplyGraphPolicyGate, PipelineEntity
+from farna.cli.apply.plan import KIND_PIPELINE, plan_entity
 
 NODE_ID = "00000000-0000-0000-0000-0000000000a1"
 EVAL_ID = "660e8400-e29b-41d4-a716-446655440001"

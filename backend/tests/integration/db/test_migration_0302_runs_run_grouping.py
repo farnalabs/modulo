@@ -47,7 +47,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.db.sqlstates import sqlstate_of
+from farna.db.sqlstates import sqlstate_of
 
 pytestmark = [pytest.mark.integration]
 
@@ -68,7 +68,7 @@ _NEW_INDEXES = ("ix_runs_run_group_id", "uq_runs_resume_parent", "uq_runs_thread
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 

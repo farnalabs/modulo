@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0337_per_node_completion")
+_MIGRATION = importlib.import_module("farna.db.migrations.versions.0337_per_node_completion")
 
 
 class _FakeResult:

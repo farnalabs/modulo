@@ -18,7 +18,7 @@ real migrated ``organisations`` table.
 import pytest
 from sqlalchemy import inspect as sa_inspect
 
-from modulo.db.models.organisation import Organisation
+from farna.db.models.organisation import Organisation
 
 
 @pytest.mark.parametrize("column", ["updated_at", "updated_by", "deleted_by"])

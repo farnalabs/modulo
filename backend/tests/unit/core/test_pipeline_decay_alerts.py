@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core import pipeline_decay_alerts as decay
-from modulo.core.notifier.event_mapper import _BODY_TEMPLATES, _TITLE_TEMPLATES
+from farna.core import pipeline_decay_alerts as decay
+from farna.core.notifier.event_mapper import _BODY_TEMPLATES, _TITLE_TEMPLATES
 
 _NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 _ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -469,7 +469,7 @@ async def test_corrupt_state_is_treated_as_absent() -> None:
 def test_health_query_filters_to_webhook_terminal_runs_in_the_window() -> None:
     from sqlalchemy.dialects import postgresql
 
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.db.models.run import TERMINAL_STATUSES
 
     since = datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
     sql = str(

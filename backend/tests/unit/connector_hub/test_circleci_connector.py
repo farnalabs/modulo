@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -12,7 +12,7 @@ from modulo.connectors.base import (
     ConnectorQuery,
     ConnectorType,
 )
-from modulo.connectors.circleci import CircleCIConnector
+from farna.connectors.circleci import CircleCIConnector
 
 TOKEN = "cc_test_token"
 _BASE = "https://circleci.com/api/v2"

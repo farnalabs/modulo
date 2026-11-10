@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.system_audit_logger import append_system_audit_event
+from farna.core.system_audit_logger import append_system_audit_event
 
 
 def _session() -> MagicMock:

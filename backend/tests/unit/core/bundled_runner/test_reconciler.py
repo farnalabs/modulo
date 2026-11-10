@@ -32,8 +32,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.bundled_runner import runner_reconciler
-from modulo.core.bundled_runner.runner_reconciler import (
+from farna.core.bundled_runner import runner_reconciler
+from farna.core.bundled_runner.runner_reconciler import (
     ReconcilerSweepError,
     _LabelledContainer,
     deployment_identity,
@@ -41,8 +41,8 @@ from modulo.core.bundled_runner.runner_reconciler import (
     docker_endpoint_skip_reason,
     reconcile_runner_workspaces,
 )
-from modulo.core.runtime_provider import WorkspaceListEntry
-from modulo.core.runtime_provider.k8s import WorkspacePodRef
+from farna.core.runtime_provider import WorkspaceListEntry
+from farna.core.runtime_provider.k8s import WorkspacePodRef
 
 
 @pytest.fixture(autouse=True)
@@ -102,7 +102,7 @@ async def _sweep(
     engine: MagicMock | None = None,
 ) -> dict[str, int]:
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: _fake_source(containers))
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(destroy))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(destroy))
     return await reconcile_runner_workspaces(engine or _engine_with_active_runs([]))
 
 
@@ -118,7 +118,7 @@ async def test_log_only_soak_default_never_destroys(
 async def test_destroy_enabled_destroys_orphan_past_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     source = _fake_source([_container("gone-run", 9999, "orphan-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -129,7 +129,7 @@ async def test_destroy_enabled_destroys_orphan_past_grace(monkeypatch: pytest.Mo
 async def test_orphan_within_grace_is_never_destroyed(monkeypatch: pytest.MonkeyPatch) -> None:
     source = _fake_source([_container("gone-run", 10.0, "recent-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -140,7 +140,7 @@ async def test_orphan_within_grace_is_never_destroyed(monkeypatch: pytest.Monkey
 async def test_container_without_created_marker_is_never_destroyed(monkeypatch: pytest.MonkeyPatch) -> None:
     source = _fake_source([_container("gone-run", 0.0, "no-marker")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -152,7 +152,7 @@ async def test_active_run_container_is_spared(monkeypatch: pytest.MonkeyPatch) -
     run_id = str(uuid.uuid4())
     source = _fake_source([_container(run_id, 9999, "active-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([run_id]))
 
@@ -167,7 +167,7 @@ async def test_active_run_container_past_max_lifetime_is_reclaimed(
     run_id = str(uuid.uuid4())
     source = _fake_source([_container(run_id, 90000.0, "expired-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
     engine = _engine_with_active_runs([run_id])
 
     with caplog.at_level(logging.WARNING):
@@ -185,7 +185,7 @@ async def test_destroy_path_recheck_detects_false_positive(
     the sweep spares the container and logs the D4 rollback signal."""
     source = _fake_source([_container("raced-run", 9999, "race-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
     # Bulk query sees nothing active; the per-container re-check DOES.
     engine = _engine_with_active_runs([])
     calls = {"n": 0}
@@ -224,7 +224,7 @@ async def test_cross_reference_failure_aborts_sweep_destroys_nothing(
 ) -> None:
     source = _fake_source([_container("gone-run", 9999, "orphan-9")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     with caplog.at_level(logging.ERROR), pytest.raises(ReconcilerSweepError, match="cross-reference"):
         await reconcile_runner_workspaces(_engine_with_active_runs([], fail=True))
@@ -237,7 +237,7 @@ async def test_container_list_failure_aborts_before_cross_reference(monkeypatch:
     source = _fake_source([])
     source.list_labelled_workspaces = AsyncMock(side_effect=OSError("engine unreachable"))
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     with pytest.raises(ReconcilerSweepError, match="listing docker workspaces"):
         await reconcile_runner_workspaces(_engine_with_active_runs([]))
@@ -250,7 +250,7 @@ async def test_log_only_max_lifetime_is_logged_not_destroyed(
 ) -> None:
     source = _fake_source([_container("gone-run", 90000.0, "old-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -652,7 +652,7 @@ async def test_sweep_wraps_a_destroy_failure_with_partial_counts(
 
     source.destroy_by_container_id = AsyncMock(side_effect=_destroy)
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     with pytest.raises(ReconcilerSweepError) as exc_info:
         await reconcile_runner_workspaces(_engine_with_active_runs([]))
@@ -688,7 +688,7 @@ async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch:
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: _fake_source([]))
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -708,7 +708,7 @@ async def test_source_close_failure_does_not_skip_the_other_tier(
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
 
     with caplog.at_level(logging.ERROR):
         result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
@@ -729,7 +729,7 @@ async def test_source_close_failure_does_not_mask_the_in_flight_sweep_error(
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
 
     with pytest.raises(ReconcilerSweepError, match="cross-reference"):
         await reconcile_runner_workspaces(_engine_with_active_runs([], fail=True))
@@ -753,7 +753,7 @@ async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregister
     )
     docker_source = _fake_source([_container("gone-run", 9999.0, "c-9")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -779,7 +779,7 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
     dispatch can never be reclaimed — driving the dispatch here rather than
     hand-building a spec is what proves the CALL SITE stamps it.
     """
-    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
     from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
 
     run_id = str(uuid.uuid4())
@@ -791,11 +791,11 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
     file_io = FakeFileIOProvider(files={"/home/user/output.json": b'{"status": "completed", "summary": "done"}'})
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        "farna.core.pipeline_engine.node_runner._build_file_io_provider",
         MagicMock(return_value=file_io),
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"f3-tail"))),
     )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-f3", exit_code=0)
@@ -826,7 +826,7 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
     # ...and a pod labelled from that spec passes the reconciler's OWN filter:
     # map the metadata through the real Kubernetes provider, then run the
     # source's listing over it.
-    from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+    from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
 
     labels, _annotations = KubernetesRuntimeProvider()._build_metadata(spec)
     source = runner_reconciler._KubernetesWorkspaceSource()
@@ -892,7 +892,7 @@ async def test_workspace_source_protocol_stub_bodies_are_executable() -> None:
 async def test_kubernetes_skip_reason_reports_a_hub_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hub-build failure is an explicit, named skip reason — never a crash."""
     monkeypatch.setattr(
-        "modulo.core.runtime_provider.build_hub",
+        "farna.core.runtime_provider.build_hub",
         MagicMock(side_effect=RuntimeError("hub down")),
     )
 
@@ -939,7 +939,7 @@ async def test_sweep_runs_kubernetes_tier_while_logging_the_docker_skip(
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
     monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "no docker endpoint")
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -1065,7 +1065,7 @@ async def test_e2b_skip_reason_reports_a_hub_build_failure(
 ) -> None:
     """A hub-build failure is an explicit, named skip reason — never a crash."""
     monkeypatch.setattr(
-        "modulo.core.runtime_provider.build_hub",
+        "farna.core.runtime_provider.build_hub",
         MagicMock(side_effect=RuntimeError("hub down")),
     )
 
@@ -1085,7 +1085,7 @@ async def test_sweep_reclaims_orphans_through_the_e2b_source(
     monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value=None))
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
     monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -1112,7 +1112,7 @@ async def test_sweep_skips_the_e2b_source_when_the_provider_is_unregistered(
     monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
     docker_source = _fake_source([_container("gone-run", 9999.0, "c-9")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 

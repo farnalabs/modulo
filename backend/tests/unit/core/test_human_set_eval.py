@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.human_eval_sets import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.human_eval_sets import (
     DEMO_CLASSIFICATION_V1,
     get_human_eval_set,
     register_human_eval_set,
@@ -81,7 +81,7 @@ class TestHumanSetEngineDispatch:
         assert "required_keys" in result.detail
 
     def test_block_behaviour_raises(self) -> None:
-        from modulo.core.eval_engine import EvalBlockedError
+        from farna.core.eval_engine import EvalBlockedError
 
         engine = EvalEngine()
         eval_def = _make_human_eval_def()
@@ -118,7 +118,7 @@ class TestHumanEvalSetRegistry:
         def _boom(output, config):
             raise RuntimeError("assertion exploded")
 
-        from modulo.core.eval_engine.human_eval_sets import HumanAssertion, HumanEvalSet
+        from farna.core.eval_engine.human_eval_sets import HumanAssertion, HumanEvalSet
 
         broken = HumanEvalSet(
             name="broken_set_tmp",
@@ -133,7 +133,7 @@ class TestHumanEvalSetRegistry:
             assert result.passed is False
             assert "boom" in result.detail
         finally:
-            from modulo.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
+            from farna.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
 
             HUMAN_EVAL_SETS.pop("broken_set_tmp", None)
 
@@ -144,7 +144,7 @@ class TestHumanEvalSetRegistry:
         def _none_detail(output, config):
             return {"passed": False, "detail": None}
 
-        from modulo.core.eval_engine.human_eval_sets import HumanAssertion, HumanEvalSet
+        from farna.core.eval_engine.human_eval_sets import HumanAssertion, HumanEvalSet
 
         none_detail_set = HumanEvalSet(
             name="none_detail_tmp",
@@ -159,6 +159,6 @@ class TestHumanEvalSetRegistry:
             assert result.passed is False
             assert "None" not in result.detail
         finally:
-            from modulo.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
+            from farna.core.eval_engine.human_eval_sets import HUMAN_EVAL_SETS
 
             HUMAN_EVAL_SETS.pop("none_detail_tmp", None)

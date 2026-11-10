@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
+from farna.core.pipeline_engine.event_broker import RunEventBroker
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/operations/websocket_reconnection.feature")

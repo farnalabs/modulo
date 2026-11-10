@@ -10,18 +10,18 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors import security
-from modulo.connectors._rate_bucket import (
+from farna.connectors import security
+from farna.connectors._rate_bucket import (
     PerDestinationRateLimiter,
     RedisTokenBucket,
     SharedBudgetUnavailableError,
     TokenBucket,
 )
-from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
-from modulo.connectors.ci_runner.github_actions import GitHubActionsCIRunner
-from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner
-from modulo.connectors.linear import LinearConnector, _authorization_header, _retry_delay
-from modulo.connectors.pagerduty import PagerDutyConnector
+from farna.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
+from farna.connectors.ci_runner.github_actions import GitHubActionsCIRunner
+from farna.connectors.ci_runner.gitlab_ci import GitLabCIRunner
+from farna.connectors.linear import LinearConnector, _authorization_header, _retry_delay
+from farna.connectors.pagerduty import PagerDutyConnector
 
 
 class _FakeScript:
@@ -228,7 +228,7 @@ async def test_rate_bucket_constructor_and_local_missing_bucket_branches() -> No
 
 async def test_linear_retry_transport_and_graphql_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     connector = LinearConnector("lin_secret")
-    monkeypatch.setattr("modulo.connectors.linear.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("farna.connectors.linear.asyncio.sleep", AsyncMock())
     connector._client = lambda: (_ for _ in ()).throw(httpx.ConnectError("lin_secret"))  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="transport error"):
         await connector._request_once({}, 3)

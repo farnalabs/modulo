@@ -18,7 +18,7 @@ def patch_expander():
             with patch_expander(expand=my_expand_fn, validate=my_validate_fn):
                 ...
     """
-    import modulo.core.composite_engine.expander as mod
+    import farna.core.composite_engine.expander as mod
 
     @contextmanager
     def _patcher(expand: Any = None, validate: Any = None):

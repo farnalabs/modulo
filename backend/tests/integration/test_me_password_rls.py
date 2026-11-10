@@ -24,10 +24,10 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.me import PasswordChangeRequest, change_password
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.passwords import hash_password
-from modulo.db.models.organisation import SYSTEM_ORG_ID
+from farna.api.routes.me import PasswordChangeRequest, change_password
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.passwords import hash_password
+from farna.db.models.organisation import SYSTEM_ORG_ID
 
 pytestmark = pytest.mark.integration
 

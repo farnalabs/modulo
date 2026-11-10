@@ -28,7 +28,7 @@ to decide whether to register a mapper.
 
 from __future__ import annotations
 
-from modulo.db.models.base import Base, SoftDeleteMixin
+from farna.db.models.base import Base, SoftDeleteMixin
 
 
 def test_every_deleted_at_model_inherits_soft_delete_mixin() -> None:
@@ -76,8 +76,8 @@ def test_gate_enumerates_known_orgscoped_models() -> None:
     these models disappear from the enumeration and the gate becomes
     vacuous again.  This self-check catches that regression.
     """
-    from modulo.db.models.error_notification_rule import ErrorNotificationRule
-    from modulo.db.models.eval import Eval
+    from farna.db.models.error_notification_rule import ErrorNotificationRule
+    from farna.db.models.eval import Eval
 
     enumerated_classes: set[type] = set()
     for mapper in Base.registry.mappers:

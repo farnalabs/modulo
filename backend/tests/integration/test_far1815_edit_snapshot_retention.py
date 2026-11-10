@@ -30,14 +30,14 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.routes.admin_housekeeping import CleanupItem, CleanupRequest, perform_cleanup
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import scan_all
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.trigger import Trigger
+from farna.api.routes.admin_housekeeping import CleanupItem, CleanupRequest, perform_cleanup
+from farna.auth.jwt import TenantPrincipal
+from farna.core.housekeeping import scan_all
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.trigger import Trigger
 
 pytestmark = pytest.mark.integration
 

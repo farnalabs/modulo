@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,
@@ -12,7 +12,7 @@ from modulo.connectors.base import (
     ConnectorQuery,
     ConnectorType,
 )
-from modulo.connectors.buildkite import BuildkiteConnector
+from farna.connectors.buildkite import BuildkiteConnector
 
 TOKEN = "bk_test_token"
 _BASE = "https://api.buildkite.com/v2"

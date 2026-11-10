@@ -374,7 +374,7 @@ class TestStackDown:
         )
         assert proc.returncode == 0, proc.stderr
         manifest = _member_text(out, "MANIFEST.txt")
-        assert "modulo.support.bundle failed" in manifest
+        assert "farna.support.bundle failed" in manifest
         assert "No module named modulo.support.bundle" in manifest
 
 

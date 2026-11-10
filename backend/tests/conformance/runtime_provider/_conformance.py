@@ -56,7 +56,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 
-from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec
+from farna.core.runtime_provider import RuntimeProvider, WorkspaceSpec
 
 _log = logging.getLogger(__name__)
 

@@ -1,0 +1,3291 @@
+"""SAQ worker settings + custom system web runner.
+
+Two worker processes (plan F1/F2):
+
+* ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod and 2 in staging — staging right-sized in
+  the 2026-09 Redis audit because SAQ's blocking dequeue issues one poll per
+  concurrency slot every 5s, making idle staging poll at prod volume; the
+  Redis pool must stay strictly larger — see :func:`_effective_redis_pool_size`),
+  no web UI. Executes
+  ``execute_run``/``resume_run`` jobs and the per-item fire jobs
+  (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``/
+  ``fire_ongoing_trigger``).
+* ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod and 2 in staging — see
+  :func:`_effective_redis_pool_size`), web UI on 8081 bound
+  to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
+  ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
+  crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, hitl-overdue,
+  retention, webhook-dedup cleanup, stale_run_recovery, slot-reconciliation,
+  hitl-park (FAR-604 D2).
+
+Accepted design target: concurrency 20 per worker x up to 5 machines = up to 100
+concurrent runs (recorded in ADR 017).
+
+Staging uses the SAME workers on dedicated queue names so a staging worker can
+never dequeue production system jobs: ``staging_runs_settings`` (queue
+``staging-runs``) and ``staging_system_settings`` (queue ``staging-system``).
+Staging configures the queue names via ``SAQ_RUNS_QUEUE=staging-runs``; the
+worker queue names ALWAYS derive from ``settings.saq_runs_queue`` so workers,
+``dispatch_run``, ``fire_due_triggers``, and the health gate stay in sync.
+
+SAQ 0.26.4 CLI invocation (no ``worker`` subcommand — the settings path is the
+only positional arg)::
+
+    python -m saq core.saq_worker.runs_settings
+
+The ``runs`` worker has no web UI and uses the plain CLI. The ``system`` worker
+MUST NOT use ``python -m saq core.saq_worker.system_settings --web`` — the plain
+``--web`` CLI binds 0.0.0.0 (aiohttp ``run_app`` has no ``host`` flag) and does
+NOT set the ``AUTH_PASSWORD``/``AUTH_USER`` env vars that ``saq/web/aiohttp.py``
+requires for BasicAuth. The system worker therefore ships a CUSTOM RUNNER
+(:func:`run_system_web`) that runs the worker (queue=system, crons + functions)
+and the web app in the same process, calling ``aiohttp.web.run_app(host=
+"127.0.0.1")`` and mapping ``SAQ_AUTH_USERNAME``/``SAQ_AUTH_PASSWORD`` to the
+``AUTH_USER``/``AUTH_PASSWORD`` env vars SAQ's web reads. Run it instead::
+
+    python -m modulo.core.saq_worker
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import os
+import sys
+import time
+import uuid
+from collections.abc import Collection
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any, cast
+
+from redis import asyncio as aioredis
+from saq import CronJob, Worker
+from saq.queue.redis import RedisQueue
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from farna.core.cron_helpers import CRON_LIVENESS_STATS_TTL_SECONDS, SAQ_TASK_FIRE_SUITE_RUN
+from farna.core.logging_config import org_id_var
+from farna.settings import get_settings, resolve_instance_identity
+
+_log = logging.getLogger(__name__)
+
+# Shared worker lifecycle knobs (plan F2).
+# SAQ runs asyncio jobs in a single process sharing one engine, so raising
+# concurrency does NOT multiply DB connection pools the way Celery prefork
+# does. Sandbox-agent runs spend most of their time awaiting external E2B
+# sandboxes; concurrency is controlled by SAQ_WORKER_CONCURRENCY (default 5)
+# and decoupled from the Redis pool size.
+_SHUTDOWN_GRACE_PERIOD_S = 30
+_CANCELLATION_HARD_DEADLINE_S = 60
+_DEQUEUE_TIMEOUT = 5
+# worker_info:89 -> TTL 90 (timer+1 is ALWAYS the TTL in saq 0.26.4).
+_TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
+
+# System-cron cadences (5-field form — croniter parses 5 fields, so the 30s
+# intent is not achievable; every minute is the floor).
+_CRON_EVERY_MINUTE = "* * * * *"
+_CRON_EVERY_5_MINUTES = "*/5 * * * *"
+_CRON_EVERY_15_MINUTES = "*/15 * * * *"
+_CRON_HOURLY = "0 * * * *"
+#: Once-daily cadence (03:00) — used by the guardrail kill-switch drill
+#: (FAR-1707). Distinct from analytics_facts_maintenance's 01:00 slot so the
+#: two daily crons never contend.
+_CRON_DAILY = "0 3 * * *"
+#: Once-daily cadence (02:30) — the FAR-132 legacy-shape straggler sweep. A
+#: distinct off-peak slot from the other daily crons (facts maintenance 01:00,
+#: kill-switch drill 03:00) so the three never contend.
+_CRON_DAILY_0230 = "30 2 * * *"
+_CRON_DEMO_DAILY_REFRESH = "5 0 * * *"
+
+# Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
+# and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
+# defaults to 90 days, and the audit helper counts the affected orgs with the
+# identical predicate immediately before the purge runs. Change BOTH together —
+# the count is the pre-image of the delete.
+_RETENTION_MAX_AGE_DAYS = 90
+_RETENTION_AUDIT_LOG_KEY = "saq.retention_cleanup.audit_failed"
+
+
+def _sync_interval_to_cron(interval_seconds: int) -> str:
+    """Map the community-library sync interval (seconds) to a 5-field cron.
+
+    croniter parses 5-field cron with a 1-minute floor, so sub-minute intervals
+    collapse to every minute. Multiples of 3600 map to an hourly cadence
+    (``0 */N * * *``); anything else is expressed as ``*/N * * * *`` minutes.
+    """
+    if interval_seconds <= 60:
+        return _CRON_EVERY_MINUTE
+    minutes = max(1, interval_seconds // 60)
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        if hours >= 24:
+            return "0 0 * * *"
+        return f"0 */{hours} * * *"
+    return f"*/{minutes} * * * *"
+
+
+# Web UI bind (F8): fly ssh only.
+_SYSTEM_WEB_HOST = "127.0.0.1"
+_SYSTEM_WEB_PORT = 8081
+
+# Engine for run execution (SAQ path) — the shared per-process engine (D4).
+# ``get_shared_engine`` builds ONE engine per process with the Fly/HAProxy
+# knobs (pool_pre_ping, statement_cache_size=0); the per-worker pool budget
+# (``saq_worker_db_pool_size``) is passed as the creation-time override. The
+# local cache mirrors the historical pattern so tests can reset it per test.
+_ASYNC_ENGINE: AsyncEngine | None = None
+
+
+def _get_async_engine() -> AsyncEngine:
+    global _ASYNC_ENGINE
+    if _ASYNC_ENGINE is None:
+        # Lazy import keeps db.session (and its module-level `engine`) out of
+        # the worker's import graph until the first engine is actually needed.
+        from farna.db.session import get_shared_engine
+
+        settings = get_settings()
+        if settings.modulo_db.lower() == "postgres":
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
+            _ASYNC_ENGINE = get_shared_engine(
+                pool_size=effective_pool,
+                max_overflow=0,
+            )
+        else:
+            _ASYNC_ENGINE = get_shared_engine()
+    return _ASYNC_ENGINE
+
+
+def _max_concurrent_ops(pool_size: int) -> int:
+    """Clamp SAQ's ``max_concurrent_ops`` strictly below the Redis pool size.
+
+    The semaphore must never exhaust all available connections — leaving
+    reserve connections for SAQ operations that bypass the semaphore
+    (``schedule``, ``sweep``, ``dequeue``, ``notify``). The old
+    ``max(pool_size - 5, 5)`` clamp was broken: at pool_size 5 it allowed
+    ``max_ops == pool_size`` (zero reserve) and for pool_size < 5 it allowed
+    ``max_ops > pool_size`` — the exact 'Too many connections' exhaustion it
+    claims to prevent.
+
+    The correct clamp always leaves at least one reserve connection: small
+    pools (2-5) reserve 1, larger pools keep the historical 5-connection
+    margin. A pool of 1 gets the whole single connection.
+    """
+    if pool_size <= 1:
+        return pool_size
+    if pool_size <= 5:
+        return pool_size - 1
+    return pool_size - 5
+
+
+def _effective_redis_pool_size(pool_size: int, concurrency: int) -> int:
+    """Guarantee the SAQ Redis pool is large enough for blocking dequeue.
+
+    SAQ's ``dequeue()`` uses a blocking ``blmove`` (``_DEQUEUE_TIMEOUT``) that
+    is NOT gated by ``max_concurrent_ops`` — every concurrent ``_process``
+    task holds one pool connection while blocked. When the queue drains, all
+    ``concurrency`` connections can be held simultaneously, leaving nothing
+    for the Upkeep tasks (``schedule``/``sweep``/``abort``/``worker_info``),
+    which raises ``ConnectionError: Too many connections`` and kills the
+    worker's heartbeats (the silent wedge, 2026-08-10).
+
+    Enforce ``pool >= concurrency + reserve`` where reserve covers the upkeep
+    ops (a minimum of 5, matching the historical non-dequeue margin).
+    """
+    reserve = 5
+    return max(pool_size, concurrency + reserve)
+
+
+# Estimated DB connections drawn per in-flight run. A single run is not one
+# connection: ``load_and_setup`` opens its own session, the executor holds a
+# connection through ``execute``/``resume``, and the heartbeat/watchdog
+# terminalize path (``fail_run_terminal``) needs a slot to fail a run that
+# wedges in setup. Sizing the floor for this fan-out (rather than assuming 1
+# connection/run) is what prevents the pool from being exhausted in pre-node
+# setup — the agent.stall root cause.
+CONNS_PER_RUN = 3
+
+
+def _effective_db_pool_size(pool_size: int, concurrency: int) -> int:
+    """Guarantee the worker async DB pool is large enough for concurrent runs.
+
+    Each concurrent run draws multiple DB connections (see :data:`CONNS_PER_RUN`),
+    and the zombie watchdog's terminalize write (``fail_run_terminal``) needs a
+    connection to fail a run that wedges in pre-node setup. With
+    ``SAQ_WORKER_CONCURRENCY=20`` and 1 connection/run assumed (as the old
+    ``concurrency + 5`` floor did), a 30-conn pool is exhausted (20 runs x 2-3
+    conns = 40-60 > 30) and ``load_and_setup`` wedges awaiting a connection —
+    the run rides to the 35-min ``dispatcher_reconcile`` backstop as a nodeless
+    zombie (the agent.stall symptom).
+
+    Mirror :func:`_effective_redis_pool_size`: enforce
+    ``pool >= concurrency * CONNS_PER_RUN + reserve`` so the floor covers the
+    per-run connection fan-out plus a reserve for the watchdog terminalize
+    writes and any system-cron connections sharing the same engine.
+    """
+    reserve = 5
+    floor = concurrency * CONNS_PER_RUN + reserve
+    return max(pool_size, floor)
+
+
+def _build_queue(queue_name: str) -> RedisQueue:
+    """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
+
+    ``max_concurrent_ops`` is set below the pool size so the semaphore never
+    exhausts all available connections — leaving reserve connections for SAQ
+    operations that bypass the semaphore (``schedule``, ``sweep``, ``dequeue``,
+    ``notify``).
+
+    The client pool uses the EFFECTIVE pool size (never below
+    ``concurrency + 5``) because SAQ's blocking ``dequeue()`` holds one pool
+    connection per concurrent ``_process`` task regardless of
+    ``max_concurrent_ops``; a pool smaller than the concurrency leaves nothing
+    for the Upkeep tasks and silently wedges the worker.
+    """
+    settings = get_settings()
+    pool_size = _effective_redis_pool_size(settings.saq_redis_pool_size, settings.saq_worker_concurrency)
+    max_ops = _max_concurrent_ops(pool_size)
+    if pool_size != settings.saq_redis_pool_size:
+        _log.warning(
+            "saq_worker.pool_raised",
+            extra={
+                "queue": queue_name,
+                "configured_pool": settings.saq_redis_pool_size,
+                "effective_pool": pool_size,
+                "concurrency": settings.saq_worker_concurrency,
+            },
+        )
+    redis_client = aioredis.from_url(
+        settings.redis_url,
+        socket_connect_timeout=10,
+        socket_keepalive=True,
+        max_connections=pool_size,
+    )
+    _check_redis_connection(redis_client)
+    return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
+
+
+def _check_redis_connection(_redis_client: aioredis.Redis, max_retries: int = 3) -> None:
+    """Validate Redis connectivity on worker startup with exponential backoff.
+
+    Synchronous — called from the settings factory before the event loop is
+    available. The async ``redis_client`` handed to SAQ is NOT pinged here:
+    ``redis.asyncio`` pools are loop-affine, so awaiting its ``ping()`` in a
+    throwaway probe loop would bind the pool to a discarded loop and break the
+    worker's own loop. Instead a separate SYNC client (``socket_connect_timeout``)
+    performs the probe, so the async client stays loop-neutral for SAQ. Logs a
+    warning and retries up to ``max_retries`` times with exponential backoff
+    instead of immediately crashing.
+    """
+    import redis as sync_redis
+
+    settings = get_settings()
+    sync_client = sync_redis.Redis.from_url(settings.redis_url, socket_connect_timeout=5)
+    try:
+        last_exc: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                sync_client.ping()
+                _log.info("Redis connection validated (attempt %d/%d)", attempt, max_retries)
+                return
+            except (sync_redis.ConnectionError, sync_redis.TimeoutError, OSError) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    delay = 2**attempt
+                    _log.warning(
+                        "Redis ping failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt,
+                        max_retries,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+        _log.error(
+            "Redis unreachable after %d attempts: %s — worker proceeding anyway",
+            max_retries,
+            last_exc,
+        )
+    finally:
+        sync_client.close()
+
+
+async def reconcile_cron_registrations(queue: RedisQueue, cron_jobs: Collection[CronJob[Any]]) -> None:
+    """Self-heal stale unique-cron registrations on system-worker startup.
+
+    SAQ's ``Worker.schedule()`` re-enqueues every cron each ``schedule`` tick, but
+    the underlying Redis enqueue Lua script DEDUPS on the job key
+    (``cron:<function_qualname>``): it only writes the registration if the key is
+    NOT already in the ``incomplete`` zset. So a cron's scheduled time is locked at
+    whatever it was when the worker FIRST registered it, and only advances after the
+    job actually fires. A worker restart does NOT clear the persisted ``incomplete``
+    registration — so if a cron expression is changed in code AFTER it was first
+    registered (as happened to ``metrics_dump``: ``0 1 * * *`` -> ``*/10 * * * *``),
+    the stale schedule silently survives restarts and the job never re-aligns.
+
+    This runs ONCE on startup (before ``worker.start()``) and clears each
+    configured UNIQUE cron's persisted Redis registration (job hash + ``incomplete``
+    zset member + ``queued`` list member) so SAQ's ``schedule()`` loop re-enqueues
+    it with the CURRENT cron expression within ~1s at its correct next occurrence.
+    It is idempotent and fail-open: a Redis hiccup must NEVER block worker boot, so
+    a cron that errors during reconciliation is logged and skipped.
+
+    A cron that is CURRENTLY executing lives in ``active``, not ``incomplete`` — so
+    removing its incomplete/queued entries is a harmless no-op and it re-registers on
+    finish. ``active`` is intentionally untouched.
+    """
+    for cron_job in cron_jobs:
+        if not getattr(cron_job, "unique", False):
+            continue
+        function = getattr(cron_job, "function", None)
+        if function is None:
+            continue
+        key = f"cron:{function.__qualname__}"
+        job_id = queue.job_id(key)
+        incomplete = queue.namespace("incomplete")
+        queued = queue.namespace("queued")
+        try:
+            async with queue.redis.pipeline() as pipe:
+                pipe.delete(job_id)
+                pipe.zrem(incomplete, job_id)
+                pipe.lrem(queued, 0, job_id)
+                await pipe.execute()
+            _log.info("saq.reconcile_cron_registrations.cleared", extra={"key": key})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "saq.reconcile_cron_registrations.failed",
+                extra={"key": key},
+            )
+
+
+def _probe_database() -> None:
+    """Run a lightweight DB probe (``SELECT 1``) on worker startup.
+
+    Uses a synchronous SQLAlchemy connection with a short timeout. Non-fatal —
+    the DB may recover before the first real job arrives. Logs a warning on
+    failure. The sync URL maps to ``psycopg`` (v3, the installed driver) — NOT
+    ``psycopg2``, which is not in the dependency tree.
+    """
+    from sqlalchemy import create_engine, text
+
+    settings = get_settings()
+    sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg").replace("+aiomysql", "+pymysql")
+    engine = None
+    try:
+        engine = create_engine(sync_url, connect_args={"connect_timeout": 5}, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        _log.info("Database connection probe passed")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Job functions — execute / resume (plan F4 / F6a)
+# ---------------------------------------------------------------------------
+
+
+async def execute_run(
+    ctx: dict[str, Any], *, run_id: str, org_id: str, claim_token: str | None = None
+) -> dict[str, Any]:
+    """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window).
+
+    Zombie protection (2026-08-05): the heartbeat loop starts BEFORE
+    ``executor.execute``, so a run hung in the pre-node setup window (checkpointer
+    setup, graph compile, connector hub init, or a DB ``OperationalError``) would
+    otherwise stay ``running`` forever with a fresh heartbeat. Two guards:
+    1. ``load_and_setup`` failures are caught and the run is terminal-failed
+       (``executor_setup_failed``) instead of being left running.
+    2. ``run_executor_with_watchdog`` starts a zombie watchdog that fails the
+       run (``executor_stalled``) if no node dispatches within the setup grace
+       window, and cancels the hung executor.
+
+    The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
+    by a previous attempt (PR #1003). SAQ retries re-invoke this function with
+    ``**job.kwargs``, so the kwarg is accepted and intentionally IGNORED here —
+    a fresh claim is taken inside via ``claim_run_async`` and the fresh token is
+    re-stamped.
+    """
+    from farna.core.pipeline_execution import (
+        DISPATCH_TRACKER_ATTR,
+        PHASE_CLAIMED,
+        PHASE_SETUP_COMPLETE,
+        DispatchPhaseTracker,
+        DispatchPhaseWriter,
+        claim_run_async,
+        mark_complete,
+        run_executor_with_watchdog,
+    )
+
+    aeng = _get_async_engine()
+    rid = uuid.UUID(run_id)
+    oid = uuid.UUID(org_id)
+    job = ctx.get("job")
+
+    # FAR-893: phase tracker shared between the claim path, the executor, and
+    # the zombie watchdog.  The watchdog reads it when the grace period fires
+    # to report WHERE the executor is stuck.
+    tracker = DispatchPhaseTracker(run_id=run_id, org_id=org_id)
+
+    claim_token = await claim_run_async(aeng, run_id, org_id)
+    if not claim_token:
+        _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
+        return {"status": "not_claimed"}
+
+    # FAR-1627: scope this claim's ownership for the shutdown handoff. The
+    # entry is dropped on EVERY normal/failed exit; on cancellation (SAQ
+    # shutdown) it is KEPT and marked cancellation-observed, so
+    # _shutdown_handoff_hook releases exactly the runs this process abandoned
+    # AND whose task provably unwound (never a run whose task is stuck).
+    from farna.core.worker_handoff import track_inflight_run
+
+    async with track_inflight_run(run_id=rid, org_id=oid, claim_token=str(claim_token)):
+        tracker.enter_phase(PHASE_CLAIMED)
+        _log.info(
+            "execute_run.claimed run=%s org=%s claim_token=%s",
+            run_id,
+            org_id,
+            str(claim_token)[:8] if claim_token else None,
+        )
+
+        # FAR-1088 (W2): durable best-effort writer for post-claim phase entries,
+        # bound to (engine, run_id, org_id, claim_token). Attaching it to the
+        # tracker wires PHASE_LOADING_SETUP / PHASE_SETUP_COMPLETE below and the
+        # executor's ``streaming`` transition (via DISPATCH_TRACKER_ATTR) through
+        # enter_phase(). Single-flight, bounded, fail-soft — see DispatchPhaseWriter.
+        tracker.durable_writer = DispatchPhaseWriter(
+            aeng,
+            run_id=run_id,
+            org_id=org_id,
+            claim_token=claim_token,
+        )
+
+        # Stamp the claim token into the job hash so the after_process task_failure
+        # hook can fence its terminal write: a failed job must not mark the run
+        # failed when a successor already re-claimed it (dist/runtime-core A1).
+        await _stamp_claim_token(job, claim_token, rid)
+
+        settings = get_settings()
+        run, executor, early_result = await _load_run_for_execution(
+            aeng,
+            rid=rid,
+            oid=oid,
+            run_id=run_id,
+            org_id=org_id,
+            tracker=tracker,
+            setup_grace_seconds=settings.saq_setup_grace_seconds,
+        )
+        if early_result is not None:
+            return early_result
+
+        tracker.enter_phase(PHASE_SETUP_COMPLETE)
+        _log.info(
+            "execute_run.setup_complete run=%s elapsed=%.1fs",
+            run_id,
+            tracker.elapsed_in_phase(),
+        )
+
+        # Wire the tracker onto the executor so it can report phases during execute().
+        setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
+
+        outcome = await run_executor_with_watchdog(
+            aeng,
+            run_id=run_id,
+            org_id=org_id,
+            executor=executor,
+            job=job,
+            claim_token=claim_token,
+            dispatch_tracker=tracker,
+            execute_fn=lambda: executor.execute(
+                run_id=rid,
+                org_id=oid,
+                input_payload=run.input_payload or {},
+                claim_token=claim_token,
+            ),
+        )
+
+        # FAR-1088 (W2): drain any still-in-flight phase write (bounded + fail-soft)
+        # so the final phase lands before the job finishes.
+        if tracker.durable_writer is not None:
+            await tracker.durable_writer.flush()
+
+        # Honest outcomes (A2): ``mark_complete`` runs ONLY on a genuine
+        # completion. After a failure/awaiting_human/supersession it is a no-op
+        # (the run is already terminal), so this is purely a guard against a
+        # silent wrong-success write.
+        if outcome.get("status") == "complete":
+            await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
+        return outcome
+
+
+async def _stamp_claim_token(job: Any, claim_token: str, rid: uuid.UUID) -> None:
+    """Stamp the fresh claim token into the SAQ job kwargs (best-effort)."""
+    if job is None:
+        return
+    try:
+        job_kwargs = getattr(job, "kwargs", None)
+        merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+        await job.update(kwargs=merged_kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
+
+
+async def _load_run_for_execution(
+    aeng: Any,
+    *,
+    rid: uuid.UUID,
+    oid: uuid.UUID,
+    run_id: str,
+    org_id: str,
+    tracker: Any,
+    setup_grace_seconds: int,
+) -> tuple[Any, Any, dict[str, Any] | None]:
+    """Load and set up the run, returning ``(run, executor, early_result)``.
+
+    A setup timeout/failure or a vanished row is terminal-failed here and
+    returned as ``early_result`` so the caller can stop without executing.
+    """
+    from farna.core.pipeline_execution import (
+        EXECUTOR_SETUP_FAILED_ERROR_CODE,
+        PHASE_LOADING_SETUP,
+        fail_run_terminal,
+        load_and_setup,
+    )
+
+    tracker.enter_phase(PHASE_LOADING_SETUP)
+    try:
+        run, executor = await asyncio.wait_for(
+            load_and_setup(aeng, rid, oid),
+            timeout=setup_grace_seconds,
+        )
+    except TimeoutError:
+        _log.exception("SAQ execute_run: load_and_setup timed out for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail=(
+                f"load_and_setup (pre-node setup) exceeded setup grace "
+                f"({setup_grace_seconds}s) — likely DB connection "
+                "exhaustion or a wedged worker; was riding to the 35-min "
+                "agent.stall backstop"
+            ),
+        )
+        return None, None, {"status": "setup_failed"}
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="load_and_setup failed before any node could run",
+        )
+        return None, None, {"status": "setup_failed"}
+    if run is None:
+        # The claim succeeded (status=running + heartbeat), but the row is now
+        # invisible to load_and_setup — terminalize so the claimed row is not
+        # left running with a frozen heartbeat until dispatcher_reconcile
+        # collects it (~35-min zombie backstop).
+        _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="run row not found during load_and_setup after a successful claim",
+        )
+        return None, None, {"status": "missing"}
+    return run, executor, None
+
+
+async def resume_run(
+    ctx: dict[str, Any],
+    *,
+    run_id: str,
+    org_id: str,
+    resume_data: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """SAQ ``resume_run`` job — claim (awaiting_human/claimed/hitl_parked or stale-running) + resume.
+
+    The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
+    by a previous attempt (PR #1003). SAQ retries re-invoke this function with
+    ``**job.kwargs``, so the kwarg must be accepted here — it is intentionally
+    IGNORED (the core claim ``claim_resume_run_async`` generates its own fresh
+    token). Popping it from ``kwargs`` keeps the SAQ re-invocation contract
+    intact while avoiding an unused-parameter lint.
+    """
+    kwargs.pop("claim_token", None)
+    from farna.core.pipeline_execution import resume_run as resume_run_core
+
+    aeng = _get_async_engine()
+    return await resume_run_core(
+        async_engine=aeng,
+        run_id=run_id,
+        org_id=org_id,
+        resume_data=resume_data,
+        job=ctx.get("job"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Job functions — per-item fire jobs (plan F1)
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_created_run(result: dict[str, Any], *, org_id: str, log_context: str) -> dict[str, Any]:
+    """Dispatch a run the fire job just created, sharing the dispatch path.
+
+    Called only when a fire helper reports successful creation with a run id;
+    attaches the dispatch outcome and the enqueued job id to ``result``. The
+    ``dispatch_run`` import stays lazy, matching the surrounding worker jobs.
+    """
+    from farna.core.dispatch import dispatch_run
+
+    if result.get("status") == "fired" and result.get("run_id"):
+        try:
+            outcome, job_id = await dispatch_run(result["run_id"], org_id, queue=get_settings().saq_runs_queue)
+            result["dispatch"] = outcome
+            result["job_id"] = job_id
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("%s: dispatch failed for run %s", log_context, result["run_id"])
+    return result
+
+
+async def fire_cron_trigger(
+    _ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    cron_expression: str,
+    snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item cron fire job — fire + dispatch the created run (SAQ)."""
+    from farna.core import cron_helpers as _ch
+
+    result = await _ch.fire_cron_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        cron_expression=cron_expression,
+        snapshot_id=uuid.UUID(snapshot_id) if snapshot_id else None,
+    )
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_cron_trigger")
+
+
+async def fire_polling_trigger(
+    _ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    connector_instance_id: str,
+    poll_query: str,
+    condition_expression: str | None = None,
+) -> dict[str, Any]:
+    """Per-item polling fire job — fire + dispatch the created run (SAQ)."""
+    from farna.core import cron_helpers as _ch
+
+    result = await _ch.fire_polling_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        connector_instance_id=uuid.UUID(connector_instance_id),
+        poll_query=poll_query,
+        condition_expression=condition_expression,
+    )
+    return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
+
+
+async def fire_report_trigger(
+    _ctx: dict[str, Any], *, report_id: str, org_id: str, epoch: str | None = None
+) -> dict[str, Any]:
+    """Per-item report fire job — generate + deliver (SAQ bounded job).
+
+    ``epoch`` is the enqueue tick replayed verbatim by SAQ on a retry, keeping
+    an already-delivered epoch from being delivered twice (FAR-1822).
+    """
+    from farna.core import cron_helpers as _ch
+
+    return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id), epoch=epoch)
+
+
+async def fire_ongoing_trigger(
+    _ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    latest_snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item ongoing fire job — top up + dispatch the created runs (SAQ).
+
+    Thin wrapper mirroring ``fire_polling_trigger``: delegates to
+    ``cron_helpers.fire_ongoing_trigger``, which performs the DB top-up in one
+    transaction and the queue dispatch post-commit inside its own body (the seam
+    lives in cron_helpers so there is one place to test). The dispatch outcomes
+    are already attached to the returned summary; failures are logged there too.
+    """
+    from farna.core import cron_helpers as _ch
+
+    return await _ch.fire_ongoing_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        latest_snapshot_id=latest_snapshot_id or "",
+    )
+
+
+async def fire_suite_run_trigger(
+    ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    cron_expression: str = "",
+    snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item fire job for a ``run_kind='suite_run'`` trigger (SAQ, FAR-377).
+
+    Builds a ``pending`` SuiteRun via ``cron_helpers.fire_suite_run_trigger``
+    (which enforces the suite-run concurrency + spend pools and writes NO
+    trigger-watch event), then — post-commit — enqueues the
+    ``execute_suite_run`` job. A fired run is dispatched exactly like a fired
+    pipeline run, but runs through the ``execute_suite_run`` SAQ job instead of
+    ``execute_run``.
+    """
+    from farna.core import cron_helpers as _ch
+
+    result = await _ch.fire_suite_run_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+    )
+    if result.get("status") == "fired" and result.get("suite_run_id"):
+        # FAR-1561: the SuiteRun row is committed by now (the helper returns
+        # from inside its transaction) — record the privilege-equivalent fact
+        # that a new eval run was created BEFORE enqueueing its execution, so a
+        # Redis/SAQ outage still leaves `created` on the org's audit chain.
+        await _record_suite_run_created_audit(
+            result["suite_run_id"],
+            org_id=org_id,
+            trigger_id=trigger_id,
+            pipeline_id=pipeline_id,
+        )
+        try:
+            await _enqueue_suite_run_execution(result["suite_run_id"], org_id)
+            result["dispatched"] = "enqueued"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_suite_run_trigger: enqueue failed for suite_run %s", result.get("suite_run_id"))
+            # Terminalise the freshly-committed (``pending``) SuiteRun in its OWN
+            # transaction so it is never stranded ``pending`` forever. Re-raising
+            # would only retry the fire job and create a *duplicate* pending run
+            # (the fire is not idempotent in run creation), re-introducing the
+            # exact stranded-``pending`` state the transaction-boundary fix
+            # eliminated. Mirrors the production path: a run that cannot be
+            # dispatched must land ``failed`` with an error_detail + Error
+            # Dashboard ingest (FAR-377 reviewer finding).
+            await _fail_suite_run_on_enqueue_error(result["suite_run_id"], org_id)
+            result["dispatched"] = "enqueue_failed"
+    return result
+
+
+async def _record_suite_run_created_audit(
+    suite_run_id: str,
+    *,
+    org_id: str,
+    trigger_id: str,
+    pipeline_id: str,
+) -> None:
+    """Record the freshly-committed ``pending`` SuiteRun (FAR-1561).
+
+    Runs after ``cron_helpers.fire_suite_run_trigger`` returned — i.e. after
+    the creation transaction COMMITTED — and the shared helper re-selects the
+    row before appending (phantom-event guard). Fail-open: an audit failure is
+    logged by the helper and never fails the fire job.
+    """
+    from farna.core.audit_logger.background import SUITE_RUN_PENDING_STATES, record_suite_run_audit
+
+    await record_suite_run_audit(
+        _make_session_factory(),
+        suite_run_id=uuid.UUID(suite_run_id),
+        org_id=uuid.UUID(org_id),
+        event_type="suite_run_created",
+        expected_states=SUITE_RUN_PENDING_STATES,
+        actor_source="fire_suite_run_trigger",
+        log_key="saq.fire_suite_run_trigger.audit_failed",
+        summary_prefix="SuiteRun created by",
+        payload_json={"trigger_id": trigger_id, "pipeline_id": pipeline_id},
+    )
+
+
+async def _record_suite_run_execution_audits(
+    factory: Any,
+    suite_run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Record the start + terminal outcome of a SuiteRun execution (FAR-1561).
+
+    Called AFTER the execution transaction committed (both the success path and
+    the re-persisted-failure path), never inside it: an event written before the
+    COMMIT could describe a transition the rollback then discarded. The helper
+    re-selects the row and applies the phantom-event guard — ``started`` only
+    lands when the run is no longer ``pending``, ``completed`` only when it is
+    terminal. Fail-open: never raises except ``CancelledError``.
+    """
+    from farna.core.audit_logger.background import (
+        SUITE_RUN_NON_PENDING_STATES,
+        SUITE_RUN_TERMINAL_STATES,
+        record_suite_run_audit,
+    )
+
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=suite_run_id,
+        org_id=org_id,
+        event_type="suite_run_started",
+        expected_states=SUITE_RUN_NON_PENDING_STATES,
+        actor_source="execute_suite_run",
+        log_key="saq.execute_suite_run.audit_failed",
+        summary_prefix="SuiteRun started by",
+    )
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=suite_run_id,
+        org_id=org_id,
+        event_type="suite_run_completed",
+        expected_states=SUITE_RUN_TERMINAL_STATES,
+        actor_source="execute_suite_run",
+        log_key="saq.execute_suite_run.audit_failed",
+        summary_prefix="SuiteRun terminalised by",
+    )
+
+
+async def _fail_suite_run_on_enqueue_error(suite_run_id: str, org_id: str) -> None:
+    """Terminalise a ``pending`` SuiteRun whose ``execute_suite_run`` job could not be enqueued.
+
+    Called from ``fire_suite_run_trigger`` when ``_enqueue_suite_run_execution``
+    raises (Redis down / SAQ unavailable). The SuiteRun was already committed as
+    ``pending`` by ``cron_helpers.fire_suite_run_trigger``; without this it would
+    sit ``pending`` forever (nothing reconciles stuck ``pending`` suite_runs).
+    Promotes ``pending -> running -> failed`` (the legal edge) via ``_fail_run``
+    and ingests the failure to the Error Dashboard, isolated in its own
+    committed transaction so the fire job itself can still return cleanly.
+    """
+    from farna.core.eval_engine.execute_suite_run import _fail_run
+    from farna.db.models.eval_suite_run import SuiteRun
+    from farna.db.rls import set_rls_org as _set_rls
+
+    rid = uuid.UUID(suite_run_id)
+    oid = uuid.UUID(org_id)
+    factory = _make_session_factory()
+    try:
+        async with factory() as session, session.begin():
+            await _set_rls(session, oid)
+            run = await session.get(SuiteRun, rid)
+            if run is None or run.organisation_id != oid:
+                _log.warning("fire_suite_run_trigger: cannot terminalise missing/cross-org suite_run %s", rid)
+                return
+            await _fail_run(
+                session,
+                run,
+                "SuiteRun could not be dispatched (SAQ/Redis enqueue failed); the run was never executed.",
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_suite_run_trigger: failed to terminalise suite_run %s after enqueue error", rid)
+        return
+
+    # FAR-1561: the ``failed`` transition above COMMITTED (the missing/cross-org
+    # branch returns earlier), so the terminal outcome is re-selected and
+    # recorded here — post-commit, with the phantom-event guard. Fail-open.
+    from farna.core.audit_logger.background import SUITE_RUN_TERMINAL_STATES, record_suite_run_audit
+
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=rid,
+        org_id=oid,
+        event_type="suite_run_completed",
+        expected_states=SUITE_RUN_TERMINAL_STATES,
+        actor_source="fire_suite_run_trigger",
+        log_key="saq.fire_suite_run_trigger.audit_failed",
+        summary_prefix="SuiteRun terminalised by",
+        payload_json={"reason": "enqueue_failed"},
+    )
+
+
+async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | None:
+    """Enqueue the ``execute_suite_run`` job on the runs queue (no Run capacity gate).
+
+    A SuiteRun is not a pipeline ``Run``, so ``dispatch_run`` (which loads a
+    ``Run`` and checks pipeline/org capacity) does not apply. The job key is
+    deterministic so SAQ dedupe never double-runs a suite, and a re-fire uses a
+    fresh suite_run anyway (each fire is a distinct SuiteRun row).
+
+    FAR-2002: this enqueue deliberately does NOT apply the status-gated queued
+    TTL. A SuiteRun is created ``pending`` and its execution job is the ONLY
+    thing that advances it — nothing reconciles a stranded ``pending`` SuiteRun
+    (``_fail_suite_run_on_enqueue_error`` covers an enqueue EXCEPTION, not a
+    hash that later expires), so a queued TTL here would terminalise nothing and
+    silently lose the run forever. The job hash therefore stays unbounded while
+    queued (the deployment's ``maxmemory`` bound and the capacity alert are the
+    backstop) and SAQ's finish-origin ``ttl`` still bounds it once it completes.
+    """
+    from saq.queue.redis import RedisQueue
+
+    settings = get_settings()
+    redis_client = aioredis.from_url(
+        settings.redis_url,
+        socket_connect_timeout=10,
+        socket_keepalive=True,
+        max_connections=settings.saq_redis_pool_size,
+    )
+    queue = RedisQueue(redis_client, name=settings.saq_runs_queue)
+    try:
+        job = await queue.enqueue(
+            "farna.core.saq_worker.execute_suite_run",
+            key=f"suite_run:{suite_run_id}",
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+            suite_run_id=suite_run_id,
+            org_id=org_id,
+        )
+        return job.id if job is not None else None
+    finally:
+        with contextlib.suppress(Exception):
+            await redis_client.aclose()
+
+
+async def _maybe_wire_suite_judge(
+    session: Any,
+    run: Any,
+    run_kwargs: dict[str, Any],
+) -> Any:
+    """Wire an org-scoped model-judge callable into the run kwargs when needed (FAR-1712).
+
+    Loads the suite's live definition rows from ``evals`` — the SAME source the
+    runner reads (FAR-1729) — scoped unconditionally to ``run.organisation_id``.
+    When the suite has NO ``model_judge`` definition the kwargs are left untouched
+    and no hub is built. When it HAS one, an org-scoped ``ModelBackendHub`` is
+    built from the org's ACTIVE backends and a per-definition dispatch callable
+    is set on ``run_kwargs``; the hub is returned so the caller tears it down in
+    a ``finally``.
+
+    When the org has no ACTIVE backend, nothing is set and ``None`` is returned
+    — the runner then persists ``outcome=error`` rows (``judge.unavailable``) for
+    the model_judge definitions and terminalises the run as failed, never a
+    silent pass.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from farna.core.eval_engine.execute_suite_run import (
+        SuiteRunExecutionError,
+        _sql_error_status,
+        load_suite_definitions,
+    )
+    from farna.core.eval_engine.suite_run_judge import (
+        build_org_model_backend_hub,
+        build_suite_run_model_judge_callable,
+    )
+
+    try:
+        definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
+    except SQLAlchemyError as exc:
+        # A raw DB error here is an orchestration failure, exactly as it is in
+        # the runner. Translate it the same way (status-coded typed error) so the
+        # job's committed-transaction failure path terminalises the run and the
+        # after_process sink sees a typed error — never a bare driver exception.
+        raise SuiteRunExecutionError(f"{_sql_error_status(exc)}: {exc}") from exc
+    if not any(str(getattr(d, "eval_type", "")) == "model_judge" for d in definitions):
+        return None
+
+    hub = await build_org_model_backend_hub(session, run.organisation_id)
+    if hub is None:
+        return None
+    run_kwargs["model_judge_callable"] = build_suite_run_model_judge_callable(hub)
+    return hub
+
+
+async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: str) -> dict[str, Any]:
+    """SAQ ``execute_suite_run`` job — run a scheduled SuiteRun to terminal (FAR-377).
+
+    Called for a ``run_kind='suite_run'`` trigger that a fire job (or the
+    ``fire_suite_run`` dispatch path) enqueued. Loads the persisted SuiteRun
+    (carrying the immutable baseline tuple + any config-derived ceiling from
+    ``extra``), executes it end-to-end (pending -> terminal) via the
+    ``execute_suite_run`` runner, and returns the terminal stats. On an
+    orchestration failure (typed OR raw DB error) the runner transitions the run
+    to ``failed``, but that write happens INSIDE ``session.begin()`` and is
+    ROLLED BACK when the runner re-raises — so the failure is re-persisted in its
+    OWN committed transaction (``_persist_suite_run_execution_failure``) before the
+    job re-raises for the SAQ ``after_process`` hook (the monitored failure sink).
+    A persistent failure therefore leaves the run ``failed`` with
+    ``error_detail`` populated, never stranded ``pending``.
+    """
+    from farna.core.eval_engine.execute_suite_run import execute_suite_run as _run_exec
+    from farna.db.models.eval_suite_run import SuiteRun, is_terminal
+    from farna.db.rls import set_rls_org
+
+    rid = uuid.UUID(suite_run_id)
+    oid = uuid.UUID(org_id)
+    factory = _make_session_factory()
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, oid)
+            run = await session.get(SuiteRun, rid)
+            if run is None:
+                _log.warning("SAQ execute_suite_run: suite_run %s not found", rid)
+                return {"status": "missing"}
+            # modulo_app is NOBYPASSRLS (bootstrap_role.py asserts
+            # ``rolbypassrls = false``), so on PostgreSQL ``session.get`` IS
+            # org-scoped by the ``rls_org_isolation`` policy via the org
+            # context set above — a cross-org row would already be invisible.
+            # The explicit predicate is defense-in-depth for non-RLS backends
+            # (SQLite/MariaDB, where the get is NOT org-scoped): verify the
+            # loaded run belongs to the job's org before executing it — a
+            # cross-org suite_run_id must never be executed.
+            if run.organisation_id != oid:
+                _log.warning("SAQ execute_suite_run: suite_run %s belongs to a different org", rid)
+                return {"status": "missing"}
+            # Terminal short-circuit (FAR-377 reviewer minor): the enqueued job uses
+            # ``retries=2``, so a run that already reached a terminal state can be
+            # re-invoked on retry. Re-evaluating the whole dataset only to fail the
+            # illegal ``failed -> completed`` transition is wasted work + a noisy
+            # error path — close it cheaply instead.
+            if is_terminal(run.state):
+                _log.info(
+                    "SAQ execute_suite_run: suite_run %s already terminal (%s) - skipping re-execution",
+                    rid,
+                    run.state,
+                )
+                return {"status": "already_terminal", "state": run.state}
+            extra = run.extra or {}
+            suite_ceiling_raw = extra.get("suite_ceiling")
+            run_kwargs: dict[str, Any] = {
+                "entity_thresholds": extra.get("entity_thresholds"),
+                "scenario_inputs": extra.get("scenario_inputs"),
+                "eval_definition_version": int(extra.get("eval_definition_version", 1)),
+            }
+            # ``cost_per_llm_case`` is JSON-decoded from ``extra`` (may be a
+            # str/int/float). Coerce to ``Decimal`` (the ledger arithmetic needs
+            # it); when absent, leave it to the runner's default rather than
+            # passing ``None`` (which would override the default AND feed ``None``
+            # into the ledger).
+            cost_per = extra.get("cost_per_llm_case")
+            if cost_per is not None:
+                run_kwargs["cost_per_llm_case"] = Decimal(str(cost_per))
+            # ``suite_ceiling`` is ALSO JSON-decoded (a str/int/float). The
+            # runner only coerces it when the kwarg is ``None`` (it falls back to
+            # ``run.extra``), so a raw str passed here would bypass that coercion
+            # and raise ``Decimal >= str`` mid-evaluation. Coerce it the same way
+            # as ``cost_per_llm_case``; when absent, omit it so the runner reads
+            # the (already-``None``) value from ``run.extra``.
+            if suite_ceiling_raw is not None:
+                run_kwargs["suite_ceiling"] = Decimal(str(suite_ceiling_raw))
+            # FAR-1712: wire the org-scoped model-judge callable when the suite has
+            # an model_judge definition. No judge definition -> kwargs untouched and
+            # no hub built. A judge suite with no ACTIVE backend also leaves the
+            # kwargs untouched, so the runner's loud refusal is preserved (never
+            # a silent pass). The hub is torn down in the finally below so its
+            # transport resources never leak; a teardown failure is logged and
+            # never masks the run result.
+            suite_judge_hub = await _maybe_wire_suite_judge(session, run, run_kwargs)
+            try:
+                stats = await _run_exec(session, run, **run_kwargs)
+                run.extra = {**extra, "execution": stats}
+                await session.flush()
+            finally:
+                if suite_judge_hub is not None:
+                    # Reuse the executor's cancellation-shielded teardown
+                    # (``_teardown_hub``): a cancellation arriving mid-cleanup
+                    # must not abort the hub's ``__aexit__`` (``asyncio.shield``
+                    # keeps it running to completion), and a teardown failure is
+                    # logged there without ever masking the run result.
+                    from farna.core.pipeline_engine.executor import _teardown_hub
+
+                    await _teardown_hub(suite_judge_hub)
+        _log.info(
+            "saq.execute_suite_run.done",
+            extra={"suite_run_id": str(rid), "state": stats.get("state"), "org": str(oid)},
+        )
+        # FAR-1561: the execution transaction above is COMMITTED by now, so the
+        # pending -> running -> terminal transitions are durable facts worth
+        # recording. Post-commit (never inside the block) + re-select guard: an
+        # event written before COMMIT would survive a rollback as a phantom.
+        await _record_suite_run_execution_audits(factory, rid, oid)
+        return stats
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("SAQ execute_suite_run failed for suite_run %s", rid)
+        # Transaction-boundary fix (FAR-377): ``execute_suite_run`` (the runner)
+        # transitions the run to ``failed`` + populates ``error_detail`` + ingests
+        # the Error-Ingestion event, but it runs INSIDE ``session.begin()`` above.
+        # When the runner re-raises (an orchestration failure — typed OR a raw DB
+        # error), the async context manager ROLLS BACK that transaction, discarding
+        # the ``failed`` transition + ``error_detail`` + event. The run would be
+        # stranded ``pending`` forever — never terminal, never surfaced. Persist
+        # the failure in a FRESH session/transaction here so it survives the
+        # rollback, then re-raise for the after_process sink.
+        await _persist_suite_run_execution_failure(factory, rid, oid, exc)
+        # The re-persisted ``failed`` state is committed in its own transaction —
+        # record it here too (FAR-1561); the re-select guard skips cleanly when
+        # even that persist failed and the run is still ``pending``.
+        await _record_suite_run_execution_audits(factory, rid, oid)
+        raise
+
+
+async def _persist_suite_run_execution_failure(
+    factory: Any, suite_run_id: uuid.UUID, org_id: uuid.UUID, exc: Exception
+) -> None:
+    """Persist a SuiteRun orchestration failure in its OWN committed transaction.
+
+    Called from ``execute_suite_run``'s outer handler AFTER the runner's execution
+    transaction rolled back. Re-loads the freshly-persisted run (now ``pending``
+    again — the rolled-back transaction also discarded the ``pending -> running``
+    transition) and terminalises it to ``failed`` with ``error_detail`` + the
+    Error-Ingestion event, then commits. ``_fail_run`` promotes a ``pending`` run
+    to ``running`` first so the ``failed`` edge is legal, and isolates the ingest
+    sink in a savepoint so it can never roll back the terminal transition.
+
+    Best-effort: if this itself fails (e.g. the DB is down), it is logged and the
+    caller still re-raises so SAQ's after_process sink sees the original error.
+    """
+    from farna.core.eval_engine.execute_suite_run import _fail_run, _failure_detail
+    from farna.db.models.eval_suite_run import SuiteRun
+    from farna.db.rls import set_rls_org as _set_rls
+
+    detail = _failure_detail(exc)
+    try:
+        async with factory() as session, session.begin():
+            await _set_rls(session, org_id)
+            run = await session.get(SuiteRun, suite_run_id)
+            if run is None or run.organisation_id != org_id:
+                _log.warning(
+                    "SAQ execute_suite_run: cannot persist failure, suite_run %s missing or cross-org",
+                    suite_run_id,
+                )
+                return
+            await _fail_run(session, run, detail)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("SAQ execute_suite_run: failed to persist suite_run failure %s", suite_run_id)
+
+
+# ---------------------------------------------------------------------------
+# Job functions — system worker (plan F1 / F3c / PR B step 6)
+# ---------------------------------------------------------------------------
+
+
+async def demo_daily_refresh(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — refresh the configured demo org's rolling sample window.
+
+    This is a demo-fixture convergence job, not a production entity lifecycle
+    transition. The seed is gated by the demo configuration and preserves
+    durable provenance on existing HITL claims.
+    """
+    settings = get_settings()
+    if not settings.modulo_demo_enabled:
+        return {"status": "disabled"}
+    from farna.db.seed_demo import seed_demo_runtime
+
+    summary = await seed_demo_runtime(session_factory=_make_session_factory())
+    return {"status": "refreshed" if summary else "disabled", "summary": summary}
+
+
+async def fire_due_triggers(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — read due rows, atomic next_fire_at advance, enqueue fire jobs."""
+    from farna.core import cron_helpers as _ch
+
+    return await _ch.fire_due_triggers()
+
+
+async def dispatcher_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — re-dispatch runs whose SAQ job is missing (every 60s)."""
+    from farna.core import cron_helpers as _ch
+
+    return await _ch.dispatcher_reconcile()
+
+
+async def legacy_agent_return_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — detect run_node_outputs rows still carrying the legacy shape (FAR-132).
+
+    The periodic invariant gating the FAR-132 Agent-Return-split strip. The scan
+    + LOUD detection log live in
+    :func:`modulo.core.cron_helpers.legacy_agent_return_sweep`; this wrapper owns
+    the durable liveness record (mirroring ``decision_record_reconcile``): the
+    outcome (``last_run_at`` + ``legacy_count``) is persisted to the shared Redis
+    key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED so
+    SAQ's ``retries`` engage — a silently dead invariant must not be invisible.
+    """
+    from farna.core import cron_helpers as _ch
+
+    try:
+        result = await _ch.legacy_agent_return_sweep()
+    except Exception as exc:
+        await _persist_sweep_stats(
+            LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "legacy_count": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "legacy_count": result.get("legacy_count", 0),
+        "sample_truncated": result.get("sample_truncated", False),
+    }
+    await _persist_sweep_stats(
+        LEGACY_AGENT_RETURN_SWEEP_STATS_KEY,
+        stats,
+        LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS,
+    )
+    return stats
+
+
+async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — expire stale HITL claims (SAQ SOLE writer/notifier, F1)."""
+    from farna.core.hitl_manager.expiry_job import expire_stale_claims
+    from farna.core.notifier import Notifier
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("claim_expiry: notifier init failed — DB expiry still runs")
+    expired = await expire_stale_claims(factory, notifier=notifier)
+    return {"expired": len(expired)}
+
+
+async def hitl_overdue(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — dispatch ``hitl_overdue`` notifications for HITL gates that
+    have been waiting past the overdue threshold (idempotent per claim).
+    """
+    from farna.core.hitl_manager.overdue_warning import dispatch_overdue_notifications
+    from farna.core.notifier import Notifier
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("hitl_overdue: notifier init failed — overdue dispatch still runs")
+    dispatched = await dispatch_overdue_notifications(factory, notifier=notifier)
+    return {"dispatched": len(dispatched)}
+
+
+async def hitl_deadline_warning(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — warn opt-in reviewers that an UNCLAIMED HITL gate is
+    approaching its terminalisation deadline (FAR-1270), BEFORE the
+    dispatcher_reconcile terminaliser cancels the run. Idempotent per claim
+    (Redis fire-once key + in-process backstop) and opt-in filtered by the
+    shared ``hitl_email_alerts`` recipient resolver. FAR-1295 adds the
+    webhook / in-app leg: the same once-only claim also gates a
+    ``Notifier`` dispatch (mirroring the ``hitl_overdue`` cron's notifier
+    wiring), so an org subscribed through the ``Notifier`` is warned too.
+    """
+    from redis.asyncio import Redis as AsyncRedis
+
+    from farna.core.cron_helpers import _int_setting
+    from farna.core.hitl_manager.deadline_warning import dispatch_deadline_notifications
+    from farna.core.notifier import Notifier
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    # Coded fallback for stand-in settings objects (FAR-746 pattern):
+    # MagicMock.__int__ silently yields 1, which would make every legacy
+    # deadline look already-expired.
+    grace_seconds = _int_setting(getattr(settings, "hitl_review_cancel_grace_seconds", None), 3600)
+
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("hitl_deadline_warning: notifier init failed — email warning still runs")
+
+    redis_client: AsyncRedis | None = None
+    try:
+        redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("hitl_deadline_warning: redis client unavailable — in-process fire-once backstop only")
+    try:
+        notified = await dispatch_deadline_notifications(
+            factory,
+            grace_seconds=grace_seconds,
+            redis_client=redis_client,
+            notifier=notifier,
+        )
+    finally:
+        if redis_client is not None:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    return {"notified": len(notified)}
+
+
+async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
+
+    Deletes terminal ``runs`` rows older than the retention window (via
+    ``batch_delete_old_terminal_runs``) AND purges LangGraph checkpoint rows
+    (``checkpoints``, ``checkpoint_blobs``, ``checkpoint_writes``) older than
+    the retention window (via ``batch_delete_langgraph_checkpoints``). The two
+    purges run in SEPARATE transactions so a failure in the checkpoint purge
+    can never roll back the already-executed runs purge.
+
+    Also garbage-collects the artifact store (``delete_orphaned_run_artifacts``,
+    FAR-811): any run directory on disk whose run no longer exists in the DB is
+    deleted, so retained full-transcript artifacts are removed by the same
+    retention policy that purges the run rows. The GC runs best-effort in its
+    own system-scoped transaction — a failure is logged as a warning and never
+    fails the job or rolls back the completed purges.
+
+    The checkpoint purge is tolerant of a missing saver schema: the system
+    worker's cron can fire before the app boot creates the checkpoint tables /
+    ``created_at`` columns, in which case ``ProgrammingError`` (the SQLAlchemy
+    wrapper for the DBAPI's missing-table/column errors, e.g. psycopg's
+    ``UndefinedTable``/``UndefinedColumn``) is caught, logged as a warning, and
+    the job still reports the runs purge count (``checkpoints_deleted=0``)
+    without failing — the app boot creates the schema later. The retention
+    session is system-scoped (modulo_system role, LOGIN, BYPASSRLS) — checkpoint
+    retention is cross-org by design and operates on the saver's unqualified
+    tables.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+    from farna.db.crud.run import batch_delete_old_terminal_runs
+
+    factory = _make_system_session_factory()
+    # FAR-1549: capture the per-org pre-image BEFORE the purge so every
+    # affected org gets one record of its own runs being deleted. The count
+    # uses the same predicate as the purge itself (terminal status, created_at
+    # older than the retention window), so it is the number of rows that purge
+    # is about to remove. Fail-OPEN: losing the record for one tick must never
+    # skip the purge itself (the guard is here as well as in the helper so a
+    # future refactor cannot silently turn a count failure into a job failure).
+    try:
+        purge_targets = await _retention_purge_targets(factory)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(_RETENTION_AUDIT_LOG_KEY, extra={"stage": "target_count"}, exc_info=True)
+        purge_targets = {}
+    async with factory() as session, session.begin():
+        deleted = await batch_delete_old_terminal_runs(session, max_age_days=_RETENTION_MAX_AGE_DAYS)
+    if deleted:
+        await _record_retention_purge_audits(purge_targets, deleted)
+
+    checkpoints_deleted = 0
+    try:
+        # No outer ``session.begin()`` here: the checkpoint sweep owns its own
+        # per-batch transactions and commits each one (FAR-1971b), so a mid-tick
+        # cancellation cannot roll back batches that already succeeded.
+        async with _make_system_session_factory()() as session:
+            checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
+    except ProgrammingError:
+        _log.warning(
+            "saq.retention_cleanup.checkpoint_schema_missing",
+            exc_info=True,
+        )
+
+    # FAR-811 artifact GC — best-effort, never lets a store failure fail the job.
+    artifact_gc: dict[str, Any] = {"orphan_runs": [], "files_deleted": 0}
+    try:
+        from farna.core.artifacts.gc import delete_orphaned_run_artifacts
+
+        async with _make_system_session_factory()() as session, session.begin():
+            artifact_gc = await delete_orphaned_run_artifacts(session)
+    except Exception:
+        _log.warning(
+            "saq.retention_cleanup.artifact_gc_failed",
+            exc_info=True,
+        )
+
+    if deleted or checkpoints_deleted or artifact_gc["files_deleted"]:
+        _log.info(
+            "saq.retention_cleanup.deleted_old_runs",
+            extra={
+                "count": deleted,
+                "checkpoints_deleted": checkpoints_deleted,
+                "artifact_files_deleted": artifact_gc["files_deleted"],
+                "artifact_orphan_runs": len(artifact_gc["orphan_runs"]),
+            },
+        )
+    return {
+        "deleted": deleted,
+        "checkpoints_deleted": checkpoints_deleted,
+        "artifact_gc": artifact_gc,
+    }
+
+
+async def _retention_purge_targets(factory: Any) -> dict[uuid.UUID, int]:
+    """Per-org count of terminal runs the scheduled purge is about to delete.
+
+    Reads on the caller's (system, BYPASSRLS) factory so the count is
+    cross-org, using the SAME predicate
+    ``db.crud.run.batch_delete_old_terminal_runs`` deletes by: terminal status
+    and ``created_at`` older than :data:`_RETENTION_MAX_AGE_DAYS`. The result
+    is the pre-image of the delete — captured immediately before it runs, so a
+    row that only becomes old between the count and the purge (impossible at
+    this granularity) is the only drift possible.
+
+    Fail-OPEN, guarded by the caller: :func:`retention_cleanup` wraps this
+    count so a failure logs and lets the purge run — losing the record for one
+    tick is strictly better than skipping retention.
+    """
+    from sqlalchemy import func, select
+
+    from farna.db.models.run import TERMINAL_STATUSES, Run
+
+    cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_MAX_AGE_DAYS)
+    async with factory() as session, session.begin():
+        result = await session.execute(
+            select(Run.organisation_id, func.count(Run.id))
+            .where(Run.status.in_(TERMINAL_STATUSES), Run.created_at < cutoff)
+            .group_by(Run.organisation_id)
+        )
+        return {row[0]: int(row[1]) for row in result.all() if row[1]}
+
+
+async def _record_retention_purge_audits(targets: dict[uuid.UUID, int], deleted: int) -> None:
+    """Record the scheduled retention purge on each affected org's audit chain (FAR-1549).
+
+    The org-independent ``system_audit_events`` ledger would be the wrong
+    home: an org admin reviewing their own chain must see that their runs were
+    deleted, so each event is written into ``audit_events`` under that org with
+    a SYSTEM actor (there is no request principal for a cron tick). Every
+    append opens its own app-role session, so one org's failure never blocks
+    another's record.
+
+    Fail-open with a loud log: the purge has already committed, and a record
+    failure must never fail the retention job itself.
+    """
+    if not targets:
+        if deleted:
+            _log.warning(
+                _RETENTION_AUDIT_LOG_KEY,
+                extra={"stage": "targets_missing", "deleted": deleted},
+            )
+        return
+    from farna.core.audit_logger.background import append_background_audit_event
+
+    app_factory = _make_session_factory()
+    recorded = 0
+    for org_id, count in targets.items():
+        if await append_background_audit_event(
+            app_factory,
+            org_id=org_id,
+            event_type="run_retention_purge",
+            resource_type="run",
+            actor_source="retention_cleanup",
+            payload_json={
+                "summary": f"Scheduled retention deleted {count} terminal run(s)",
+                "purged_runs": count,
+                "max_age_days": _RETENTION_MAX_AGE_DAYS,
+            },
+            log_key=_RETENTION_AUDIT_LOG_KEY,
+        ):
+            recorded += 1
+    _log.info(
+        "saq.retention_cleanup.audit_recorded",
+        extra={"orgs": len(targets), "recorded": recorded, "deleted": deleted},
+    )
+
+
+async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — purge old webhook trigger events (30-day retention).
+
+    The purge is CROSS-ORG by design (age-based retention over every org's
+    events), so on PostgreSQL it runs on the system session factory
+    (modulo_system role, LOGIN, BYPASSRLS — FAR-523). ``trigger_events``
+    carries the ``rls_org_isolation`` policy and ``modulo_app`` is
+    NOBYPASSRLS, so the previous plain-factory session — which never set
+    ``app.organisation_id`` — silently matched ZERO rows and deleted nothing:
+    an invisible no-op that let retention grow unbounded. Do NOT swap back to
+    ``_make_session_factory`` on PostgreSQL. On non-PostgreSQL backends (no
+    RLS, no modulo_system role) the plain factory is correct and used instead
+    (see ``_cleanup_session_factory``).
+
+    The system session factory is ``autobegin=False`` (the codebase DI
+    convention), so every batch needs an explicit transaction: the first
+    ``session.execute`` would otherwise raise ``InvalidRequestError: Autobegin
+    is disabled on this Session`` and the hourly cron would fail on every tick.
+    The transaction must begin PER BATCH (not once around the loop) because
+    ``cleanup_old_webhook_events`` commits at the end of each pass.
+    """
+    from farna.core.cleanup_jobs.webhook_dedup_cleanup import BATCH_SIZE, cleanup_old_webhook_events
+
+    total = 0
+    async with _cleanup_session_factory()() as session:
+        while True:
+            async with session.begin():
+                deleted = await cleanup_old_webhook_events(session)
+            total += deleted
+            if deleted < BATCH_SIZE:
+                break
+    return {"deleted": total}
+
+
+async def expired_webhook_dedup_purge(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — purge expired ``webhook_dedup_hashes`` rows (FAR-661).
+
+    Every webhook delivery inserts a dedup hash row with a 5-minute TTL
+    (``TriggerEngine._DEDUP_TTL_SECONDS = 300``), but the hourly
+    ``webhook_dedup_cleanup`` above only retains ``trigger_events`` — nothing
+    scheduled ever deleted the dedup rows themselves, so they accumulated
+    forever and only surfaced as housekeeping candidates (10k+ "expired
+    webhook dedups" observed in manual testing). This sibling job deletes
+    rows whose ``expires_at`` has passed, in bounded batches.
+
+    The purge is CROSS-ORG by design (expiry-based over every org's hashes),
+    so on PostgreSQL it runs on the system session factory (modulo_system
+    role, LOGIN, BYPASSRLS — FAR-523) via ``_cleanup_session_factory``:
+    ``webhook_dedup_hashes`` carries the org-scoped ``rls_org_isolation``
+    policy and ``modulo_app`` is NOBYPASSRLS, so a plain-factory session —
+    which never set ``app.organisation_id`` — would silently match ZERO rows
+    (the same invisible no-op documented on ``webhook_dedup_cleanup``). Do
+    NOT swap back to ``_make_session_factory`` on PostgreSQL. On
+    non-PostgreSQL backends (no RLS, no modulo_system role) the plain
+    factory is correct and used instead (see ``_cleanup_session_factory``).
+
+    Mirrors ``webhook_dedup_cleanup``: the system session factory is
+    ``autobegin=False`` (the codebase DI convention), so every batch needs an
+    explicit transaction — the first ``session.execute`` would otherwise
+    raise ``InvalidRequestError: Autobegin is disabled on this Session``. The
+    transaction must begin PER BATCH (not once around the loop) because
+    ``purge_expired_dedup_hashes`` commits at the end of each pass.
+    """
+    from farna.core.cleanup_jobs.webhook_dedup_cleanup import DEDUP_PURGE_BATCH_SIZE, purge_expired_dedup_hashes
+
+    total = 0
+    async with _cleanup_session_factory()() as session:
+        while True:
+            async with session.begin():
+                deleted = await purge_expired_dedup_hashes(session)
+            total += deleted
+            if deleted < DEDUP_PURGE_BATCH_SIZE:
+                break
+    return {"deleted": total}
+
+
+async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — age-based retention for trigger_events (90-day default).
+
+    Deletes ``trigger_events`` rows whose ``received_at`` is older than the
+    retention window (default 90 days, aligned with the run-retention policy)
+    in bounded batches. The retention comfortably exceeds the webhook replay
+    window, so replayable events are never purged.
+
+    The purge is CROSS-ORG by design, so on PostgreSQL it runs on the system
+    session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523).
+    ``trigger_events`` is an ``OrgScoped`` table under the
+    ``rls_org_isolation`` policy and ``modulo_app`` is NOBYPASSRLS: the
+    previous plain-factory session never set ``app.organisation_id``, so every
+    batch silently matched ZERO rows and the retention never deleted anything.
+    Do NOT swap back to ``_make_session_factory`` on PostgreSQL. On
+    non-PostgreSQL backends (no RLS, no modulo_system role) the plain factory
+    is correct and used instead (see ``_cleanup_session_factory``).
+
+    Mirrors ``webhook_dedup_cleanup``: the system session factory is
+    ``autobegin=False`` (the codebase DI convention), so every batch needs an
+    explicit transaction — the first ``session.execute`` would otherwise raise
+    ``InvalidRequestError: Autobegin is disabled on this Session``. The
+    transaction must begin PER BATCH (not once around the loop) because
+    ``cleanup_old_trigger_events`` commits at the end of each pass.
+    """
+    from farna.core.cleanup_jobs.trigger_events_cleanup import BATCH_SIZE, cleanup_old_trigger_events
+
+    total = 0
+    async with _cleanup_session_factory()() as session:
+        while True:
+            async with session.begin():
+                deleted = await cleanup_old_trigger_events(session)
+            total += deleted
+            if deleted < BATCH_SIZE:
+                break
+    return {"deleted": total}
+
+
+# Cross-process stats key for the stale-run recovery sweep (D1). The sweep runs
+# in the SYSTEM WORKER process; /healthz/ready runs in the WEB process. Mirroring
+# the dispatcher_reconcile stats pattern, the cron job persists its outcome here
+# every tick and the health check reads this key to detect a silently dead sweep
+# (stale > 15 min) or a never-run sweep.
+STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
+# The sweep runs every 5 min; a last_run_at older than 15 min means at least two
+# ticks were missed -> report "stale" (advisory).
+STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
+# TTL for the stats key: one sweep past the stale window (2026-09 Redis audit).
+# The key is a liveness marker refreshed every 5 min, so a live worker never
+# lets it expire; a dead worker's key self-expires instead of persisting a dead
+# timestamp forever. /healthz/ready's _check_stale_run_recovery treats a missing
+# key as the equivalent "never run" advisory (fail-open, never gates readiness),
+# so expiry is signal-equivalent and strictly more hygienic.
+STALE_RUN_RECOVERY_STATS_TTL_SECONDS = STALE_RUN_RECOVERY_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-604 slot-reconciliation sweep. Same
+# contract as the legacy sweep's key above: the cron job persists its outcome
+# every tick and /healthz/ready reads it to detect a silently dead sweep
+# (stale > 15 min) or a never-run sweep — a silently dead
+# slot_reconciliation re-opens the FAR-604 admission wedge invisibly.
+SLOT_RECONCILIATION_STATS_KEY = "saq:cron:stats:slot_reconciliation"
+# The sweep runs every 5 min; same stale threshold + TTL arithmetic as the
+# legacy sweep's key (one sweep past the stale window).
+SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
+SLOT_RECONCILIATION_STATS_TTL_SECONDS = SLOT_RECONCILIATION_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-604 D2 HITL park sweep (qa F5). Same
+# contract as the sibling sweeps: the cron job persists its outcome every tick
+# and /healthz/ready reads it to detect a silently dead sweep (stale > 15 min)
+# or a never-run sweep. Parking is post-D1 hygiene (a parked run holds no
+# pipeline slot), so the sweep's death was previously invisible — a dead sweep
+# only delays the "expired — parked" transition, but an operator must still
+# see that the visibility half of the design has stopped working.
+HITL_PARK_SWEEP_STATS_KEY = "saq:cron:stats:hitl_park_sweep"
+# The sweep runs every 5 min; same stale threshold + TTL arithmetic as the
+# sibling sweeps (one sweep past the stale window).
+HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
+HITL_PARK_SWEEP_STATS_TTL_SECONDS = HITL_PARK_SWEEP_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-590 D4 Bundled Runner orphan reconciler
+# (same contract as the sibling sweeps: the 5-min cron persists its outcome
+# and /healthz/ready reads it to detect a silently dead sweep).
+RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcile"
+RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
+RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS = RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-594 D8 runner dispatch-marker
+# reconciliation sweep (same contract as the sibling sweeps).
+RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
+RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
+RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS = RUNNER_MARKER_SWEEP_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-591 D5 runner health probe (qa F3).
+# The probe runs on a 60s cadence (not the siblings' 5 min), so the stale
+# window is 3x the cadence (180s — one missed tick never alerts) and the
+# TTL is stale + one tick, matching the sibling arithmetic.
+RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
+RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
+RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS = RUNNER_HEALTH_PROBE_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-1108 chunk-8b decision-record
+# reconciliation sweep (same contract as the sibling sweeps: the hourly cron
+# persists its outcome — scanned count + anomaly counts — and /healthz/ready
+# reads it to detect a silently dead sweep or a never-run sweep). The sweep is
+# read-only (it never mutates a decision record), so its liveness is the only
+# signal that the corruption-detection surface is still working.
+DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
+# The sweep runs hourly; a last_run_at older than 3h means at least two ticks
+# were missed -> report "stale" (advisory).
+DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+# TTL: one sweep past the stale window (same arithmetic as the sibling keys).
+DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS = DECISION_RECORD_RECONCILE_STALE_SECONDS + 60
+
+# Cross-process stats key for the FAR-132 legacy-shape straggler sweep (same
+# contract as the sibling detection crons: the daily cron persists its outcome
+# — ``legacy_count`` + ``last_run_at`` — and /healthz/ready reads it to detect a
+# silently dead sweep or a never-run sweep). The sweep is read-only (it never
+# mutates a row), so its liveness is the only signal that the strip-gating
+# invariant is still being evaluated.
+LEGACY_AGENT_RETURN_SWEEP_STATS_KEY = "saq:cron:stats:legacy_agent_return_sweep"
+# The sweep runs daily at 02:30; a last_run_at older than 72h means at least two
+# ticks were missed -> report "stale" (advisory). Mirrors the sibling 3x-cadence
+# arithmetic (decision_record_reconcile: hourly -> 3h).
+LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS = 3 * 24 * 60 * 60
+# TTL: one sweep past the stale window.
+LEGACY_AGENT_RETURN_SWEEP_STATS_TTL_SECONDS = LEGACY_AGENT_RETURN_SWEEP_STALE_SECONDS + 60
+
+
+async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
+    """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
+
+    Shared by the ``stale_run_recovery``, ``slot_reconciliation`` and
+    ``hitl_park_sweep`` wrappers: a persistence failure must never fail the
+    sweep — the log carries the loss and /healthz/ready treats a missing key
+    as the equivalent "never run" advisory.
+    """
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+
+        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
+        try:
+            await redis_client.set(key, json.dumps(stats), ex=ttl_seconds)
+        finally:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.sweep_stats_persist_failed key=%s", key, exc_info=True)
+
+
+async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1).
+
+    The sweep itself (``pipeline_execution.stale_run_recovery_sweep``) returns a
+    plain integer count; this wrapper ALSO persists a stats dict to the shared
+    Redis key so /healthz/ready can warn when the sweep is stale or missing.
+    Best-effort: a persistence failure must never fail the sweep.
+    """
+    from farna.core.pipeline_execution import stale_run_recovery_sweep
+
+    result = await stale_run_recovery_sweep(_get_async_engine())
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+    }
+    if isinstance(result, dict) and "error" in result:
+        stats["error"] = result["error"]
+        stats["recovered"] = 0
+    else:
+        stats["recovered"] = result
+    await _persist_sweep_stats(STALE_RUN_RECOVERY_STATS_KEY, stats, STALE_RUN_RECOVERY_STATS_TTL_SECONDS)
+    return result
+
+
+async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-604 slot reconciliation sweep (every 5 min).
+
+    Force-releases pipeline slots leaked by ``running`` runs whose heartbeat
+    went stale (a crashed worker never wrote a terminal status). The legacy
+    ``stale_run_recovery`` worker_lost branch is scoped to non-SAQ rows with
+    5+ claims, so SAQ-dispatched leaked slots were never reclaimed — the
+    leaked-slot half of the 2026-09-04 admission wedge.
+
+    Liveness contract (FAR-604 F6): the outcome (last_run_at + released
+    counts) is persisted to the shared Redis key every tick so /healthz/ready
+    can warn when the sweep is stale or missing. A sweep failure is persisted
+    (with the PARTIAL counts the sweep achieved) and then RE-RAISED so SAQ's
+    ``retries=2`` engages — a silently dead sweep must never re-open the
+    FAR-604 wedge invisibly.
+    """
+    from farna.core.run_admission import SlotReconciliationError, reconcile_pipeline_slots
+
+    try:
+        result = await reconcile_pipeline_slots(_get_async_engine())
+    except SlotReconciliationError as exc:
+        await _persist_sweep_stats(
+            SLOT_RECONCILIATION_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "released": exc.released,
+                "per_pipeline": exc.per_pipeline,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            SLOT_RECONCILIATION_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        SLOT_RECONCILIATION_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "released": result["released"],
+            "retried": result.get("retried", 0),
+            "per_pipeline": result["per_pipeline"],
+        },
+        SLOT_RECONCILIATION_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-604 D2 HITL park-on-expiry sweep (every 5 min).
+    Parks runs whose open HITL review expired unanswered past the grace window
+    (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
+    ``awaiting_human`` for the non-terminal ``hitl_parked`` status — the
+    status itself is the parked signal (qa F13; the gate row stays untouched,
+    OPEN AND CLAIMABLE — park ≠ decide) and a later decision un-parks the run
+    back into normal admission. Each park is logged loudly
+    (``hitl_park.parked``).
+
+    Liveness contract (qa F5): the outcome (last_run_at + parked count) is
+    persisted to the shared Redis key every tick so /healthz/ready can warn
+    when the sweep is stale or missing. A sweep failure is persisted (with
+    the PARTIAL parked count the sweep achieved) and then RE-RAISED so SAQ's
+    ``retries=2`` engages.
+    """
+    from farna.core.run_admission import HitlParkError, park_expired_hitl_runs
+
+    try:
+        result = await park_expired_hitl_runs(_get_async_engine())
+    except HitlParkError as exc:
+        await _persist_sweep_stats(
+            HITL_PARK_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "parked": exc.parked,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        HITL_PARK_SWEEP_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "parked": result["parked"],
+        },
+        HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-594 D8 runner dispatch-marker reconciliation (every 5 min).
+
+    State-aware marker sweep: clears non-fence markers on genuinely terminal
+    runs and stale (>25h) non-fence markers, transitions a stale non-terminal
+    RUNNING run terminal (no zombie running-without-marker-without-workspace),
+    and NEVER clears ``script_executing`` fence components or markers of runs
+    ``dispatcher_reconcile`` considers recoverable (parity by construction —
+    the sweep evaluates the reconciler's own predicates). Breaches of the org
+    cap are logged as ``runner.capacity.violation`` (the D8 rollback signal).
+
+    Liveness contract (qa F5, mirrors the ``runner_workspace_reconcile``
+    sibling): the outcome is persisted to the shared Redis key every tick. A
+    FAILED sweep (org-index or any org pass) persists the PARTIAL counts with
+    an enriched ``"error": "sweep_failed (<ExceptionType>: <message>)"`` and
+    then RE-RAISES so SAQ's ``retries=2``
+    engages — a swallowed sweep failure is a silently dead safety net (stale
+    markers accumulate as phantom capacity and the rollback signal goes dark).
+
+    The sweep is ALSO wired into ``dispatcher_reconcile`` (60s cadence via
+    ``_run_reconcile_sweeps``); this dedicated cron is the independent
+    periodic path with a liveness key so a silently dead sweep is visible to
+    /healthz/ready. The session-scoped dedup advisory lock makes concurrent
+    ticks a no-op.
+    """
+    from farna.core.runner_capacity import RunnerMarkerSweepError, reconcile_runner_dispatch_markers
+
+    try:
+        result = await reconcile_runner_dispatch_markers(_make_session_factory())
+    except RunnerMarkerSweepError as exc:
+        await _persist_sweep_stats(
+            RUNNER_MARKER_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": exc.scanned,
+                "cleared": exc.cleared,
+                "transitioned": exc.transitioned,
+                "orgs_failed": exc.org_failures,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+                "error_detail": exc.detail or repr(exc),
+            },
+            RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        RUNNER_MARKER_SWEEP_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": result["scanned"],
+            "cleared": result["cleared"],
+            "transitioned": result["transitioned"],
+            "violations": result["violations"],
+            "orgs_failed": result.get("orgs_failed", 0),
+        },
+        RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-590 D4 Bundled Runner orphan reconciler (every 5 min).
+
+    Lists labelled workspace containers, cross-references ACTIVE runs, and
+    destroys orphans past the grace period (LOG-ONLY soak mode first —
+    settings ``RUNNER_RECONCILER_DESTROY_ENABLED`` defaults False).
+    Fail-safe: any cross-reference query error aborts the sweep, destroys
+    nothing, and persists the partial counts before re-raising so SAQ's
+    ``retries=2`` engages.
+
+    Liveness contract (sibling sweeps): the outcome (last_run_at + scanned +
+    orphans_destroyed) is persisted to the shared Redis key every tick.
+    """
+    from farna.core.bundled_runner.runner_reconciler import (
+        ReconcilerSweepError,
+        reconcile_runner_workspaces,
+    )
+
+    try:
+        result = await reconcile_runner_workspaces(_get_async_engine())
+    except ReconcilerSweepError as exc:
+        await _persist_sweep_stats(
+            RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": exc.scanned,
+                "orphans_destroyed": exc.destroyed,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+                "error_detail": str(exc),
+            },
+            RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": result["scanned"],
+            "orphans_destroyed": result["orphans_destroyed"],
+        },
+        RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-591 D5 per-machine runner health probe (every 60s).
+
+    Probes the deployment's Docker engine THROUGH the socket-proxy (engine
+    reachability + pinned image presence + ``/info`` resources) and upserts
+    one probe-cache row per (organisation, machine). The Runners page + node
+    editor read ONLY the cache — never a synchronous probe on the request
+    path. A healthy→unreachable transition emits the error-dashboard entry +
+    the ``runner_unavailable`` in-app notification. Cross-org: uses the
+    system session factory on PostgreSQL (modulo_app is NOBYPASSRLS).
+
+    Liveness contract (qa F3, mirrors the sibling sweeps): the outcome
+    (last_run_at + orgs probed/failed + transitions) is persisted to the
+    shared Redis key every tick — on SUCCESS with the tick's counts, and
+    on FAILURE with zero counts + an enriched
+    ``"error": "probe_failed (<ExceptionType>: <message>)"`` (the
+    ``last_run_at`` refresh is what keeps /healthz/ready's staleness
+    warning honest) — so /healthz/ready can warn when the probe is stale
+    or missing. An infrastructure failure is persisted (zero counts +
+    the error flag) and then RE-RAISED so SAQ's ``retries=2`` engages — a
+    swallowed probe failure would leave every org's strip aging to
+    "status unknown" invisibly. The FAR-538 per-machine cron heartbeat
+    (``saq:cron:heartbeat:runner_health_probe``) is refreshed on every
+    successful tick.
+    """
+    from farna.core.bundled_runner.health_probe import run_runner_health_probe
+
+    try:
+        result = await run_runner_health_probe(_cleanup_session_factory())
+    except Exception as exc:
+        await _persist_sweep_stats(
+            RUNNER_HEALTH_PROBE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "orgs_probed": 0,
+                "orgs_failed": 0,
+                "transitions": 0,
+                "error": f"probe_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS,
+        )
+        raise
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "orgs_probed": result["orgs_probed"],
+        "orgs_failed": result.get("orgs_failed", 0),
+        "transitions": result["transitions"],
+        "reachable": result["reachable"],
+    }
+    await _persist_sweep_stats(RUNNER_HEALTH_PROBE_STATS_KEY, stats, RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS)
+    await _touch_probe_cron_liveness()
+    return result
+
+
+async def _touch_probe_cron_liveness() -> None:
+    """Refresh the per-machine cron liveness heartbeat (FAR-538, qa F3).
+
+    Written on every SUCCESSFUL ``runner_health_probe`` tick so
+    /healthz/ready can tell a silently dead cron scheduler from a live one
+    (the worker loop can stay alive while its cron scheduler is stuck).
+    Best-effort: a Redis write failure must never fail the probe.
+    """
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+
+        from farna.core.cron_helpers import _cron_liveness_key
+
+        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
+        try:
+            await redis_client.set(
+                _cron_liveness_key("runner_health_probe"),
+                int(time.time()),
+                ex=CRON_LIVENESS_STATS_TTL_SECONDS,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.runner_health_probe liveness heartbeat write failed", exc_info=True)
+
+
+async def decision_record_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — decision-record corruption detection (FAR-1108 chunk 8b).
+
+    Read-only reconciliation of ``policy_gate_decisions``: detects duplicate
+    rows (per event identity), rows missing an ``eval_result_id``, and rows
+    whose referenced ``EvalResult``/``Run`` no longer exist. It NEVER mutates
+    or deletes a decision record — decision records are audit evidence and
+    deletion is a governance action owned by the retention/purge chunk.
+
+    Liveness contract (mirrors the sibling sweeps): the outcome
+    (``last_run_at`` + ``scanned`` + anomaly counts) is persisted to the shared
+    Redis key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED
+    so SAQ's ``retries=2`` engages — a silently dead detection surface must not
+    be invisible.
+
+    Cross-org: uses the system session factory (BYPASSRLS) so a single tick
+    scans every org's decision records.
+    """
+    from farna.core.eval_engine.decision_reconcile import reconcile_decision_records
+
+    try:
+        async with _make_system_session_factory()() as session, session.begin():
+            report = await reconcile_decision_records(session)
+    except Exception as exc:
+        await _persist_sweep_stats(
+            DECISION_RECORD_RECONCILE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": 0,
+                "total_anomalies": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "scanned": report.scanned,
+        "total_anomalies": report.total,
+        **{f"anomaly_{kind}": count for kind, count in report.counts_by_kind().items()},
+    }
+    if report.total:
+        _log.warning(
+            "decision_record.reconcile.anomalies",
+            extra={
+                "scanned": report.scanned,
+                "total_anomalies": report.total,
+                "counts_by_kind": report.counts_by_kind(),
+                "samples": report.to_dict()["samples"],
+            },
+        )
+    await _persist_sweep_stats(
+        DECISION_RECORD_RECONCILE_STATS_KEY,
+        stats,
+        DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+    )
+    return stats
+
+
+async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
+
+    The verification canary for the ledger/report system: samples the N=50 most
+    recent terminal runs per org, checks ``total == sum``, asserts the org-row
+    WATCH, and evaluates the canonical rollback trigger (the probe rule + the
+    duplicate-terminal flood with its cooldown). The heartbeat gauge turns a
+    silently dead probe into a stale alert.
+    """
+    from farna.core.cost_controller.probe import run_probe
+
+    return await run_probe(_make_session_factory())
+
+
+async def analytics_facts_maintenance(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
+
+    System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
+    modulo_app is NOBYPASSRLS. Non-Postgres backends no-op.
+    """
+    from farna.core.analytics.maintenance import run_maintenance
+
+    return await run_maintenance(_make_system_session_factory())
+
+
+async def journey_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — hourly bounded journey reconciliation sweep (FAR-143).
+
+    Re-derives ``journeys`` evidence from terminal runs whose journey rows are
+    MISSING or STALE (see ``modulo.core.lifecycle_map.reconcile``). System cron:
+    uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access. modulo_app
+    is NOBYPASSRLS. The sweep is batch-bounded and idempotent, so an hourly
+    tick simply drains whatever backlog remains.
+    """
+    from farna.core.lifecycle_map.reconcile import reconcile_journeys
+
+    async with _make_system_session_factory()() as session, session.begin():
+        advanced = await reconcile_journeys(session)
+    if advanced:
+        _log.info("saq.journey_reconcile.advanced", extra={"advanced": advanced})
+    return {"advanced": advanced}
+
+
+async def check_missed_fire_alerts_cron(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — hourly missed-fire probe for silent low-cadence triggers.
+
+    Delegates to :func:`modulo.core.error_tracking.check_missed_fire_alerts`,
+    which alerts for active cron/polling triggers whose cadence is >= 1h and
+    whose ``last_fired_at`` is stale (throttled by an in-memory cooldown).
+
+    Uses the 5-field expression ``"0 * * * *"`` — NOT the 6-field form, which
+    croniter parses with a leading seconds field and fires on the wrong cadence
+    (the bug class documented on ``cost_probe`` / bug #680).
+    """
+    from farna.core.error_tracking import check_missed_fire_alerts
+
+    emitted = await check_missed_fire_alerts(_get_async_engine())
+    if emitted:
+        _log.info("saq.check_missed_fire_alerts.emitted", extra={"count": emitted})
+    return {"emitted": emitted}
+
+
+async def library_sync(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — periodic community-library sync (FAR-363).
+
+    No-op when ``modulo_library_endpoint`` is empty (library not configured).
+    Never raises (fail-open): ``sync_library`` already returns a result on every
+    failure path and this wrapper adds a final guard so a session/DB failure
+    cannot crash the worker. The last-good cached manifest survives a bad tick.
+    """
+    settings = get_settings()
+    if not settings.modulo_library_endpoint:
+        _log.info("saq.library_sync.disabled")
+        return {"status": "disabled"}
+    try:
+        from farna.core.library_sync import sync_library
+
+        async with _make_session_factory()() as session:
+            result = await sync_library(session)
+        return {
+            "status": "ok" if result.success else "failed",
+            "entries_count": result.entries_count,
+            "revoked_count": result.revoked_count,
+            "error": result.error,
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("saq.library_sync.failed")
+        return {"status": "failed", "error": f"unexpected cron failure ({type(exc).__name__}: {exc})"[:200]}
+
+
+async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — daily product analytics metrics dump (FAR-356).
+
+    Builds an aggregate payload from all consenting orgs and POSTs it to
+    the vendor endpoint.  Skips when: no consenting orgs or instance switch
+    off.  Watermark advances only on full success.
+    """
+    from farna.core.product_analytics.metrics_dump import metrics_dump as _run_dump
+
+    return await _run_dump(ctx)
+
+
+async def connector_health_checks(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — 15-min cross-org connector health sweep (FAR-699).
+
+    The per-instance health-check endpoint only ran when a user hit the API,
+    so integration status showed ``last_check: "never"`` for every connector
+    forever. This cron runs every ACTIVE instance's ``health_check``
+    (cheap credential probes only — never ``query``/``write``, so nothing
+    mutates org data) and persists ``last_health_check_at`` /
+    ``last_health_check_error``. Per-instance isolation: one bad connector
+    records its own error and never aborts the sweep. The hub is built with
+    the instance's org so rate-limited connectors respect the org's SHARED
+    rate budget (FAR-442). Fail-open: a bad tick is logged; the next tick
+    re-checks everything (the sweep is idempotent).
+    """
+    from farna.core.connector_hub.health_sweep import run_connector_health_checks
+
+    settings = get_settings()
+    result = await run_connector_health_checks(_make_system_session_factory(), fernet_key=settings.fernet_key)
+    if result["unhealthy"]:
+        _log.warning("saq.connector_health_checks.unhealthy", extra={"unhealthy": result["unhealthy"]})
+    return result
+
+
+async def health_readiness_alert(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — readiness-degradation alert email (FAR-1446).
+
+    Delegates to :func:`modulo.core.health_alerts.run_health_alert_check`,
+    which evaluates readiness through the SAME code the ``/healthz/ready``
+    route runs (``api.routes.health.evaluate_readiness`` — no reimplemented
+    checks), and emails ``ALERT_EMAIL_TO`` on a confirmed transition into a
+    degraded/unavailable state plus a matching recovery email when healthy
+    again. Edge-triggered with a 2-tick hysteresis and Redis-backed dedup
+    state, so a tick almost never sends anything.
+
+    Quiet when unconfigured (the compose default): with ``SMTP_HOST`` /
+    ``ALERT_EMAIL_TO`` absent the check still runs, never raises, and logs at
+    most hourly that alerting is disabled. Never raises — a bad tick is
+    logged and the next 5-minute tick re-evaluates.
+    """
+    from farna.core.health_alerts import run_health_alert_check
+
+    return await run_health_alert_check()
+
+
+# ---------------------------------------------------------------------------
+# Worker settings
+# ---------------------------------------------------------------------------
+
+
+def _runs_queue_name() -> str:
+    """Runs worker queue — derives from ``SAQ_RUNS_QUEUE`` (settings).
+
+    ``dispatch_run``, ``fire_due_triggers``, and the health gate all enqueue/
+    check this exact queue name; the worker MUST listen on the same one or jobs
+    are enqueued but never dequeued (plan F3 / review).
+    """
+    return get_settings().saq_runs_queue
+
+
+def _system_queue_name() -> str:
+    """System worker queue — derived from the runs queue.
+
+    Matches ``health._configured_queues`` (``runs_queue.replace("runs",
+    "system")``) so the readiness gate checks the queues the workers actually
+    listen on. Falls back to ``"system"`` for a runs queue name without
+    ``"runs"``.
+    """
+    runs_queue = get_settings().saq_runs_queue
+    return runs_queue.replace("runs", "system") if "runs" in runs_queue else "system"
+
+
+def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, Any]:
+    return {
+        "queue": _build_queue(queue_name),
+        "functions": functions,
+        "concurrency": get_settings().saq_worker_concurrency,
+        "shutdown_grace_period_s": _SHUTDOWN_GRACE_PERIOD_S,
+        "cancellation_hard_deadline_s": _CANCELLATION_HARD_DEADLINE_S,
+        "dequeue_timeout": _DEQUEUE_TIMEOUT,
+        "timers": dict(_TIMERS),
+        # FAR-1417: bind the job's organisation BEFORE SAQ creates the job
+        # task, so every ERROR the job logs is attributable to error_events.
+        "before_process": _before_process_hook,
+        "after_process": _after_process_hook,
+        # FAR-250: register SQLAlchemy listeners + configure the EventBus
+        # Redis broker, and hold a non-relaying Redis subscription. Flows
+        # through both the custom system-web runner and the plain SAQ CLI;
+        # SAQ awaits async lifecycle callbacks.
+        "startup": _startup_event_bus_hook,
+        # FAR-1627: on worker shutdown (SIGTERM drain -> cancel -> stop), hand
+        # every still-in-flight run back for re-dispatch instead of letting it
+        # wait out the 30-minute heartbeat TTL. Runs AFTER job cancellation by
+        # SAQ design (Worker.stop calls shutdown callbacks post-drain) — but
+        # NOT unconditionally after the tasks are DEAD: SAQ invokes the
+        # callbacks even when cancellation timed out. The hook therefore only
+        # releases runs whose task actually observed the cancellation (see
+        # worker_handoff's cancellation-observation gate).
+        "shutdown": _shutdown_handoff_hook,
+        # Instance identity for worker metadata shared with the health gate —
+        # platform-neutral resolver at call time (ADR 043 / FAR-1194).
+        "metadata": {"hostname": resolve_instance_identity()},
+    }
+
+
+async def _before_process_hook(ctx: dict[str, Any]) -> None:  # NOSONAR S7503 - SAQ async lifecycle callback seam
+    """SAQ ``before_process`` hook — bind the job's organisation for ERROR capture (FAR-1417).
+
+    ``Worker.process()`` awaits this hook BEFORE ``asyncio.create_task``-ing the
+    job function, so the contextvar set here is copied into the job's own
+    context and is visible to every log call the job makes — including the
+    synchronous ``ErrorTrackingLogHandler.emit`` read.
+
+    Org-scoped jobs (``execute_run``, ``resume_run``, ``fire_*_trigger``,
+    ``execute_suite_run``, ...) carry the organisation as an ``org_id`` kwarg.
+    System crons carry none; they bind ``None`` EXPLICITLY rather than leaving
+    whatever was there, so a job can never inherit a previous job's
+    organisation. Residual (no org to bind): those system-cron ERROR records
+    are stdout-only — persisting them would need a system/unknown organisation
+    (schema decision, reported under FAR-1417).
+    """
+    job = ctx.get("job")
+    kwargs = getattr(job, "kwargs", None) or {}
+    raw_org = kwargs.get("org_id", kwargs.get("organisation_id"))
+    org_id_var.set(None if raw_org is None else str(raw_org))
+
+    # FAR-2153: the system licence is process memory restored from the instance
+    # store. A licence installed (or removed) by the API after this worker
+    # booted must be visible to the job that is about to resolve a tier, with
+    # no restart. TTL-throttled (the session is not even opened while the slot
+    # is fresh) and fail-open: a store blip keeps the last known tier and must
+    # never fail a job's start.
+    try:
+        from farna.core.license import persisted_license_refresh_due, refresh_persisted_system_license
+
+        if persisted_license_refresh_due():
+            from farna.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session, session.begin():
+                await refresh_persisted_system_license(session)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.license_persistence_refresh_failed", exc_info=True)
+
+
+async def _after_process_hook(ctx: dict[str, Any]) -> None:
+    from farna.core.error_tracking.saq_hooks import after_process
+
+    await after_process(ctx)
+
+
+async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
+    """SAQ ``startup`` hook: apply the licence anchor + wire the event pipeline.
+
+    0. (FAR-2093) ``configure_license_trust_anchor()`` — apply the SAME
+       process-global licence trust anchor the API applies at startup. Licence
+       verification reads module state (the configured Ed25519 public key and
+       whether the built-in development anchor may be trusted), which does not
+       cross a process boundary: without this step the worker verified every
+       production-signed licence against the DEVELOPMENT key, failed, and
+       silently resolved to Community while the API reported the real tier.
+       This is the hook's ONE fail-closed step (a misconfigured trust anchor
+       is a security failure, not a transient blip): it must run before any
+       job can resolve licence state.
+    1. (FAR-1771) ``install_event_loop_stall_attribution()`` — opt-in
+       worker-side event-loop stall attribution, gated on
+       ``MODULO_SLOW_CALLBACK_WARN_MS`` (0/off = a pure no-op): when enabled
+       it arms asyncio's slow-callback warning and starts the stack sampler
+       that lets the readiness stall log name the blocking callback
+       (file:line). Installed HERE because this hook is the ONE startup
+       path shared by both worker flavours (``run_system_web`` and the plain
+       ``python -m saq ...runs_settings`` CLI) and runs on the worker's
+       event loop — the exact thread the sampler must watch.
+    2. ``register_listeners()`` so worker-side ORM inserts publish locally
+       and (for non-notification resources) to Redis.
+    3. ``configure_event_bus(RedisEventBroker(settings.redis_url))`` so those
+       publishes reach other processes.
+    4. Spawn the connect+subscribe loop as a background task with backoff —
+       workers subscribe but NEVER relay (the web process owns the pump).
+    5. (FAR-1992) install the provider/platform DB-capacity probe so
+       WORKER-created runs (cron/polling triggers run in this process) can
+       auto-detect capacity exactly as the API process does. Installed BEFORE
+       the Redis steps below, which can ``return`` early when Redis is absent.
+
+    Every step EXCEPT the licence anchor (step 0) is LAZY and FAIL-OPEN:
+    try/except log-and-continue. A Redis blip at boot must NEVER crash the
+    worker (``policy="always"`` crash-loop risk) — the worker keeps serving
+    jobs and the background task re-attempts connect+subscribe until it
+    succeeds. Step 0 is fail-closed instead: a misset trust anchor refuses to
+    boot the worker rather than silently resolving every licence to Community.
+    """
+    from farna.core.events import configure_event_bus, register_listeners
+    from farna.core.license_bootstrap import configure_license_trust_anchor, restore_persisted_license
+
+    # FAR-2093: fail-closed, and FIRST — the anchor must exist before any job
+    # (or any of the fail-open steps' own licence reads) can resolve a tier.
+    settings = get_settings()
+    configure_license_trust_anchor(settings)
+
+    # FAR-2153: the worker is a SEPARATE process, so the memory-only system
+    # licence the API installs was invisible to it. Restore the persisted
+    # instance licence into this process's slot now (fail-open on a DB blip,
+    # fail-closed on an anchor miss). A licence installed WHILE the worker runs
+    # is picked up by the TTL refresh in ``_before_process_hook``, which runs
+    # before every job — no background task and no restart.
+    await restore_persisted_license(settings)
+
+    try:
+        from farna.core.health_alerts import install_event_loop_stall_attribution
+
+        install_event_loop_stall_attribution()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Attribution is observability, never a boot requirement — a failure
+        # here must leave the worker serving (same fail-open contract as the
+        # steps below; the log line IS the signal).
+        _log.exception("saq_worker.event_loop_stall_attribution_install_failed")
+
+    try:
+        register_listeners()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.event_listeners_register_failed")
+
+    # FAR-1992: the capacity hard-stop gate runs in create_run, which this
+    # process also drives (cron/polling triggers create runs). Install the
+    # provider/platform probe here too, BEFORE the Redis steps below (either of
+    # which can return early). Fail-open: an unconfigured/failed probe leaves
+    # the port unset and the chain falls through to "none" (inert).
+    try:
+        from farna.core.capacity_providers import build_platform_capacity_probe
+        from farna.db.capacity import set_platform_capacity_probe
+
+        set_platform_capacity_probe(build_platform_capacity_probe(get_settings()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.capacity_platform_probe_failed", exc_info=True)
+
+    settings = get_settings()
+    if not settings.redis_url:
+        _log.info("saq_worker.event_bus_skipped_no_redis_url")
+        return
+
+    try:
+        from farna.core.events.redis_broker import RedisEventBroker
+
+        broker = RedisEventBroker(settings.redis_url)
+        await configure_event_bus(redis_broker=broker)
+        _log.info("saq_worker.event_bus_redis_enabled")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Broker init / configure failure: log and continue WITHOUT the
+        # subscription task — local listener delivery still works.
+        _log.exception("saq_worker.event_bus_configure_failed")
+        return
+
+    try:
+        from farna.core.events.worker_subscription import spawn_worker_event_subscription
+
+        spawn_worker_event_subscription(broker)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.event_subscription_spawn_failed")
+
+
+async def _shutdown_handoff_hook(_ctx: dict[str, Any]) -> None:
+    """SAQ ``shutdown`` hook — hand every abandoned run back for re-dispatch (FAR-1627).
+
+    SAQ's ``Worker.stop()`` runs this AFTER the shutdown grace period and the
+    cancellation hard deadline — but that does NOT mean every job task is
+    dead: ``cancel_tasks`` only returns ``all(task.done())``, and on timeout
+    ``stop()`` logs "Some tasks did not finish cancellation in time, they may
+    be stuck or blocked" and runs the shutdown callbacks anyway. The hook
+    therefore does not assume a dead predecessor. It hands back only the runs
+    whose task actually OBSERVED the cancellation (the executor body has
+    unwound — ``worker_handoff``'s cancellation-observation gate), releasing
+    the claim (reset to ``pending`` with the truthful ``harness.worker_lost``
+    code) so ``dispatcher_reconcile`` re-dispatches them on its next 60s tick;
+    a run whose re-run is not safe (non-idempotent node-started graph, or a
+    never-retry decision) is terminal-failed in place with the same code
+    instead of being put on the un-gated re-dispatch leg. A run whose task is
+    stuck and never observed the cancellation is left untouched and falls back
+    to the 30-minute heartbeat TTL, instead of being re-dispatched against a
+    still-live executor.
+
+    Fail-open with a LOUD log: a failed handback must never fail the worker's
+    shutdown (the heartbeat-TTL sweeps remain the backstop, and an exception
+    here would surface as a worker crash). ``CancelledError`` is re-raised —
+    a second signal cancelling the shutdown sequence must not be swallowed.
+    """
+    from farna.core.worker_handoff import handback_inflight_runs
+
+    try:
+        result = await handback_inflight_runs(_get_async_engine())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.shutdown_handoff_failed (runs fall back to the heartbeat-TTL sweeps)")
+        return
+    if result.get("handed_back") or result.get("terminalised"):
+        _log.warning(
+            "saq_worker.shutdown_handoff handed_back=%d terminalised=%d skipped=%d "
+            "(in-flight runs released for re-dispatch — or truthfully failed in place — on worker shutdown)",
+            result["handed_back"],
+            result.get("terminalised", 0),
+            result.get("skipped", 0),
+        )
+
+
+def _make_session_factory() -> Any:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+
+
+# ---------------------------------------------------------------------------
+# System cron engine — dedicated modulo_system role (LOGIN, BYPASSRLS)
+# ---------------------------------------------------------------------------
+
+_SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
+
+
+def _get_system_async_engine() -> AsyncEngine:
+    """Engine for cross-org system crons using the modulo_system role.
+
+    FAIL CLOSED when MODULO_SYSTEM_DATABASE_URL is not set: cross-org system
+    crons require the modulo_system role (LOGIN, BYPASSRLS). Falling back to the
+    regular engine would run them as modulo_app, which is NOBYPASSRLS (see
+    bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
+    RLS-scoped read silently returns zero rows — a silent no-op that masks a
+    misconfigured deployment. Instead, a clear ``RuntimeError`` is raised. The
+    engine is created LAZILY on first use inside a cron invocation (never at
+    worker startup), so this raise fails only the specific system cron — which
+    SAQ logs — while the worker stays up to serve every other job.
+    """
+    global _SYSTEM_ASYNC_ENGINE
+    if _SYSTEM_ASYNC_ENGINE is None:
+        settings = get_settings()
+        if settings.modulo_system_database_url:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            from farna.db.url_utils import split_engine_sslmode
+
+            # FAR-1440: the system URL preserves the operator's ``sslmode``, so
+            # translate it into asyncpg's ``ssl`` connect arg (absent/disable →
+            # explicit plaintext; require/verify-* kept fail-closed). Passing
+            # the raw URL straight through raises TypeError at first connect.
+            _system_url, _system_ssl_arg = split_engine_sslmode(settings.modulo_system_database_url)
+            _system_connect_args: dict[str, Any] = {}
+            if _system_ssl_arg is not None:
+                _system_connect_args["ssl"] = _system_ssl_arg
+                _system_connect_args["statement_cache_size"] = 0
+
+            effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
+            if effective_pool != settings.saq_worker_db_pool_size:
+                _log.warning(
+                    "saq_worker.db_pool_raised",
+                    extra={
+                        "configured_pool": settings.saq_worker_db_pool_size,
+                        "effective_pool": effective_pool,
+                        "concurrency": settings.saq_worker_concurrency,
+                    },
+                )
+            _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                _system_url,
+                pool_pre_ping=True,
+                pool_size=effective_pool,
+                max_overflow=0,
+                # FAR-1524: settings-driven recycle window, strictly below the
+                # Fly HAProxy 30m session timeout — without it this pooled
+                # system engine never recycled by age at all (connections
+                # could outlive the proxy window indefinitely). Same contract
+                # as db.session._build_engine.
+                pool_recycle=settings.db_pool_recycle_seconds,
+                connect_args=_system_connect_args,
+            )
+        else:
+            _log.error(
+                "saq_worker.system_engine_misconfigured",
+                extra={
+                    "reason": (
+                        "MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org "
+                        "system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would "
+                        "silently return zero rows. Set the modulo_system role URL."
+                    )
+                },
+            )
+            raise RuntimeError(
+                "MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require "
+                "the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to "
+                "modulo_app (NOBYPASSRLS), which would silently return zero rows."
+            )
+    return _SYSTEM_ASYNC_ENGINE
+
+
+def _make_system_session_factory() -> Any:
+    """Session factory for cross-org system crons (modulo_system role).
+
+    Does NOT include the RLS reset hook — system crons operate cross-org
+    intentionally and never call set_rls_org.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(_get_system_async_engine(), expire_on_commit=False, autobegin=False)
+
+
+def _cleanup_session_factory() -> Any:
+    """Session factory for the age-based retention cleanup crons
+    (``webhook_dedup_cleanup`` / ``trigger_events_cleanup``).
+
+    On PostgreSQL the purge is CROSS-ORG by design, so it MUST run on the
+    system session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523):
+    the plain ``modulo_app`` factory is NOBYPASSRLS and a batch without
+    ``app.organisation_id`` silently matches zero rows. Do NOT swap back on
+    PostgreSQL. On non-PostgreSQL backends (SQLite/MariaDB/MySQL) there is no
+    RLS and no modulo_system role, so the plain factory is both correct and
+    the only option — the cross-org purge is exactly right there.
+
+    The dialect is read from ``settings.modulo_db`` — the same signal
+    :func:`_get_async_engine` uses — WITHOUT connecting: on PostgreSQL the
+    system-engine path still fails LOUD when ``MODULO_SYSTEM_DATABASE_URL``
+    is unset (RuntimeError from :func:`_get_system_async_engine`), while
+    non-PostgreSQL backends never touch the system engine at all.
+    """
+    if get_settings().modulo_db.lower() != "postgres":
+        return _make_session_factory()
+    return _make_system_session_factory()
+
+
+def _runs_functions() -> list[tuple[str, Any]]:
+    """Functions registered on the ``runs`` worker.
+
+    Names match the strings enqueued by dispatch_run and fire_due_triggers.
+    """
+    return [
+        ("farna.core.saq_worker.execute_run", execute_run),
+        ("farna.core.saq_worker.resume_run", resume_run),
+        ("farna.core.saq_worker.execute_suite_run", execute_suite_run),
+        ("farna.core.saq_worker.fire_cron_trigger", fire_cron_trigger),
+        ("farna.core.saq_worker.fire_polling_trigger", fire_polling_trigger),
+        ("farna.core.saq_worker.fire_report_trigger", fire_report_trigger),
+        ("farna.core.saq_worker.fire_ongoing_trigger", fire_ongoing_trigger),
+        (SAQ_TASK_FIRE_SUITE_RUN, fire_suite_run_trigger),
+    ]
+
+
+def _system_functions() -> list[Any]:
+    """Functions registered on the ``system`` worker (under their ``__qualname__``,
+    which is the name SAQ's cron scheduler uses when enqueueing).
+    """
+    from farna.core.guardrails.kill_switch_drill import run_kill_switch_drill
+    from farna.core.worker_memory import memory_monitor_cron
+
+    return [
+        demo_daily_refresh,
+        fire_due_triggers,
+        dispatcher_reconcile,
+        claim_expiry,
+        hitl_overdue,
+        hitl_deadline_warning,
+        retention_cleanup,
+        webhook_dedup_cleanup,
+        expired_webhook_dedup_purge,
+        trigger_events_cleanup,
+        stale_run_recovery,
+        slot_reconciliation,
+        hitl_park_sweep,
+        runner_workspace_reconcile,
+        runner_marker_sweep,
+        runner_health_probe,
+        cost_probe,
+        analytics_facts_maintenance,
+        journey_reconcile,
+        decision_record_reconcile,
+        check_missed_fire_alerts_cron,
+        library_sync,
+        metrics_dump,
+        connector_health_checks,
+        health_readiness_alert,
+        memory_monitor_cron,
+        run_kill_switch_drill,
+        legacy_agent_return_sweep,
+    ]
+
+
+def _system_cron_jobs() -> list[CronJob[Any]]:
+    """System cron jobs (plan F1) — all knobs explicit."""
+    from farna.core.guardrails.kill_switch_drill import run_kill_switch_drill
+    from farna.core.worker_memory import memory_monitor_cron
+
+    return [
+        # demo_daily_refresh: keep the rolling three-day demo window current.
+        CronJob(
+            demo_daily_refresh,
+            cron=_CRON_DEMO_DAILY_REFRESH,
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
+        ),
+        # fire_due_triggers: every 60s (croniter parses 5-field cron, so the
+        # 30s intent is not achievable — every minute); the atomic next_fire_at
+        # advance makes multi-machine ticks safe (unique=True only prevents overlap).
+        CronJob(
+            fire_due_triggers,
+            cron=_CRON_EVERY_MINUTE,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=3,
+            ttl=300,
+        ),
+        # dispatcher_reconcile: every 60s (timeout=120 per plan F1).
+        CronJob(
+            dispatcher_reconcile,
+            cron=_CRON_EVERY_MINUTE,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=3,
+            ttl=300,
+        ),
+        # claim-expiry: every 60s — SAQ cron is the SOLE writer/notifier (F1).
+        CronJob(
+            claim_expiry,
+            cron=_CRON_EVERY_MINUTE,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl-overdue: every 5 minutes — overdue thresholds are hour-scale, so
+        # a 5-min tick keeps latency low while avoiding contention with the
+        # claim-expiry sweep; unique so overlapping ticks cannot double-dispatch.
+        CronJob(
+            hitl_overdue,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl-deadline-warning: every 60s (FAR-1270) — the approaching-band
+        # width is a FRACTION of the review window (down to the 60s minimum),
+        # so the cadence — not a wider lead — is what guarantees a tick lands
+        # inside the band before the terminaliser cancels; the 5-min overdue
+        # cadence would miss every small window. unique=True so overlapping
+        # ticks cannot double-select; the per-claim Redis fire-once key is the
+        # once-only guarantee underneath.
+        CronJob(
+            hitl_deadline_warning,
+            cron=_CRON_EVERY_MINUTE,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # retention: hourly (matches the in-process _run_retention_loop cadence).
+        CronJob(
+            retention_cleanup,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # webhook-dedup cleanup: hourly.
+        CronJob(
+            webhook_dedup_cleanup,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # expired webhook dedup hashes: every 15 min (FAR-661) — each webhook
+        # delivery leaves a dedup row with a 5-minute TTL that nothing
+        # scheduled ever deleted; a 15-min purge bounds the pile-up to
+        # housekeeping scale without competing with the 5-min sweeps.
+        # unique=True so overlapping ticks cannot double-purge (the purge is
+        # bounded + idempotent — a second instance can only find nothing left
+        # to delete, and the advisory lock serialises against the manual API
+        # cleanup anyway).
+        CronJob(
+            expired_webhook_dedup_purge,
+            cron=_CRON_EVERY_15_MINUTES,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # trigger_events retention: hourly, unique=True so overlapping ticks
+        # cannot interleave (bounded + idempotent — a second instance can only
+        # find nothing left to delete).
+        CronJob(
+            trigger_events_cleanup,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # stale_run_recovery: every 5 min (legacy beat cadence, scoped to
+        # non-SAQ rows in the sweep itself).
+        CronJob(
+            stale_run_recovery,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # slot_reconciliation: every 5 min (FAR-604) — a stale-heartbeat
+        # running row holds a pipeline slot that admission can never reclaim;
+        # a 5-min release cadence bounds the leak to one sweep window.
+        # unique=True so overlapping ticks cannot double-release (the sweep's
+        # guarded UPDATE is idempotent regardless). Failures RAISE (retries=2
+        # engages) after the liveness stats are persisted — a silently dead
+        # sweep must never re-open the FAR-604 wedge invisibly (F6).
+        CronJob(
+            slot_reconciliation,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl_park_sweep: every 5 min (FAR-604 D2) — a run waiting on an
+        # unanswered HITL gate parks after expires_at + grace so it stops
+        # occupying review state; the gate stays open/claimable (park ≠
+        # decide) and a later decision un-parks the run. unique=True so
+        # overlapping ticks cannot double-park (the guarded UPDATE is
+        # idempotent regardless). Failures RAISE (retries=2 engages).
+        CronJob(
+            hitl_park_sweep,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_workspace_reconcile: every 5 min (FAR-590 D4) — destroys
+        # (or, in soak mode, logs) labelled workspace orphans past the grace
+        # period; fail-safe, so any cross-reference failure persists the
+        # partial counts and re-raises (retries=2 engages).
+        CronJob(
+            runner_workspace_reconcile,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_marker_sweep: every 5 min (FAR-594 D8) — state-aware
+        # dispatch-marker reconciliation: clears non-fence markers on
+        # terminal runs and stale (>25h) markers, transitions stale
+        # non-terminal RUNNING runs terminal, and never clears
+        # script_executing fence components or reconciler-recoverable rows.
+        # unique=True so overlapping cron ticks cannot double-clear; the
+        # sweep's session-scoped dedup advisory lock also guards the 60s
+        # dispatcher_reconcile path overlapping this cron (a failed sweep
+        # persists the partial counts + re-raises — retries=2 engages).
+        CronJob(
+            runner_marker_sweep,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_health_probe: every 60s (FAR-591 D5) — per-machine engine
+        # reachability + pinned-image presence + /info resources cached in
+        # runner_probe_cache per (organisation, machine). Per-org DB errors
+        # are SAVEPOINT-isolated (one poisoned org never aborts the tick)
+        # but infrastructure failures ARE re-raised so retries=2 engages —
+        # engine-level Docker failures are recorded as unreachable rows,
+        # never retried (qa F3). unique=True so overlapping ticks cannot
+        # double-probe.
+        CronJob(
+            runner_health_probe,
+            cron=_CRON_EVERY_MINUTE,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
+        # separately by the heartbeat/staleness alert), unique=True so a second
+        # overlapping instance cannot double-advance probe_state (§4.7).
+        # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
+        # 6-field expression ("0 */5 * * * *") differently and the probe fires
+        # per-5-hours instead of per-5-minutes (bug class #680).
+        CronJob(
+            cost_probe,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=0,
+            ttl=300,
+        ),
+        # analytics_facts_maintenance: daily (idempotent — the anti-join +
+        # ON CONFLICT DO NOTHING make overlap harmless), unique=True so a
+        # second instance cannot double-run a maintenance day-slice.
+        CronJob(
+            analytics_facts_maintenance,
+            cron="0 1 * * *",
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
+        ),
+        # journey_reconcile: hourly (bounded + idempotent — a second instance
+        # cannot double-advance because a reconciled ref is no longer drift),
+        # unique=True so overlapping ticks cannot interleave. The sweep drains
+        # oldest-first across ticks.
+        CronJob(
+            journey_reconcile,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # decision_record_reconcile: hourly (FAR-1108 chunk 8b) — read-only
+        # corruption detection over policy_gate_decisions (duplicate event
+        # rows, NULL eval_result_id rows, orphaned eval-result/run references).
+        # Hourly is ample: the write path is fail-open, so a lost decision
+        # record is rare and the detection is not latency-sensitive. unique=True
+        # so overlapping ticks cannot interleave; failures persist the error
+        # then re-raise (retries=2 engages).
+        CronJob(
+            decision_record_reconcile,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # check_missed_fire_alerts: hourly (the probe only targets triggers
+        # with a >= 1h cadence, so an hourly tick with its own cooldown is
+        # ample). NOTE: must be the 5-field form "0 * * * *" — croniter parses
+        # a 6-field expression with a leading seconds field differently (bug
+        # class #680).
+        CronJob(
+            check_missed_fire_alerts_cron,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # library_sync: cadence derives from modulo_library_sync_interval_seconds
+        # (default 300s -> every 5 min). Fail-open: the job never raises (a bad
+        # tick is logged and the last-good cached manifest survives). unique=True
+        # so overlapping ticks cannot double-write the singleton state row.
+        CronJob(
+            library_sync,
+            cron=_sync_interval_to_cron(get_settings().modulo_library_sync_interval_seconds),
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
+        ),
+        # metrics_dump: ticks every 10 minutes (*/10 * * * *).  The per-instance
+        # jitter gate (metrics_dump._should_dump_now) opens a 10-minute execution
+        # window aligned to this grid, so each instance performs its daily dump on
+        # exactly one tick, spread across a 6-hour window (36 grid slots).  The
+        # cron must run on the SAME grid the gate is aligned to, or the dump may
+        # never fire (FAR-356 review).  unique=True, long timeout (full org scan),
+        # single retry, generous ttl.  Watermark advances only on full success.
+        CronJob(
+            metrics_dump,
+            cron="*/10 * * * *",
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
+        ),
+        # connector_health_checks: every 15 min (FAR-699) — cross-org health
+        # sweep per ACTIVE connector instance. Cheap credential probes only
+        # (never query/write — no org-data mutation). unique=True so
+        # overlapping ticks cannot double-probe; fail-open (retries=1).
+        CronJob(
+            connector_health_checks,
+            cron=_CRON_EVERY_15_MINUTES,
+            unique=True,
+            timeout=600,
+            heartbeat=30,
+            retries=1,
+            ttl=900,
+        ),
+        # health_readiness_alert: every 5 min (FAR-1446) — emails ALERT_EMAIL_TO
+        # when readiness CONFIRMEDLY transitions (2-tick hysteresis + Redis dedup
+        # in core.health_alerts), plus the matching recovery email. 5-min cadence
+        # matches the other advisory sweeps and, with the confirmation window,
+        # bounds worst-case notification latency at ~10 min; the edge-triggered
+        # state means a steady tick sends nothing. unique=True so overlapping
+        # fleet ticks cannot double-notify (the read-modify-write dedup state
+        # depends on one execution per slot). Quiet no-op (hourly INFO log) when
+        # SMTP_HOST/ALERT_EMAIL_TO are unconfigured — the compose default.
+        CronJob(
+            health_readiness_alert,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # memory_monitor_cron: every 5 min (FAR-776) — captures /proc/meminfo
+        # + cgroup v1 memory counters to structured logs for durable OOM
+        # forensics; fires a LOUD worker.guest_memory_alarm when MemAvailable
+        # < 20% MemTotal or Committed_AS > CommitLimit. Advisory only — never
+        # fails the worker, never gates readiness. unique=True so overlapping
+        # system-worker ticks (multi-machine) do not double-capture.
+        CronJob(
+            memory_monitor_cron,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=60,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
+        ),
+        # kill_switch_drill: daily (FAR-1707) — a non-mutating self-test of the
+        # org guardrail kill-switch's two invariants (downgrade-to-observe, and
+        # fail-closed read), appended as ONE system_audit_events fact. unique=True
+        # so overlapping multi-machine ticks cannot double-record; retries=1
+        # because a *record-write* failure is fail-closed (the ledger append must
+        # not be silently lost, so a transient DB error is retried once).
+        CronJob(
+            run_kill_switch_drill,
+            cron=_CRON_DAILY,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
+        ),
+        # legacy_agent_return_sweep: daily at 02:30 (FAR-132) — the periodic
+        # invariant that gates stripping the Agent-Return-split's legacy
+        # tolerance. It counts run_node_outputs rows still reaching the legacy
+        # fallback, logs a LOUD ERROR when any remain (zero is healthy), and
+        # persists ``last_run_at`` + ``legacy_count`` to
+        # ``saq:cron:stats:legacy_agent_return_sweep`` for the /healthz/ready
+        # advisory. READ-ONLY: it mutates no row, so unique=True simply prevents
+        # two machines double-scanning one slot, and retries=1 is enough for a
+        # transient DB error (a scan that cannot run re-raises and must never be
+        # mistaken for a clean zero).
+        CronJob(
+            legacy_agent_return_sweep,
+            cron=_CRON_DAILY_0230,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=1,
+            ttl=900,
+        ),
+    ]
+
+
+def _assert_system_auth_configured() -> None:
+    """Fail-closed: the system worker refuses to boot without web auth (F1)."""
+    settings = get_settings()
+    if not settings.saq_auth_password:
+        raise RuntimeError(
+            "Refusing to boot SAQ system worker: SAQ_AUTH_PASSWORD must be set (fail-closed web UI auth)."
+        )
+    if not settings.saq_auth_username:
+        raise RuntimeError(
+            "Refusing to boot SAQ system worker: SAQ_AUTH_USERNAME must be set (fail-closed web UI auth)."
+        )
+
+
+def runs_settings() -> dict[str, Any]:
+    """WorkerSettings for the ``runs`` worker (no web UI)."""
+    return _base_worker_settings(_runs_queue_name(), _runs_functions())
+
+
+def system_settings() -> dict[str, Any]:
+    """WorkerSettings for the ``system`` worker (web UI, FAIL-CLOSED auth, crons)."""
+    _assert_system_auth_configured()
+    return {**_base_worker_settings(_system_queue_name(), _system_functions()), "cron_jobs": _system_cron_jobs()}
+
+
+def staging_runs_settings() -> dict[str, Any]:
+    """Staging ``runs`` worker — queue derives from ``SAQ_RUNS_QUEUE=staging-runs``."""
+    return _base_worker_settings(_runs_queue_name(), _runs_functions())
+
+
+def staging_system_settings() -> dict[str, Any]:
+    """Staging ``system`` worker — queue derives from the staging runs queue."""
+    _assert_system_auth_configured()
+    return {**_base_worker_settings(_system_queue_name(), _system_functions()), "cron_jobs": _system_cron_jobs()}
+
+
+async def _set_duplicate_terminal_cooldown() -> None:
+    """Set the flood cooldown on worker start so the probe (same process)
+    does not auto-trigger a rollback on PR A's OWN rollout restart burst.
+    """
+    from farna.core.cost_controller.probe import set_duplicate_terminal_cooldown
+
+    try:
+        await set_duplicate_terminal_cooldown(_make_session_factory())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.cooldown_set_failed")
+
+
+async def _disconnect_started_worker(worker: Worker[Any]) -> None:
+    """Disconnect the worker's queue after a start attempt.
+
+    A disconnect failure must never mask the startup failure the caller exits
+    on, but it is still worth a log line.
+    """
+    try:
+        await worker.queue.disconnect()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.system_worker_disconnect_failed")
+
+
+async def _start_system_worker(
+    worker: Worker[Any],
+    loop: asyncio.AbstractEventLoop,
+    startup_failure: list[Exception],
+) -> None:
+    """Connect, reconcile crons and start the worker, recording any failure.
+
+    Deliberately NOT ``sys.exit(1)`` from inside this task: a ``SystemExit``
+    raised in a task only becomes a process exit because asyncio re-raises
+    ``BaseException`` out of the loop, and any exception raised in the
+    ``finally`` below (a queue disconnect failure on a half-started worker is
+    normal) replaces it. The task then completes with the disconnect error,
+    the done-callback retrieves it, and the web app serves forever with a dead
+    scheduler — the exact degraded state FAR-2099 removes.
+    """
+    try:
+        await worker.queue.connect()
+        await reconcile_cron_registrations(cast(RedisQueue, worker.queue), worker.cron_jobs)
+        await worker.start()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("SAQ system worker failed to start — stopping the web app and exiting non-zero")
+        startup_failure.append(exc)
+        loop.stop()
+    finally:
+        await _disconnect_started_worker(worker)
+
+
+def _serve_web_until_startup_outcome(
+    web: Any,
+    app: Any,
+    loop: asyncio.AbstractEventLoop,
+    startup_failure: list[Exception],
+) -> None:
+    """Serve the web app, exiting non-zero when the worker failed to start.
+
+    ``aiohttp.web.run_app`` drives the loop through ``run_until_complete``, so a
+    loop stopped by a startup failure surfaces as ``RuntimeError`` ("Event loop
+    stopped before Future completed"). That is the expected consequence of the
+    deliberate stop (run_app's own cleanup already ran); anything else is a
+    genuine serving failure and is re-raised.
+    """
+    try:
+        web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
+    except RuntimeError:
+        if not startup_failure:
+            raise
+
+    if startup_failure:
+        _log.error("saq_worker.system_worker_exiting_nonzero")
+        sys.exit(1)
+
+
+def run_system_web() -> None:
+    """Run the SAQ system worker + web UI bound to 127.0.0.1 (custom runner).
+
+    aiohttp ``run_app`` has no ``host`` flag and defaults to 0.0.0.0; this
+    runner passes ``host="127.0.0.1"`` so the web UI is only reachable via
+    ``fly ssh`` (plan F8). SAQ's web reads ``AUTH_PASSWORD`` / ``AUTH_USER``
+    from the environment (``saq/web/aiohttp.py``) — map the settings values
+    there. Auth is fail-closed: boot raises if either value is unset.
+
+    A worker that cannot START (including a fail-closed startup hook such as
+    the licence trust-anchor bootstrap) stops the web app and exits non-zero
+    rather than serving a healthy-looking process with a dead scheduler.
+    """
+    from aiohttp import web
+    from saq.web.aiohttp import create_app
+
+    _assert_system_auth_configured()
+    settings = get_settings()
+    os.environ["AUTH_PASSWORD"] = settings.saq_auth_password or ""
+    os.environ["AUTH_USER"] = settings.saq_auth_username or "admin"
+
+    _probe_database()
+
+    worker = Worker(**system_settings())
+    loop = asyncio.new_event_loop()
+    #: Populated when the worker cannot start (a fail-closed startup hook such
+    #: as the licence trust-anchor bootstrap is the important case). The
+    #: serving loop is stopped and this process exits non-zero on it: a
+    #: web-only process whose scheduler is dead is a degraded state that looks
+    #: HEALTHY to an orchestrator, so it must never be left running (FAR-2099).
+    startup_failure: list[Exception] = []
+
+    _cooldown_task = loop.create_task(_set_duplicate_terminal_cooldown())
+    _cooldown_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+    async def _shutdown(_app: Any) -> None:
+        await worker.stop()
+
+    queue = worker.queue
+    app = create_app([queue])
+    app.on_shutdown.append(_shutdown)
+
+    startup_task = loop.create_task(_start_system_worker(worker, loop, startup_failure))
+    startup_task.add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
+    _serve_web_until_startup_outcome(web, app, loop, startup_failure)
+
+
+def main() -> None:
+    """Entry point for ``python -m modulo.core.saq_worker`` (system worker)."""
+    run_system_web()
+
+
+if __name__ == "__main__":
+    main()

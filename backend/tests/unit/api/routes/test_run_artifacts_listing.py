@@ -14,16 +14,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from tests.unit.api.mock_session import configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import (
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import (
     get_current_tenant_user,
     get_current_tenant_user_or_api_key,
     get_current_user,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.models.run_node_outputs import RunNodeOutput
-from modulo.settings import Settings, get_settings
+from farna.auth.jwt import TenantPrincipal
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.settings import Settings, get_settings
 
 _RUN_ID = uuid.uuid4()
 _NODE_ID = "sandbox_1"

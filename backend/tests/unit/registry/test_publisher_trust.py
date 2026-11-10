@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.library_service import copy_to_adapt
-from modulo.core.registry import (
+from farna.core.library_service import copy_to_adapt
+from farna.core.registry import (
     _BUILTIN_REGISTRY,
     _DOWNLOAD_WEIGHT,
     _RECENCY_WEIGHT,
@@ -212,23 +212,23 @@ class TestDownloadTracking:
 
         with (
             patch(
-                "modulo.core.library_service.get_primitive",
+                "farna.core.library_service.get_primitive",
                 AsyncMock(return_value=source),
             ),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 AsyncMock(return_value=source),
             ),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 create_primitive,
             ),
             patch(
-                "modulo.core.library_service.set_rls_org",
+                "farna.core.library_service.set_rls_org",
                 AsyncMock(),
             ),
             patch(
-                "modulo.core.library_service.set_rls_user_context",
+                "farna.core.library_service.set_rls_user_context",
                 AsyncMock(),
             ),
         ):

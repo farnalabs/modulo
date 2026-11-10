@@ -33,19 +33,19 @@ from pydantic import ValidationError
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes.pipelines import GraphValidationIssue, _finalize_locked_graph_save
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.exceptions import SnapshotLockNotAvailableError
-from modulo.db.crud.hitl_review_guard import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.api.routes.pipelines import GraphValidationIssue, _finalize_locked_graph_save
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.db.crud.hitl_review_guard import (
     GuardrailBindingStripDenied,
     HitlReviewWeakeningDenied,
     denial_http_status,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -63,7 +63,7 @@ _SQL = SQLAlchemyError("boom")
 #: translation each surface below fell through to the generic 500.
 _LOCK_BUSY = SnapshotLockNotAvailableError("snapshot allocation lock busy")
 
-_PREFIX = "modulo.api.routes.pipelines."
+_PREFIX = "farna.api.routes.pipelines."
 
 
 def _make_settings() -> Settings:
@@ -180,8 +180,8 @@ def _install_any_credential_default() -> None:
     the same contract the conftest default provides. No test here exercises the
     real ``mk_`` resolution, so deriving from the JWT override loses nothing.
     """
-    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.auth.dependencies import get_current_tenant_user_or_api_key
+    from farna.auth.jwt import TenantPrincipal
 
     def _derived() -> TenantPrincipal:
         auth = app.dependency_overrides[get_current_user]()
@@ -341,7 +341,7 @@ def _edge_dict() -> dict:
 
 
 async def test_deny_hitl_review_audits_and_raises_403() -> None:
-    from modulo.api.routes.pipelines import _deny_hitl_review
+    from farna.api.routes.pipelines import _deny_hitl_review
 
     session = _make_session()
     exc = HitlReviewWeakeningDenied(
@@ -369,7 +369,7 @@ async def test_deny_hitl_review_audits_and_raises_403() -> None:
 
 
 async def test_deny_hitl_review_audit_failure_still_raises() -> None:
-    from modulo.api.routes.pipelines import _deny_hitl_review
+    from farna.api.routes.pipelines import _deny_hitl_review
 
     session = _make_session()
     exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
@@ -390,7 +390,7 @@ async def test_deny_hitl_review_audit_failure_still_raises() -> None:
 
 
 async def test_handle_graph_write_denials_maps_both_types() -> None:
-    from modulo.api.routes.pipelines import _handle_graph_write_denials
+    from farna.api.routes.pipelines import _handle_graph_write_denials
 
     session = _make_session()
     principal = MagicMock()
@@ -419,7 +419,7 @@ async def test_handle_graph_write_denials_maps_both_types() -> None:
 
 
 def test_validate_retry_policy_rejects_malformed() -> None:
-    from modulo.api.routes.pipelines import _validate_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
 
     assert _validate_retry_policy(None) is None
     with pytest.raises(ValueError, match="bogus"):
@@ -427,7 +427,7 @@ def test_validate_retry_policy_rejects_malformed() -> None:
 
 
 def test_reject_graph_validation_issues_blocks_cap_and_redact() -> None:
-    from modulo.api.routes.pipelines import _reject_graph_validation_issues
+    from farna.api.routes.pipelines import _reject_graph_validation_issues
 
     issue = MagicMock()
     issue.code = "GUARDRAIL_CAP_EXCEEDED"
@@ -442,7 +442,7 @@ def test_reject_graph_validation_issues_blocks_cap_and_redact() -> None:
 
 
 def test_schema_pin_rejects_non_concrete_versions() -> None:
-    from modulo.api.routes.pipelines import SchemaPin
+    from farna.api.routes.pipelines import SchemaPin
 
     for bad in ("latest", "*", "", "x" * 51):
         with pytest.raises(ValidationError):
@@ -450,7 +450,7 @@ def test_schema_pin_rejects_non_concrete_versions() -> None:
 
 
 def test_graph_node_validator_matrix() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     base = {"id": str(uuid.uuid4()), "position": {"x": 0.0, "y": 0.0}}
 
@@ -550,7 +550,7 @@ def test_graph_node_validator_matrix() -> None:
 
 
 def test_graph_node_sandbox_command_exclusivity_and_missing_template() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     base = {"id": str(uuid.uuid4()), "position": {"x": 0.0, "y": 0.0}, "node_type": "sandbox_agent"}
     # agent_commands with valid list should accept
@@ -572,7 +572,7 @@ def test_graph_node_sandbox_command_exclusivity_and_missing_template() -> None:
 
 
 def test_graph_node_output_pin_mismatch_rejected() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     out_pin = str(uuid.uuid4())
     with pytest.raises(ValidationError) as excinfo:
@@ -590,7 +590,7 @@ def test_graph_node_output_pin_mismatch_rejected() -> None:
 
 
 def test_pipeline_graph_update_rejects_duplicates_and_overflow() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphUpdate
+    from farna.api.routes.pipelines import PipelineGraphUpdate
 
     node = _agent_node_dict()
     dup_node = dict(node)
@@ -612,7 +612,7 @@ def test_pipeline_graph_update_rejects_duplicates_and_overflow() -> None:
 def test_graph_response_invalid_data_returns_with_issues() -> None:
     """FAR-874: _graph_response must never 422 on read. Invalid stored data
     is returned with validation_issues instead of raising."""
-    from modulo.api.routes.pipelines import _graph_response
+    from farna.api.routes.pipelines import _graph_response
 
     resp = _graph_response([{"id": "not-a-uuid"}], [])
     # Should return a response, not raise
@@ -623,7 +623,7 @@ def test_graph_response_invalid_data_returns_with_issues() -> None:
 
 
 def test_collect_schema_ids_and_pin_builder() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode, _build_schema_and_backend_pins, _collect_schema_ids
+    from farna.api.routes.pipelines import PipelineGraphNode, _build_schema_and_backend_pins, _collect_schema_ids
 
     schema_a = uuid.uuid4()
     schema_b = uuid.uuid4()
@@ -656,7 +656,7 @@ def test_collect_schema_ids_and_pin_builder() -> None:
 
 
 def test_is_admin_and_team_private_helpers() -> None:
-    from modulo.api.routes.pipelines import _is_admin, _is_owner_reassignment, _is_team_private
+    from farna.api.routes.pipelines import _is_admin, _is_owner_reassignment, _is_team_private
 
     admin = MagicMock()
     admin.org_role = "admin"
@@ -673,7 +673,7 @@ def test_is_admin_and_team_private_helpers() -> None:
 
 
 def test_find_node_and_edge_helpers() -> None:
-    from modulo.api.routes.pipelines import _edge_to_dict, _find_node_in_list
+    from farna.api.routes.pipelines import _edge_to_dict, _find_node_in_list
 
     node_id = uuid.uuid4()
     node = {"id": node_id, "node_type": "agent"}
@@ -698,7 +698,7 @@ def test_find_node_and_edge_helpers() -> None:
 
 
 def test_extract_agent_command_sync_updates_rejects_bad_shapes() -> None:
-    from modulo.api.routes.pipelines import _extract_agent_command_sync_updates
+    from farna.api.routes.pipelines import _extract_agent_command_sync_updates
 
     agent_id = uuid.uuid4()
     nodes: list[object] = [
@@ -712,7 +712,7 @@ def test_extract_agent_command_sync_updates_rejects_bad_shapes() -> None:
 
 
 def test_endpoint_events_normalisation() -> None:
-    from modulo.api.routes.pipelines import _endpoint_events
+    from farna.api.routes.pipelines import _endpoint_events
 
     assert _endpoint_events(["quality_report"]) == ["quality_report"]
     assert _endpoint_events('["quality_report"]') == ["quality_report"]
@@ -723,7 +723,7 @@ def test_endpoint_events_normalisation() -> None:
 
 
 async def test_quality_report_recipient_urls_filters_subscribers() -> None:
-    from modulo.api.routes.pipelines import _quality_report_recipient_urls
+    from farna.api.routes.pipelines import _quality_report_recipient_urls
 
     session = _make_session()
     subscribed = MagicMock()
@@ -789,7 +789,7 @@ def test_update_pipeline_programming_error_maps_501(client: tuple[TestClient, As
 
 
 def test_update_pipeline_active_runs_conflict_maps_409(client: tuple[TestClient, AsyncMock]) -> None:
-    from modulo.db.crud.pipeline import PipelineHasActiveRunsError
+    from farna.db.crud.pipeline import PipelineHasActiveRunsError
 
     http, _session = client
     with (
@@ -2662,8 +2662,8 @@ def test_revert_to_manual_programming_error_maps_501() -> None:
 
 
 async def test_resolve_graph_references_scope_violation_maps_422() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
-    from modulo.core.capability_scope import ScopeViolationError
+    from farna.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
+    from farna.core.capability_scope import ScopeViolationError
 
     agent_id = uuid.uuid4()
     node = PipelineGraphNode.model_validate(
@@ -2691,7 +2691,7 @@ async def test_resolve_graph_references_scope_violation_maps_422() -> None:
 
 
 async def test_resolve_graph_references_enforces_backend_team_bindings() -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
+    from farna.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
 
     agent_id = uuid.uuid4()
     node = PipelineGraphNode.model_validate(_agent_node_dict(agent_id))

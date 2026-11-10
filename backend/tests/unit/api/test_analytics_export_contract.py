@@ -17,9 +17,9 @@ miss the export again.
 
 from __future__ import annotations
 
-from modulo.api.routes.analytics import AnalyticsExportItem
-from modulo.core.analytics.service import EXPORT_COLUMN_NAMES
-from modulo.db.models.run_daily_facts import RunDailyFact
+from farna.api.routes.analytics import AnalyticsExportItem
+from farna.core.analytics.service import EXPORT_COLUMN_NAMES
+from farna.db.models.run_daily_facts import RunDailyFact
 
 # Deliberately NOT an analytics export column: internal plumbing, not run
 # data. Everything else on the fact is exportable by contract.

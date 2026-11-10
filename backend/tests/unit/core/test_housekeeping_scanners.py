@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.housekeeping import (
+from farna.core.housekeeping import (
     NON_DELETABLE_ENTITY_TYPES,
     _lifecycle_map_has_no_stages,
     _scan_degraded_composite_templates,
@@ -40,29 +40,29 @@ from modulo.core.housekeeping import (
     _scan_unused_schemas,
     _scan_unused_sso_providers,
 )
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-from modulo.db.models.account import Account
-from modulo.db.models.agent import Agent
-from modulo.db.models.api_key import OrgApiKey
-from modulo.db.models.base import Base
-from modulo.db.models.composite_template import CompositeTemplate
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.model_backend import ModelBackend
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.parameter_schema import ParameterSchema
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.schema import Schema
-from modulo.db.models.secret import Secret
-from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
-from modulo.db.models.sso_provider import SsoProvider
-from modulo.db.models.team import Team
-from modulo.db.models.team_membership import TeamMembership
-from modulo.db.models.trigger import Trigger
-from modulo.db.models.webhook import WebhookDedupHash
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.api_key import OrgApiKey
+from farna.db.models.base import Base
+from farna.db.models.composite_template import CompositeTemplate
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.parameter_schema import ParameterSchema
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.schema import Schema
+from farna.db.models.secret import Secret
+from farna.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from farna.db.models.sso_provider import SsoProvider
+from farna.db.models.team import Team
+from farna.db.models.team_membership import TeamMembership
+from farna.db.models.trigger import Trigger
+from farna.db.models.webhook import WebhookDedupHash
 
 # ``onboarding_progress`` uses a Postgres-only ARRAY column and cannot be
 # rendered on SQLite — exclude it, the scanners never touch it.
@@ -478,7 +478,7 @@ class TestEmptyLifecycleMaps:
         """
         from sqlalchemy.dialects import postgresql
 
-        from modulo.core import housekeeping
+        from farna.core import housekeeping
 
         monkeypatch.setattr(housekeeping, "resolve_dialect", lambda _session: "postgresql")
         expression = _lifecycle_map_has_no_stages(session=object())  # type: ignore[arg-type]
@@ -682,7 +682,7 @@ class TestEditSnapshotRetention:
         session.add_all(rows)
         await session.commit()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.core.housekeeping"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.housekeeping"):
             candidates = await _scan_edit_snapshot_retention(session, _ORG_A)
 
         # Pool for `over_limit` = v210 + v2..v207 = 207 provenance-edit rows;
@@ -1340,7 +1340,7 @@ class TestDegradedCompositeTemplates:
         session.add_all([degraded, clean, other_org])
         await session.commit()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.core.housekeeping"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.housekeeping"):
             candidates = await _scan_degraded_composite_templates(session, _ORG_A)
 
         # Only the degraded template in THIS org is reported; a real (fake)

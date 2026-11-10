@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.core.bundled_runner import (
+from farna.core.bundled_runner import (
     BUNDLED_RUNNER_IMAGE_REF,
     BUNDLED_RUNNER_PROVIDER_TYPE,
     TEMPLATE_CONFIG_JSON,
@@ -12,7 +12,7 @@ from modulo.core.bundled_runner import (
     build_bundled_runner_profile_values,
     template_drift_status,
 )
-from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PLACEHOLDER_DIGEST
+from farna.db.bundled_runner_template import BUNDLED_RUNNER_PLACEHOLDER_DIGEST
 
 
 def test_template_constants_shape() -> None:
@@ -80,7 +80,7 @@ def test_drift_detects_placeholder_image_ref_when_constant_advances(monkeypatch:
     """
     advanced = "modulo-runner:opencode@sha256:" + "9" * 64
     monkeypatch.setattr(
-        "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+        "farna.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
         advanced,
     )
     row = _row(image_ref=BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
@@ -94,7 +94,7 @@ def test_drift_treats_missing_image_ref_as_template_owned(monkeypatch: pytest.Mo
     """A row with no image at all is template-owned, so it reports drift."""
     advanced = "modulo-runner:opencode@sha256:" + "9" * 64
     monkeypatch.setattr(
-        "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+        "farna.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
         advanced,
     )
     status = template_drift_status(_row(image_ref=None))

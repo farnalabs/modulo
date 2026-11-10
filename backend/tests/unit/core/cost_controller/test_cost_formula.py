@@ -6,9 +6,9 @@ from decimal import Decimal
 
 import pytest
 
-from modulo.core.cost_controller.breakdown.constants import MAX_FORMULA_DEPTH, MAX_FORMULA_LENGTH
-from modulo.core.cost_controller.breakdown.formula import CostFormulaError, evaluate_formula, validate_formula
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.constants import MAX_FORMULA_DEPTH, MAX_FORMULA_LENGTH
+from farna.core.cost_controller.breakdown.formula import CostFormulaError, evaluate_formula, validate_formula
+from farna.core.cost_controller.breakdown.params import (
     _DEAD_PARAMS,
     _PARAM_REGISTRY,
     CALCULATED_ALLOWED_IDENTS,

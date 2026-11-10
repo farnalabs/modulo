@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.runtime_config.store import (
+from farna.core.runtime_config.store import (
     DEFAULT_VALUES,
     HOT_RELOADABLE_KEYS,
     KNOWN_KEYS,
@@ -247,7 +247,7 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.set_override("UNKNOWN_CONFIG_KEY", "v1")
         assert any(
             r.levelno == logging.WARNING
@@ -259,7 +259,7 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.set_override("", "DEBUG")
             store.set_override(" MODULO_LOG_LEVEL", "DEBUG")
         assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
@@ -276,7 +276,7 @@ class TestRuntimeConfigStore:
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.clear_override("MODULO_LOG_LEVEL ")
         assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
         assert any(
@@ -289,7 +289,7 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            caplog.set_level(logging.DEBUG, logger="modulo.core.runtime_config.store")
+            caplog.set_level(logging.DEBUG, logger="farna.core.runtime_config.store")
             store.clear_override("MODULO_LOG_LEVEL")
         assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
         assert any(

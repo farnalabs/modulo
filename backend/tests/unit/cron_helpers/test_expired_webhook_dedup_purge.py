@@ -31,12 +31,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-import modulo.core.saq_worker as sw
-from modulo.core.cleanup_jobs.webhook_dedup_cleanup import purge_expired_dedup_hashes
-from modulo.core.housekeeping import _scan_expired_webhook_dedups
-from modulo.core.trigger_engine import TriggerEngine
-from modulo.db.models.base import Base
-from modulo.db.models.webhook import WebhookDedupHash
+import farna.core.saq_worker as sw
+from farna.core.cleanup_jobs.webhook_dedup_cleanup import purge_expired_dedup_hashes
+from farna.core.housekeeping import _scan_expired_webhook_dedups
+from farna.core.trigger_engine import TriggerEngine
+from farna.db.models.base import Base
+from farna.db.models.webhook import WebhookDedupHash
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()
@@ -237,7 +237,7 @@ class TestExpiredWebhookDedupPurgeCron:
             patch.object(sw, "_make_system_session_factory", return_value=factory) as mock_system,
             patch.object(sw, "_make_session_factory") as mock_plain,
             patch(
-                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
+                "farna.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
                 new_callable=AsyncMock,
                 side_effect=[1000, 1000, 3],
             ) as mock_purge,
@@ -256,7 +256,7 @@ class TestExpiredWebhookDedupPurgeCron:
             patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
             patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
-                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
+                "farna.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
                 new_callable=AsyncMock,
                 return_value=0,
             ) as mock_purge,
@@ -274,7 +274,7 @@ class TestExpiredWebhookDedupPurgeCron:
             patch.object(sw, "get_settings", return_value=MagicMock(modulo_db="postgres")),
             patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
-                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
+                "farna.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             ),
@@ -293,7 +293,7 @@ class TestExpiredWebhookDedupPurgeCron:
             patch.object(sw, "_make_session_factory", return_value=factory) as mock_plain,
             patch.object(sw, "_make_system_session_factory") as mock_system,
             patch(
-                "modulo.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
+                "farna.core.cleanup_jobs.webhook_dedup_cleanup.purge_expired_dedup_hashes",
                 new_callable=AsyncMock,
                 return_value=0,
             ),

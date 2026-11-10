@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from modulo.connectors.ci_runner.github_actions import GitHubActionsCIRunner
+from farna.connectors.ci_runner.github_actions import GitHubActionsCIRunner
 
 
 def _runner():

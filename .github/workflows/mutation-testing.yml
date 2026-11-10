@@ -53,7 +53,7 @@ jobs:
             echo ""
             echo "**Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo "**Commit:** ${{ github.sha }}"
-            echo "**Modules:** \`src/modulo/core/graph_validator/\`, \`src/modulo/db/rls.py\`"
+            echo "**Modules:** \`src/farna/core/graph_validator/\`, \`src/farna/db/rls.py\`"
             echo ""
             echo "### Results"
             echo ""

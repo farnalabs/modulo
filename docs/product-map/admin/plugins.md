@@ -3,10 +3,10 @@ id: feat-plugins
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/plugins.py
-  - backend/src/modulo/core/plugin_registry
-  - backend/src/modulo/core/plugin_registry/__init__.py
-  - backend/src/modulo/util/__init__.py
+  - backend/src/farna/api/routes/plugins.py
+  - backend/src/farna/core/plugin_registry
+  - backend/src/farna/core/plugin_registry/__init__.py
+  - backend/src/farna/util/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_plugin_registry_bdd.py
   - backend/tests/unit/plugin_registry/test_plugin_registry.py
@@ -34,7 +34,7 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 - [x] Plugins are discovered at startup and available through the registry's
       `list_plugins` / `get_plugin` queries
-      (`backend/src/modulo/core/plugin_registry/__init__.py`)
+      (`backend/src/farna/core/plugin_registry/__init__.py`)
 - [x] `GET /api/v1/plugins` lists every discovered plugin with
       `PLUGIN_ID`, `display_name`, `description`, `version`, `capabilities` and
       per-plugin health (patched-registry BDD + unit tests)

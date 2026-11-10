@@ -30,13 +30,13 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.agent_return_legacy import (
+from farna.core.agent_return_legacy import (
     LegacyAgentReturnReport,
     count_legacy_agent_return_rows,
 )
-from modulo.core.node_output_split import stored_row_is_legacy
-from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
-from modulo.db.models.run_node_outputs import (
+from farna.core.node_output_split import stored_row_is_legacy
+from farna.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from farna.db.models.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
     RunNodeOutput,
@@ -240,10 +240,10 @@ async def test_sample_predicate_drift_is_dropped_and_logged(
     await _seed(maker, _row("legacy", outputs={"output": {"answer": 1}}))
     with (
         patch(
-            "modulo.core.agent_return_legacy.stored_row_is_legacy",
+            "farna.core.agent_return_legacy.stored_row_is_legacy",
             return_value=False,
         ),
-        caplog.at_level(logging.ERROR, logger="modulo.core.agent_return_legacy"),
+        caplog.at_level(logging.ERROR, logger="farna.core.agent_return_legacy"),
     ):
         async with maker() as session:
             report = await count_legacy_agent_return_rows(session)
@@ -278,16 +278,16 @@ def _sessionmaker_mock() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_cron_warns_loudly_when_legacy_rows_remain(caplog: pytest.LogCaptureFixture) -> None:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     report = LegacyAgentReturnReport(legacy_count=3, sample=((str(_RUN), "n1"),), sample_truncated=True)
     with (
         patch.object(ch, "_open_system_factory", return_value=_sessionmaker_mock()),
         patch(
-            "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
+            "farna.core.agent_return_legacy.count_legacy_agent_return_rows",
             new=AsyncMock(return_value=report),
         ),
-        caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"),
     ):
         stats = await ch.legacy_agent_return_sweep()
 
@@ -302,16 +302,16 @@ async def test_cron_warns_loudly_when_legacy_rows_remain(caplog: pytest.LogCaptu
 
 @pytest.mark.asyncio
 async def test_cron_logs_clean_zero(caplog: pytest.LogCaptureFixture) -> None:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     report = LegacyAgentReturnReport(legacy_count=0)
     with (
         patch.object(ch, "_open_system_factory", return_value=_sessionmaker_mock()),
         patch(
-            "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
+            "farna.core.agent_return_legacy.count_legacy_agent_return_rows",
             new=AsyncMock(return_value=report),
         ),
-        caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"),
     ):
         stats = await ch.legacy_agent_return_sweep()
 
@@ -322,12 +322,12 @@ async def test_cron_logs_clean_zero(caplog: pytest.LogCaptureFixture) -> None:
 
 @pytest.mark.asyncio
 async def test_cron_reraises_a_failed_scan_never_a_silent_zero() -> None:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     with (
         patch.object(ch, "_open_system_factory", return_value=_sessionmaker_mock()),
         patch(
-            "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
+            "farna.core.agent_return_legacy.count_legacy_agent_return_rows",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
         pytest.raises(RuntimeError, match="db down"),
@@ -343,12 +343,12 @@ async def test_cron_propagates_cancellation_unchanged() -> None:
     the generic fail-loud handler must not intercept it — cancellation has to
     unwind the task rather than be logged as a scan failure.
     """
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     with (
         patch.object(ch, "_open_system_factory", return_value=_sessionmaker_mock()),
         patch(
-            "modulo.core.agent_return_legacy.count_legacy_agent_return_rows",
+            "farna.core.agent_return_legacy.count_legacy_agent_return_rows",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -364,14 +364,14 @@ async def test_cron_propagates_cancellation_unchanged() -> None:
 @pytest.mark.asyncio
 async def test_saq_wrapper_persists_clean_stats() -> None:
     """A successful tick persists last_run_at + legacy_count to the stats key."""
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     with (
         patch(
-            "modulo.core.cron_helpers.legacy_agent_return_sweep",
+            "farna.core.cron_helpers.legacy_agent_return_sweep",
             new=AsyncMock(return_value={"legacy_count": 2, "sample_truncated": False}),
         ),
-        patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
     ):
         result = await sw.legacy_agent_return_sweep({})
 
@@ -388,14 +388,14 @@ async def test_saq_wrapper_persists_clean_stats() -> None:
 @pytest.mark.asyncio
 async def test_saq_wrapper_persists_error_and_reraises() -> None:
     """A failed scan persists an error blob AND re-raises (never a silent zero)."""
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     with (
         patch(
-            "modulo.core.cron_helpers.legacy_agent_return_sweep",
+            "farna.core.cron_helpers.legacy_agent_return_sweep",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
-        patch("modulo.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
+        patch("farna.core.saq_worker._persist_sweep_stats", new_callable=AsyncMock) as mock_persist,
         pytest.raises(RuntimeError, match="db down"),
     ):
         await sw.legacy_agent_return_sweep({})

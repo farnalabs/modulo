@@ -23,8 +23,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.rest import RestConnector
-from modulo.connectors.trello import TrelloConnector
+from farna.connectors.rest import RestConnector
+from farna.connectors.trello import TrelloConnector
 from tests.connectors._noop_guard import make_noop_security_guard as _noop_guard
 
 _TRELLO_KEY = "tkey1234567890abcdef"

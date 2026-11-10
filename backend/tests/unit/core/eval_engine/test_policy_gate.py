@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.core.eval_engine.policy_gate import (
+from farna.core.eval_engine.policy_gate import (
     EvalPolicySnapshot,
     EvalResultView,
     EvalView,

@@ -15,12 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Update
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -205,7 +205,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 def _patch_guard(**kwargs: object) -> patch:
-    return patch("modulo.api.routes.admin.assert_not_last_admin", new_callable=AsyncMock, **kwargs)
+    return patch("farna.api.routes.admin.assert_not_last_admin", new_callable=AsyncMock, **kwargs)
 
 
 class TestSelfLockoutEndpoint:
@@ -224,12 +224,12 @@ class TestSelfLockoutEndpoint:
                     reason="Cannot remove the last admin. Promote another user to admin first.",
                 )
             ),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_org"),
             # The session is a bare AsyncMock, so an unpatched membership lookup
             # would call ``result.scalar_one_or_none()`` on the AsyncMock result
             # and leak a never-awaited coroutine (FAR-2289).
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -262,10 +262,10 @@ class TestSelfLockoutEndpoint:
 
         with (
             _patch_guard(),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -278,7 +278,7 @@ class TestSelfLockoutEndpoint:
     def test_self_deactivate_returns_422(self, client: TestClient) -> None:
         """Cannot-deactivate-yourself 422 is enforced on admin_update_user."""
         with (
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.set_rls_org"),
             _patch_guard(),
         ):
             resp = client.put(
@@ -298,10 +298,10 @@ class TestSelfLockoutEndpoint:
 
         with (
             _patch_guard(),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -321,10 +321,10 @@ class TestSelfLockoutEndpoint:
 
         with (
             _patch_guard(),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -344,13 +344,13 @@ class TestSelfLockoutEndpoint:
 
         with (
             _patch_guard(),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             # Bare-AsyncMock session: patch the membership lookup so its
             # ``scalar_one_or_none()`` read cannot leak a never-awaited
             # coroutine (FAR-2289).
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -380,13 +380,13 @@ class TestSelfLockoutEndpoint:
 
         with (
             patch(
-                "modulo.api.routes.admin.assert_not_last_admin",
+                "farna.api.routes.admin.assert_not_last_admin",
                 new=_recording_guard,
             ),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):
@@ -421,10 +421,10 @@ class TestSelfLockoutEndpoint:
 
         with (
             _patch_guard(),
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_account_by_id", return_value=mock_account),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_account_by_id", return_value=mock_account),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 return_value=mock_membership,
             ),
         ):

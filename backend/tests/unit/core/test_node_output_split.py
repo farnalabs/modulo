@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.cost_controller.finalize import _store_split_result
-from modulo.core.node_output_split import (
+from farna.core.cost_controller.finalize import _store_split_result
+from farna.core.node_output_split import (
     DISPATCH_PROVENANCE_FIELDS,
     NODE_TYPE_GATE,
     TELEMETRY_FIELDS,
@@ -576,7 +576,7 @@ def test_is_split_envelope_false_for_non_dict_and_non_dict_telemetry() -> None:
 
 
 def test_split_malformed_non_dict_returns_empty(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger="modulo.core.node_output_split")
+    caplog.set_level(logging.WARNING, logger="farna.core.node_output_split")
     value, telemetry = split_node_output("not a dict", "agent", None)
     assert value is None
     assert telemetry == {}
@@ -584,7 +584,7 @@ def test_split_malformed_non_dict_returns_empty(caplog: pytest.LogCaptureFixture
 
 
 def test_split_unknown_node_type_best_effort(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger="modulo.core.node_output_split")
+    caplog.set_level(logging.WARNING, logger="farna.core.node_output_split")
     envelope = {"output": {"data": 1}, "custom": True}
     value, telemetry = split_node_output(envelope, "mystery_type", None, run_id="run-1", node_id="node-1")
     assert value == {"data": 1}
@@ -850,7 +850,7 @@ def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> N
     the derived ``telemetry_present`` would be False and this test would fail
     (hardcoding True made the old form tautological).
     """
-    from modulo.core.node_output_split import SPLITTABLE_NODE_TYPES
+    from farna.core.node_output_split import SPLITTABLE_NODE_TYPES
 
     envelopes: dict[str, Any] = {
         "sandbox_agent": {"artifacts": [{"output": {"output_json": {"pr_url": "u"}}}]},

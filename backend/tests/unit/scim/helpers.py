@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 if TYPE_CHECKING:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
 VALID_32 = "a" * 32
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -44,7 +44,7 @@ PATCH_GROUP_ADD_MEMBER = {
 
 def make_settings(**overrides: object) -> "Settings":
     """Build a minimal Settings for SCIM tests; override any field via kwargs."""
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     base: dict[str, object] = {
         "database_url": "postgresql+asyncpg://localhost/test",

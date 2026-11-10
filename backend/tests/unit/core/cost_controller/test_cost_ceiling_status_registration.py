@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import importlib
 
-from modulo.core.cost_controller.probe import PROBE_TERMINAL_STATUSES
-from modulo.db.crud.run import RUN_STATUS_WHITELIST
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.core.cost_controller.probe import PROBE_TERMINAL_STATUSES
+from farna.db.crud.run import RUN_STATUS_WHITELIST
+from farna.db.models.run import TERMINAL_STATUSES, Run
 
 NEW_STATUS = "cost_ceiling_exceeded"
 
@@ -27,7 +27,7 @@ NEW_STATUS = "cost_ceiling_exceeded"
 def _migration_0128():
     # The migration module name starts with a digit, so it cannot be imported
     # with a normal ``import`` statement — load it by string instead.
-    return importlib.import_module("modulo.db.migrations.versions.0146_extend_runs_status_cost_ceiling")
+    return importlib.import_module("farna.db.migrations.versions.0146_extend_runs_status_cost_ceiling")
 
 
 def test_cost_ceiling_exceeded_registered_in_vocabularies() -> None:

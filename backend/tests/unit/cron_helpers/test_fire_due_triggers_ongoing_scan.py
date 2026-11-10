@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 from tests.unit.cron_helpers._helpers import _org_result, _rows_result, _settings
 from tests.unit.cron_helpers.test_cron_helpers import (
     _cron_row,
@@ -95,7 +95,7 @@ class TestFireDueTriggersOngoingScan:
 
         # The enqueued ongoing job targets the SAQ wrapper with the snapshot.
         ongoing_calls = [
-            c for c in enqueue.await_args_list if c.args[1] == "modulo.core.saq_worker.fire_ongoing_trigger"
+            c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"
         ]
         assert len(ongoing_calls) == 1
         assert "latest_snapshot_id" in ongoing_calls[0].kwargs
@@ -222,6 +222,6 @@ class TestFireDueTriggersOngoingScan:
         assert summary["ongoing_enqueued"] == 0
         adv_ongoing.assert_awaited_once()
         ongoing_calls = [
-            c for c in enqueue.await_args_list if c.args[1] == "modulo.core.saq_worker.fire_ongoing_trigger"
+            c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"
         ]
         assert ongoing_calls == []

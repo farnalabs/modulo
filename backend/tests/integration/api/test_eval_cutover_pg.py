@@ -31,7 +31,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.future import select
 
-from modulo.db.models.eval import Eval
+from farna.db.models.eval import Eval
 
 pytestmark = [pytest.mark.integration]
 
@@ -103,7 +103,7 @@ class McpEnv:
 
 def _activate_mcp(env: McpEnv) -> SimpleNamespace:
     """Patch the MCP session factory onto the real DB engine + auth + ctx."""
-    from modulo.api import mcp_server
+    from farna.api import mcp_server
 
     def fake_factory() -> async_sessionmaker:
         return async_sessionmaker(env.engine, expire_on_commit=False)
@@ -158,7 +158,7 @@ async def test_mcp_create_persists_eval_and_gate(pg_env: McpEnv, mcp_on: SimpleN
     the write path no longer has a legacy branch, so ``evals`` is the only
     place a row can land.
     """
-    from modulo.api.mcp_server import create_eval_definition
+    from farna.api.mcp_server import create_eval_definition
 
     try:
         node_id = uuid.uuid5(uuid.NAMESPACE_DNS, "pg-created-node")
@@ -191,7 +191,7 @@ async def test_mcp_create_persists_eval_and_gate(pg_env: McpEnv, mcp_on: SimpleN
 async def test_mcp_soft_delete_stamps_real_rows(pg_env: McpEnv, mcp_on: SimpleNamespace) -> None:
     """Criterion 19 (guardrail-eval soft delete): MCP soft delete stamps deleted_at + deleted_by on the
     real eval row (physically present, logically removed)."""
-    from modulo.api.mcp_server import create_eval_definition, delete_eval_definition
+    from farna.api.mcp_server import create_eval_definition, delete_eval_definition
 
     try:
         created = await create_eval_definition(
@@ -229,7 +229,7 @@ async def test_mcp_soft_delete_stamps_real_rows(pg_env: McpEnv, mcp_on: SimpleNa
 async def test_mcp_merged_update_bumps_version_keeps_one_gate(pg_env: McpEnv, mcp_on: SimpleNamespace) -> None:
     """Criterion 17     repeated merged updates bump version and keep exactly
     one live gate row for the node-scoped eval."""
-    from modulo.api.mcp_server import create_eval_definition, update_eval_definition
+    from farna.api.mcp_server import create_eval_definition, update_eval_definition
 
     try:
         created = await create_eval_definition(
@@ -268,7 +268,7 @@ async def test_other_orgs_evals_invisible_to_rls_app_role(
     """Criterion 11     another org's evals are invisible through the real
     ``modulo_app`` role (NOBYPASSRLS     RLS applies), the shape the MCP write
     nodes use in production (set_rls_org + set_rls_user_context)."""
-    from modulo.db.rls import set_rls_org, set_rls_user_context
+    from farna.db.rls import set_rls_org, set_rls_user_context
 
     env = McpEnv(db_engine)
     await env.seed()
@@ -322,8 +322,8 @@ async def test_other_orgs_evals_invisible_to_rls_app_role(
 async def test_soft_deleted_eval_dropped_from_pipeline_loader(pg_env: McpEnv, mcp_on: SimpleNamespace) -> None:
     """Criterion 14     after soft delete, the executor's live pipeline loader
     no longer surfaces the eval (the loader's read excludes deleted rows)."""
-    from modulo.api.mcp_server import create_eval_definition, delete_eval_definition
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.api.mcp_server import create_eval_definition, delete_eval_definition
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     try:
         created = await create_eval_definition(
@@ -400,8 +400,8 @@ guardrails:
 
 async def _reconcile(env: McpEnv, config_yaml: str) -> list[str]:
     """Drive the production W7 reconciliation against a real DB session."""
-    from modulo.api.routes.guardrail_config import _reconcile_guardrail_rows
-    from modulo.core.guardrails.config import load_config_set
+    from farna.api.routes.guardrail_config import _reconcile_guardrail_rows
+    from farna.core.guardrails.config import load_config_set
 
     config_set = load_config_set(config_yaml)
     factory = async_sessionmaker(env.engine, expire_on_commit=False)
@@ -496,8 +496,8 @@ async def test_guardrail_config_reapply_upserts_with_version_snapshot(
 async def test_policy_gate_action_matches_failure_behaviour(pg_env: McpEnv) -> None:
     """Criterion 17 - non-guardrail W1 creates map ``failure_behaviour`` to
     ``PolicyGate.action`` exactly ('block' and 'warn')."""
-    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
-    from modulo.db.models.policy_gate import PolicyGate
+    from farna.core.eval_engine.eval_definition_write import create_or_update_eval
+    from farna.db.models.policy_gate import PolicyGate
 
     factory = async_sessionmaker(pg_env.engine, expire_on_commit=False)
     for behaviour in ("block", "warn"):
@@ -525,7 +525,7 @@ async def test_policy_gate_action_matches_failure_behaviour(pg_env: McpEnv) -> N
 async def test_suite_scoped_non_guardrail_persists_with_no_gate(pg_env: McpEnv) -> None:
     """Criterion 24 - suite-scoped non-guardrail evals persist an Eval row
     but never gate a policy row (helper's branch 3: suite-scoped non-gate)."""
-    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
+    from farna.core.eval_engine.eval_definition_write import create_or_update_eval
 
     factory = async_sessionmaker(pg_env.engine, expire_on_commit=False)
     async with factory() as s, s.begin():

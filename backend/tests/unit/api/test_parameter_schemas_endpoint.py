@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -95,10 +95,10 @@ def test_update_parameter_schema_owned_returns_200(client: TestClient) -> None:
         return schema
 
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", _get_schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", _noop),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", _noop),
-        patch("modulo.api.routes.parameter_schemas.update_schema", _update_schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", _get_schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", _noop),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", _noop),
+        patch("farna.api.routes.parameter_schemas.update_schema", _update_schema),
     ):
         resp = client.put(
             f"/api/v1/parameter-schemas/{schema.id}",
@@ -122,10 +122,10 @@ def test_update_parameter_schema_cross_org_returns_404(client: TestClient) -> No
         return schema
 
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", _get_schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", _noop),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", _noop),
-        patch("modulo.api.routes.parameter_schemas.update_schema", _update_schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", _get_schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", _noop),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", _noop),
+        patch("farna.api.routes.parameter_schemas.update_schema", _update_schema),
     ):
         resp = client.put(
             f"/api/v1/parameter-schemas/{schema.id}",

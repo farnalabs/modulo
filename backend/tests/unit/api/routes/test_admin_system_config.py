@@ -10,14 +10,14 @@ from unittest.mock import MagicMock
 
 from sqlalchemy.sql import Insert
 
-from modulo.api.routes.admin_system_config import (
+from farna.api.routes.admin_system_config import (
     SetConfigRequest,
     admin_delete_config,
     admin_list_config,
     admin_set_config,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.system_config import SystemConfig
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.system_config import SystemConfig
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

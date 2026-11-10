@@ -26,12 +26,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.cron_helpers import _sweep_workspace_input_drift_flags
-from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
-from modulo.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY, read_audit_row_outputs_json
-from modulo.db.models.base import Base
-from modulo.db.models.run import TERMINAL_STATUSES, Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.core.cron_helpers import _sweep_workspace_input_drift_flags
+from farna.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from farna.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY, read_audit_row_outputs_json
+from farna.db.models.base import Base
+from farna.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.models.run_node_outputs import RunNodeOutput
 
 _TABLE_NAMES = {"runs", "run_node_outputs", "organisations"}
 
@@ -279,7 +279,7 @@ class TestSweepWorkspaceInputDriftFlags:
             await session.commit()
 
         with patch(
-            "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+            "farna.db.crud.run_node_outputs.read_audit_row_outputs_json",
             side_effect=RuntimeError("db blip"),
         ):
             result = await _sweep_workspace_input_drift_flags(factory)

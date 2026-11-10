@@ -19,13 +19,13 @@ import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorPayload,
     ConnectorQuery,
     ConnectorType,
 )
-from modulo.core.connector_hub import ConnectorHub, ConnectorNotFoundError
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.core.connector_hub import ConnectorHub, ConnectorNotFoundError
+from farna.core.secrets_backend import create_secrets_backend
 
 from .secrets_helpers import SHARED_FERNET_KEY as _KEY
 from .secrets_helpers import encrypt_credentials

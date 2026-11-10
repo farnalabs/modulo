@@ -21,11 +21,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.uuid4()
 _USER_ID = uuid.uuid4()
@@ -102,7 +102,7 @@ def _unrelated_fk_error() -> IntegrityError:
 class TestCleanupDecisionRecordBlock:
     def test_decision_fk_surfaces_blocked_by(self, client: TestClient) -> None:
         """Criterion 17: the error-dict convention carries ``blocked_by``."""
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.execute = AsyncMock(side_effect=_decision_fk_error())
 
@@ -124,7 +124,7 @@ class TestCleanupDecisionRecordBlock:
 
     def test_unrelated_fk_is_not_marked_as_decision_block(self, client: TestClient) -> None:
         """A non-decision FK violation keeps the generic error, no blocked_by."""
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.execute = AsyncMock(side_effect=_unrelated_fk_error())
 
@@ -142,7 +142,7 @@ class TestCleanupDecisionRecordBlock:
 
     def test_non_integrity_failure_is_not_marked_as_decision_block(self, client: TestClient) -> None:
         """Only IntegrityError is classified as a decision-record block."""
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
             session.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
 

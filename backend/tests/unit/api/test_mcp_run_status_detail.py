@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _MCP_INPUT_PAYLOAD_MAX_DEPTH,
     _MCP_INPUT_PAYLOAD_MAX_STRING_CHARS,
     _MCP_INPUT_PAYLOAD_MAX_TOTAL_ITEMS,
@@ -32,10 +32,10 @@ from modulo.api.mcp_server import (
     _load_run_for_status,
     _run_status_detail,
 )
-from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.db.models.run import Run
+from farna.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.db.models.run import Run
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000009")
@@ -111,7 +111,7 @@ class _McpCtx(AuthContext):
 
 class TestRunStatusDetailParityFields:
     def test_input_payload_is_masked_exactly_as_rest_masks_it(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         run = _run_row()
         result = _run_status_detail(run, _blobs(markers=None))
@@ -162,7 +162,7 @@ class TestRunStatusDetailParityFields:
         """FAR-1886 B1: the MCP projection reads ``run_attempt_count`` from the
         SAME run row REST uses, so the two surfaces cannot diverge; the
         derived age metric is gone from both."""
-        from modulo.api.routes.runs import (
+        from farna.api.routes.runs import (
             _deadline_triage_from_markers,
             _run_attempt_count,
         )
@@ -204,7 +204,7 @@ class TestRunStatusDetailParityFields:
 
 class TestRunStatusDetailPayloadBounds:
     def test_normal_small_payload_is_unchanged(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         run = _run_row()
 
@@ -285,10 +285,10 @@ class TestGetRunStatusImplParity(_McpCtx):
     async def _call(run: Run, blobs: RunBlobs | None, *, detail: bool) -> dict[str, Any]:
         session = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(session)),
-            patch("modulo.api.mcp_server._load_run_for_status", AsyncMock(return_value=run)),
-            patch("modulo.api.mcp_server.read_run_blobs", AsyncMock(return_value=blobs)),
+            patch("farna.api.mcp_server.validate_current_auth", AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=make_session_context(session)),
+            patch("farna.api.mcp_server._load_run_for_status", AsyncMock(return_value=run)),
+            patch("farna.api.mcp_server.read_run_blobs", AsyncMock(return_value=blobs)),
         ):
             return await _get_run_status_impl(str(run.id), detail)
 
@@ -336,7 +336,7 @@ class TestGetRunStatusImplParity(_McpCtx):
         test in tests/integration/test_run_org_scoping_bypassrls.py).
         """
         mock_get_run = AsyncMock(return_value=None)
-        with patch("modulo.api.mcp_server.get_run", mock_get_run):
+        with patch("farna.api.mcp_server.get_run", mock_get_run):
             loaded = await _load_run_for_status(AsyncMock(), _RUN_ID, ORG_ID)
 
         assert loaded is None

@@ -13,8 +13,8 @@ import click
 import pytest
 from cryptography.fernet import Fernet
 
-import modulo.cli.backup as backup_mod
-from modulo.cli.backup import (
+import farna.cli.backup as backup_mod
+from farna.cli.backup import (
     _check_tool,
     _export_checkpoint_blobs_sync,
     _export_checkpoint_writes_sync,
@@ -419,7 +419,7 @@ class TestPreviewRestore:
         for name, content in files.items():
             (tmp_path / name).write_text(content)
         manifest: dict[str, Any] = {"fernet_key_hash": backup_mod._fernet_key_hash(settings.fernet_key)}
-        with patch("modulo.cli.backup._fernet_key_hash", return_value=manifest["fernet_key_hash"]):
+        with patch("farna.cli.backup._fernet_key_hash", return_value=manifest["fernet_key_hash"]):
             _preview_restore(tmp_path, manifest, settings, None)
         out = capsys.readouterr().out
         assert "no changes were made" in out
@@ -431,7 +431,7 @@ class TestPreviewRestore:
         settings.fernet_key = "new-key"
         (tmp_path / "credentials_references.json").write_text("{}")
         manifest = {"fernet_key_hash": "old-hash"}
-        with patch("modulo.cli.backup._fernet_key_hash", return_value="current-hash") as hfn:
+        with patch("farna.cli.backup._fernet_key_hash", return_value="current-hash") as hfn:
             hfn.side_effect = None
             with pytest.raises(click.ClickException, match="previous-fernet-key"):
                 _preview_restore(tmp_path, manifest, settings, None)
@@ -444,7 +444,7 @@ class TestPreviewRestore:
         )
         manifest = {"fernet_key_hash": "old-hash"}
         with patch(
-            "modulo.cli.backup._fernet_key_hash",
+            "farna.cli.backup._fernet_key_hash",
             return_value="current-hash",
         ):
             _preview_restore(tmp_path, manifest, settings, "old-key")
@@ -457,7 +457,7 @@ class TestPreviewRestore:
         (tmp_path / "credentials_references.json").write_text('{"model_backends": [{"credentials_ciphertext": ""}]}')
         manifest = {"fernet_key_hash": "old-hash"}
         with patch(
-            "modulo.cli.backup._fernet_key_hash",
+            "farna.cli.backup._fernet_key_hash",
             return_value="current-hash",
         ):
             _preview_restore(tmp_path, manifest, settings, "old-key")
@@ -466,7 +466,7 @@ class TestPreviewRestore:
 
     def test_missing_files_messages(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         settings = self._settings()
-        with patch("modulo.cli.backup._fernet_key_hash", return_value="same"):
+        with patch("farna.cli.backup._fernet_key_hash", return_value="same"):
             _preview_restore(tmp_path, {"fernet_key_hash": "same"}, settings, None)
         out = capsys.readouterr().out
         assert "No database.sql found" in out

@@ -12,7 +12,7 @@ as an opaque instant-fail for every run of the pipeline.
 
 import uuid
 
-from modulo.api.mcp_server import _validate_sandbox_nodes
+from farna.api.mcp_server import _validate_sandbox_nodes
 
 
 def _sandbox_node(**overrides: object) -> dict:

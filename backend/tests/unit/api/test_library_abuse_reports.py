@@ -26,12 +26,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -42,8 +42,8 @@ _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 _REVIEWED_AT = datetime(2025, 1, 2, tzinfo=UTC)
 
 _LIST_PATH = "/api/v1/libraries/admin/abuse-reports"
-_CRUD_LIST = "modulo.api.routes.library.list_abuse_reports"
-_CRUD_REVIEW = "modulo.api.routes.library.review_abuse_report"
+_CRUD_LIST = "farna.api.routes.library.list_abuse_reports"
+_CRUD_REVIEW = "farna.api.routes.library.review_abuse_report"
 
 
 def _make_settings() -> Settings:
@@ -297,7 +297,7 @@ def test_resolve_route_is_audited(client: TestClient) -> None:
     with (
         patch(_CRUD_REVIEW, new_callable=AsyncMock, return_value=report),
         patch(
-            "modulo.core.audit_coverage.append_audit_event_isolated",
+            "farna.core.audit_coverage.append_audit_event_isolated",
             new_callable=AsyncMock,
         ) as append,
     ):

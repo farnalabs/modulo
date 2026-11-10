@@ -73,15 +73,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_current_user
-from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.pipeline_snapshot import (
+from farna.api.dependencies import get_current_user
+from farna.api.main import app
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.pipeline_snapshot import (
     _pipeline_lock_keys,
     create_snapshot_from_live_graph,
 )
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.rls import set_rls_org
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -211,7 +211,7 @@ async def test_body_db_failure_leaves_no_advisory_lock(
 
     try:
         with (
-            patch("modulo.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_db_level_failure),
+            patch("farna.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_db_level_failure),
             pytest.raises(ProgrammingError),
         ):
             await _failing_snapshot()
@@ -278,7 +278,7 @@ async def test_lock_is_never_held_by_the_callers_session(
         return {}
 
     try:
-        with patch("modulo.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_observe_lock_state):
+        with patch("farna.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_observe_lock_state):
             snapshot = await _run_snapshot(pooled_engine, test_org, pipeline_id)
         assert isinstance(snapshot, PipelineSnapshot)
         assert observed["caller_locks"] == 0
@@ -322,7 +322,7 @@ async def test_concurrent_snapshot_creation_serialises_within_retry_budget(
             in_flight -= 1
 
     try:
-        with patch("modulo.db.crud.pipeline_snapshot._load_guardrail_pins", new=_slow_body):
+        with patch("farna.db.crud.pipeline_snapshot._load_guardrail_pins", new=_slow_body):
             first, second = await asyncio.gather(
                 _run_snapshot(pooled_engine, test_org, pipeline_id),
                 _run_snapshot(pooled_engine, test_org, pipeline_id),
@@ -366,7 +366,7 @@ async def test_cancelled_snapshot_releases_the_advisory_lock(
         return {}
 
     try:
-        with patch("modulo.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_hang_forever):
+        with patch("farna.db.crud.pipeline_snapshot._resolve_parameter_bindings", new=_hang_forever):
             task = asyncio.create_task(_run_snapshot(pooled_engine, test_org, pipeline_id))
             await asyncio.wait_for(body_entered.wait(), timeout=10)
             # The lock is real and held while the copy is in flight.

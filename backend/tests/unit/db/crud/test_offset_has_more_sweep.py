@@ -22,42 +22,42 @@ import pytest
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.agent import list_agents
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.composite_template import list_composite_templates
-from modulo.db.crud.connector_instance import list_connector_instances
-from modulo.db.crud.environment_profile import list_environment_profiles
-from modulo.db.crud.external_agent import list_external_agents
-from modulo.db.crud.library_primitive import list_library_primitives
-from modulo.db.crud.mcp_server import list_mcp_servers
-from modulo.db.crud.model_backend import list_model_backends, list_pipeline_references_for_backend
-from modulo.db.crud.node_category import list_node_categories
-from modulo.db.crud.publisher import list_publishers
-from modulo.db.crud.rating import list_abuse_reports, list_ratings_for_primitive
-from modulo.db.crud.run import list_runs
-from modulo.db.crud.schema import list_schema_versions
-from modulo.db.crud.team import list_teams
-from modulo.db.crud.team_membership import list_team_members
-from modulo.db.crud.template import list_templates
-from modulo.db.models.agent import Agent
-from modulo.db.models.base import Base
-from modulo.db.models.composite_template import CompositeTemplate
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.external_agent import ExternalAgent
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.mcp_server import McpServer
-from modulo.db.models.model_backend import ModelBackend
-from modulo.db.models.node_category import NodeCategory
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
-from modulo.db.models.primitive_rating import PrimitiveRating
-from modulo.db.models.publisher import Publisher
-from modulo.db.models.run import Run
-from modulo.db.models.schema import Schema, SchemaVersion
-from modulo.db.models.team import Team
-from modulo.db.models.team_membership import TeamMembership
+from farna.db.crud.agent import list_agents
+from farna.db.crud.base import PageResult
+from farna.db.crud.composite_template import list_composite_templates
+from farna.db.crud.connector_instance import list_connector_instances
+from farna.db.crud.environment_profile import list_environment_profiles
+from farna.db.crud.external_agent import list_external_agents
+from farna.db.crud.library_primitive import list_library_primitives
+from farna.db.crud.mcp_server import list_mcp_servers
+from farna.db.crud.model_backend import list_model_backends, list_pipeline_references_for_backend
+from farna.db.crud.node_category import list_node_categories
+from farna.db.crud.publisher import list_publishers
+from farna.db.crud.rating import list_abuse_reports, list_ratings_for_primitive
+from farna.db.crud.run import list_runs
+from farna.db.crud.schema import list_schema_versions
+from farna.db.crud.team import list_teams
+from farna.db.crud.team_membership import list_team_members
+from farna.db.crud.template import list_templates
+from farna.db.models.agent import Agent
+from farna.db.models.base import Base
+from farna.db.models.composite_template import CompositeTemplate
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.external_agent import ExternalAgent
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.mcp_server import McpServer
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.node_category import NodeCategory
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.primitive_abuse_report import PrimitiveAbuseReport
+from farna.db.models.primitive_rating import PrimitiveRating
+from farna.db.models.publisher import Publisher
+from farna.db.models.run import Run
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.models.team import Team
+from farna.db.models.team_membership import TeamMembership
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000a1")

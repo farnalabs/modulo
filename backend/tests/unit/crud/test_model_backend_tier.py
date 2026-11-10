@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.db.crud.model_backend import list_model_backends
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.crud.model_backend import list_model_backends
+from farna.db.models.model_backend import ModelBackend
 from tests.unit.crud.helpers import (
     compile_sql,
     executed_sql,
@@ -98,7 +98,7 @@ async def test_cursor_pagination_applies_filters() -> None:
         )
     )
 
-    with patch("modulo.db.crud.model_backend.CursorPaginator", return_value=paginator):
+    with patch("farna.db.crud.model_backend.CursorPaginator", return_value=paginator):
         result = await list_model_backends(session, org_id=_ORG_ID, cursor="abc", excluded_tiers=["preview"])
 
     assert result.total == 7

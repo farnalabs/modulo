@@ -3,13 +3,13 @@ id: feat-pipelines-pipeline-diff-rollback
 prd: 8.13
 delivery-tasks: []
 code:
-  - backend/src/modulo/db/models/pipeline_snapshot.py
-  - backend/src/modulo/db/crud/pipeline_snapshot.py
-  - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
-  - backend/src/modulo/db/crud/pipeline.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/api/routes/runs.py
-  - backend/src/modulo/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - backend/src/farna/db/models/pipeline_snapshot.py
+  - backend/src/farna/db/crud/pipeline_snapshot.py
+  - backend/src/farna/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/farna/db/crud/pipeline.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/api/routes/runs.py
+  - backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
   - frontend/src/components/pipeline/PipelineSnapshotCompare.vue
@@ -58,7 +58,7 @@ centralized authorization cleanup.
       writes `version_kind='edit'` / `created_kind='rollback'` with the next
       allocated `snapshot_version`, so a restore is a new version rather than a
       rewrite and history is never deleted, so the same target can be restored
-      again (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`)
+      again (`backend/src/farna/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`)
 - [x] The editor's restore flow is ONE shared FormDialog opened from the
       read-only historic view (the persistent banner's Restore this version and
       the version timeline's per-version action): it embeds the old-vs-latest
@@ -92,7 +92,7 @@ centralized authorization cleanup.
       snapshots fail closed as `legacy-snapshot-ambiguous`), a non-admin may not
       roll back to a snapshot that drops a guardrail-bound node, and the live
       role is re-read under the lock for `rest` callers
-      (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`,
+      (`backend/src/farna/db/crud/pipeline_snapshot_versioning.py::rollback_to_snapshot`,
       `backend/tests/bdd/features/pipelines/snapshot_versioning.feature`
       "Rollback that would weaken a HITL review is denied")
 - [x] Rollback reconciles declared `policy_gate` blocks against the pre-rollback
@@ -100,7 +100,7 @@ centralized authorization cleanup.
       `reconcile_graph_policy_gates` (FAR-1666): a gate the rollback reintroduces
       gets its row, one it drops is soft-deleted - without this the restored
       graph would carry a block with no governing row
-      (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py`,
+      (`backend/src/farna/db/crud/pipeline_snapshot_versioning.py`,
       `backend/tests/unit/db/crud/test_far1666_policy_gate_graph_writers.py`)
 - [x] Rollback runs the connector-team gate under the same row lock via the
       `post_lock_gate` hook (FAR-1515 MAJOR 3): the target snapshot's bindings
@@ -108,7 +108,7 @@ centralized authorization cleanup.
       the shared named 409 `connector_team_mismatch` - the team boundary may
       have moved since the snapshot was taken (shared rule tracked under
       `feat-connectors`)
-      (`backend/src/modulo/api/routes/pipelines.py::rollback_snapshot_endpoint`)
+      (`backend/src/farna/api/routes/pipelines.py::rollback_snapshot_endpoint`)
 - [x] Rollback emits the same `pipeline.graph_updated` audit event a graph write
       does (FAR-1471), attributed to the rollback caller, in the same transaction
       as the restore
@@ -133,7 +133,7 @@ centralized authorization cleanup.
       environment bindings) and the port signature – so the restore dialog's embedded
       change summary cannot tell an operator a version pair is identical when
       the two graphs behave differently
-      (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::_compute_node_changes`,
+      (`backend/src/farna/db/crud/pipeline_snapshot_versioning.py::_compute_node_changes`,
       `backend/tests/unit/pipelines/test_snapshot_versioning.py::TestComputeNodeChangesExecutionSemantics`)
 - [x] A conditional edge that differs only in its routing expression is reported
       as modified: `condition_expression` (or the legacy `condition` spelling,
@@ -166,7 +166,7 @@ centralized authorization cleanup.
 ## Known Gaps
 
 - The FAR-402 P6 release-channel follow-ups stay out of scope by design
-  (`backend/src/modulo/core/release_channels.py` contract): the channel metrics
+  (`backend/src/farna/core/release_channels.py` contract): the channel metrics
   pipeline, the promotion/rollback dashboard, and the channel-promotion reducer
   do not exist - snapshots can be tagged per channel and triggers resolve to
   the latest channel snapshot, but nothing promotes a channel or auto-rolls one

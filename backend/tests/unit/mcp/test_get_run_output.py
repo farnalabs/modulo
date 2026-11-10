@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import get_run_output
+from farna.api.mcp_server import get_run_output
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -21,8 +21,8 @@ def _make_mock_run(*, outputs_json: dict | None = None, node_telemetry_json: dic
 
 @pytest.fixture(autouse=True)
 def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.mcp_server as mcp_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.mcp_server as mcp_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(mcp_module.get_run, "return_value", None)
@@ -49,7 +49,7 @@ def _make_mock_session() -> AsyncMock:
 
 class TestGetRunOutputAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -57,29 +57,29 @@ class TestGetRunOutputAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_run_output(run_id=str(uuid.uuid4()), node_id="node1")
         assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
     async def test_insufficient_scope(
         self,
         mock_check_scope: MagicMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_check_scope.side_effect = MCPAuthorizationError("insufficient_scope")
         mock_cm = AsyncMock()
@@ -98,7 +98,7 @@ class TestGetRunOutputAuth:
 
 class TestGetRunOutputSuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -106,16 +106,16 @@ class TestGetRunOutputSuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_masked_output(
         self,
         mock_session: AsyncMock,
@@ -147,9 +147,9 @@ class TestGetRunOutputSuccess:
         assert "api_key" in result["masked_fields"]
         mock_get_run.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_no_masked_fields(
         self,
         mock_session: AsyncMock,
@@ -174,9 +174,9 @@ class TestGetRunOutputSuccess:
         assert result["output"]["result"] == "hello"
         assert not result["masked_fields"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_run_not_found(
         self,
         mock_session: AsyncMock,
@@ -194,9 +194,9 @@ class TestGetRunOutputSuccess:
         result = await get_run_output(run_id=str(run_id), node_id="node1")
         assert result["error"] == "run_not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_node_not_found(
         self,
         mock_session: AsyncMock,
@@ -216,9 +216,9 @@ class TestGetRunOutputSuccess:
         result = await get_run_output(run_id=str(run_id), node_id="nonexistent")
         assert result["error"] == "node_output_not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_new_shape_returns_pure_return_with_no_telemetry_keys(
         self,
         mock_session: AsyncMock,
@@ -263,9 +263,9 @@ class TestGetRunOutputSuccess:
             assert key not in result["output"]
         assert not result["masked_fields"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_derived_status_fallback_when_return_none(
         self,
         mock_session: AsyncMock,
@@ -289,9 +289,9 @@ class TestGetRunOutputSuccess:
         assert result["output"] == {"status": "failed", "summary": "command failed"}
         assert not result["masked_fields"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_stdout_artifact_pointer_when_present(
         self,
         mock_session: AsyncMock,
@@ -323,9 +323,9 @@ class TestGetRunOutputSuccess:
         assert result["output"] == {"result": "hello"}
         assert result["stdout_artifact"] == pointer
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_stdout_artifact_is_none_when_no_transcript_stored(
         self,
         mock_session: AsyncMock,
@@ -348,9 +348,9 @@ class TestGetRunOutputSuccess:
         assert result["output"] == {"result": "hello"}
         assert result["stdout_artifact"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_node_not_found_when_absent_from_both_columns(
         self,
         mock_session: AsyncMock,
@@ -371,8 +371,8 @@ class TestGetRunOutputSuccess:
         result = await get_run_output(run_id=str(run_id), node_id="nonexistent")
         assert result["error"] == "node_output_not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_run_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -387,9 +387,9 @@ class TestGetRunOutputSuccess:
 
     # --- FAR-879: stderr_artifact parity ---
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_stderr_artifact_pointer_when_present(
         self,
         mock_session: AsyncMock,
@@ -421,9 +421,9 @@ class TestGetRunOutputSuccess:
         assert result["output"] == {"result": "hello"}
         assert result["stderr_artifact"] == stderr_pointer
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_stderr_artifact_is_none_when_no_transcript_stored(
         self,
         mock_session: AsyncMock,
@@ -446,9 +446,9 @@ class TestGetRunOutputSuccess:
         assert result["output"] == {"result": "hello"}
         assert result["stderr_artifact"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_run")
+    @patch("farna.api.mcp_server._session")
     async def test_both_artifact_pointers_returned_independently(
         self,
         mock_session: AsyncMock,

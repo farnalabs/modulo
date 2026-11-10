@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pagerduty import PagerDutyConnector, _body_field, _next_offset_cursor
+from farna.connectors._safe_page import safe_paging_total as _paging_total
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.pagerduty import PagerDutyConnector, _body_field, _next_offset_cursor
 
 TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"

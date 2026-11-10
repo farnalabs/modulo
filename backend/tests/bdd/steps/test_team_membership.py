@@ -70,9 +70,9 @@ def request_my_profile(request, ctx, client=None) -> None:
     account.preferences = {}
 
     with (
-        patch("modulo.api.routes.viewmodel.get_account_by_id", new_callable=AsyncMock, return_value=account),
+        patch("farna.api.routes.viewmodel.get_account_by_id", new_callable=AsyncMock, return_value=account),
         patch(
-            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            "farna.api.routes.viewmodel.list_team_memberships_for_account",
             new_callable=AsyncMock,
             return_value=[],
         ),

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, scenarios, then, when
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.scanner import ScanSample
+from farna.connectors.base import ConnectorType
+from farna.determination.scanner import ScanSample
 
 # ---------------------------------------------------------------------------
 # Register feature file
@@ -36,7 +36,7 @@ def ctx() -> dict[str, Any]:
 @given("a GitHub connector with sample data")
 def step_github_connector_samples(ctx):
     """Mock a GitHub connector that returns repo and PR data."""
-    from modulo.connectors.base import ConnectorQuery, ConnectorResult
+    from farna.connectors.base import ConnectorQuery, ConnectorResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = ConnectorType.GITHUB
@@ -69,7 +69,7 @@ def step_github_connector_samples(ctx):
 
 @given("a Jira connector with sample data")
 def step_jira_connector_samples(ctx):
-    from modulo.connectors.base import ConnectorResult
+    from farna.connectors.base import ConnectorResult
 
     mock_connector = AsyncMock()
     mock_connector.connector_type = ConnectorType.JIRA
@@ -91,7 +91,7 @@ def step_jira_connector_samples(ctx):
 @given("scanned samples with planning and development stages")
 def step_scanned_samples_planning_dev(ctx):
     """Build mock ScanSample objects representing planning + dev findings."""
-    from modulo.determination.inference import Finding
+    from farna.determination.inference import Finding
 
     samples = [
         ScanSample(
@@ -136,7 +136,7 @@ def step_no_connector_data(ctx):
 
 @given("scanned samples with planning stage")
 def step_scanned_samples_planning(ctx):
-    from modulo.determination.inference import Finding
+    from farna.determination.inference import Finding
 
     samples = [
         ScanSample(
@@ -162,7 +162,7 @@ def step_scanned_samples_planning(ctx):
 @when("the determination scanner samples the connector")
 def step_scanner_sample_connector(ctx):
     """Use the scanner module to sample a single connector."""
-    from modulo.determination.scanner import _sample_connector
+    from farna.determination.scanner import _sample_connector
 
     connector_id = ctx["_connector_id"]
     connector = ctx["_mock_connector"]
@@ -177,7 +177,7 @@ def step_scanner_sample_connector(ctx):
 
 @when("a pipeline draft is generated")
 def step_generate_pipeline_draft(ctx):
-    from modulo.determination.draft import generate_draft
+    from farna.determination.draft import generate_draft
 
     samples = ctx.get("samples", [])
     findings = ctx.get("findings", [])

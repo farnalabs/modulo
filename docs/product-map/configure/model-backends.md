@@ -3,16 +3,16 @@ id: feat-model-backends
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/model_backends.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/cli/backfill_model_backend_base_url.py
-  - backend/src/modulo/core/model_backend_endpoints.py
-  - backend/src/modulo/core/model_backend_hub
-  - backend/src/modulo/core/team_visibility.py
-  - backend/src/modulo/model_backends/base.py
-  - backend/src/modulo/model_backends/openai
-  - backend/src/modulo/model_backends/anthropic
-  - backend/src/modulo/db/models/model_backend.py
+  - backend/src/farna/api/routes/model_backends.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/cli/backfill_model_backend_base_url.py
+  - backend/src/farna/core/model_backend_endpoints.py
+  - backend/src/farna/core/model_backend_hub
+  - backend/src/farna/core/team_visibility.py
+  - backend/src/farna/model_backends/base.py
+  - backend/src/farna/model_backends/openai
+  - backend/src/farna/model_backends/anthropic
+  - backend/src/farna/db/models/model_backend.py
 unit-tests:
   - backend/tests/unit/model_backend_hub/test_hub.py
   - backend/tests/unit/model_backends/test_base.py
@@ -50,7 +50,7 @@ Credentials are stored encrypted and never exposed in API responses (`has_creden
 true with the key itself redacted). The `ModelBackendHub` (`core/model_backend_hub`) is the
 runtime registry that resolves, health-checks and fails over registered backends per run,
 selecting a healthy configured fallback or rotating across the org's healthy backends,
-and provider adapters under `backend/src/modulo/model_backends/*` implement the
+and provider adapters under `backend/src/farna/model_backends/*` implement the
 `ModelBackendBase` contract with per-provider configuration (most wrap a
 LangChain `BaseChatModel` internally).
 
@@ -113,8 +113,8 @@ LangChain `BaseChatModel` internally).
       a pin with `hub.get(backend_id)` and never consults `visibility` - so a
       save-time rejection there would refuse a graph the run would happily
       execute; closing that gap needs the invocation-side gate first
-      (`backend/src/modulo/api/routes/pipelines.py`,
-      `backend/src/modulo/core/team_visibility.py`,
+      (`backend/src/farna/api/routes/pipelines.py`,
+      `backend/src/farna/core/team_visibility.py`,
       `backend/tests/unit/core/test_team_visibility.py`,
       `backend/tests/unit/api/test_pipeline_team_visibility.py`)
 
@@ -168,5 +168,5 @@ LangChain `BaseChatModel` internally).
 - 2026-08-27: **product-map review pass** - added this behavior-tracker
   for the registered manifest feature `feat-model-backends`, which previously had no
   `docs/product-map/` entry. Behaviors verified against `api/routes/model_backends.py`,
-  `core/model_backend_hub`, `backend/src/modulo/model_backends/*` and the model-backends
+  `core/model_backend_hub`, `backend/src/farna/model_backends/*` and the model-backends
   BDD/unit suites. Status: covered.

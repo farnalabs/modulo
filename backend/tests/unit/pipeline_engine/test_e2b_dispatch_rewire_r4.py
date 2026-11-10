@@ -39,9 +39,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine import workspace_input_orchestration as wio
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine import workspace_input_orchestration as wio
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     SandboxQueueTimeoutError,
     SandboxRateLimitedError,
@@ -54,7 +54,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _wait_command_with_exec_process,
     make_sandbox_agent_fn,
 )
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecProcess,
     ExecResult,
     ExecStreamChunk,
@@ -65,7 +65,7 @@ from modulo.core.runtime_provider import (
     WorkspaceMetrics,
     WorkspaceSpec,
 )
-from modulo.settings import get_settings
+from farna.settings import get_settings
 from tests.unit.pipeline_engine.conftest import FakeDispatchProvider, install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -101,7 +101,7 @@ def _run_state() -> dict[str, Any]:
 def _install_log_tail(monkeypatch: pytest.MonkeyPatch, tail: bytes = b"r4-tail") -> MagicMock:
     """Route the R1 log-tail seam to a fake so the dispatch never hits urllib."""
     builder = MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=tail)))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     return builder
 
 
@@ -195,19 +195,19 @@ async def test_build_dispatch_provider_returns_none_without_a_credential(
 ) -> None:
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    monkeypatch.setattr("modulo.core.runtime_config.key_bridge.override_or", lambda *_a, **_k: None)
+    monkeypatch.setattr("farna.core.runtime_config.key_bridge.override_or", lambda *_a, **_k: None)
     assert await _build_dispatch_provider() is None
 
 
 async def test_build_dispatch_provider_returns_none_when_hub_build_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("modulo.core.runtime_provider.build_hub", MagicMock(side_effect=RuntimeError("hub down")))
+    monkeypatch.setattr("farna.core.runtime_provider.build_hub", MagicMock(side_effect=RuntimeError("hub down")))
     assert await _build_dispatch_provider() is None
 
 
 async def test_build_dispatch_provider_returns_the_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
     provider = await _build_dispatch_provider()
@@ -502,12 +502,12 @@ def test_provider_errors_translate_onto_the_existing_taxonomy_without_reparentin
 
 
 def test_translated_classes_resolve_to_the_existing_retryable_codes() -> None:
-    from modulo.core.pipeline_engine.error_codes import (
+    from farna.core.pipeline_engine.error_codes import (
         _CODE_SANDBOX_QUEUE_TIMEOUT,
         _CODE_SANDBOX_RATE_LIMITED,
         LEGACY_ALIASES,
     )
-    from modulo.core.pipeline_engine.runtime_retry import _NEVER_RETRYABLE_NAMES
+    from farna.core.pipeline_engine.runtime_retry import _NEVER_RETRYABLE_NAMES
 
     assert LEGACY_ALIASES["SandboxRateLimitedError"] == _CODE_SANDBOX_RATE_LIMITED
     assert LEGACY_ALIASES["SandboxQueueTimeoutError"] == _CODE_SANDBOX_QUEUE_TIMEOUT
@@ -531,7 +531,7 @@ async def test_provider_rate_limit_enters_the_existing_backoff_then_queue_timeou
     )
 
     with (
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
         pytest.raises(SandboxQueueTimeoutError) as excinfo,
     ):
         await make_sandbox_agent_fn(_base_node_def())(_run_state())
@@ -554,7 +554,7 @@ async def test_provider_wrapped_sdk_rate_limit_still_backs_off(monkeypatch: pyte
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-wrapped-429", create_exception=wrapped)
 
     with (
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
         pytest.raises(SandboxQueueTimeoutError),
     ):
         await make_sandbox_agent_fn(_base_node_def())(_run_state())
@@ -641,7 +641,7 @@ async def test_provider_selected_allowlist_rides_the_spec_metadata(
     # recording stand-in keeps the run on the fake dispatch (no network).
     isolation = MagicMock(apply_isolation=AsyncMock())
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_isolation_provider",
+        "farna.core.pipeline_engine.node_runner._build_isolation_provider",
         MagicMock(return_value=isolation),
     )
 
@@ -744,7 +744,7 @@ async def test_marker_telemetry_lands_in_node_telemetry_json(monkeypatch: pytest
 
 def test_dispatch_marker_json_carries_provider_and_routing_and_stays_readable() -> None:
     """ADR 040 marker schema versioning: the extra key never breaks a reader."""
-    from modulo.core.runner_capacity import parse_marker_state
+    from farna.core.runner_capacity import parse_marker_state
 
     for provider_flag in (True, False):
         raw = _dispatch_marker_json("run:1:node:n:2", "e2b", via_provider=provider_flag)
@@ -785,7 +785,7 @@ def _patch_workspace_inputs(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     # no network is wanted here.
     fake_client = MagicMock()
     fake_client.aclose = AsyncMock()
-    monkeypatch.setattr("modulo.core.ssrf.pinned_async_client_sync", MagicMock(return_value=fake_client))
+    monkeypatch.setattr("farna.core.ssrf.pinned_async_client_sync", MagicMock(return_value=fake_client))
     seen: list[Any] = []
     original = wio.provision_workspace_inputs_in_sandbox
 
@@ -834,7 +834,7 @@ _S2_S3_S4_SOURCES = (
 
 
 def _repo_src(rel: str) -> str:
-    # node_runner.py -> .../src/modulo/core/pipeline_engine -> parents[2] = .../src/modulo
+    # node_runner.py -> .../src/farna/core/pipeline_engine -> parents[2] = .../src/modulo
     return (Path(nr.__file__).parents[2] / rel).read_text(encoding="utf-8")
 
 
@@ -850,7 +850,7 @@ def test_s2_s3_s4_kill_sites_never_read_the_flag() -> None:
 
 async def test_s3_run_watchdog_kill_never_raises() -> None:
     """``pipeline_execution._kill_sandbox_best_effort`` never raises."""
-    from modulo.core import pipeline_execution as pe
+    from farna.core import pipeline_execution as pe
 
     killed: list[str] = []
 
@@ -885,7 +885,7 @@ async def test_s3_run_watchdog_kill_never_raises() -> None:
 
 
 async def test_s2_org_deletion_kill_is_bounded_and_best_effort() -> None:
-    from modulo.db.crud import org_deletion as od
+    from farna.db.crud import org_deletion as od
 
     class _Result:
         def first(self) -> Any:
@@ -907,7 +907,7 @@ async def test_s2_org_deletion_kill_is_bounded_and_best_effort() -> None:
 
 
 async def test_s4_evidence_probes_run_through_the_sdk_handle() -> None:
-    from modulo.core.pipeline_engine import evidence as ev
+    from farna.core.pipeline_engine import evidence as ev
 
     class _Commands:
         async def run(self, command: str, **kwargs: Any) -> Any:
@@ -974,8 +974,8 @@ async def test_provider_commands_run_background_and_non_zero_exit_fail_loudly() 
     """``_ProviderCommands.run`` refuses a background start and RAISES on a
     non-zero exit (the duck-typed helpers rely on the raise, mirroring the SDK).
     """
-    from modulo.core.pipeline_engine.node_runner import _ProviderCommands
-    from modulo.core.runtime_provider import ExecResult
+    from farna.core.pipeline_engine.node_runner import _ProviderCommands
+    from farna.core.runtime_provider import ExecResult
 
     class _Provider:
         async def exec_command(
@@ -1089,7 +1089,7 @@ async def test_watchdog_enforces_resource_caps_through_abc_metrics_primitive(
     """
     provider = _SampledProvider([WorkspaceMetrics(cpu_used_pct=1.0), WorkspaceMetrics(cpu_used_pct=99.0)])
     watchdog = _resource_watchdog(_ProviderMediatedHandle(provider, "sbx-caps"))
-    logger = "modulo.core.pipeline_engine.node_runner"
+    logger = "farna.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is True
     assert watchdog.budget_killed is True
@@ -1128,7 +1128,7 @@ async def test_watchdog_missing_metrics_surface_fails_open_loudly(
     returns ``False``, so a measurement gap never kills the run.
     """
     watchdog = _resource_watchdog(_NoMetricsSurfaceHandle())
-    logger = "modulo.core.pipeline_engine.node_runner"
+    logger = "farna.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is False
     gap_records = [
@@ -1153,7 +1153,7 @@ async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(cap
     """
     handle = _ProviderMediatedHandle(_MetricslessProvider(), "sbx-gap")
     watchdog = _resource_watchdog(handle)
-    logger = "modulo.core.pipeline_engine.node_runner"
+    logger = "farna.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is False
         assert await watchdog.enforce_resource_limits() is False
@@ -1397,7 +1397,7 @@ class _FileCapableDispatchProvider(FakeDispatchProvider):
         return sorted(self.files)
 
     async def get_info(self, provider_ref: str, path: str) -> Any:
-        from modulo.core.runtime_provider import WorkspaceFileInfo
+        from farna.core.runtime_provider import WorkspaceFileInfo
 
         data = self.files.get(path)
         return WorkspaceFileInfo(path=path, size=len(data) if data is not None else 0, is_dir=False)
@@ -1419,7 +1419,7 @@ async def test_route_resolved_provider_is_reused_and_its_hub_is_aclosed(
     hub.aclose = AsyncMock()
     route = _Route(provider_type="kubernetes", profile=_RouteProfile(), provider=provider, hub=hub)
     monkeypatch.setattr(
-        "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+        "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
         AsyncMock(return_value=route),
     )
     fresh_hub = AsyncMock(side_effect=AssertionError("a route-resolved provider must not build a fresh hub"))
@@ -1454,7 +1454,7 @@ async def test_route_uses_the_kubernetes_profiles_image_ref(monkeypatch: pytest.
         image_ref_override="ghcr.io/acme/agent:1.2.3",
     )
     monkeypatch.setattr(
-        "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+        "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
         AsyncMock(return_value=route),
     )
 
@@ -1474,7 +1474,7 @@ async def test_route_hub_aclose_failure_is_logged_not_raised(monkeypatch: pytest
     hub.aclose = AsyncMock(side_effect=RuntimeError("aclose boom"))
     route = _Route(provider_type="kubernetes", profile=_RouteProfile(), provider=provider, hub=hub)
     monkeypatch.setattr(
-        "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+        "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
         AsyncMock(return_value=route),
     )
 
@@ -1493,7 +1493,7 @@ async def test_route_hub_aclose_cancellation_propagates(monkeypatch: pytest.Monk
     hub.aclose = AsyncMock(side_effect=asyncio.CancelledError())
     route = _Route(provider_type="kubernetes", profile=_RouteProfile(), provider=provider, hub=hub)
     monkeypatch.setattr(
-        "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+        "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
         AsyncMock(return_value=route),
     )
 
@@ -1530,7 +1530,7 @@ async def test_provider_bridge_escalation_surfaces_a_summary_only_failure_detail
     The marker is summary-only by design: tool / guardrail / reason appear, the
     raw args (here ``{"url": "x"}``) never do.
     """
-    from modulo.core.guardrails.loop_intercept import (
+    from farna.core.guardrails.loop_intercept import (
         BRIDGE_ESCALATED_EXIT_CODE,
         BRIDGE_ESCALATED_MARKER,
     )

@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -178,34 +178,34 @@ class TestAuditSuccess:
     def test_list_events_succeeds_when_enabled(self, client_with_audit: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 return_value={"items": [], "total": 0, "next_cursor": None, "prev_cursor": None, "limit": 50},
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client_with_audit.get("/api/v1/admin/audit")
         assert resp.status_code == 200
 
     def test_batch_detail_succeeds_when_enabled(self, client_with_audit: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.get_audit_events_batch", return_value=[]),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.get_audit_events_batch", return_value=[]),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client_with_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": [str(_EVENT_ID)]})
         assert resp.status_code == 200
 
     def test_verify_chain_succeeds_when_enabled(self, client_with_audit: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.verify_chain", return_value={"valid": True}),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client_with_audit.get("/api/v1/admin/audit/verify")
         assert resp.status_code == 200
 
     def test_export_succeeds_when_enabled(self, client_with_audit: TestClient) -> None:
         with (
-            patch("modulo.api.routes.audit.export_chain", return_value={"items": [], "total": 0}),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.export_chain", return_value={"items": [], "total": 0}),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client_with_audit.get("/api/v1/admin/audit/export")
         assert resp.status_code == 200

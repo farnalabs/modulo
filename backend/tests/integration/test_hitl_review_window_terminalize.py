@@ -29,7 +29,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 from tests.integration.test_org_sandbox_capacity import (
     _SANDBOX_GRAPH,
     _run_cancel_reason,
@@ -64,7 +64,7 @@ async def _seed_claim(
     """Insert a ``hitl_claims`` row with an optional FAR-1257 deadline stamp."""
     from sqlalchemy import insert
 
-    from modulo.db.models.hitl_claim import HitlClaim
+    from farna.db.models.hitl_claim import HitlClaim
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -119,7 +119,7 @@ class TestStampedDeadline:
         """A stamped claim past its deadline is collected — even though its
         claim TTL (``expires_at``) is still a DAY in the future, so the legacy
         arithmetic alone would never have fired it."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257StampedPastOrg", "PipeF1257StampedPast"
@@ -156,7 +156,7 @@ class TestStampedDeadline:
         alone even though ``expires_at`` is 10h stale (legacy arithmetic with a
         3600s grace would have fired it 9h ago). This is the regression that a
         single-arm predicate would ship."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257StampedInOrg", "PipeF1257StampedIn"
@@ -187,7 +187,7 @@ class TestStampedDeadline:
     ) -> None:
         """Multi-gate/claim safety is unchanged: a CLAIMED gate is live human
         work no matter how stale its deadline is."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257StampedClaimedOrg", "PipeF1257StampedClaimed"
@@ -220,7 +220,7 @@ class TestStampedDeadline:
         """The NOT-EXISTS arm mirrors the same two deadlines: one past-deadline
         gate plus one still-in-window gate means live human work exists, so the
         run is left alone (the FAR-648 multi-gate rule, carried over)."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257MultiStampedOrg", "PipeF1257MultiStamped"
@@ -263,7 +263,7 @@ class TestLegacyFallback:
         """The legacy arm is untouched: a NULL ``terminalize_at`` claim past
         ``expires_at + grace`` is still collected (shipped behaviour for every
         row that fired before the column existed)."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257LegacyPastOrg", "PipeF1257LegacyPast"
@@ -295,7 +295,7 @@ class TestLegacyFallback:
     ) -> None:
         """Past ``expires_at`` but INSIDE the grace window is still live human
         work — the grace knob keeps its shipped meaning on legacy rows."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257LegacyGraceOrg", "PipeF1257LegacyGrace"
@@ -327,7 +327,7 @@ class TestLegacyFallback:
         """A stamped deadline 5 minutes in the past is collected even with a
         grace window so large the legacy arm could never have fired — the two
         arms are alternatives, not accumulations."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257StampedGraceOrg", "PipeF1257StampedGrace"
@@ -361,7 +361,7 @@ class TestParkMarginOrdering:
         needs ``terminalize_at + margin`` (margin >= 300s, floored at five
         reconcile ticks), so the sweep that must cancel the run always gets
         there first."""
-        from modulo.core.run_admission import _PARK_MARGIN_FLOOR_SECONDS, park_expired_hitl_runs
+        from farna.core.run_admission import _PARK_MARGIN_FLOOR_SECONDS, park_expired_hitl_runs
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257ParkOrderOrg", "PipeF1257ParkOrder"
@@ -394,7 +394,7 @@ class TestParkMarginOrdering:
         passed (10 min past the deadline vs the 300s floor), the run parks —
         NON-terminal (``hitl_parked``, still in ACTIVE_RUN_STATUSES) and the
         gate row is untouched (park != decide)."""
-        from modulo.core.run_admission import park_expired_hitl_runs
+        from farna.core.run_admission import park_expired_hitl_runs
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257ParkFireOrg", "PipeF1257ParkFire"
@@ -423,7 +423,7 @@ class TestParkMarginOrdering:
     ) -> None:
         """The legacy arm is untouched: a NULL ``terminalize_at`` claim past
         ``expires_at + park_grace`` still parks (shipped behaviour)."""
-        from modulo.core.run_admission import park_expired_hitl_runs
+        from farna.core.run_admission import park_expired_hitl_runs
 
         org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
             db_engine, "F1257ParkLegacyOrg", "PipeF1257ParkLegacy"
@@ -483,7 +483,7 @@ class TestHumanModeGateCoverage:
         """Criterion 16: a human-mode gate left unanswered past its absolute
         deadline (unclaimed) is collected exactly like any other HITL gate —
         ``cancelled`` / ``hitl_review_expired``."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, run_id = await _seed_human_mode_awaiting_run(db_engine, "C16HumanTimeout")
         # The claim row the gate firing would stamp; unclaimed, deadline past.
@@ -515,7 +515,7 @@ class TestHumanModeGateCoverage:
         """Criterion 17: a decision committed BEFORE the sweep's guarded
         UPDATE excludes the gate (``decision IS NULL`` predicate) — the run
         is NOT terminalised and carries no ``hitl_review_expired``."""
-        from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+        from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
         org_id, run_id = await _seed_human_mode_awaiting_run(db_engine, "C17HumanDecided")
         await _seed_claim(

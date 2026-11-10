@@ -6,7 +6,7 @@ Covers ``_base_audit_payload`` including ``answer_kind`` and
 
 from unittest.mock import MagicMock
 
-from modulo.core.hitl_manager import HITLManager
+from farna.core.hitl_manager import HITLManager
 
 
 def _make_gate(**overrides: object) -> MagicMock:

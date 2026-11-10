@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher.config_source import (
+from farna.launcher.config_source import (
     CONFIG_ENV_FILENAME,
     LauncherConfigError,
     LauncherConfigSource,
@@ -25,9 +25,9 @@ from modulo.launcher.config_source import (
     render_env_file,
     write_pinned_env_file,
 )
-from modulo.launcher.secrets_file import LauncherSecrets
-from modulo.launcher.state import LauncherState, save_state
-from modulo.settings import get_settings
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import LauncherState, save_state
+from farna.settings import get_settings
 from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, launcher_state_reset
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -43,7 +43,7 @@ def _reset_launcher_state() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bypass the Windows-refusal seams this module's tests exercise."""
-    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
+    bypass_platform_seams(monkeypatch, "farna.launcher.secrets_file")
 
 
 def _secrets() -> LauncherSecrets:
@@ -60,21 +60,21 @@ def _state() -> LauncherState:
 
 
 def test_no_settings_import_at_module_time_by_ast() -> None:
-    from modulo.launcher import config_source
+    from farna.launcher import config_source
 
     source = Path(config_source.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("modulo.settings"):
-            raise AssertionError("config_source must not import modulo.settings at module level")
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("farna.settings"):
+            raise AssertionError("config_source must not import farna.settings at module level")
         if isinstance(node, ast.Import):
             for alias in node.names:
-                assert not alias.name.startswith("modulo.settings")
+                assert not alias.name.startswith("farna.settings")
 
 
 def test_no_settings_module_loaded_after_import_by_subprocess() -> None:
     result = subprocess.run(
-        [sys.executable, "-c", "import sys, modulo.launcher.config_source; print('modulo.settings' in sys.modules)"],
+        [sys.executable, "-c", "import sys, modulo.launcher.config_source; print('farna.settings' in sys.modules)"],
         capture_output=True,
         text=True,
         timeout=120,
@@ -114,7 +114,7 @@ def test_source_omits_keys_the_environment_already_sets(monkeypatch: pytest.Monk
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     real_create = sf.load_or_create
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
@@ -136,7 +136,7 @@ def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.Mon
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -154,7 +154,7 @@ def test_source_system_database_url_environment_wins_over_composed(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -174,7 +174,7 @@ def test_source_derives_system_url_from_the_operators_database_url(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.setenv("DATABASE_URL", "postgresql://app:op-pass@db.example.com:5432/modulo")
@@ -197,7 +197,7 @@ def test_source_includes_everything_without_environment(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     resolved = LauncherConfigSource(data_dir)()
@@ -218,7 +218,7 @@ def test_source_skips_empty_composed_values(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     password_free = LauncherSecrets(postgres_password="", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
     monkeypatch.setattr(sf, "load_or_create", lambda _path: password_free)
@@ -235,12 +235,12 @@ def test_source_skips_empty_composed_values(
 def test_source_settings_roundtrip_honours_priority(
     clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
-    import modulo.launcher.secrets_file as sf
+    import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     resolved = LauncherConfigSource(data_dir)()
@@ -299,7 +299,7 @@ def test_write_pinned_env_file_warns_when_clobbering_different_content(
     data_dir.mkdir()
     first = write_pinned_env_file(data_dir, _state(), _secrets())
     first.write_text("MANUALLY EDITED=1\n", encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="modulo.launcher.config_source"):
+    with caplog.at_level(logging.WARNING, logger="farna.launcher.config_source"):
         write_pinned_env_file(data_dir, _state(), _secrets())
     assert any("config_env_overwritten" in record.message for record in caplog.records)
     rewritten = first.read_text(encoding="utf-8")
@@ -314,7 +314,7 @@ def test_write_pinned_env_file_no_warning_on_identical_rewrite(
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     first = write_pinned_env_file(data_dir, _state(), _secrets())
-    with caplog.at_level(logging.WARNING, logger="modulo.launcher.config_source"):
+    with caplog.at_level(logging.WARNING, logger="farna.launcher.config_source"):
         second = write_pinned_env_file(data_dir, _state(), _secrets())
     assert not any("config_env_overwritten" in record.message for record in caplog.records)
     assert second.read_text(encoding="utf-8") == first.read_text(encoding="utf-8")
@@ -337,7 +337,7 @@ def test_write_pinned_env_file_refuses_symlink_squat(tmp_path: Path) -> None:
 def test_pinned_env_file_feeds_get_settings(
     clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from modulo.settings import pin_env_file
+    from farna.settings import pin_env_file
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -352,7 +352,7 @@ def test_pinned_env_file_feeds_get_settings(
 
 def test_environment_overrides_the_pinned_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """env > state.json: an operator DATABASE_URL beats the composed one."""
-    from modulo.settings import pin_env_file
+    from farna.settings import pin_env_file
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()

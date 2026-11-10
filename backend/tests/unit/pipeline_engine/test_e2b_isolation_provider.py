@@ -33,8 +33,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine import node_runner as node_runner_module
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine import node_runner as node_runner_module
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     SandboxTierRefusedError,
     _apply_isolation_via_provider,
@@ -42,7 +42,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _should_apply_sandbox_policy,
     make_sandbox_agent_fn,
 )
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     ExecStreamChunk,
     IsolationPolicy,
@@ -164,7 +164,7 @@ async def _completed_no_output_sandbox(sandbox_id: str) -> MagicMock:
 def _patch_isolation_builder(monkeypatch: pytest.MonkeyPatch, provider: Any) -> MagicMock:
     builder = MagicMock(return_value=provider)
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_isolation_provider",
+        "farna.core.pipeline_engine.node_runner._build_isolation_provider",
         builder,
     )
     return builder
@@ -172,7 +172,7 @@ def _patch_isolation_builder(monkeypatch: pytest.MonkeyPatch, provider: Any) -> 
 
 def _patch_legacy_sandbox_policy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     legacy = AsyncMock(return_value=None)
-    monkeypatch.setattr("modulo.core.pipeline_engine.sandbox_policy.apply_sandbox_policy", legacy)
+    monkeypatch.setattr("farna.core.pipeline_engine.sandbox_policy.apply_sandbox_policy", legacy)
     return legacy
 
 
@@ -180,7 +180,7 @@ def _legacy_must_not_run(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     legacy = AsyncMock(
         side_effect=AssertionError("legacy apply_sandbox_policy must not run when routed via the provider")
     )
-    monkeypatch.setattr("modulo.core.pipeline_engine.sandbox_policy.apply_sandbox_policy", legacy)
+    monkeypatch.setattr("farna.core.pipeline_engine.sandbox_policy.apply_sandbox_policy", legacy)
     return legacy
 
 
@@ -258,8 +258,8 @@ async def test_provider_capability_refusal_maps_to_terminal_named_code(
 ) -> None:
     """ADR 040: apply_isolation's refusal is a TERMINAL run failure with a
     named error code — never a retry-loop. The typed cause is preserved."""
-    from modulo.core.pipeline_engine import runtime_retry
-    from modulo.core.pipeline_engine.error_codes import LEGACY_ALIASES
+    from farna.core.pipeline_engine import runtime_retry
+    from farna.core.pipeline_engine.error_codes import LEGACY_ALIASES
 
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     _patch_isolation_builder(monkeypatch, _RefusingIsolationProvider())
@@ -299,7 +299,7 @@ def test_build_isolation_provider_constructs_real_e2b_provider(
     Restores the R1 hub seam the autouse bridge fixture replaced, so this
     exercises the REAL chain rather than the mock-sandbox bridge.
     """
-    from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    from farna.core.runtime_provider.e2b import E2BRuntimeProvider
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     monkeypatch.setattr(node_runner_module, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
@@ -310,7 +310,7 @@ def test_build_isolation_provider_constructs_real_e2b_provider(
 def test_build_isolation_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
     from tests.unit._e2b_sandbox_bridge import original_seam
 
     def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
@@ -325,7 +325,7 @@ async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_isolation_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
     with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider(
@@ -343,7 +343,7 @@ async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) 
 async def test_helper_fails_closed_on_invalid_sandbox_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a sandbox id"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_isolation_provider", builder)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
     with pytest.raises(SandboxTierRefusedError, match="sandbox id"):
         await _apply_isolation_via_provider(
@@ -688,7 +688,7 @@ async def test_sentinel_without_flag_emits_the_disarm_warning(
     install_fake_dispatch(monkeypatch, ref="sbx-flag-missing")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -719,7 +719,7 @@ async def test_flagged_node_emits_no_disarm_warning(
     install_fake_dispatch(monkeypatch, ref="sbx-flag-armed")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -821,7 +821,7 @@ async def test_flagged_node_settles_the_run_claim_ledger_on_finish(
     fake = _RecordingIsolationProvider()
     _patch_isolation_builder(monkeypatch, fake)
     recorded: list[tuple[Any, ...]] = []
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     monkeypatch.setattr(
         sandbox_policy,
@@ -857,7 +857,7 @@ async def test_unflagged_node_never_settles_the_run_claim_ledger(
     fake = _RecordingIsolationProvider()
     _patch_isolation_builder(monkeypatch, fake)
     recorded: list[tuple[Any, ...]] = []
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     monkeypatch.setattr(
         sandbox_policy,
@@ -905,7 +905,7 @@ class _ClaimingIsolationProvider(_RecordingIsolationProvider):
     ) -> str | None:
         status = await super().apply_isolation(provider_ref, spec, policy)
         if policy.single_pr_per_run and spec.run_id is not None:
-            from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard
+            from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard
 
             acquire_run_pr_guard(str(spec.run_id), policy.guard_owner)
         return status
@@ -944,7 +944,7 @@ async def _dispatch_flagged_e2b(
     i.e. the harvest ran but yielded no token -> unavailable);
     ``install_status`` is what apply_isolation reports for the guard install
     (``"absent"`` models the shipped runner image with no ``gh``)."""
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     reset_run_pr_guard_claims()
     monkeypatch.setenv("E2B_API_KEY", "test-key")
@@ -986,7 +986,7 @@ async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_cla
     in the ``finally`` — the run's claim is SPENT for every later flagged
     node. The harvest yields no token here, so this is the sentinel FALLBACK
     arm a dispatch reaches when its receipt probe is unavailable."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     shim_stdout = shim_created_pr_stdout(tmp_path)
     run_id = await _dispatch_flagged_e2b(
@@ -1009,7 +1009,7 @@ async def test_flagged_node_spends_from_the_harvested_receipt_when_the_sentinel_
     sentinel. The platform-side receipt harvest must still spend the run —
     releasing here would let the next flagged node install a live guard and
     open a SECOND PR."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     run_id = await _dispatch_flagged_e2b(
         monkeypatch,
@@ -1033,7 +1033,7 @@ async def test_flagged_node_shim_read_transcript_never_spends_when_the_harvest_c
     and confirmed no receipt — so the run must NOT be spent and the holder's
     hold must be RELEASED. Spending here is the fail-closed DoS: every later
     flagged node pre-plants and the run delivers no PR at all."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     shim_stdout = shim_created_pr_stdout(tmp_path)
     run_id = await _dispatch_flagged_e2b(
@@ -1056,7 +1056,7 @@ async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
     the ``finally`` releases the slot so a later flagged node of the run can
     still claim it. Fail-without-fix: moving the settle out of the ``finally``
     leaves the entry ``held`` forever and the assertion reads ``held``."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     run_id = await _dispatch_flagged_e2b(monkeypatch, fake_file_io, chunks=[])
     try:
@@ -1085,7 +1085,7 @@ async def test_pr_url_never_outranks_a_definitive_receipt_false(
     Fail-without-fix: the pre-fix precedence evaluated ``pr_url`` BEFORE
     ``claim_receipt is False``, so this exact dispatch marked the run SPENT and
     every later flagged node was pre-planted — the run then delivers nothing."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     url = "https://github.com/org/repo/pull/42"
     run_id = await _dispatch_flagged_e2b(
@@ -1122,7 +1122,7 @@ async def test_absent_install_leaves_the_receipt_meaningless_so_the_sentinel_sti
     Fail-without-fix: the pre-fix settle read ``claim_receipt is False`` as
     definitive regardless of install status, so this dispatch released the
     hold (``acquired``) instead of spending it."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     shim_stdout = shim_created_pr_stdout(tmp_path)
     run_id = await _dispatch_flagged_e2b(
@@ -1185,7 +1185,7 @@ async def test_cancel_during_the_claim_harvest_still_tears_down(
     _patch_isolation_builder(monkeypatch, provider)
     dispatch = _BlockingHarvestDispatch(ref="sbx-cancel-harvest")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        "farna.core.pipeline_engine.node_runner._build_dispatch_provider",
         AsyncMock(return_value=dispatch),
     )
     clear_mock = AsyncMock()
@@ -1225,7 +1225,7 @@ async def test_flagged_dispatch_skips_the_harvest_without_a_sandbox_id(
     """With an armed guard but no sandbox id (the dispatch lost its provider ref
     after create), the receipt harvest is skipped and the settle runs on the
     weaker evidence — the ``_sandbox_id`` guard's false arm."""
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     reset_run_pr_guard_claims()
     monkeypatch.setenv("E2B_API_KEY", "test-key")
@@ -1249,8 +1249,8 @@ async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
     """Defence in depth: if ``settle_run_pr_guard`` itself raises
     ``CancelledError`` the dispatch records it, still tears the sandbox down,
     then re-raises — a cancellation must never skip the teardown."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     def _cancel_settle(*args: Any, **kwargs: Any) -> None:
         raise asyncio.CancelledError
@@ -1286,8 +1286,8 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
     """When the harvest already recorded a cancellation AND settle then raises
     another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
     None`` guard's false arm) and still tears down before re-raising."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     def _cancel_settle(*args: Any, **kwargs: Any) -> None:
         raise asyncio.CancelledError
@@ -1299,7 +1299,7 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
     _patch_isolation_builder(monkeypatch, provider)
     dispatch = _BlockingHarvestDispatch(ref="sbx-double-cancel")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        "farna.core.pipeline_engine.node_runner._build_dispatch_provider",
         AsyncMock(return_value=dispatch),
     )
     fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))

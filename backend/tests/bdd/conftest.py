@@ -25,8 +25,8 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 # satisfies the operator role), so it runs with developer mode enabled.
 os.environ.setdefault("MODULO_DEV_MODE", "true")
 
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings
 from tests.helpers.audit_session import install_audit_session_double
 from tests.unit.api.conftest import make_system_session_mock
 
@@ -106,7 +106,7 @@ def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.M
     """
     if request.node.get_closest_marker(_REAL_VERIFY_IDENTITY_MARKER) is not None:
         return
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr("farna.auth.dependencies._verify_identity", AsyncMock(return_value=None))
 
 
 # ---------------------------------------------------------------------------
@@ -390,9 +390,9 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     from unittest.mock import AsyncMock, patch
 
-    from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_system_db_session
-    from modulo.api.main import app
-    from modulo.settings import get_settings
+    from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_system_db_session
+    from farna.api.main import app
+    from farna.settings import get_settings
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -405,19 +405,19 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
     sso_patches = [
         patch(
-            "modulo.api.routes.sso.list_enabled_oidc_providers",
+            "farna.api.routes.sso.list_enabled_oidc_providers",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "modulo.api.routes.sso.get_enabled_saml_provider",
+            "farna.api.routes.sso.get_enabled_saml_provider",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "modulo.auth.sso.get_enabled_saml_provider",
+            "farna.auth.sso.get_enabled_saml_provider",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "modulo.auth.sso.get_provider_by_provider_id",
+            "farna.auth.sso.get_provider_by_provider_id",
             new=AsyncMock(return_value=None),
         ),
     ]
@@ -578,21 +578,21 @@ def session_client(
     here are snapshotted and restored so the shared ``client`` fixture keeps
     working after the step.
     """
-    from modulo.api.dependencies import (
+    from farna.api.dependencies import (
         _get_engine,
         _get_session_factory,
         get_anonymous_plan_context,
         get_db_session,
         get_plan_context,
     )
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
+    from farna.api.main import app
+    from farna.auth.dependencies import (
         get_current_tenant_user,
         get_current_tenant_user_or_api_key,
         get_current_user,
     )
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import get_settings
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import get_settings
 
     mock_session = make_mock_session()
     if shaper is not None:
@@ -716,12 +716,12 @@ def _bdd_create_pipeline(name: str, client, request) -> None:
         create_return = _make_mock_pipeline_full(name=name)
     with (
         patch(
-            "modulo.api.routes.pipelines.create_pipeline",
+            "farna.api.routes.pipelines.create_pipeline",
             side_effect=create_side_effect,
             return_value=create_return,
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": name})
     request.node._resp = resp
@@ -827,7 +827,7 @@ def _bdd_get_verify_chain_broken(client, request) -> None:
     """
     with (
         patch(
-            "modulo.api.routes.audit.verify_chain",
+            "farna.api.routes.audit.verify_chain",
             return_value={
                 "valid": False,
                 "total_events": 3,
@@ -842,7 +842,7 @@ def _bdd_get_verify_chain_broken(client, request) -> None:
                 ),
             },
         ),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/audit/verify")
     request.node._resp = resp
@@ -851,7 +851,7 @@ def _bdd_get_verify_chain_broken(client, request) -> None:
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
     from unittest.mock import patch
 
-    from modulo.api.dependencies import (
+    from farna.api.dependencies import (
         _get_engine,
         _get_session_factory,
         get_anonymous_plan_context,
@@ -859,14 +859,14 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
         get_plan_context,
         get_system_db_session,
     )
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
+    from farna.api.main import app
+    from farna.auth.dependencies import (
         get_current_tenant_user,
         get_current_tenant_user_or_api_key,
         get_current_user,
     )
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import get_settings
+    from farna.auth.jwt import TenantPrincipal
+    from farna.settings import get_settings
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -896,19 +896,19 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     # MagicMock that crashes SAML metadata parsing.
     sso_patches = [
         patch(
-            "modulo.api.routes.sso.list_enabled_oidc_providers",
+            "farna.api.routes.sso.list_enabled_oidc_providers",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "modulo.api.routes.sso.get_enabled_saml_provider",
+            "farna.api.routes.sso.get_enabled_saml_provider",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "modulo.auth.sso.get_enabled_saml_provider",
+            "farna.auth.sso.get_enabled_saml_provider",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "modulo.auth.sso.get_provider_by_provider_id",
+            "farna.auth.sso.get_provider_by_provider_id",
             new=AsyncMock(return_value=None),
         ),
     ]
@@ -1275,7 +1275,7 @@ def _shared_my_role_changed(role: str, request) -> None:
 
 @given("I do not have a Team license")
 def _shared_no_team_license(request) -> None:
-    from modulo.core.feature_flags import CommunityTier
+    from farna.core.feature_flags import CommunityTier
 
     request.node._plan_context = CommunityTier()
 
@@ -1284,14 +1284,14 @@ def _shared_no_team_license(request) -> None:
 def _shared_get_teams(request, client) -> None:
     plan = getattr(request.node, "_plan_context", None)
     if plan is not None:
-        from modulo.api.dependencies import get_plan_context
-        from modulo.api.main import app
+        from farna.api.dependencies import get_plan_context
+        from farna.api.main import app
 
         app.dependency_overrides[get_plan_context] = lambda: plan
     with (
-        patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=MagicMock(items=[], total=0)),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=MagicMock(items=[], total=0)),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/teams")
     _shared_store_resp(request, resp)
@@ -1314,7 +1314,7 @@ def _shared_rbac_team_role(request, role: str) -> None:
 
 @when("I compute the effective team role")
 def _shared_compute_effective_team_role(request) -> None:
-    from modulo.auth.team_rbac import get_effective_team_role
+    from farna.auth.team_rbac import get_effective_team_role
 
     state = getattr(request.node, "rbac_state", {})
     org_role = state.get("org_role", "")
@@ -1330,7 +1330,7 @@ def _shared_effective_role_is(request, expected: str) -> None:
 
 @given(parsers.parse('the role hierarchy for "{role}" is {level:d}'))
 def _shared_role_hierarchy(request, role: str, level: int) -> None:
-    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+    from farna.auth.team_rbac import ORG_ROLE_HIERARCHY
 
     actual = ORG_ROLE_HIERARCHY.get(role, -1)
     assert actual == level, f"Expected {role!r} level {level}, got {actual}"
@@ -1338,7 +1338,7 @@ def _shared_role_hierarchy(request, role: str, level: int) -> None:
 
 @then("each level is strictly higher than the previous")
 def _shared_hierarchy_strictly_increasing() -> None:
-    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+    from farna.auth.team_rbac import ORG_ROLE_HIERARCHY
 
     levels = list(ORG_ROLE_HIERARCHY.values())
     for i in range(1, len(levels)):
@@ -1396,10 +1396,10 @@ def _shared_create_team(name: str, description: str, request, mock_session) -> N
 
     team = _mock_team(name=name, description=description)
     with (
-        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=team),
-        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.create_team", new_callable=AsyncMock, return_value=team),
+        patch("farna.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/teams", json={"name": name, "description": description})
     state["teams"][name] = team
@@ -1416,9 +1416,9 @@ def _shared_list_teams(request, mock_session) -> None:
     page_result.page = 1
     page_result.page_size = 20
     with (
-        patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page_result),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page_result),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/teams")
     _shared_store_resp(request, resp)
@@ -1430,9 +1430,9 @@ def _shared_get_team(team_name: str, request, mock_session) -> None:
     client = _shared_teams_client(state, mock_session)
     team = state["teams"].get(team_name, _mock_team(name=team_name))
     with (
-        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/teams/{team.id}")
     _shared_store_resp(request, resp)
@@ -1443,9 +1443,9 @@ def _shared_get_team_by_id(team_id: str, request, mock_session) -> None:
     state = _shared_state(request)
     client = _shared_teams_client(state, mock_session)
     with (
-        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/teams/{team_id}")
     _shared_store_resp(request, resp)
@@ -1463,9 +1463,9 @@ def _shared_delete_team(team_name: str, request, mock_session) -> None:
     team = state["teams"].get(team_name)
     if team is None:
         with (
-            patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
-            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+            patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
         ):
             resp = client.delete(f"/api/v1/teams/{uuid.uuid4()}")
         _shared_store_resp(request, resp)
@@ -1479,9 +1479,9 @@ def _shared_delete_team(team_name: str, request, mock_session) -> None:
     if has_resources:
         mock_session.execute.return_value.scalar = MagicMock(return_value=1)
     with (
-        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/teams/{team.id}")
     state["teams"].pop(team_name, None)
@@ -1497,9 +1497,9 @@ def _shared_delete_team_by_id(team_id: str, request, mock_session) -> None:
         _shared_store_resp(request, _mock_resp(403, {"detail": "Only admin users can perform this action"}))
         return
     with (
-        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/teams/{team_id}")
     _shared_store_resp(request, resp)
@@ -1512,9 +1512,9 @@ def _shared_rename_team(old_name: str, new_name: str, request, mock_session) -> 
     team = state["teams"].get(old_name)
     if team is None:
         with (
-            patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.update_team", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
         ):
             resp = client.patch(f"/api/v1/teams/{uuid.uuid4()}", json={"name": new_name})
         _shared_store_resp(request, resp)
@@ -1522,19 +1522,19 @@ def _shared_rename_team(old_name: str, new_name: str, request, mock_session) -> 
     conflict = state["teams"].get(new_name)
     if conflict is not None and conflict.id != team.id:
         with (
-            patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict),
-            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict),
+            patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
         ):
             resp = client.patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
         _shared_store_resp(request, resp)
         return
     updated = _mock_team(name=new_name, id=team.id)
     with (
-        patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
-        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
+        patch("farna.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
     state["teams"][new_name] = updated

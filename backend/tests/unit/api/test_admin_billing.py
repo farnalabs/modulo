@@ -10,9 +10,9 @@ LICENSED tier — community when no valid signed license is present, even when
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.routes.admin import BillingOverviewResponse, admin_billing_overview
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.license import LicenseData, LicenseValidation
+from farna.api.routes.admin import BillingOverviewResponse, admin_billing_overview
+from farna.auth.jwt import TenantPrincipal
+from farna.core.license import LicenseData, LicenseValidation
 from tests.unit.api.mock_session import configure_rls_preamble
 
 
@@ -75,12 +75,12 @@ async def _invoke(org: MagicMock, *, license_key: str = "") -> BillingOverviewRe
     settings = MagicMock()
     settings.modulo_license_key = license_key
     with (
-        patch("modulo.api.routes.admin.set_rls_org"),
-        patch("modulo.api.routes.admin.get_organisation", new_callable=AsyncMock, return_value=org),
-        patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.core.license.get_license", return_value=None),
-        patch("modulo.core.license.parse_and_verify", return_value=_invalid_validation()),
+        patch("farna.api.routes.admin.set_rls_org"),
+        patch("farna.api.routes.admin.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+        patch("farna.core.license.get_license", return_value=None),
+        patch("farna.core.license.parse_and_verify", return_value=_invalid_validation()),
     ):
         return await admin_billing_overview(
             current_user=_principal(org_id),
@@ -108,12 +108,12 @@ class TestBillingOverviewPlanTier:
         settings.modulo_license_key = "env-key"
         session = _session()
         with (
-            patch("modulo.api.routes.admin.set_rls_org"),
-            patch("modulo.api.routes.admin.get_organisation", new_callable=AsyncMock, return_value=org),
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
+            patch("farna.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
         ):
             resp = await admin_billing_overview(
                 current_user=_principal(org_id),

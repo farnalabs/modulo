@@ -1,0 +1,566 @@
+"""FastAPI auth dependencies for v1 user management."""
+
+import logging
+import uuid
+from typing import TYPE_CHECKING, cast
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import InvalidTokenError as JWTError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from farna.api.db_error_handling import raise_session_contract_error
+from farna.auth.jwt import (
+    CLIENT_KIND_PROGRAMMATIC,
+    AuthenticatedPrincipal,
+    TenantPrincipal,
+    decode_principal,
+)
+from farna.auth.permissions import _clamp_role
+from farna.core.logging_config import org_id_var
+from farna.settings import Settings, get_settings
+
+if TYPE_CHECKING:
+    # Typing only: importing the ORM model at module scope would pull the SQLAlchemy
+    # model layer into every ``modulo.auth.dependencies`` import, so the annotation is
+    # quoted and the runtime import stays inside ``_lookup_api_key_org``.
+    from farna.db.models.api_key import OrgApiKey
+
+_log = logging.getLogger(__name__)
+
+_bearer = HTTPBearer()
+_bearer_optional = HTTPBearer(auto_error=False)
+
+
+class InvalidToken(HTTPException):
+    def __init__(self, detail: str = "Invalid or expired token") -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationMembershipRequired(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organisation membership required",
+        )
+
+
+class AccountNotFound(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account not found. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationNotFound(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organisation not found. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class OrganisationMembershipNotFound(HTTPException):
+    """401 for a principal with no active membership (removed/deactivated).
+    ADR 047: a user removed from the org loses access immediately - the JWT
+    claim alone is not sufficient.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organisation membership required",
+        )
+
+
+class SystemAdminRequired(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="System admin role required",
+        )
+
+
+def bind_principal_context[PrincipalT: AuthenticatedPrincipal](
+    request: Request | None,
+    principal: PrincipalT,
+) -> PrincipalT:
+    """Publish a resolved principal's organisation where ERROR capture can see it (FAR-1417).
+
+    Two carriers, both needed:
+
+    * ``org_id_var`` (``core.logging_config``) — read synchronously by
+      ``ErrorTrackingLogHandler.emit`` for EVERY log record, so an ERROR
+      logged anywhere downstream of principal resolution is attributed to
+      this organisation and persisted to ``error_events``. Only callable from
+      the request's own task context, so it is visible to the route and its
+      exception handlers but NOT to outer middlewares.
+    * ``request.state.organisation_id`` / ``request.state.user_id`` — the
+      ASGI scope is shared by every middleware layer, so this is how an OUTER
+      middleware (``CatchAllMiddleware``) learns the organisation after the
+      request fails. It re-binds ``org_id_var`` from here before logging, and
+      ``_ingest_unhandled_error`` reads it directly.
+
+    Call this on every path that returns a principal, as soon as the
+    organisation is known. Monotonic: a principal without an organisation
+    (system-admin claim, pre-auth) never clears a value already bound by an
+    earlier dependency on the same request.
+
+    ``request`` is ``None`` when the caller is not a FastAPI-injected
+    dependency (direct/legacy calls, unit tests) — the contextvar is still
+    bound, only the scope carrier is skipped.
+    """
+    if principal.organisation_id is None:
+        return principal
+    org = str(principal.organisation_id)
+    org_id_var.set(org)
+    if request is not None:
+        request.state.organisation_id = org
+        request.state.user_id = str(principal.account_id)
+    return principal
+
+
+async def get_current_user(  # NOSONAR S7503 - FastAPI dependency coroutine seam
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    settings: Settings = Depends(get_settings),
+    # ``Request`` is injected by FastAPI (never a query param); it defaults to
+    # None only for direct, non-DI calls. The annotation MUST stay bare
+    # ``Request`` — ``Request | None`` is not special-cased by FastAPI and
+    # would be treated as a response model. Hence the ignore on the default.
+    request: Request = None,  # type: ignore[assignment]
+) -> AuthenticatedPrincipal:
+    """Decode the Bearer JWT and return its validated identity and tenant claims."""
+    try:
+        principal = decode_principal(credentials.credentials, settings.secret_key)
+    except JWTError as exc:
+        _log.warning(
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": credentials.credentials[:10] + "...", "error": str(exc)},
+        )
+        raise InvalidToken from exc
+
+    # EARLIEST point the organisation is known (the claim is decoded locally,
+    # so this does not depend on the database being reachable — a DB-outage 503
+    # logged later in the request still carries the org). FAR-1417.
+    return bind_principal_context(request, principal)
+
+
+async def get_current_tenant_user(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Require the tenant claims used by organisation-scoped API routes.
+
+    Also verifies the account and organisation still exist in the database.
+    Catches stale JWTs from deleted accounts/orgs — returns 401 with a clear
+    message instead of letting them surface as confusing 409 FK violations.
+    """
+    if current_user.organisation_id is None or current_user.org_role is None:
+        raise OrganisationMembershipRequired
+
+    live_role = await _verify_identity(current_user)
+
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        # _verify_identity returns the LIVE role; when it returns None the
+        # caller's identity was verified but no live role could be read
+        # (e.g. the test harness patches it) - fall back to the claim role.
+        # In production the DB read either returns the live role or raises
+        # (401 missing membership / 503 on SQLAlchemyError), so the claim
+        # fallback is only reachable when the read is explicitly stubbed.
+        org_role=live_role if live_role is not None else current_user.org_role,
+        is_system_admin=current_user.is_system_admin,
+        # FAR-610: preserve the credential-kind marker (JWT vs API key) so
+        # human_only HITL enforcement sees the real credential. JWTs resolve
+        # through decode_principal (via_api_key=False); only the mk_ branch
+        # below sets it True.
+        via_api_key=current_user.via_api_key,
+        # FAR-634: propagate the JWT's credential class (browser for legacy
+        # tokens without the claim). The human_only gate reads this instead
+        # of hardcoding a credential-type assumption.
+        client_kind=current_user.client_kind,
+    )
+
+
+async def get_current_tenant_user_or_api_key(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
+    settings: Settings = Depends(get_settings),
+    # Injected by FastAPI; None only for the direct (non-DI) calls in tests —
+    # see get_current_user for why the annotation must stay bare ``Request``.
+    request: Request = None,  # type: ignore[assignment]
+) -> TenantPrincipal:
+    """Tenant principal from either a user JWT or an org API key (``mk_``).
+
+    API keys are the documented credential for CI/CD and external agents
+    (PRD §9.3 / §5.2): ``runner`` keys can trigger runs and call read
+    endpoints; ``operator`` keys are reserved for future HITL-approval
+    wiring. This dependency is only wired into ``trigger_run`` and
+    ``get_run_status`` — the HITL-approval routes (``observe_run_node``,
+    ``recover_run_node``) and other write endpoints still require a user
+    JWT, so API keys cannot approve gates or modify pipelines.
+
+    Note that FAR-681 threads a team-scoped key's ``team_id`` into the
+    returned principal: team-scoped keys carry a hard team boundary enforced
+    by the team-gate dependency (and the RLS org context still applies
+    everywhere), while org-wide keys and user JWTs carry ``team_id=None`` and
+    behave exactly as before.
+
+    API keys are resolved by first looking up the key's organisation through a
+    SECURITY DEFINER function (owned by the migration role, so it can read
+    RLS-protected ``org_api_keys`` rows that the runtime app role cannot), then
+    re-validating the key inside that org's RLS context — mirroring the MCP
+    middleware, since ``org_api_keys`` has RLS enabled. For JWT credentials the
+    behaviour is identical to :func:`get_current_tenant_user`.
+    """
+    if credentials is None:
+        raise InvalidToken
+
+    token = credentials.credentials
+    if token.startswith("mk_"):
+        return await _resolve_api_key_principal(token, settings, request)
+
+    try:
+        principal = decode_principal(token, settings.secret_key)
+    except JWTError as exc:
+        _log.warning(
+            "auth.jwt_decode_failed",
+            extra={"token_prefix": token[:10] + "...", "error": str(exc)},
+        )
+        raise InvalidToken from exc
+
+    # This branch never reaches get_current_user (it decodes directly), so the
+    # org context is bound here — same carriers, same moment-as-soon-as-known.
+    tenant = await get_current_tenant_user(principal)
+    return bind_principal_context(request, tenant)
+
+
+async def _resolve_api_key_principal(
+    token: str,
+    settings: Settings,
+    request: Request | None,
+) -> TenantPrincipal:
+    """Resolve an ``mk_`` API-key credential into a tenant principal.
+
+    Failure ordering is load-bearing and must stay: invalid key -> 401,
+    unreadable grant flag -> 503, DB error -> classify then 503, and only
+    after a successful read is the membership/role clamp evaluated.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from farna.api.dependencies import (
+        get_or_create_engine,
+        get_or_create_session_factory,
+    )
+    from farna.auth.api_key import (
+        ApiKeyGrantsUnavailableError,
+        ApiKeyInvalidError,
+        resolve_key_grants,
+    )
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    try:
+        org_id = await _lookup_api_key_org(factory, token)
+        if org_id is None:
+            raise ApiKeyInvalidError
+
+        key, live_role, owner_kind = await _validate_api_key_in_org(factory, token, org_id)
+        # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+        # flag read). A grant-bearing key with the flag OFF is denied.
+        # Resolved AFTER the validation session closes: for grant-bearing
+        # keys the flag read opens its own pooled session, and holding two
+        # connections per request risks pool-exhaustion deadlock.
+        key_grants = await resolve_key_grants(key)
+    except ApiKeyInvalidError:
+        raise InvalidToken from None
+    except ApiKeyGrantsUnavailableError:
+        # Grant flag unreadable: fail closed with 503 (retryable), not 401.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API key grants temporarily unavailable.",
+        ) from None
+    except SQLAlchemyError as exc:
+        # FAR-1481: session-contract violations (InvalidRequestError and
+        # subclasses, incl. MissingGreenlet) are local programming bugs,
+        # not a DB outage — the shared classifier answers 500 for them and
+        # RETURNS for genuine transient errors so the 503 below is
+        # unchanged.
+        raise_session_contract_error(exc, "dependencies.get_current_tenant_user_or_api_key")
+        _log.warning("auth.api_key_verify_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    return _bind_api_key_principal(request, key, live_role, key_grants, owner_kind)
+
+
+async def _lookup_api_key_org(factory: async_sessionmaker[AsyncSession], token: str) -> uuid.UUID | None:
+    """Resolve the key's org without RLS filtering (SECURITY DEFINER on Postgres)."""
+    from sqlalchemy import select, text
+
+    from farna.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+    from farna.db.models.api_key import OrgApiKey
+    from farna.db.rls import _ensure_active_transaction
+
+    # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and the
+    # key's org is unknown until the record is read — a plain lookup in
+    # an empty org context would be filtered out by RLS and reject every
+    # valid key. On Postgres the runtime app role is RLS-subject (a
+    # non-owner DML-granted role), so the org is resolved through a
+    # SECURITY DEFINER function owned by the migration role rather than
+    # SET row_security TO OFF (which only bypasses RLS for owners and
+    # raises for a regular role). On generic backends there is no RLS
+    # and the tenant filter only injects when an org context is set, so
+    # a plain prefix scan works. Then re-validate inside the org
+    # context before trusting the key.
+    prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+    async with factory() as session, session.begin():
+        dialect = await _ensure_active_transaction(session)
+        if dialect == "postgresql":
+            resolved_org = (
+                await session.execute(
+                    text("SELECT public.lookup_api_key_org(:prefix)"),
+                    {"prefix": prefix},
+                )
+            ).scalar_one_or_none()
+            # A raw scalar SELECT is untyped at the SQLAlchemy layer (`Any`),
+            # but the SECURITY DEFINER function returns the org uuid or NULL.
+            return cast(uuid.UUID | None, resolved_org)
+        key_record = (
+            await session.execute(
+                select(OrgApiKey).where(
+                    OrgApiKey.lookup_prefix == prefix,
+                    OrgApiKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return key_record.organisation_id if key_record is not None else None
+
+
+async def _validate_api_key_in_org(
+    factory: async_sessionmaker[AsyncSession],
+    token: str,
+    org_id: uuid.UUID,
+) -> tuple["OrgApiKey", str | None, str | None]:
+    """Re-validate the key inside its org's RLS context and read the live role/kind."""
+    from farna.auth.api_key import validate_api_key
+    from farna.db.crud.org_membership import resolve_live_role_and_kind
+    from farna.db.rls import set_rls_org
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        key = await validate_api_key(session, token, org_id=org_id)
+
+        # ADR 047 live-role re-read: clamp the minted role to the
+        # account's current membership role, matching the MCP auth
+        # path (api/mcp_server.py:770-790). A demoted or removed
+        # member's key must not retain elevated privileges. FAR-2281:
+        # the same query returns the owner's ``Account.kind`` so a
+        # user-scoped key can be attributed to its live human owner.
+        membership = await resolve_live_role_and_kind(
+            session,
+            str(key.account_id),
+            str(key.organisation_id),
+        )
+    if membership is None:
+        return key, None, None
+    live_role, owner_kind = membership
+    return key, live_role, owner_kind
+
+
+def _bind_api_key_principal(
+    request: Request | None,
+    key: "OrgApiKey",
+    live_role: str | None,
+    key_grants: frozenset[str] | None,
+    owner_kind: str | None = None,
+) -> TenantPrincipal:
+    """Clamp the minted role to the live role, then build the principal."""
+    # Clamp: if the account has no active membership, reject.
+    # If the live role is lower than the minted role, use the live role.
+    if live_role is None:
+        _log.warning(
+            "auth.api_key_membership_not_found",
+            extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
+        )
+        raise OrganisationMembershipNotFound
+    clamped_role = _clamp_role(key.role, live_role)
+    if not clamped_role:
+        _log.warning(
+            "auth.api_key_clamp_failed",
+            extra={
+                "account_id": str(key.account_id),
+                "org_id": str(key.organisation_id),
+                "minted_role": key.role,
+                "live_role": live_role,
+            },
+        )
+        raise OrganisationMembershipNotFound
+    # FAR-2281: a user-scoped key owned by a live human acts as that human.
+    # Thread the key's caller scope + the owner kind onto the principal so the
+    # human-linkage resolver and the audit stamp can attribute the action to
+    # the human instead of a generic ``api_key`` principal. An org-scoped key
+    # (even one owned by a human) stays an unattributed machine identity.
+    # Lazy imports: pulling auth.api_key (feature-flag registry) or the ORM
+    # account model into this module's import time would widen/circle the auth
+    # dependency graph; both are fully loaded by the time a request is bound.
+    from farna.auth.api_key import KEY_SCOPE_USER
+    from farna.db.models.account import KIND_HUMAN
+
+    key_scope = getattr(key, "scope", None)
+    key_scope = key_scope if isinstance(key_scope, str) else None
+    human_linked_owner = key_scope == KEY_SCOPE_USER and owner_kind == KIND_HUMAN
+    return bind_principal_context(
+        request,
+        TenantPrincipal(
+            username=key.name,
+            organisation_id=key.organisation_id,
+            account_id=key.account_id,
+            org_role=clamped_role,
+            is_system_admin=False,
+            # FAR-681: thread the key's team scope into the principal so the
+            # team-gate dependency can enforce the boundary (a team-A-scoped
+            # key must not mutate team-B resources even when its OWNER is a
+            # member of team B). Org-wide keys carry team_id=None. getattr for
+            # duck-typed key fakes in existing tests (the real OrgApiKey row
+            # always carries the column).
+            team_id=getattr(key, "team_id", None),
+            # FAR-610: the credential is an org API key, not a browser-login
+            # JWT. human_only HITL gates deny API-key principals on decision
+            # actions; this marker is the mechanism that distinguishes them.
+            via_api_key=True,
+            # FAR-634: an API key is a programmatic credential by definition —
+            # the human_only enforcement's ``client_kind != browser`` rule
+            # subsumes the via_api_key check through this stamp.
+            client_kind=CLIENT_KIND_PROGRAMMATIC,
+            key_grants=key_grants,
+            key_scope=key_scope,
+            owner_kind=owner_kind if key_scope == KEY_SCOPE_USER else None,
+            # FAR-2281: only a user-scoped key owned by a live human carries a
+            # human principal kind, so the audit stamp records the human rather
+            # than omitting the kind for every programmatic credential.
+            principal_kind=KIND_HUMAN if human_linked_owner else None,
+        ),
+    )
+
+
+async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
+    """Return the LIVE org role for the account in the org, or None if no active membership.
+
+    Filters ``deactivated_at IS NULL`` — a soft-deactivated membership must not
+    resolve a role (ADR 047). The canonical implementation lives in the db
+    layer (``db.crud.org_membership``) so the service-layer HITL backstop can
+    reuse it without reaching through the api layer; this re-export keeps the
+    ``auth.dependencies`` surface stable for existing callers.
+    """
+    from farna.db.crud.org_membership import resolve_role_from_membership as _resolve
+
+    return await _resolve(session, account_id, organisation_id)
+
+
+async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
+    """Verify the JWT's account and organisation still exist, returning the LIVE org role.
+
+    Uses lazy imports to avoid a circular dependency:
+    ``auth.dependencies → api.dependencies → auth.dependencies``.
+
+    ADR 047 live-role re-read: after the existence checks, the account's live
+    org role is read from ``org_memberships`` (deactivated rows excluded).
+
+        Failure modes:
+    - missing/deactivated membership -> raise 401 (removed users lose access immediately)
+    - session-contract violation (InvalidRequestError subclass) -> raise 500 via
+      the shared raise_session_contract_error guard (FAR-1481: a local
+      programming bug must not be reported as an outage)
+    - SQLAlchemyError during the read -> raise 503 (fail-closed; a DB blip must
+      not restore a removed user's stale role - ADR 047 review decision)
+    - any other exception -> propagate (500)
+    """
+    try:
+        from sqlalchemy import text as _text
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from farna.api.dependencies import (
+            get_or_create_engine,
+            get_or_create_session_factory,
+        )
+        from farna.settings import get_settings as _get_settings
+
+        engine = get_or_create_engine(_get_settings())
+        factory = get_or_create_session_factory(engine)
+        async with factory() as session, session.begin():
+            result = await session.execute(
+                _text("SELECT 1 FROM accounts WHERE id = :aid"),
+                {"aid": principal.account_id},
+            )
+            if result.scalar_one_or_none() is None:
+                _log.warning(
+                    "auth.account_not_found",
+                    extra={
+                        "account_id": str(principal.account_id),
+                        "username": principal.username,
+                    },
+                )
+                raise AccountNotFound
+
+            result = await session.execute(
+                _text("SELECT 1 FROM organisations WHERE id = :oid"),
+                {"oid": principal.organisation_id},
+            )
+            if result.scalar_one_or_none() is None:
+                _log.warning(
+                    "auth.org_not_found",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "username": principal.username,
+                    },
+                )
+                raise OrganisationNotFound
+
+            live_role = await resolve_role_from_membership(
+                session,
+                str(principal.account_id),
+                str(principal.organisation_id),
+            )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        # FAR-1481: session-contract violations (InvalidRequestError subclasses)
+        # are local programming bugs — the shared classifier answers 500 for
+        # them and RETURNS for genuine transient errors, so the fail-closed 503
+        # below keeps its exact behaviour for real DB faults.
+        raise_session_contract_error(exc, "dependencies._verify_identity")
+        _log.warning("permission.live_role_read_failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Role verification temporarily unavailable. Please try again.",
+        ) from None
+
+    if live_role is None:
+        _log.warning(
+            "auth.membership_not_found",
+            extra={
+                "account_id": str(principal.account_id),
+                "org_id": str(principal.organisation_id),
+                "username": principal.username,
+            },
+        )
+        raise OrganisationMembershipNotFound
+    return live_role
+
+
+async def require_system_admin(  # NOSONAR S7503 - FastAPI dependency coroutine seam
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> AuthenticatedPrincipal:
+    """Require the current user to have system admin privileges."""
+    if not current_user.is_system_admin:
+        raise SystemAdminRequired
+    return current_user

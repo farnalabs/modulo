@@ -48,7 +48,7 @@ jobs:
 
       # Authenticate (FAR-1468): BOTH audit endpoints require
       # require_permission("audit.manage"), and audit.manage maps to the ADMIN
-      # org role (backend/src/modulo/auth/permissions.py:180; role order
+      # org role (backend/src/farna/auth/permissions.py:180; role order
       # viewer < runner < operator < admin). API keys are only mintable as
       # operator/runner, so `Bearer <api key>` always gets HTTP 403 here -
       # live-tested against app.modulo.run. The monitor therefore logs in with
@@ -106,7 +106,7 @@ jobs:
           echo "admin login OK - JWT access token acquired for the audit-chain checks"
 
       # Check 1 - integrity: recompute the hash chain server-side.
-      # Endpoint verified: backend/src/modulo/api/routes/audit.py:32
+      # Endpoint verified: backend/src/farna/api/routes/audit.py:32
       # (router prefix "/api/v1/admin/audit") + :146 (GET "/verify").
       #
       # Auth: `Authorization: Bearer ${MODULO_TOKEN}` - the admin JWT from the
@@ -116,7 +116,7 @@ jobs:
       #
       # TRUNCATION IS NOT A LAPSE (FAR-1468, live-tested): verify_chain()
       # returns valid=false whenever total_events > VERIFY_MAX_EVENTS (10000,
-      # backend/src/modulo/core/audit_logger/__init__.py:30,462) - production
+      # backend/src/farna/core/audit_logger/__init__.py:30,462) - production
       # has ~23.5k events, so /verify reports {"valid": false, "truncated":
       # true} on EVERY call. Check 1 therefore PASSES on truncated=true (logged
       # as an informational note - a known product limitation) and FAILS only
@@ -158,7 +158,7 @@ jobs:
           done
 
           if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-            echo "::error::Audit verify auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/modulo/auth/permissions.py:180 maps audit.manage to the admin role). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
+            echo "::error::Audit verify auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/farna/auth/permissions.py:180 maps audit.manage to the admin role). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
             echo "integrity_detail=GET /api/v1/admin/audit/verify returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
             exit 1
@@ -269,7 +269,7 @@ jobs:
           done
 
           if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-            echo "::error::Audit list auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/modulo/auth/permissions.py:180). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
+            echo "::error::Audit list auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/farna/auth/permissions.py:180). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
             echo "continuity_detail=GET /api/v1/admin/audit returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
             exit 1

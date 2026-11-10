@@ -13,10 +13,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
@@ -160,7 +160,7 @@ async def test_put_patches_only_its_own_settings_key(client_admin, mock_session)
         captured["patch"] = patch
         return patch or {}
 
-    with patch("modulo.api.routes.admin.update_org_settings_patch", new=_fake_patch):
+    with patch("farna.api.routes.admin.update_org_settings_patch", new=_fake_patch):
         resp = await client_admin.put(
             "/api/v1/admin/org/run-concurrency",
             json={"run_concurrency_limit": 9},
@@ -197,7 +197,7 @@ def _raise(exc: Exception):
 async def test_get_programming_error_returns_501(client_admin):
     """Migration-required errors on GET surface as 501."""
     with patch(
-        "modulo.api.routes.admin.get_org_run_concurrency_limit",
+        "farna.api.routes.admin.get_org_run_concurrency_limit",
         new=_raise(ProgrammingError("stmt", {}, Exception("missing table"))),
     ):
         resp = await client_admin.get("/api/v1/admin/org/run-concurrency")
@@ -208,7 +208,7 @@ async def test_get_programming_error_returns_501(client_admin):
 async def test_get_sqlalchemy_error_returns_503(client_admin):
     """Generic SQLAlchemy errors on GET surface as 503."""
     with patch(
-        "modulo.api.routes.admin.get_org_run_concurrency_limit",
+        "farna.api.routes.admin.get_org_run_concurrency_limit",
         new=_raise(SQLAlchemyError("mock", {}, "")),
     ):
         resp = await client_admin.get("/api/v1/admin/org/run-concurrency")
@@ -219,7 +219,7 @@ async def test_get_sqlalchemy_error_returns_503(client_admin):
 async def test_get_integrity_error_returns_503_not_409(client_admin):
     """The read-only GET has no IntegrityError→409 'already exists' mapping."""
     with patch(
-        "modulo.api.routes.admin.get_org_run_concurrency_limit",
+        "farna.api.routes.admin.get_org_run_concurrency_limit",
         new=_raise(IntegrityError("stmt", {}, Exception("fk violation"))),
     ):
         resp = await client_admin.get("/api/v1/admin/org/run-concurrency")

@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api import mcp_server
-from modulo.api.mcp_server import (
+from farna.api import mcp_server
+from farna.api.mcp_server import (
     _check_agent_tool_scope,
     _ctx_node_allowed_tools,
     _ctx_role,
     _extract_node_id_from_key_name,
 )
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 
 
 class TestExtractNodeIdFromKeyName:

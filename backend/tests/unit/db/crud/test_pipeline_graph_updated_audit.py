@@ -24,15 +24,15 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
-from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
+from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 # Scoped create_all: unrelated models use Postgres-only column types that
 # SQLite cannot render (same rationale as tests/unit/db/test_seed_demo.py).
@@ -406,7 +406,7 @@ class TestMcpGraphWriteAttribution:
     """
 
     async def test_mcp_graph_write_is_attributed_to_the_calling_account(self, session: AsyncSession) -> None:
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         await _seed_graph(session, [_mcp_node(_NODE_A, label="a"), _mcp_node(_NODE_B, label="b")], with_edge=True)
 
@@ -426,10 +426,10 @@ class TestMcpGraphWriteAttribution:
         ms._ctx_key_scope.set("org")
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server._session", _session_factory),
+                patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+                patch("farna.api.mcp_server._session", _session_factory),
                 patch(
-                    "modulo.core.team_visibility.find_connector_team_mismatches",
+                    "farna.core.team_visibility.find_connector_team_mismatches",
                     new=AsyncMock(return_value=[]),
                 ),
                 # FAR-1810: the MCP graph write now records an edit snapshot in
@@ -440,7 +440,7 @@ class TestMcpGraphWriteAttribution:
                 # event under test is written BEFORE the snapshot hook, so this
                 # cannot mask a missing ``graph_updated`` event.
                 patch(
-                    "modulo.db.crud.pipeline.create_snapshot_edit",
+                    "farna.db.crud.pipeline.create_snapshot_edit",
                     new=AsyncMock(return_value=MagicMock(snapshot_version=1)),
                 ),
             ):
@@ -536,7 +536,7 @@ class TestRollbackGraphUpdatedAudit:
         # It runs AFTER the audit emit under test, so patching it out here
         # cannot mask a missing ``graph_updated`` event.
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=None),
         ):
             await rollback_to_snapshot(

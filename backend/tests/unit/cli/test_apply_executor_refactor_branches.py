@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.cli.apply.executor import ApplyExecutor
-from modulo.cli.apply.models import ApplyVersionSpec, ModelBackendEntity, SchemaEntity
-from modulo.cli.apply.plan import KIND_BACKEND, KIND_SCHEMA
+from farna.cli.apply.executor import ApplyExecutor
+from farna.cli.apply.models import ApplyVersionSpec, ModelBackendEntity, SchemaEntity
+from farna.cli.apply.plan import KIND_BACKEND, KIND_SCHEMA
 
 
 def _executor() -> ApplyExecutor:

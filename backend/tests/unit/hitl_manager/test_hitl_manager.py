@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.core.hitl_manager import (
+from farna.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
@@ -22,8 +22,8 @@ from modulo.core.hitl_manager import (
     NotTeamMemberError,
     RunNotAwaitingError,
 )
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.team_membership import TeamMembership
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.team_membership import TeamMembership
 from tests.unit.api.mock_session import configure_mock_session
 
 from .conftest import _session_decide
@@ -395,7 +395,7 @@ async def test_claim_success_emits_hitl_claimed_audit():
     session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager()
     audit = AsyncMock(return_value=MagicMock())
-    with patch("modulo.core.hitl_manager.append_audit_event", new=audit):
+    with patch("farna.core.hitl_manager.append_audit_event", new=audit):
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is claimed_gate
@@ -425,7 +425,7 @@ async def test_claim_audit_failure_does_not_block_claim():
     async def _raise_audit(*_a: Any, **_k: Any) -> Any:
         raise RuntimeError("audit boom")
 
-    with patch("modulo.core.hitl_manager.append_audit_event", side_effect=_raise_audit):
+    with patch("farna.core.hitl_manager.append_audit_event", side_effect=_raise_audit):
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
@@ -441,7 +441,7 @@ async def test_claim_with_secret_key_uses_jwt_token():
     session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager(secret_key="test-secret-key-with-enough-length")
 
-    with patch("modulo.core.hitl_manager._create_claim_jwt", return_value="signed.token.value") as mock_jwt:
+    with patch("farna.core.hitl_manager._create_claim_jwt", return_value="signed.token.value") as mock_jwt:
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is claimed_gate
@@ -963,7 +963,7 @@ async def test_claim_same_account_reclaim_issues_fresh_token():
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+    with patch("farna.core.hitl_manager.append_audit_event", new=AsyncMock()):
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
@@ -1020,7 +1020,7 @@ async def test_claim_same_account_reclaim_team_scoped_gate():
     session.execute = _execute
     session.get = AsyncMock(return_value=reclaimed)
     mgr = HITLManager()
-    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+    with patch("farna.core.hitl_manager.append_audit_event", new=AsyncMock()):
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
@@ -1073,7 +1073,7 @@ async def test_claim_same_account_reclaim_on_claimed_run_succeeds():
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+    with patch("farna.core.hitl_manager.append_audit_event", new=AsyncMock()):
         result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
@@ -1707,7 +1707,7 @@ async def test_approve_jwt_expired_signature_raises_expired():
 
     with (
         patch(
-            "modulo.core.hitl_manager._decode_claim_jwt",
+            "farna.core.hitl_manager._decode_claim_jwt",
             side_effect=ExpiredSignatureError("token expired"),
         ) as mock_decode,
         pytest.raises(ClaimTokenExpiredError),
@@ -1728,7 +1728,7 @@ async def test_approve_jwt_invalid_signature_raises_invalid():
 
     with (
         patch(
-            "modulo.core.hitl_manager._decode_claim_jwt",
+            "farna.core.hitl_manager._decode_claim_jwt",
             side_effect=InvalidTokenError("bad signature"),
         ) as mock_decode,
         pytest.raises(ClaimTokenInvalidError),
@@ -1753,7 +1753,7 @@ async def test_approve_with_modification_valid_token_and_audit():
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     modified = {"summary": "Modified output from human review"}
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         result = await mgr.approve_with_modification(
             session,
@@ -1859,7 +1859,7 @@ async def test_approve_audit_cancellation_propagates():
 
     with (
         patch(
-            "modulo.core.hitl_manager.append_audit_event",
+            "farna.core.hitl_manager.append_audit_event",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -2519,8 +2519,8 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     from langgraph.errors import GraphInterrupt
     from langgraph.types import Interrupt
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    from farna.core.pipeline_engine.executor import PipelineExecutor
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     run = MagicMock()
     run.id = uuid.uuid4()
@@ -2574,29 +2574,29 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
 
     with (
         patch(
-            "modulo.core.pipeline_engine.executor.async_sessionmaker",
+            "farna.core.pipeline_engine.executor.async_sessionmaker",
             return_value=session_factory,
         ),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.cost_controller.finalize.update_run_status", return_value=final_run) as mock_update,
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.cost_controller.finalize.update_run_status", return_value=final_run) as mock_update,
         # The finalize tail reads the run's node-output blobs; this test targets
         # interrupt handling, so serve the "no blobs" shape rather than route
         # every query through one scalar result.
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=None, telemetry=None, markers=None)),
         ),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch(
-            "modulo.core.pipeline_engine.executor._checkpointer_scope",
+            "farna.core.pipeline_engine.executor._checkpointer_scope",
             return_value=AsyncMock(),
         ),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="x" * 32)),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="x" * 32)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
@@ -2788,7 +2788,7 @@ def test_hitl_claim_model_columns_stable():
     built against alpha are not broken by a column rename."""
     from sqlalchemy import inspect as sa_inspect
 
-    from modulo.db.models.hitl_claim import HitlClaim
+    from farna.db.models.hitl_claim import HitlClaim
 
     columns = {c.name for c in sa_inspect(HitlClaim).columns}
     expected_columns = (
@@ -2820,14 +2820,14 @@ async def _interrupt_payload(gate_config: dict[str, Any]) -> dict[str, Any]:
     from langgraph.errors import GraphInterrupt
     from langgraph.types import Interrupt
 
-    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+    from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     def _raise_interrupt(value: Any) -> None:
         raise GraphInterrupt((Interrupt(value=value),))
 
     node_fn = make_hitl_review_fn(gate_config)
     with (
-        patch("modulo.core.pipeline_engine.node_runner.interrupt", side_effect=_raise_interrupt),
+        patch("farna.core.pipeline_engine.node_runner.interrupt", side_effect=_raise_interrupt),
         pytest.raises(GraphInterrupt) as exc_info,
     ):
         await node_fn({"artifacts": [], "_hitl_reviews": []})
@@ -2840,7 +2840,7 @@ async def test_hitl_review_invalid_required_team_id_is_logged_and_sanitized(capl
     normalised to None in the interrupt payload — the executor's
     ``uuid.UUID()`` conversion must never see an invalid string (logged, not
     raised)."""
-    caplog.set_level("WARNING", logger="modulo.core.pipeline_engine.node_runner")
+    caplog.set_level("WARNING", logger="farna.core.pipeline_engine.node_runner")
     payload = await _interrupt_payload(
         {"review_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"}
     )

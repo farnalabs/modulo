@@ -83,14 +83,14 @@ _MODIFIED_OUTPUT = {"summary": "corrected by reviewer"}
 
 @when("the reviewer approves with a modified output")
 def reviewer_approves_with_modification(ctx: dict[str, Any], client, request) -> None:
-    from modulo.core.hitl_manager import ClaimTokenExpiredError
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.hitl_manager import ClaimTokenExpiredError
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     body: dict[str, Any] = {"modified_output": _MODIFIED_OUTPUT}
     if ctx.get("claim_token_expired"):
         mgr = MagicMock()
         mgr.approve_with_modification = AsyncMock(side_effect=ClaimTokenExpiredError())
-        with patch("modulo.api.routes.hitl.HITLManager", return_value=mgr):
+        with patch("farna.api.routes.hitl.HITLManager", return_value=mgr):
             resp = client.post(
                 f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve-with-modification",
                 json={**body, "claim_token": ctx["claim_token"]},
@@ -103,8 +103,8 @@ def reviewer_approves_with_modification(ctx: dict[str, Any], client, request) ->
         mgr = MagicMock()
         mgr.approve_with_modification = AsyncMock(return_value=mock_gate)
         with (
-            patch("modulo.api.routes.hitl.HITLManager", return_value=mgr),
-            patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as exec_cls,
+            patch("farna.api.routes.hitl.HITLManager", return_value=mgr),
+            patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as exec_cls,
         ):
             exec_cls.return_value.resume = AsyncMock()
             resp = client.post(
@@ -141,10 +141,10 @@ def resume_carries_modified_output(ctx: dict[str, Any]) -> None:
 def api_key_credential_approves(ctx: dict[str, Any], api_key_client, request) -> None:
     with (
         patch(
-            "modulo.api.routes.hitl.resolve_hitl_review_config",
+            "farna.api.routes.hitl.resolve_hitl_review_config",
             new=AsyncMock(return_value={"human_only": True}),
         ),
-        patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=AsyncMock()),
+        patch("farna.api.routes.hitl._emit_human_only_denial_audit", new=AsyncMock()),
     ):
         resp = api_key_client.post(
             f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
@@ -170,7 +170,7 @@ def claimed_gate_held_for(ctx: dict[str, Any], hours: int) -> None:
 
 @when("the overdue claims are queried")
 def overdue_claims_queried(ctx: dict[str, Any]) -> None:
-    from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
+    from farna.core.hitl_manager.overdue_warning import get_overdue_claims
 
     result = MagicMock()
     result.scalars.return_value.all.return_value = [_claim_mock(ctx["held_hours"], ctx["overdue_review_id"])]

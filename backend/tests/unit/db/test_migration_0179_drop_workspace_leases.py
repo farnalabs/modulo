@@ -20,7 +20,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0179_drop_workspace_leases"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -83,6 +83,6 @@ def test_downgrade_recreates_empty_table_with_original_shape() -> None:
 
 
 def test_model_metadata_has_no_workspace_leases_table() -> None:
-    from modulo.db.models import Base
+    from farna.db.models import Base
 
     assert "workspace_leases" not in Base.metadata.tables

@@ -9,7 +9,7 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from modulo.api.routes.admin_run_retention import _delete_run_artifacts
+from farna.api.routes.admin_run_retention import _delete_run_artifacts
 
 
 def _make_run(org_id: str | None = None, run_id: str | None = None) -> SimpleNamespace:
@@ -28,7 +28,7 @@ def test_delete_run_artifacts_happy_path():
     run1 = _make_run()
     run2 = _make_run(org_id="00000000-0000-0000-0000-000000000003")
 
-    with patch("modulo.core.artifacts.store.get_store", return_value=mock_store):
+    with patch("farna.core.artifacts.store.get_store", return_value=mock_store):
         _delete_run_artifacts([run1, run2], uuid.UUID("00000000-0000-0000-0000-000000000001"))
 
     assert mock_store.delete_run.call_count == 2
@@ -42,7 +42,7 @@ def test_delete_run_artifacts_happy_path():
 def test_delete_run_artifacts_store_unavailable():
     """When get_store() raises, the callback swallows the error — no deletion attempted."""
     mock_get_store = MagicMock(side_effect=RuntimeError("boom"))
-    with patch("modulo.core.artifacts.store.get_store", mock_get_store):
+    with patch("farna.core.artifacts.store.get_store", mock_get_store):
         # Should not raise (best-effort store access)
         _delete_run_artifacts([_make_run()], None)
     # get_store was exercised (proving the code path ran)
@@ -60,7 +60,7 @@ def test_delete_run_artifacts_per_run_failure():
     run1 = _make_run()
     run2 = _make_run(org_id="00000000-0000-0000-0000-000000000003")
 
-    with patch("modulo.core.artifacts.store.get_store", return_value=mock_store):
+    with patch("farna.core.artifacts.store.get_store", return_value=mock_store):
         # Should not raise
         _delete_run_artifacts([run1, run2], uuid.UUID("00000000-0000-0000-0000-000000000001"))
 

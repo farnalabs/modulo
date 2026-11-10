@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 
 def _redis_mock(method: str) -> MagicMock:

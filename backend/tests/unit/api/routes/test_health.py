@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
-import modulo.api.routes.health as health_mod
-from modulo.api.routes.health import (
+import farna.api.routes.health as health_mod
+from farna.api.routes.health import (
     _check_decision_record_reconcile,
     _check_dispatcher_reconcile,
     _check_migrations,
@@ -29,9 +29,9 @@ from modulo.api.routes.health import (
     _check_slot_reconciliation,
     _check_stale_run_recovery,
 )
-from modulo.core import cron_helpers as ch
-from modulo.db.migration_guard import DivergenceCheckResult
-from modulo.settings import Settings
+from farna.core import cron_helpers as ch
+from farna.db.migration_guard import DivergenceCheckResult
+from farna.settings import Settings
 
 
 @pytest.fixture(autouse=True)
@@ -115,8 +115,8 @@ class TestCheckDispatcherReconcile:
         persistence failed, so readiness must gate rather than cut over."""
         fake = _FakeStatsRedis(blob=None)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
@@ -127,8 +127,8 @@ class TestCheckDispatcherReconcile:
     async def test_fresh_run_ok(self) -> None:
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -146,8 +146,8 @@ class TestCheckDispatcherReconcile:
         stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=61)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -160,8 +160,8 @@ class TestCheckDispatcherReconcile:
         stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=181)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
@@ -177,8 +177,8 @@ class TestCheckDispatcherReconcile:
         stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=301)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
@@ -197,8 +197,8 @@ class TestCheckDispatcherReconcile:
         )
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
@@ -215,8 +215,8 @@ class TestCheckDispatcherReconcile:
     async def test_unparsable_last_run_at_degraded(self) -> None:
         fake = _FakeStatsRedis(blob=_fresh_payload(last_run_at="not-a-date").encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
@@ -227,8 +227,8 @@ class TestCheckDispatcherReconcile:
     async def test_redis_read_error_fails_open(self) -> None:
         fake = _FakeStatsRedis(fail_get=True)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -242,8 +242,8 @@ class TestCheckDispatcherReconcile:
         key and reports ok â€” not 'has never run'."""
         fake = _FakeStatsRedis(blob=None)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             await ch.write_dispatcher_reconcile_stats(fake, {"scanned": 2, "repaired": 0, "skipped": 2})  # type: ignore[arg-type]
             result = await _check_dispatcher_reconcile()
@@ -266,8 +266,8 @@ class TestCheckDispatcherReconcile:
             ).encode()
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -295,8 +295,8 @@ class TestCheckDispatcherReconcile:
             ).encode()
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -310,8 +310,8 @@ class TestCheckDispatcherReconcile:
         as 0 rather than raising (pre-FAR-1649 worker)."""
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -335,8 +335,8 @@ class TestCheckDispatcherReconcile:
             ).encode()
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -354,8 +354,8 @@ class TestCheckDispatcherReconcile:
         pre-FAR-1803 payload."""
         fake = _FakeStatsRedis(blob=_fresh_payload(node_started_executor_lost=4).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -365,8 +365,8 @@ class TestCheckDispatcherReconcile:
         # Absent key (pre-FAR-1803 worker payload) renders 0, never raises.
         fake_absent = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake_absent),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake_absent),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -392,8 +392,8 @@ class TestCheckDispatcherReconcile:
             ).encode()
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -411,8 +411,8 @@ class TestCheckDispatcherReconcile:
         every counter defaults to 0 rather than raising."""
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -439,8 +439,8 @@ class TestCheckDispatcherReconcile:
             ).encode()
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -456,8 +456,8 @@ class TestCheckDispatcherReconcile:
         counter in this line follows)."""
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -472,8 +472,8 @@ class TestCheckDispatcherReconcile:
         background sweep degrades the health report, not prod routing."""
         fake = _FakeStatsRedis(blob=_fresh_payload(status="timeout", last_error="TimeoutError: ...").encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
@@ -486,8 +486,8 @@ class TestCheckDispatcherReconcile:
         exception) must return 'degraded' (non-gating)."""
         fake = _FakeStatsRedis(blob=_fresh_payload(status="failed", last_error="RuntimeError: boom").encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
@@ -505,8 +505,8 @@ class TestCheckDispatcherReconcile:
         )
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
@@ -519,8 +519,8 @@ class TestCheckDispatcherReconcile:
         returns 'ok' â€” the normal path."""
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -541,8 +541,8 @@ class TestCheckDispatcherReconcile:
         }
         fake = _FakeStatsRedis(blob=json.dumps(payload).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
@@ -580,8 +580,8 @@ class TestSweepStatsAdvisoryError:
         exact regime the FAR-808 incident hit (fresh last_run_at, error set)."""
         fake = _FakeStatsRedis(blob=_rhp_payload(error="probe_failed", orgs_probed=0).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_runner_health_probe()
         assert result.status != "ok"
@@ -595,8 +595,8 @@ class TestSweepStatsAdvisoryError:
         cron reported on this path (here via the stale_run_recovery wrapper)."""
         fake = _FakeStatsRedis(blob=_srr_payload(error="sweep_exploded").encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
@@ -607,8 +607,8 @@ class TestSweepStatsAdvisoryError:
     async def test_clean_fresh_payload_still_ok(self) -> None:
         fake = _FakeStatsRedis(blob=_rhp_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_runner_health_probe()
         assert result.status == "ok"
@@ -620,8 +620,8 @@ class TestSweepStatsAdvisoryError:
         stale_at = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
         fake = _FakeStatsRedis(blob=_rhp_payload(last_run_at=stale_at).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_runner_health_probe()
         assert result.status == "degraded"
@@ -635,8 +635,8 @@ class TestSweepStatsAdvisoryError:
         stale_at = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
         fake = _FakeStatsRedis(blob=_rhp_payload(last_run_at=stale_at, error="probe_failed", orgs_probed=0).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_runner_health_probe()
         assert result.status == "degraded"
@@ -653,8 +653,8 @@ class TestCheckStaleRunRecovery:
     async def test_never_run_degraded(self) -> None:
         fake = _FakeStatsRedis(blob=None)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
@@ -665,8 +665,8 @@ class TestCheckStaleRunRecovery:
     async def test_fresh_run_ok(self) -> None:
         fake = _FakeStatsRedis(blob=_srr_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "ok"
@@ -678,8 +678,8 @@ class TestCheckStaleRunRecovery:
         stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
         fake = _FakeStatsRedis(blob=_srr_payload(last_run_at=stale_at).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
@@ -690,8 +690,8 @@ class TestCheckStaleRunRecovery:
     async def test_unparsable_degraded(self) -> None:
         fake = _FakeStatsRedis(blob=b"not-json")
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
@@ -702,8 +702,8 @@ class TestCheckStaleRunRecovery:
     async def test_redis_read_error_fails_open(self) -> None:
         fake = _FakeStatsRedis(fail_get=True)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "ok"
@@ -731,8 +731,8 @@ class TestCheckSlotReconciliation:
     async def test_never_run_degraded(self) -> None:
         fake = _FakeStatsRedis(blob=None)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
@@ -743,8 +743,8 @@ class TestCheckSlotReconciliation:
     async def test_fresh_run_ok(self) -> None:
         fake = _FakeStatsRedis(blob=_sr_payload().encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "ok"
@@ -756,8 +756,8 @@ class TestCheckSlotReconciliation:
         stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
         fake = _FakeStatsRedis(blob=_sr_payload(last_run_at=stale_at).encode())
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
@@ -768,8 +768,8 @@ class TestCheckSlotReconciliation:
     async def test_unparsable_degraded(self) -> None:
         fake = _FakeStatsRedis(blob=b"not-json")
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
@@ -780,8 +780,8 @@ class TestCheckSlotReconciliation:
     async def test_redis_read_error_fails_open(self) -> None:
         fake = _FakeStatsRedis(fail_get=True)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "ok"
@@ -800,7 +800,7 @@ class TestCheckMigrationsDivergence:
         """Divergence check ran and found nothing — detail says 'up to date'."""
         from contextlib import asynccontextmanager
 
-        from modulo.db.migration_guard import DivergenceCheckResult
+        from farna.db.migration_guard import DivergenceCheckResult
 
         fake_divergence = DivergenceCheckResult(
             diverged=False,
@@ -823,11 +823,11 @@ class TestCheckMigrationsDivergence:
             yield FakeConn()
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
-            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=fake_divergence),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("farna.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("farna.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=fake_divergence),
             patch.object(Path, "exists", return_value=True),
         ):
             mock_cfg = mock_sd.from_config.return_value
@@ -844,7 +844,7 @@ class TestCheckMigrationsDivergence:
         """Divergence check found orphaned revisions — degraded with detail."""
         from contextlib import asynccontextmanager
 
-        from modulo.db.migration_guard import DivergenceCheckResult
+        from farna.db.migration_guard import DivergenceCheckResult
 
         fake_divergence = DivergenceCheckResult(
             diverged=True,
@@ -867,11 +867,11 @@ class TestCheckMigrationsDivergence:
             yield FakeConn()
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
-            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=fake_divergence),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("farna.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("farna.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=fake_divergence),
             patch.object(Path, "exists", return_value=True),
         ):
             mock_cfg = mock_sd.from_config.return_value
@@ -905,12 +905,12 @@ class TestCheckMigrationsDivergence:
             yield FakeConn()
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
-            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("farna.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("farna.api.routes.health.get_or_create_engine") as mock_eng,
             patch(
-                "modulo.api.routes.health.check_migration_divergence",
+                "farna.api.routes.health.check_migration_divergence",
                 side_effect=RuntimeError("guard crashed"),
             ),
             patch.object(Path, "exists", return_value=True),
@@ -964,11 +964,11 @@ class TestCheckMigrationsImageRevisionLag:
         )
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
-            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=clean_divergence),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("farna.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("farna.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=clean_divergence),
             patch.object(Path, "exists", return_value=True),
         ):
             mock_sd.from_config.return_value.get_heads.return_value = image_heads
@@ -1033,9 +1033,9 @@ class TestRunnerWorkspaceReconcileNotApplicable:
 
     async def _read(self, reason: str | None, fake: _FakeStatsRedis) -> Any:
         with (
-            patch("modulo.api.routes.health.docker_endpoint_skip_reason", return_value=reason),
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.docker_endpoint_skip_reason", return_value=reason),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             return await _check_runner_workspace_reconcile()
 
@@ -1139,8 +1139,8 @@ class TestSweepStatsWarmupGrace:
         """Run a sweep check with NO stats key and a given process start time."""
         with (
             patch.object(health_mod, "_START_TIME", started),
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=_FakeStatsRedis(blob=None)),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=_FakeStatsRedis(blob=None)),
         ):
             return await check()
 
@@ -1190,8 +1190,8 @@ class TestSweepStatsWarmupGrace:
         fake = _FakeStatsRedis(blob=_rhp_payload().encode())
         with (
             patch.object(health_mod, "_START_TIME", datetime.now(UTC)),
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_runner_health_probe()
         assert result.status == "ok"

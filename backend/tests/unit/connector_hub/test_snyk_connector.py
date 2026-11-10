@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.snyk import SnykConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.snyk import SnykConnector
 
 TOKEN = "snyk_test_token"
 _BASE = "https://api.snyk.io/rest"

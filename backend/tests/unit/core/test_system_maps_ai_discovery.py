@@ -7,15 +7,15 @@ from typing import Any
 import pytest
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from modulo.core.system_maps_ai_discovery import (
+from farna.core.system_maps_ai_discovery import (
     ENHANCEMENT_OUTPUT_SCHEMA,
     PROMPT_VERSION,
     RUBRIC_VERSION,
     build_discovery_prompt,
     enhance_discovery,
 )
-from modulo.core.system_maps_discovery import DiscoveryDraft, DiscoverySource, discover_draft
-from modulo.model_backends.base import ModelBackendBase
+from farna.core.system_maps_discovery import DiscoveryDraft, DiscoverySource, discover_draft
+from farna.model_backends.base import ModelBackendBase
 
 
 class _Response(HumanMessage):

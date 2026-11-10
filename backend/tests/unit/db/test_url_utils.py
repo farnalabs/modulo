@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.db.url_utils import (
+from farna.db.url_utils import (
     derive_system_database_url,
     fix_database_url,
     split_engine_sslmode,

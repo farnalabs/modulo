@@ -28,7 +28,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0290_scheduled_reports_due_scan"
 _INDEX = "ix_scheduled_reports_due_scan"
@@ -119,7 +119,7 @@ def test_postgres_default_legs_present_in_source() -> None:
 
 
 def test_model_carries_active_server_default() -> None:
-    from modulo.db.models.scheduled_report import ScheduledReport
+    from farna.db.models.scheduled_report import ScheduledReport
 
     server_default = ScheduledReport.__table__.c.active.server_default
     assert server_default is not None

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 
 def _make_mock_primitive(
@@ -42,16 +42,16 @@ class TestSearchLibrary:
         middleware's context so the REAL ``_check_agent_tool_scope`` gate runs
         against a live role + node ``capability_scope.allowed_tools`` (FAR-436).
         """
-        from modulo.api.mcp_server import _ctx_node_allowed_tools as _node_tools
-        from modulo.api.mcp_server import _ctx_org_id as _org
-        from modulo.api.mcp_server import _ctx_role as _role
+        from farna.api.mcp_server import _ctx_node_allowed_tools as _node_tools
+        from farna.api.mcp_server import _ctx_org_id as _org
+        from farna.api.mcp_server import _ctx_role as _role
 
         _org.set(org_id)
         _role.set(role)
         _node_tools.set(node_allowed_tools)
 
     async def test_returns_formatted_items(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         mock_items = [
             _make_mock_primitive(
@@ -80,10 +80,10 @@ class TestSearchLibrary:
 
         self._auth_ctx()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=page_result,
             ) as mock_list,
         ):
@@ -118,7 +118,7 @@ class TestSearchLibrary:
         }
 
     async def test_returns_empty_list_when_no_results(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         page_result = PageResult(
             items=[],
@@ -131,10 +131,10 @@ class TestSearchLibrary:
 
         self._auth_ctx()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=page_result,
             ) as mock_list,
         ):
@@ -150,14 +150,14 @@ class TestSearchLibrary:
         }
 
     async def test_passes_filter_params(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=10),
             ) as mock_list,
         ):
@@ -169,7 +169,7 @@ class TestSearchLibrary:
                 limit=10,
             )
 
-        from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
+        from farna.core.library_service.primitive_types import PRIMITIVE_TYPES
 
         mock_list.assert_called_once_with(
             mock_session.return_value.__aenter__.return_value,
@@ -186,14 +186,14 @@ class TestSearchLibrary:
         )
 
     async def test_uses_default_limit_of_20(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=20),
             ) as mock_list,
         ):
@@ -204,10 +204,10 @@ class TestSearchLibrary:
         assert kwargs["page_size"] == 20
 
     async def test_rejects_expired_token(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx()
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=False):
             result = await search_library()
 
         assert result == {
@@ -216,14 +216,14 @@ class TestSearchLibrary:
         }
 
     async def test_authenticated_viewer_browses(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx(role="viewer")
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=20),
             ) as mock_list,
         ):
@@ -238,17 +238,17 @@ class TestSearchLibrary:
         assert result["total"] == 0
 
     async def test_out_of_scope_node_denied_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx(
             role="runner",
             node_allowed_tools=["trigger_pipeline"],
         )
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 return_value=PageResult(items=[], total=0, page=1, page_size=20),
             ) as mock_list,
         ):
@@ -263,14 +263,14 @@ class TestSearchLibrary:
         mock_list.assert_not_called()
 
     async def test_error_handling(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.api.mcp_server.list_primitives",
+                "farna.api.mcp_server.list_primitives",
                 side_effect=RuntimeError("DB connection lost"),
             ),
         ):
@@ -283,14 +283,14 @@ class TestSearchLibrary:
         }
 
     async def test_lifecycle_map_type_filter_is_empty_for_ordinary_caller(self) -> None:
-        from modulo.api.mcp_server import search_library
+        from farna.api.mcp_server import search_library
 
         self._auth_ctx(role="viewer")
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server.list_primitives") as mock_list,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.list_primitives") as mock_list,
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await search_library(primitive_type="lifecycle_map")
@@ -299,17 +299,17 @@ class TestSearchLibrary:
         mock_list.assert_not_called()
 
     async def test_internal_operator_searches_every_primitive_type(self) -> None:
-        from modulo.api.mcp_server import _ctx_key_grants, search_library
+        from farna.api.mcp_server import _ctx_key_grants, search_library
 
         self._auth_ctx(role="operator")
         _ctx_key_grants.set(frozenset({"library.search.in_dev", "resource.read_only"}))
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-                patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
-                patch("modulo.api.mcp_server._session") as mock_session,
+                patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+                patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+                patch("farna.api.mcp_server._session") as mock_session,
                 patch(
-                    "modulo.api.mcp_server.list_primitives",
+                    "farna.api.mcp_server.list_primitives",
                     return_value=PageResult(items=[], total=0, page=1, page_size=20),
                 ) as mock_list,
             ):

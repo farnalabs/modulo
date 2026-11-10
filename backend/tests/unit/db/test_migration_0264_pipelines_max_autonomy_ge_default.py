@@ -41,7 +41,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models.pipeline import Pipeline
+from farna.db.models.pipeline import Pipeline
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
@@ -52,7 +52,7 @@ _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: same-named constraint on another table must not satisfy the gate.
 _REGCLASS = "'public.pipelines'::regclass"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 #: Both statements rank the SAME vocabulary through the SAME CASE shape - only

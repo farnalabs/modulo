@@ -22,17 +22,17 @@ from types import SimpleNamespace
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ProviderNotConfiguredError,
     RuntimeProvider,
     UnknownProviderTypeError,
     build_hub,
 )
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
-from modulo.db.models.environment_profile import PROVIDER_TYPES
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.local import LocalRuntimeProvider
+from farna.db.models.environment_profile import PROVIDER_TYPES
 
 scenarios("provider_matrix.feature")
 

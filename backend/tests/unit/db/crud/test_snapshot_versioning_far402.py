@@ -11,21 +11,21 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_impact import (
+from farna.core.pipeline_impact import (
     check_port_change_breaking,
     compute_port_change_impact,
     diff_edge_ports,
     diff_node_ports,
     node_port_signature,
 )
-from modulo.core.release_channels import (
+from farna.core.release_channels import (
     ChannelMetrics,
     ReleaseChannelThresholds,
     resolve_channel_binding,
     should_rollback,
 )
-from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
-from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots, resolve_snapshot_for_channel
+from farna.db.crud.pipeline_snapshot import create_snapshot_edit
+from farna.db.crud.pipeline_snapshot_versioning import diff_snapshots, resolve_snapshot_for_channel
 
 
 def _mock_snapshot(
@@ -217,7 +217,7 @@ class TestReleaseChannels:
 
 
 class TestCreateSnapshotEdit:
-    @patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock)
+    @patch("farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock)
     async def test_forwards_edit_kind(self, mock_create):
         pipeline_id = uuid.uuid4()
         account_id = uuid.uuid4()
@@ -238,29 +238,29 @@ class TestCreateSnapshotEdit:
 
 class TestRollbackDiscriminator:
     @patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+        "farna.db.crud.pipeline_snapshot_versioning.append_audit_event",
         new_callable=AsyncMock,
     )
     @patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+        "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
     )
     @patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
+        "farna.db.crud.pipeline_snapshot_versioning.resolve_effective_privilege",
         new_callable=AsyncMock,
     )
     @patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+        "farna.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
         new_callable=MagicMock,
     )
     @patch(
-        "modulo.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
+        "farna.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
         new_callable=AsyncMock,
     )
     async def test_rollback_tags_created_kind_rollback(
         self, mock_enforce, mock_apply, mock_resolve, mock_create, mock_audit
     ):
-        from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+        from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
         # FAR-609: the diff result now also carries weakened_nodes — the mock
         # must provide both lists for the caller's blended raise/audit path.
@@ -651,7 +651,7 @@ class TestResolveSnapshotIdForTrigger:
         )
 
     async def test_none_trigger_resolves_none_without_db_hit(self):
-        from modulo.core.trigger_engine import TriggerEngine
+        from farna.core.trigger_engine import TriggerEngine
 
         session = _channel_session(MagicMock())
 
@@ -660,7 +660,7 @@ class TestResolveSnapshotIdForTrigger:
         session.execute.assert_not_called()
 
     async def test_unbound_trigger_resolves_none_without_db_hit(self):
-        from modulo.core.trigger_engine import TriggerEngine
+        from farna.core.trigger_engine import TriggerEngine
 
         session = _channel_session(MagicMock())
 
@@ -669,7 +669,7 @@ class TestResolveSnapshotIdForTrigger:
         session.execute.assert_not_called()
 
     async def test_bogus_channel_resolves_none_without_db_hit(self):
-        from modulo.core.trigger_engine import TriggerEngine
+        from farna.core.trigger_engine import TriggerEngine
 
         session = _channel_session(MagicMock())
 
@@ -680,7 +680,7 @@ class TestResolveSnapshotIdForTrigger:
         session.execute.assert_not_called()
 
     async def test_bound_trigger_resolves_channel_snapshot_id(self):
-        from modulo.core.trigger_engine import TriggerEngine
+        from farna.core.trigger_engine import TriggerEngine
 
         snap = MagicMock()
         snap.id = uuid.uuid4()
@@ -694,7 +694,7 @@ class TestResolveSnapshotIdForTrigger:
         assert "canary" in params.values(), "hook must resolve the bound channel"
 
     async def test_bound_trigger_without_channel_snapshot_resolves_none(self):
-        from modulo.core.trigger_engine import TriggerEngine
+        from farna.core.trigger_engine import TriggerEngine
 
         session = _channel_session(None)
 

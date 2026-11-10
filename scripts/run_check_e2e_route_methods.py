@@ -3130,7 +3130,7 @@ def load_live_routes() -> list[LiveRoute]:
     for key, value in _TEMPLATE_ENV.items():
         os.environ[key] = value
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{temp_db.as_posix()}"
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return build_live_routes_from_routes(app.routes)
 

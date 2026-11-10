@@ -345,7 +345,7 @@ class TestC16RealIntegrityErrorMetadata:
     async def test_fk_violation_carries_constraint_name(self, db_engine: AsyncEngine) -> None:
         """Deleting a gate with a referencing decision must raise an IntegrityError
         whose metadata classifies as a decision-record FK error."""
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
@@ -361,7 +361,7 @@ class TestC16RealIntegrityErrorMetadata:
 
     @pytest.mark.asyncio
     async def test_unrelated_fk_violation_not_classified(self, db_engine: AsyncEngine) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         _, acc_id, _ = await _setup_org(db_engine)
         exc = None
@@ -487,7 +487,7 @@ class TestC16F5DecisionStateUnchangedAfterPersistenceFailure:
 
     @pytest.mark.asyncio
     async def test_outcome_identical_before_and_after_persistence_failure(self, db_engine: AsyncEngine) -> None:
-        from modulo.core.eval_engine.policy_gate import (
+        from farna.core.eval_engine.policy_gate import (
             EvalPolicySnapshot,
             EvalResultView,
             EvalView,
@@ -535,7 +535,7 @@ class TestC16F5DecisionStateUnchangedAfterPersistenceFailure:
         # deliberately broken (no real table for this row in the raw session)
         from contextlib import asynccontextmanager
 
-        from modulo.core.pipeline_engine.eval_persist_order import _persist_decision_row
+        from farna.core.pipeline_engine.eval_persist_order import _persist_decision_row
 
         @asynccontextmanager
         async def _broken_factory():

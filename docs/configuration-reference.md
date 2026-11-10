@@ -451,7 +451,7 @@ Telemetry is opt-in. With default settings, Farna Control makes **zero** externa
 
 ## Rate Limiting
 
-Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api/middleware/rate_limiter.py`](../backend/src/modulo/api/middleware/rate_limiter.py)):
+Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/farna/api/middleware/rate_limiter.py`](../backend/src/farna/api/middleware/rate_limiter.py)):
 
 | Path | Limit | Window |
 |------|-------|--------|

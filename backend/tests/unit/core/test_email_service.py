@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.email_service import (
+from farna.core.email_service import (
     EmailSendingError,
     EmailSendLimiter,
     _effective_timeout,
@@ -45,7 +45,7 @@ def mock_settings_no_smtp() -> MockSettingsNoSMTP:
 
 class TestSendEmail:
     def test_send_email_success(self, mock_settings: MockSettings) -> None:
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -68,7 +68,7 @@ class TestSendEmail:
             assert msg["To"] == "admin@example.com"
 
     def test_send_email_no_body_text(self, mock_settings: MockSettings) -> None:
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -84,7 +84,7 @@ class TestSendEmail:
 
     def test_send_email_custom_timeout(self, mock_settings: MockSettings) -> None:
         mock_settings.smtp_timeout = 15
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -108,7 +108,7 @@ class TestSendEmail:
                 self.email_from = "noreply@example.com"
 
         settings = MinimalSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -125,7 +125,7 @@ class TestSendEmail:
     def test_send_email_timeout_invalid_value_falls_back_to_default(self) -> None:
         settings = MockSettings()
         settings.smtp_timeout = "not-a-number"
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -142,7 +142,7 @@ class TestSendEmail:
     def test_send_email_timeout_zero_or_huge_clamped(self) -> None:
         settings = MockSettings()
         settings.smtp_timeout = 0
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
             send_email(
@@ -154,7 +154,7 @@ class TestSendEmail:
             mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
 
         settings.smtp_timeout = 9999
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
             send_email(
@@ -169,7 +169,7 @@ class TestSendEmail:
         settings = MockSettings()
         settings.smtp_username = ""
         settings.smtp_password = ""
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -186,7 +186,7 @@ class TestSendEmail:
 
     def test_send_email_multiple_recipients(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -212,7 +212,7 @@ class TestSendEmail:
 
     def test_send_email_smtp_failure(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
                 "smtplib"
             ).SMTPException("Connection refused")
@@ -230,7 +230,7 @@ class TestSendEmail:
         in EmailSendingError — previously such failures escaped uncaught because
         only smtplib.SMTPException was handled."""
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = ConnectionRefusedError(
                 111, "Connection refused"
             )
@@ -248,7 +248,7 @@ class TestSendEmail:
 
     def test_send_email_timeout_retried_and_wrapped(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = TimeoutError("timed out")
 
             with pytest.raises(EmailSendingError, match="timed out"):
@@ -265,7 +265,7 @@ class TestSendEmail:
         """A transient OSError on the first attempt must not abort — the retry
         succeeds on the next attempt."""
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
             mock_server.send_message.side_effect = [
@@ -287,7 +287,7 @@ class TestSendEmail:
         """SMTP auth failures can echo the configured username/password in the
         server response — the raised EmailSendingError must redact them."""
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
                 "smtplib"
             ).SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted. user failed authentication")
@@ -309,7 +309,7 @@ class TestSendEmail:
         """Error detail strings must never contain the SMTP password even when
         the underlying exception embeds it."""
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
                 "smtplib"
             ).SMTPException("authentication failed for pass")
@@ -337,7 +337,7 @@ class TestSendEmail:
 
     def test_send_email_empty_subject_still_sends(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -354,7 +354,7 @@ class TestSendEmail:
 
     def test_send_email_special_characters_in_subject(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -372,7 +372,7 @@ class TestSendEmail:
 
     def test_send_email_mime_structure(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -393,7 +393,7 @@ class TestSendEmail:
 
     def test_send_email_mime_structure_html_only(self) -> None:
         settings = MockSettings()
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -412,7 +412,7 @@ class TestSendEmail:
             assert "text/plain" in parts
 
     def test_send_email_logs_disabled_no_smtp_host(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+        caplog.set_level(logging.WARNING, logger="farna.core.email_service")
 
         result = send_email(
             MockSettingsNoSMTP(),
@@ -425,7 +425,7 @@ class TestSendEmail:
         assert any(r.getMessage() == "email.disabled_no_smtp_host" for r in caplog.records)
 
     def test_send_email_logs_warning_when_no_recipients(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+        caplog.set_level(logging.WARNING, logger="farna.core.email_service")
 
         result = send_email(
             MockSettings(),
@@ -438,9 +438,9 @@ class TestSendEmail:
         assert any(r.getMessage() == "email.no_recipients" for r in caplog.records)
 
     def test_send_email_logs_sent_with_recipients_and_subject(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.INFO, logger="modulo.core.email_service")
+        caplog.set_level(logging.INFO, logger="farna.core.email_service")
 
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value = MagicMock()
 
             result = send_email(
@@ -459,9 +459,9 @@ class TestSendEmail:
     def test_send_email_logs_send_failed_with_redacted_error(self, caplog: pytest.LogCaptureFixture) -> None:
         """The final failure log must use the redacted error, never the raw
         SMTP message that can echo configured credentials."""
-        caplog.set_level(logging.ERROR, logger="modulo.core.email_service")
+        caplog.set_level(logging.ERROR, logger="farna.core.email_service")
 
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
                 "smtplib"
             ).SMTPException("authentication failed for pass")
@@ -482,9 +482,9 @@ class TestSendEmail:
     def test_send_email_logs_retry_warning_with_redacted_error(self, caplog: pytest.LogCaptureFixture) -> None:
         """Transient failures must log a retry warning carrying the redacted
         error before the next attempt."""
-        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+        caplog.set_level(logging.WARNING, logger="farna.core.email_service")
 
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
             mock_server.send_message.side_effect = [
@@ -509,7 +509,7 @@ class TestSendEmail:
     def test_send_email_html_fallback_creates_plain_text_body(self) -> None:
         """Without body_text, the plain-text part must be the HTML with tags
         stripped — not an empty body."""
-        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+        with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 

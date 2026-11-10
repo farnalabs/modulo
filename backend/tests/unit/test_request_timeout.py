@@ -5,7 +5,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
+from farna.api.middleware.request_timeout import RequestTimeoutMiddleware
 
 
 def _build_app(timeout: int = 2, overrides: dict[str, int] | None = None) -> FastAPI:

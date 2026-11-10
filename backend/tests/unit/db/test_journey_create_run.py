@@ -31,21 +31,21 @@ from sqlalchemy import Table, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.exceptions import TriggersPausedError
-from modulo.core.trigger_engine import TriggerEngine, _apply_payload_mapping
-from modulo.db.crud.run import _floor_work_item_id, create_run
-from modulo.db.crud.variant_group import run_variant_weighted
-from modulo.db.lifecycle_refs import canonical_work_item_id
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.variant_group import VariantGroup
+from farna.core.exceptions import TriggersPausedError
+from farna.core.trigger_engine import TriggerEngine, _apply_payload_mapping
+from farna.db.crud.run import _floor_work_item_id, create_run
+from farna.db.crud.variant_group import run_variant_weighted
+from farna.db.lifecycle_refs import canonical_work_item_id
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -442,7 +442,7 @@ class TestFailOpen:
         def _boom(*_args: Any, **_kwargs: Any) -> uuid.UUID:
             raise RuntimeError("canonicalizer exploded")
 
-        monkeypatch.setattr("modulo.db.crud.run.canonical_work_item_id", _boom)
+        monkeypatch.setattr("farna.db.crud.run.canonical_work_item_id", _boom)
         run = await _create(session, work_item_refs=_REF_ENTRIES)
         assert run.id is not None
         assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
@@ -560,8 +560,8 @@ class TestVariantAndReplayWiring:
             calls.update(kwargs)
             return SimpleNamespace(id=uuid.uuid4())
 
-        monkeypatch.setattr("modulo.core.trigger_engine.create_run", _fake_create_run)
-        monkeypatch.setattr("modulo.core.trigger_engine.ensure_triggers_resumable", AsyncMock())
+        monkeypatch.setattr("farna.core.trigger_engine.create_run", _fake_create_run)
+        monkeypatch.setattr("farna.core.trigger_engine.ensure_triggers_resumable", AsyncMock())
 
         engine = TriggerEngine()
         _, _, _ = await engine.replay_event(

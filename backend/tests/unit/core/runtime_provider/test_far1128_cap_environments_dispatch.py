@@ -18,13 +18,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ProviderNotConfiguredError,
     UnknownProviderTypeError,
     WorkspaceSpec,
     build_hub,
 )
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:

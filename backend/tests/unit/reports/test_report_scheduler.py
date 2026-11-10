@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.core.reports.scheduler import (
+from farna.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
     _SIGNATURE_HEADER,
     ReportFireLeaseUnavailableError,
@@ -117,7 +117,7 @@ class TestComputeNextSend:
             compute_next_send("not-a-cron")
 
     def test_raises_type_error_when_croniter_returns_unexpected_type(self) -> None:
-        with patch("modulo.core.reports.scheduler.croniter") as mock_croniter:
+        with patch("farna.core.reports.scheduler.croniter") as mock_croniter:
             fake_cron = MagicMock()
             fake_cron.get_next.return_value = "2026-07-01"
             mock_croniter.return_value = fake_cron
@@ -131,13 +131,13 @@ class TestComputeNextSend:
 
 class TestSetRlsOrg:
     async def test_delegates_to_db_rls_helper(self) -> None:
-        from modulo.core.reports.scheduler import _set_rls_org
+        from farna.core.reports.scheduler import _set_rls_org
 
         session = MagicMock()
         org_id = uuid.uuid4()
         with (
-            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as mock_set,
-            patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_ctx,
+            patch("farna.db.rls.set_rls_org", new_callable=AsyncMock) as mock_set,
+            patch("farna.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_ctx,
         ):
             await _set_rls_org(session, org_id)
         mock_set.assert_awaited_once_with(session, org_id)
@@ -207,7 +207,7 @@ class TestFireScheduledReport:
         with (
             report_firing_env(session),
             patch(
-                "modulo.core.reports.scheduler.compute_next_send",
+                "farna.core.reports.scheduler.compute_next_send",
                 return_value=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC),
             ),
         ):
@@ -236,7 +236,7 @@ class TestFireScheduledReport:
         with (
             report_firing_env(session),
             patch(
-                "modulo.core.reports.scheduler.compute_next_send",
+                "farna.core.reports.scheduler.compute_next_send",
                 return_value=datetime.datetime(2026, 7, 8, 9, 0, tzinfo=datetime.UTC),
             ),
         ):
@@ -271,7 +271,7 @@ class TestFireScheduledReport:
         with (
             report_firing_env(session),
             patch(
-                "modulo.core.reports.scheduler.get_generator",
+                "farna.core.reports.scheduler.get_generator",
                 return_value=_cancelled_generator,
             ),
             pytest.raises(asyncio.CancelledError),
@@ -433,18 +433,18 @@ class TestFireScheduledReportLockScope:
 
         session = _LockTrackingSession(report)
         with (
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock) as rls,
+            patch("farna.core.reports.scheduler._set_rls_org", new_callable=AsyncMock) as rls,
             patch(
-                "modulo.core.reports.scheduler._acquire_report_fire_lease",
+                "farna.core.reports.scheduler._acquire_report_fire_lease",
                 new_callable=AsyncMock,
                 return_value="tok",
             ),
-            patch("modulo.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch("farna.core.reports.scheduler._release_report_fire_lease", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+            patch("farna.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
             patch(
-                "modulo.core.reports.scheduler.compute_next_send",
+                "farna.core.reports.scheduler.compute_next_send",
                 return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
             ),
         ):
@@ -486,12 +486,12 @@ class TestFireScheduledReportLockScope:
             )
 
         with (
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch("farna.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+            patch("farna.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
             patch(
-                "modulo.core.reports.scheduler.compute_next_send",
+                "farna.core.reports.scheduler.compute_next_send",
                 return_value=datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC),
             ),
         ):
@@ -573,9 +573,9 @@ class TestReportFireEpochIdempotency:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+            patch("farna.core.reports.scheduler.get_deliverer", return_value=deliverer),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -611,7 +611,7 @@ class TestReportFireEpochIdempotency:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -704,10 +704,10 @@ class TestReportFireLeaseOutcome:
 
         session = MockSession([select_returns(report)])
         with (
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-            patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+            patch("farna.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+            patch("farna.core.reports.scheduler.get_deliverer", return_value=deliverer),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -817,9 +817,9 @@ class TestReportFireLeasePrimitives:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-            patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-            patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+            patch("farna.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=[])),
             pytest.raises(asyncio.CancelledError),
         ):
             await _fire_scheduled_report(
@@ -842,7 +842,7 @@ class TestOneTimeReportNotStranded:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -869,7 +869,7 @@ class TestTerminalStampDoesNotClobber:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -892,7 +892,7 @@ class TestTerminalStampDoesNotClobber:
 
         with (
             report_firing_env(session),
-            patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
+            patch("farna.core.reports.scheduler.get_generator", return_value=generator),
         ):
             result = await _fire_scheduled_report(
                 report_id=report.id,
@@ -936,7 +936,7 @@ class TestDeliverSlackWebhook:
         client = make_http_client([make_http_response(is_success=False, status_code=500)] * 3)
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patched_http_client(client),
         ):
             results = await _deliver_slack_webhook({"text": "hello"}, [url])
@@ -991,7 +991,7 @@ class TestDeliverViaConfig:
         url = "https://hooks.example.com/report"
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patched_http_client(make_http_client([make_http_response(status_code=200)])) as client_cls,
         ):
             await _deliver_via_config(
@@ -1015,7 +1015,7 @@ def _engine_env(
     """Patch the engine cache, ``create_async_engine`` and ``get_settings`` for
     one ``_get_engine()`` probe. ``patch.object`` guarantees the cached engine
     is restored on exit; yields the ``create_async_engine`` mock."""
-    import modulo.core.reports.scheduler as rsched
+    import farna.core.reports.scheduler as rsched
 
     settings_mock = MagicMock()
     settings_mock.database_url = database_url
@@ -1038,7 +1038,7 @@ class TestGetEngine:
             mock_create.assert_called_once()
 
     def test_returns_test_engine_when_set(self) -> None:
-        import modulo.core.reports.scheduler as rsched
+        import farna.core.reports.scheduler as rsched
 
         saved = rsched._TEST_ENGINE
         try:
@@ -1049,7 +1049,7 @@ class TestGetEngine:
             rsched._set_test_engine(saved)
 
     def test_reset_test_engine_restores_default(self) -> None:
-        import modulo.core.reports.scheduler as rsched
+        import farna.core.reports.scheduler as rsched
 
         saved_engine = rsched._ENGINE
         saved_test = rsched._TEST_ENGINE
@@ -1262,7 +1262,7 @@ class TestDeliverToUrlsRejectsInvalid:
         no HTTP attempt, no exponential-backoff sleeps, just a typed failure."""
         client = await self._spy_client()
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls(["ftp://hooks.example.com/x"], {"a": 1})
@@ -1306,7 +1306,7 @@ class TestDeliverToUrlsRejectsInvalid:
         client = await self._spy_client()
         urls = ["https://hooks.example.com:abc/x", "https://hooks.example.com:99999/x"]
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls(urls, {"a": 1})
@@ -1326,7 +1326,7 @@ class TestDeliverToUrlsRejectsInvalid:
         client = await self._spy_client()
         credentialed = "https://user:secret@hooks.example.com/x"
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.core.reports.scheduler"),
+            caplog.at_level(logging.WARNING, logger="farna.core.reports.scheduler"),
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([credentialed], {"a": 1})
@@ -1357,7 +1357,7 @@ class TestDeliverToUrlsSsrf:
         ids=["loopback", "rfc1918", "cloud-metadata"],
     )
     async def test_internal_target_is_blocked_and_never_sent(self, url: str) -> None:
-        with patch("modulo.core.reports.scheduler._deliver_one_url", new_callable=AsyncMock) as deliver_one:
+        with patch("farna.core.reports.scheduler._deliver_one_url", new_callable=AsyncMock) as deliver_one:
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -1382,7 +1382,7 @@ class TestDeliverToUrlsSsrf:
         client = make_http_client([make_http_response(status_code=200)])
         pinned = AsyncMock(side_effect=[ValueError("host now resolves internally"), client])
 
-        with patch("modulo.core.reports.scheduler.pinned_async_client", new=pinned):
+        with patch("farna.core.reports.scheduler.pinned_async_client", new=pinned):
             results = await _deliver_to_urls(["https://rebind.example.com/x", SLACK_URL], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -1441,7 +1441,7 @@ class TestDeliverToUrls:
         )
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1454,7 +1454,7 @@ class TestDeliverToUrls:
         client = make_http_client([make_http_response(is_success=False, status_code=500)] * 3)
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1468,7 +1468,7 @@ class TestDeliverToUrls:
         client = make_http_client([make_http_response(is_success=False, status_code=400)])
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1482,7 +1482,7 @@ class TestDeliverToUrls:
         client = make_http_client([httpx.RequestError("connection refused"), make_http_response(status_code=200)])
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1495,7 +1495,7 @@ class TestDeliverToUrls:
         client = make_http_client([httpx.RequestError("down")] * 3)
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1508,7 +1508,7 @@ class TestDeliverToUrls:
         url = "https://hooks.example.com/x"
 
         with (
-            patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 0),
+            patch("farna.core.reports.scheduler._REPORT_MAX_RETRIES", 0),
             patched_http_client(make_http_client([])),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1529,7 +1529,7 @@ class TestDeliverToUrls:
         )
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], body, signing_secret=secret)
@@ -1549,7 +1549,7 @@ class TestDeliverToUrls:
         client = make_http_client([make_http_response(is_success=False, status_code=503)] * 8)
 
         with (
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
             patched_http_client(client),
         ):
             results = await _deliver_to_urls([url], {"a": 1})
@@ -1586,7 +1586,7 @@ class TestFireInvalidCron:
         with (
             report_firing_env(session),
             patch(
-                "modulo.core.reports.scheduler.compute_next_send",
+                "farna.core.reports.scheduler.compute_next_send",
                 side_effect=ValueError("invalid cron"),
             ),
         ):

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.auth.jwt import AuthenticatedPrincipal
 from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -20,7 +20,7 @@ _SQLALCHEMY_ERROR = SQLAlchemyError("mock", {}, None)
 
 @pytest.fixture(autouse=True)
 def _reset_error_state(monkeypatch: pytest.MonkeyPatch):
-    from modulo.api.routes import errors as errors_module
+    from farna.api.routes import errors as errors_module
 
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     monkeypatch.setenv("SECRET_KEY", "unit-test-secret-key-that-is-long-enough")
@@ -60,7 +60,7 @@ def _override_user():
 
 
 def _override_plan_context():
-    from modulo.api.dependencies import get_plan_context
+    from farna.api.dependencies import get_plan_context
 
     async def _inner():
         return all_features()
@@ -94,7 +94,7 @@ CREATE_RULE_PAYLOAD = {
 
 
 def _make_errors_app():
-    import modulo.api.routes.errors as mod
+    import farna.api.routes.errors as mod
 
     app = FastAPI()
     app.include_router(mod.router)
@@ -103,8 +103,8 @@ def _make_errors_app():
     async def _override_db():
         return session
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.auth.dependencies import get_current_user
+    from farna.api.dependencies import get_db_session
+    from farna.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user()
     app.dependency_overrides[get_db_session] = _override_db
@@ -113,7 +113,7 @@ def _make_errors_app():
 
 
 def _make_rules_app():
-    import modulo.api.routes.error_notification_rules as mod
+    import farna.api.routes.error_notification_rules as mod
 
     app = FastAPI()
     app.include_router(mod.router)
@@ -122,8 +122,8 @@ def _make_rules_app():
     async def _override_db():
         return session
 
-    from modulo.api.dependencies import get_db_session as get_db
-    from modulo.auth.dependencies import get_current_user as get_user
+    from farna.api.dependencies import get_db_session as get_db
+    from farna.auth.dependencies import get_current_user as get_user
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
@@ -132,7 +132,7 @@ def _make_rules_app():
 
 
 def _make_fwd_app():
-    import modulo.api.routes.error_forwarder_config as mod
+    import farna.api.routes.error_forwarder_config as mod
 
     app = FastAPI()
     app.include_router(mod.router)
@@ -141,8 +141,8 @@ def _make_fwd_app():
     async def _override_db():
         return session
 
-    from modulo.api.dependencies import get_db_session as get_db
-    from modulo.auth.dependencies import get_current_user as get_user
+    from farna.api.dependencies import get_db_session as get_db
+    from farna.auth.dependencies import get_current_user as get_user
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
@@ -155,9 +155,9 @@ def _make_fwd_app():
 # The request_builder returns a (client, response) tuple so we can inspect it.
 # ===========================================================================
 
-_EP = "modulo.api.routes.errors"
-_RP = "modulo.api.routes.error_notification_rules"
-_FP = "modulo.api.routes.error_forwarder_config"
+_EP = "farna.api.routes.errors"
+_RP = "farna.api.routes.error_notification_rules"
+_FP = "farna.api.routes.error_forwarder_config"
 
 _ERROR_ENDPOINTS: list[tuple[str, object, str, object, bool, bool, bool]] = [
     (
@@ -302,7 +302,7 @@ class TestErrorDatabaseErrors:
 
         hmac_patch = None
         if needs_hmac:
-            from modulo.api.routes.errors import _get_key_store
+            from farna.api.routes.errors import _get_key_store
 
             store = _get_key_store()
             hmac_patch = patch.object(store, "verify_hmac", AsyncMock(return_value=True))

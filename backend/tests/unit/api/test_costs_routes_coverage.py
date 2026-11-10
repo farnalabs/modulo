@@ -22,11 +22,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -41,7 +41,7 @@ _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
 _RUNTIME = RuntimeError("kaboom")
 
-_PREFIX = "modulo.api.routes.costs."
+_PREFIX = "farna.api.routes.costs."
 
 
 def _make_settings() -> Settings:
@@ -127,7 +127,7 @@ def _assert_error_matrix(
 
 
 def test_coerce_spend_limit_usd_invalid_returns_none() -> None:
-    from modulo.api.routes.costs import _coerce_spend_limit_usd
+    from farna.api.routes.costs import _coerce_spend_limit_usd
 
     assert _coerce_spend_limit_usd(None) is None
     assert _coerce_spend_limit_usd("not-a-number") is None  # type: ignore[arg-type]
@@ -135,7 +135,7 @@ def test_coerce_spend_limit_usd_invalid_returns_none() -> None:
 
 
 def test_coerce_cents_usd_invalid_returns_none() -> None:
-    from modulo.api.routes.costs import _coerce_cents_usd
+    from farna.api.routes.costs import _coerce_cents_usd
 
     assert _coerce_cents_usd(None) is None
     assert _coerce_cents_usd("bad") is None  # type: ignore[arg-type]
@@ -386,7 +386,7 @@ def test_update_cost_controls_applies_all_fields(client: tuple[TestClient, Async
 
 def test_update_cost_controls_no_settings_only_leaves_org_untouched() -> None:
     """A request with only unset optional fields must not rewrite settings_json."""
-    from modulo.api.routes.costs import UpdateCostControlsRequest, _cost_controls_patch
+    from farna.api.routes.costs import UpdateCostControlsRequest, _cost_controls_patch
 
     org = MagicMock()
     org.daily_spend_limit = None
@@ -791,7 +791,7 @@ def test_delete_report_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
 
 
 def test_build_rolling_anomalies_detects_spike_and_skips_flat() -> None:
-    from modulo.api.routes.costs import _build_rolling_anomalies
+    from farna.api.routes.costs import _build_rolling_anomalies
 
     base = [(datetime(2025, 1, 1, tzinfo=UTC).date(), 1.0)] * 7
     flat = [*base, (datetime(2025, 1, 2, tzinfo=UTC).date(), 1.0)]
@@ -817,7 +817,7 @@ def _make_stored_anomaly(date_value: object = None) -> MagicMock:
 
 
 def test_merge_anomalies_keeps_stored_dismissals_and_filters_stored_only() -> None:
-    from modulo.api.routes.costs import _merge_anomalies
+    from farna.api.routes.costs import _merge_anomalies
 
     detected = [
         {

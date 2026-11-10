@@ -15,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.settings import Settings
+from farna.core.rate_limiter import AuthRateLimiter
+from farna.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Register feature file
@@ -76,7 +76,7 @@ def _active_account() -> MagicMock:
 
 def _patch_active_account() -> Any:
     return patch(
-        "modulo.api.routes.auth.get_account_by_id",
+        "farna.api.routes.auth.get_account_by_id",
         new=AsyncMock(return_value=_active_account()),
     )
 
@@ -121,9 +121,9 @@ def _post_logout(client: TestClient) -> Any:
 
 @pytest.fixture
 def token_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.settings import get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.settings import get_settings
 
     async def override_session() -> Generator[AsyncMock, None]:
         yield mock_session
@@ -164,11 +164,11 @@ def login_jwt(email: str, password: str, request: Any, ctx: dict[str, Any], toke
     mock_user.is_system_admin = False
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
         patch(
-            "modulo.api.routes.auth.list_memberships_for_account",
+            "farna.api.routes.auth.list_memberships_for_account",
             new=AsyncMock(return_value=[MagicMock(organisation_id=_ORG_ID, role="admin")]),
         ),
     ):
@@ -278,9 +278,9 @@ def authenticated_request_me(request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.created_at = datetime.now(UTC)
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)),
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="admin"),
         ),
     ):
@@ -321,12 +321,12 @@ def logged_in_as(email: str, request: Any, ctx: dict[str, Any], token_client: Te
     mock_user.is_system_admin = False
 
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
         patch(
-            "modulo.api.routes.auth.list_memberships_for_account",
+            "farna.api.routes.auth.list_memberships_for_account",
             new=AsyncMock(return_value=[MagicMock(organisation_id=_ORG_ID, role="admin")]),
         ),
     ):
@@ -348,8 +348,8 @@ def refresh_with_stored_token(request: Any, ctx: dict[str, Any], token_client: T
     time_mod.sleep(1.0)
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)
@@ -396,7 +396,7 @@ def tokens_differ_from_old(request: Any, ctx: dict[str, Any]) -> None:
 
 @given("I have a refresh token with sequence 0")
 def refresh_token_seq0(request: Any, ctx: dict[str, Any]) -> None:
-    from modulo.auth.jwt import create_refresh_token
+    from farna.auth.jwt import create_refresh_token
 
     family_id = str(uuid.uuid4())
     ctx["theft_family_id"] = family_id
@@ -418,8 +418,8 @@ def refresh_once(request: Any, ctx: dict[str, Any], token_client: TestClient) ->
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, False))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)
@@ -431,8 +431,8 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)
@@ -445,8 +445,8 @@ def refresh_again_within_grace(request: Any, ctx: dict[str, Any], token_client: 
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, True))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, False, True))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)
@@ -459,8 +459,8 @@ def refresh_again_beyond_grace(request: Any, ctx: dict[str, Any], token_client: 
     refresh_token = ctx.get("theft_refresh_token")
     with (
         _patch_active_account(),
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(1, True, False))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)
@@ -482,7 +482,7 @@ def error_suspected_theft(request: Any) -> None:
 @when(parsers.parse("I POST /api/auth/logout with my refresh token"))
 def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
-    with patch("modulo.api.routes.auth.blacklist_family", new=AsyncMock(return_value=True)):
+    with patch("farna.api.routes.auth.blacklist_family", new=AsyncMock(return_value=True)):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_logout(token_client)
         _store_response(request, ctx, resp)
@@ -492,8 +492,8 @@ def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
 def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     with (
-        patch("modulo.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True, False))),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=AsyncMock(return_value=(0, True, False))),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         _arm_refresh_cookie(token_client, refresh_token)
         resp = _post_refresh(token_client)

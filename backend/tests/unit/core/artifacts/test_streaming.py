@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.artifacts.store import LocalArtifactStore
-from modulo.core.artifacts.streaming import StreamingArtifactWriter
+from farna.core.artifacts.store import LocalArtifactStore
+from farna.core.artifacts.streaming import StreamingArtifactWriter
 
 
 def _make_store(tmp_path) -> LocalArtifactStore:

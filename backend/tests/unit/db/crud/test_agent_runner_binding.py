@@ -14,7 +14,7 @@ import pytest
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
-from modulo.db.crud.agent_runner_binding import (
+from farna.db.crud.agent_runner_binding import (
     count_bindings_for_backend,
     delete_all_bindings_for_agent,
     delete_binding,
@@ -22,8 +22,8 @@ from modulo.db.crud.agent_runner_binding import (
     list_bindings_for_agent,
     replace_agent_bindings,
 )
-from modulo.db.models.agent_runner_binding import AgentRunnerBinding
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models.agent_runner_binding import AgentRunnerBinding
+from farna.db.models.model_backend import ModelBackend
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

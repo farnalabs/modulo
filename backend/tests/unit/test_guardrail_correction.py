@@ -27,8 +27,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.guardrails.correction import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.guardrails.correction import (
     CorrectionDefinition,
     CorrectionDetectorFamily,
     CorrectionVerdict,
@@ -43,7 +43,7 @@ from modulo.core.guardrails.correction import (
     resume_interrupted_correction,
     run_single_node_correction,
 )
-from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+from farna.model_backends.stub.backend import StubModelBackend, normalize_input
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -193,8 +193,8 @@ def test_regex_revalidation_with_empty_pattern_fails_closed():
     """MAJOR-1: a regex revalidator with an empty pattern/field must NOT mark the
     correction resolved (fail closed) — the empty-pattern engine failure is not
     inverted into a false pass."""
-    from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails.correction import _revalidate_regex
+    from farna.core.eval_engine import EvalEngine
+    from farna.core.guardrails.correction import _revalidate_regex
 
     engine = EvalEngine()
     # Empty pattern/field (the pre-fix default) -> passed=False (fail closed).
@@ -217,8 +217,8 @@ def test_model_judge_revalidation_carries_the_rubric_as_a_typed_question():
     reaches the judge through the guarded input (an empty field previously
     produced empty content, so the judge validated nothing).
     """
-    from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails.correction import _revalidate_model_judge
+    from farna.core.eval_engine import EvalEngine
+    from farna.core.guardrails.correction import _revalidate_model_judge
 
     captured: dict[str, Any] = {}
 
@@ -247,8 +247,8 @@ def test_model_judge_revalidation_carries_the_rubric_as_a_typed_question():
 
 def test_model_judge_revalidation_without_a_backend_raises_loudly():
     """A rubric that cannot be represented is an error, never a silent default."""
-    from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails.correction import _revalidate_model_judge
+    from farna.core.eval_engine import EvalEngine
+    from farna.core.guardrails.correction import _revalidate_model_judge
 
     with pytest.raises(ValueError, match="revalidation model backend"):
         _revalidate_model_judge(
@@ -795,7 +795,7 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_claim_slot_respects_concurrency_cap():
-    from modulo.core.guardrails.correction import claim_correction_slot
+    from farna.core.guardrails.correction import claim_correction_slot
 
     correction = _correction(concurrency_cap=2)
     assert await claim_correction_slot(_FakeSession(active_count=0), org_id=_ORG, correction=correction) is True
@@ -810,7 +810,7 @@ async def test_claim_slot_excludes_current_record_self_count():
     cap=1 with one 'correcting' record (the current one) must admit the claim —
     the current record's own 'correcting' status must not block its correction.
     """
-    from modulo.core.guardrails.correction import claim_correction_slot
+    from farna.core.guardrails.correction import claim_correction_slot
 
     correction = _correction(concurrency_cap=1)
     assert (
@@ -835,7 +835,7 @@ async def test_dispatch_reject_correction_resolves_and_dispatches():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from modulo.core.feedback_manager import FeedbackManager, dispatch_reject_correction
+    from farna.core.feedback_manager import FeedbackManager, dispatch_reject_correction
 
     run = SimpleNamespace(pipeline_id=uuid.uuid4(), account_id=uuid.uuid4())
     node_input = {"body": "secret: hunter2"}
@@ -890,13 +890,13 @@ async def test_dispatch_reject_correction_resolves_and_dispatches():
     hub.get = AsyncMock(return_value=backend)
 
     with (
-        patch("modulo.core.feedback_manager.get_run", AsyncMock(return_value=run)),
-        patch("modulo.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[guardrail])),
+        patch("farna.core.feedback_manager.get_run", AsyncMock(return_value=run)),
+        patch("farna.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[guardrail])),
         patch(
-            "modulo.core.feedback_manager.queries.get_feedback_record_for_node",
+            "farna.core.feedback_manager.queries.get_feedback_record_for_node",
             AsyncMock(return_value=record),
         ),
-        patch("modulo.core.pipeline_engine.decorator.get_model_backend_hub", return_value=hub),
+        patch("farna.core.pipeline_engine.decorator.get_model_backend_hub", return_value=hub),
         patch.object(
             FeedbackManager,
             "run_single_node_correction",
@@ -927,7 +927,7 @@ async def test_dispatch_reject_correction_no_correction_guardrail_returns_none()
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from modulo.core.feedback_manager import dispatch_reject_correction
+    from farna.core.feedback_manager import dispatch_reject_correction
 
     run = SimpleNamespace(pipeline_id=uuid.uuid4(), account_id=uuid.uuid4())
     session = AsyncMock()
@@ -943,8 +943,8 @@ async def test_dispatch_reject_correction_no_correction_guardrail_returns_none()
 
     plain_guardrail = _guardrail()  # no correction block
     with (
-        patch("modulo.core.feedback_manager.get_run", AsyncMock(return_value=run)),
-        patch("modulo.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[plain_guardrail])),
+        patch("farna.core.feedback_manager.get_run", AsyncMock(return_value=run)),
+        patch("farna.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[plain_guardrail])),
     ):
         outcome = await dispatch_reject_correction(
             session_factory=session_factory,
@@ -961,8 +961,8 @@ async def test_dispatch_reject_correction_no_correction_guardrail_returns_none()
 
 async def test_model_judge_revalidation_family_runs_the_bound_judge() -> None:
     """The MODEL_JUDGE revalidation branch dispatches to the injected judge."""
-    from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails.correction import _run_different_family_revalidation
+    from farna.core.eval_engine import EvalEngine
+    from farna.core.guardrails.correction import _run_different_family_revalidation
 
     captured: list[dict[str, Any]] = []
 

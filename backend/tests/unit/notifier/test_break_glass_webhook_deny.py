@@ -20,9 +20,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.notifier.conftest import begin_context, make_scalar_result, session_factory_for
 
-from modulo.core.notifier import DispatchResult, Notifier
-from modulo.db.models.account import Account
-from modulo.db.models.notification_endpoint import NotificationEndpoint
+from farna.core.notifier import DispatchResult, Notifier
+from farna.db.models.account import Account
+from farna.db.models.notification_endpoint import NotificationEndpoint
 
 _ORG = uuid.uuid4()
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -159,7 +159,7 @@ async def test_reject_fail_closed_on_db_error(notifier: Notifier) -> None:
     ep = _endpoint(account_id=uuid.uuid4())
     with (
         patch.object(notifier, "_session_factory", _session_factory([], raise_on_execute=True)),
-        patch("modulo.core.notifier._record_owner_read_failure") as mock_metric,
+        patch("farna.core.notifier._record_owner_read_failure") as mock_metric,
     ):
         kept = await notifier._reject_break_glass_owned([ep])
     assert kept == []
@@ -174,8 +174,8 @@ async def test_reject_uses_shared_builder_rule(notifier: Notifier) -> None:
     owner.id = ep.account_id
     with (
         patch.object(notifier, "_session_factory", _session_factory([owner])),
-        patch("modulo.core.notifier.is_break_glass_denied", return_value=False) as mock_denied,
-        patch("modulo.core.notifier.is_break_glass_live", return_value=False) as mock_live,
+        patch("farna.core.notifier.is_break_glass_denied", return_value=False) as mock_denied,
+        patch("farna.core.notifier.is_break_glass_live", return_value=False) as mock_live,
     ):
         kept = await notifier._reject_break_glass_owned([ep])
     assert kept == [ep]
@@ -212,7 +212,7 @@ async def _dispatch(
         patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=endpoints)),
         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
         patch.object(n, "_session_factory", _session_factory(owners, raise_on_execute=raise_on_execute)),
-        patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper_instance),
+        patch("farna.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper_instance),
     ):
         mock_dispatch.return_value = DispatchResult(
             endpoint_id=uuid.uuid4(),

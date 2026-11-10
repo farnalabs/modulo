@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.auth.ws_token import WsTokenConsumeError, WsTokenExpiredError, consume_ws_token, create_ws_token
+from farna.auth.ws_token import WsTokenConsumeError, WsTokenExpiredError, consume_ws_token, create_ws_token
 
 
 @pytest.fixture

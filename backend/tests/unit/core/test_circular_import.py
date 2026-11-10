@@ -17,9 +17,9 @@ import pytest
 # The import paths that previously triggered the circular-import failure.
 # Each must succeed in a FRESH interpreter (no shared module cache).
 _IMPORT_PATHS: list[str] = [
-    "import modulo.api.routes.admin",
-    "import modulo.core.pipeline_engine",
-    "import modulo.core.hitl_manager",
+    "import farna.api.routes.admin",
+    "import farna.core.pipeline_engine",
+    "import farna.core.hitl_manager",
 ]
 
 

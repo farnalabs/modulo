@@ -26,16 +26,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-from modulo.api.routes.runs import (
+from farna.api.routes.runs import (
     RunResponse,
     _build_list_item,
     _build_run_response,
     _ListPageContext,
 )
-from modulo.core import cron_helpers as ch
-from modulo.core import pipeline_execution as pe
-from modulo.db.models.run import Run
-from modulo.settings import Settings
+from farna.core import cron_helpers as ch
+from farna.core import pipeline_execution as pe
+from farna.db.models.run import Run
+from farna.settings import Settings
 
 _RUN_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
@@ -404,7 +404,7 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
         # _nodeless_no_live_marker_sql), so this assertion pins the two legs
         # together — it fails if the SQL ever goes back to a hand-written
         # literal that a constant rename would silently orphan.
-        from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
+        from farna.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
 
         assert f'"state": "{MARKER_STATE_CLEARED_AT_HITL}"' in sql
         assert '"state": "cleared_at_hitl"' in sql  # the constant's shipped value

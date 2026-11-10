@@ -24,12 +24,12 @@ from subprocess import Popen
 
 import pytest
 
-import modulo.launcher.secrets_file as secrets_file_module
-import modulo.launcher.supervisor as supervisor_module
-from modulo.launcher import policy as policy_module
-from modulo.launcher.secrets_file import load_or_create
-from modulo.launcher.state import LauncherState, save_state
-from modulo.launcher.supervisor import (
+import farna.launcher.secrets_file as secrets_file_module
+import farna.launcher.supervisor as supervisor_module
+from farna.launcher import policy as policy_module
+from farna.launcher.secrets_file import load_or_create
+from farna.launcher.state import LauncherState, save_state
+from farna.launcher.supervisor import (
     ChildSpec,
     DataDirLock,
     DataDirLockError,
@@ -611,7 +611,7 @@ def test_lock_release_clears_the_holder_record(tmp_path: Path) -> None:
 _LOCK_CHILD_SCRIPT = """
 import sys
 from pathlib import Path
-from modulo.launcher.supervisor import DataDirLock
+from farna.launcher.supervisor import DataDirLock
 
 lock = DataDirLock(Path(sys.argv[1]), mode='serve')
 lock.acquire()
@@ -741,7 +741,7 @@ def test_request_stop_without_holder_is_noop(tmp_path: Path) -> None:
 @requires_posix
 def test_request_stop_refuses_recycled_holder_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A recycled PID is never SIGTERMed — the STARTTIME must match."""
-    from modulo.launcher import supervisor as supervisor_module
+    from farna.launcher import supervisor as supervisor_module
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -789,7 +789,7 @@ def test_request_stop_reports_unverifiable_holder_still_locking(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Legacy lock file (no starttime) + held lock → still verified via flock."""
-    from modulo.launcher import supervisor as supervisor_module
+    from farna.launcher import supervisor as supervisor_module
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -829,7 +829,7 @@ def test_reconcile_removes_dead_postmaster_pidfile(tmp_path: Path) -> None:
 
 
 def test_reconcile_refuses_live_postgres_pidfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher import supervisor as supervisor_module
+    from farna.launcher import supervisor as supervisor_module
 
     pgdata = tmp_path / "pgdata"
     pgdata.mkdir()
@@ -842,7 +842,7 @@ def test_reconcile_refuses_live_postgres_pidfile(tmp_path: Path, monkeypatch: py
 
 
 def test_reconcile_treats_pid_reuse_as_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher import supervisor as supervisor_module
+    from farna.launcher import supervisor as supervisor_module
 
     pgdata = tmp_path / "pgdata"
     pgdata.mkdir()
@@ -871,7 +871,7 @@ def test_reconcile_missing_pgdata_is_noop(tmp_path: Path) -> None:
 
 
 def test_reconcile_sweeps_stale_redis_conf_files(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import REDIS_CONF_PREFIX
+    from farna.launcher.supervisor import REDIS_CONF_PREFIX
 
     pgdata = tmp_path / "pgdata"
     pgdata.mkdir()
@@ -958,7 +958,7 @@ def _write_bootstrapped_data_dir(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bypass the Windows-refusal seams this module's tests exercise."""
-    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
+    bypass_platform_seams(monkeypatch, "farna.launcher.secrets_file")
 
 
 def test_collect_status_uninitialized_dir(tmp_path: Path) -> None:
@@ -1035,7 +1035,7 @@ def test_child_shim_argv_wraps_on_macos(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setitem(supervisor_module._PROCESS_BACKENDS, "darwin", _DarwinStub())
     argv = child_shim_argv(["redis-server", "--port", "1"], parent_pid=4242)
-    assert argv[:3] == [sys.executable, "-m", "modulo.launcher.supervisor"]
+    assert argv[:3] == [sys.executable, "-m", "farna.launcher.supervisor"]
     assert argv[argv.index("--parent-pid") + 1] == "4242"
     assert argv[argv.index("--parent-starttime") + 1] == "987654"
 
@@ -1045,13 +1045,13 @@ def test_child_shim_argv_wraps_on_linux() -> None:
     if sys.platform != "linux":
         pytest.skip("Linux-only shim mechanics")
     argv = child_shim_argv(["redis-server", "--port", "1"], parent_pid=os.getpid())
-    assert argv[:3] == [sys.executable, "-m", "modulo.launcher.supervisor"]
+    assert argv[:3] == [sys.executable, "-m", "farna.launcher.supervisor"]
 
 
 def _child_argv_pair(recorded: object = ...) -> list[str]:
     """Build a direct-call argv for child_shim_main pointing at this pytest."""
     if recorded is ...:
-        from modulo.launcher.supervisor import read_proc_starttime as _reader
+        from farna.launcher.supervisor import read_proc_starttime as _reader
 
         recorded = _reader(os.getpid())
     return [
@@ -1079,9 +1079,9 @@ def test_child_shim_main_rejects_empty_child_argv(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A shim invocation with no child after -- logs and exits 2."""
-    from modulo.launcher.supervisor import child_shim_main
+    from farna.launcher.supervisor import child_shim_main
 
-    with caplog.at_level(logging.ERROR, logger="modulo.launcher.supervisor"):
+    with caplog.at_level(logging.ERROR, logger="farna.launcher.supervisor"):
         result = child_shim_main(["modulo-child-shim", "--parent-pid", "1", "--parent-starttime", "1", "--"])
     assert result == 2
     assert "shim.no_child_argv" in caplog.text
@@ -1090,7 +1090,7 @@ def test_child_shim_main_rejects_empty_child_argv(
 @requires_posix
 def test_child_shim_main_propagates_child_exit_code() -> None:
     """A child's exit code is what the shim returns (crash bookkeeping truth)."""
-    from modulo.launcher.supervisor import child_shim_main
+    from farna.launcher.supervisor import child_shim_main
 
     argv = [*_child_argv_pair(), "raise SystemExit(3)"]
     assert child_shim_main(argv) == 3
@@ -1101,7 +1101,7 @@ def test_child_shim_main_abandons_on_recorded_starttime_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A changed/missing STARTTIME kills the child and exits 2."""
-    from modulo.launcher.supervisor import child_shim_main
+    from farna.launcher.supervisor import child_shim_main
 
     argv = [*_child_argv_pair(100500), "import time; time.sleep(60)"]
     monkeypatch.setattr(supervisor_module, "read_proc_starttime", lambda _pid: 200000)
@@ -1313,7 +1313,7 @@ def test_degraded_record_is_written_0600(tmp_path: Path) -> None:
 
 
 def test_degraded_record_readers_are_tolerant(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import (
+    from farna.launcher.supervisor import (
         clear_degraded_record,
         read_degraded_record,
         write_degraded_record,
@@ -1332,7 +1332,7 @@ def test_degraded_record_readers_are_tolerant(tmp_path: Path) -> None:
 
 
 def test_collect_status_surfaces_the_degraded_record(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+    from farna.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1388,13 +1388,13 @@ def test_entrypoint_sources_the_policy_constants() -> None:
     text = entrypoint.read_text(encoding="utf-8")
     assert "SLIDING_WINDOW_S=300" not in text  # inline magic numbers removed
     assert "SLIDING_CRASH_LIMIT=5" not in text
-    assert "modulo.launcher.policy" in text
+    assert "farna.launcher.policy" in text
     assert "SLIDING_RESTART_SLEEP_S" in text
 
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-m", "modulo.launcher.policy"],
+        [sys.executable, "-m", "farna.launcher.policy"],
         capture_output=True,
         text=True,
         timeout=120,

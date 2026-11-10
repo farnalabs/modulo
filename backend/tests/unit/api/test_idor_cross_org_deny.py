@@ -17,16 +17,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     deny_break_glass_mint,
     get_db_session,
     get_plan_context,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -152,8 +152,8 @@ def _wrong_org_backend() -> MagicMock:
 class TestAgentCrossOrgDeny:
     def test_get_agent_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/agents/{_AGENT_ID}")
         assert resp.status_code == 404
@@ -161,22 +161,22 @@ class TestAgentCrossOrgDeny:
     def test_optimize_prompt_wrong_org_returns_404(self, client: TestClient) -> None:
         optimize_result = SimpleNamespace(suggested_prompt="p", rationale="r", analysis="a")
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
+            patch("farna.api.routes.agents.set_rls_org"),
             patch(
-                "modulo.api.routes.agents.get_eval_results_with_defs",
+                "farna.api.routes.agents.get_eval_results_with_defs",
                 return_value=([MagicMock()], [MagicMock()]),
             ),
             patch(
-                "modulo.api.routes.agents.create_secrets_backend",
+                "farna.api.routes.agents.create_secrets_backend",
                 return_value=MagicMock(get_secret=MagicMock(return_value="{}")),
             ),
             patch(
-                "modulo.core.model_backend_hub._build_backend",
+                "farna.core.model_backend_hub._build_backend",
                 return_value=MagicMock(invoke=AsyncMock(return_value=MagicMock(content="ok"))),
             ),
             patch(
-                "modulo.api.routes.agents.PromptOptimizer",
+                "farna.api.routes.agents.PromptOptimizer",
                 return_value=MagicMock(optimize=AsyncMock(return_value=optimize_result)),
             ),
         ):
@@ -188,18 +188,18 @@ class TestAgentCrossOrgDeny:
 
     def test_list_prompt_versions_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/agents/{_AGENT_ID}/prompts")
         assert resp.status_code == 404
 
     def test_get_prompt_version_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
+            patch("farna.api.routes.agents.set_rls_org"),
             patch(
-                "modulo.api.routes.agents.get_prompt_version",
+                "farna.api.routes.agents.get_prompt_version",
                 return_value=_PROMPT_VERSION_ENTRY,
             ),
         ):
@@ -208,10 +208,10 @@ class TestAgentCrossOrgDeny:
 
     def test_diff_prompt_versions_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=_wrong_org_agent()),
+            patch("farna.api.routes.agents.set_rls_org"),
             patch(
-                "modulo.api.routes.agents.get_prompt_version",
+                "farna.api.routes.agents.get_prompt_version",
                 return_value=_PROMPT_VERSION_ENTRY,
             ),
         ):
@@ -231,27 +231,27 @@ class TestAgentCrossOrgDeny:
 class TestConnectorCrossOrgDeny:
     def test_get_connector_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
         assert resp.status_code == 404
 
     def test_connector_health_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
         assert resp.status_code == 404
 
     def test_update_connector_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.get_connector_instance", return_value=_wrong_org_connector()),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.patch(
                 f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -269,9 +269,9 @@ class TestConnectorCrossOrgDeny:
 class TestModelBackendCrossOrgDeny:
     def test_get_model_backend_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
         assert resp.status_code == 404
@@ -286,10 +286,10 @@ class TestModelBackendCrossOrgDeny:
         undecryptable credential produced a 500 instead of a 404.
         """
         with (
-            patch("modulo.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
-            patch("modulo.api.routes.model_backends.create_secrets_backend") as secrets_factory,
+            patch("farna.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.create_secrets_backend") as secrets_factory,
         ):
             resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
         assert resp.status_code == 404
@@ -297,9 +297,9 @@ class TestModelBackendCrossOrgDeny:
 
     def test_list_pipeline_references_wrong_org_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.get_model_backend", return_value=_wrong_org_backend()),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
         assert resp.status_code == 404

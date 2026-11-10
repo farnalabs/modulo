@@ -7,7 +7,7 @@ evaluation, the combined evaluator, the cents conversion, and the kill-switch
 
 from decimal import Decimal
 
-from modulo.core.spend_ceiling import (
+from farna.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
     RUN_CEILING_EXCEEDED,
     cents_from_usd,

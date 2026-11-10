@@ -55,16 +55,16 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.connectors.base import ConnectorACL
-from modulo.connectors.circleci import CircleCIConnector
-from modulo.core.connector_hub import _TracedConnector
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_connector_hub, set_model_backend_hub
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
-from modulo.db.crud.run import graph_contains_dispatch
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+import farna.core.pipeline_engine.node_runner as nr
+from farna.connectors.base import ConnectorACL
+from farna.connectors.circleci import CircleCIConnector
+from farna.core.connector_hub import _TracedConnector
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_connector_hub, set_model_backend_hub
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
+from farna.db.crud.run import graph_contains_dispatch
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 _PROJECT_SLUG = "gh/acme/widget"
 _PIPELINE_URL = "https://circleci.com/api/v2/project/gh/acme/widget/pipeline"

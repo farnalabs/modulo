@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.capability_scope import compute_run_fetch_scope
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.capability_scope import compute_run_fetch_scope
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -147,13 +147,13 @@ class _FakeSessionCM:
 
 def _patch_hub_construction(mock_hub: MagicMock) -> ExitStack:
     stack = ExitStack()
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()))
-    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()))
-    stack.enter_context(patch("modulo.core.connector_hub.ConnectorHub", return_value=mock_hub))
-    stack.enter_context(patch("modulo.core.pipeline_engine.decorator.set_connector_hub"))
-    stack.enter_context(patch("modulo.core.runtime_provider.create_default_hub", return_value=MagicMock()))
-    stack.enter_context(patch("modulo.core.secrets_backend.create_secrets_backend", return_value=MagicMock()))
-    stack.enter_context(patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test")))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()))
+    stack.enter_context(patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()))
+    stack.enter_context(patch("farna.core.connector_hub.ConnectorHub", return_value=mock_hub))
+    stack.enter_context(patch("farna.core.pipeline_engine.decorator.set_connector_hub"))
+    stack.enter_context(patch("farna.core.runtime_provider.create_default_hub", return_value=MagicMock()))
+    stack.enter_context(patch("farna.core.secrets_backend.create_secrets_backend", return_value=MagicMock()))
+    stack.enter_context(patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="test")))
     return stack
 
 

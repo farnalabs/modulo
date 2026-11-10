@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 
 @pytest.fixture
@@ -42,10 +42,10 @@ def _make_template(**overrides: object) -> MagicMock:
 class TestCreateCompositeTemplate:
     async def test_creates_and_returns_template(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.composite_template.CompositeTemplate",
+            "farna.db.crud.composite_template.CompositeTemplate",
             return_value=_make_template(),
         ) as mock_model:
-            from modulo.db.crud.composite_template import create_composite_template
+            from farna.db.crud.composite_template import create_composite_template
 
             result = await create_composite_template(
                 mock_session,
@@ -73,10 +73,10 @@ class TestCreateCompositeTemplate:
 
     async def test_creates_with_optional_fields(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.composite_template.CompositeTemplate",
+            "farna.db.crud.composite_template.CompositeTemplate",
             return_value=_make_template(),
         ) as mock_model:
-            from modulo.db.crud.composite_template import create_composite_template
+            from farna.db.crud.composite_template import create_composite_template
 
             ports = [{"id": "p1", "name": "system_prompt", "type": "string"}]
             result = await create_composite_template(
@@ -101,7 +101,7 @@ class TestGetCompositeTemplate:
         scalar = MagicMock(return_value=template)
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=scalar))
 
-        from modulo.db.crud.composite_template import get_composite_template
+        from farna.db.crud.composite_template import get_composite_template
 
         result = await get_composite_template(mock_session, _TEMPLATE_ID)
         assert result is not None
@@ -110,7 +110,7 @@ class TestGetCompositeTemplate:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.composite_template import get_composite_template
+        from farna.db.crud.composite_template import get_composite_template
 
         result = await get_composite_template(mock_session, uuid.uuid4())
         assert result is None
@@ -132,7 +132,7 @@ class TestListCompositeTemplates:
             ]
         )
 
-        from modulo.db.crud.composite_template import list_composite_templates
+        from farna.db.crud.composite_template import list_composite_templates
 
         result = await list_composite_templates(mock_session, org_id=_ORG_ID, page=1, page_size=20)
         assert isinstance(result, PageResult)
@@ -147,7 +147,7 @@ class TestUpdateCompositeTemplate:
         template = _make_template(name="Updated")
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
-        from modulo.db.crud.composite_template import update_composite_template
+        from farna.db.crud.composite_template import update_composite_template
 
         result = await update_composite_template(mock_session, _TEMPLATE_ID, {"name": "Updated"})
         assert result is not None
@@ -157,7 +157,7 @@ class TestUpdateCompositeTemplate:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.composite_template import update_composite_template
+        from farna.db.crud.composite_template import update_composite_template
 
         result = await update_composite_template(mock_session, uuid.uuid4(), {"name": "x"})
         assert result is None
@@ -168,7 +168,7 @@ class TestDeleteCompositeTemplate:
         template = _make_template()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
-        from modulo.db.crud.composite_template import delete_composite_template
+        from farna.db.crud.composite_template import delete_composite_template
 
         result = await delete_composite_template(mock_session, _TEMPLATE_ID)
         assert result is True
@@ -178,7 +178,7 @@ class TestDeleteCompositeTemplate:
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.composite_template import delete_composite_template
+        from farna.db.crud.composite_template import delete_composite_template
 
         result = await delete_composite_template(mock_session, uuid.uuid4())
         assert result is False
@@ -189,7 +189,7 @@ class TestSoftDeleteCompositeTemplate:
         template = _make_template()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
-        from modulo.db.crud.composite_template import soft_delete_composite_template
+        from farna.db.crud.composite_template import soft_delete_composite_template
 
         result = await soft_delete_composite_template(mock_session, _TEMPLATE_ID)
         assert result is not None
@@ -199,7 +199,7 @@ class TestSoftDeleteCompositeTemplate:
     async def test_soft_delete_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.composite_template import soft_delete_composite_template
+        from farna.db.crud.composite_template import soft_delete_composite_template
 
         result = await soft_delete_composite_template(mock_session, uuid.uuid4())
         assert result is None
@@ -210,7 +210,7 @@ class TestRestoreCompositeTemplate:
         template = _make_template()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
-        from modulo.db.crud.composite_template import restore_composite_template
+        from farna.db.crud.composite_template import restore_composite_template
 
         result = await restore_composite_template(mock_session, _TEMPLATE_ID)
         assert result is not None
@@ -220,7 +220,7 @@ class TestRestoreCompositeTemplate:
     async def test_restore_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.composite_template import restore_composite_template
+        from farna.db.crud.composite_template import restore_composite_template
 
         result = await restore_composite_template(mock_session, uuid.uuid4())
         assert result is None

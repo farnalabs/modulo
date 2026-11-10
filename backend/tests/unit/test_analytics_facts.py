@@ -21,9 +21,9 @@ import opentelemetry.metrics as _otel_metrics
 import pytest
 from sqlalchemy.dialects import postgresql
 
-import modulo.core.analytics as analytics_mod
-from modulo.core.analytics import maintenance as maintenance_mod
-from modulo.core.analytics import metrics as metrics_mod
+import farna.core.analytics as analytics_mod
+from farna.core.analytics import maintenance as maintenance_mod
+from farna.core.analytics import metrics as metrics_mod
 
 # ---------------------------------------------------------------------------
 # Shared doubles
@@ -703,7 +703,7 @@ class TestRecordFactForTerminalFailedRun:
         session = _session(execute_side_effect=[])
         record = AsyncMock()
         monkeypatch.setattr(analytics_mod, "record_run_facts", record)
-        with caplog.at_level("WARNING", logger="modulo.core.analytics"):
+        with caplog.at_level("WARNING", logger="farna.core.analytics"):
             await analytics_mod.record_fact_for_terminal_failed_run(session, None)
         record.assert_not_awaited()
         assert any("run_missing" in m for m in caplog.messages)
@@ -718,7 +718,7 @@ class TestRecordFactForTerminalFailedRun:
             raise RuntimeError("facts boom")
 
         monkeypatch.setattr(analytics_mod, "record_run_facts", _boom)
-        with caplog.at_level("ERROR", logger="modulo.core.analytics"):
+        with caplog.at_level("ERROR", logger="farna.core.analytics"):
             await analytics_mod.record_fact_for_terminal_failed_run(session, run)  # must not raise
         assert any("terminal_failed_facts_failed" in m for m in caplog.messages)
 

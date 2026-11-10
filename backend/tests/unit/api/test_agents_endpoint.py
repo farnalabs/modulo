@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -39,7 +39,7 @@ def _stub_get_agent() -> Generator[None, None, None]:
     write CRUD, but the write-path cases only mock ``update_agent`` /
     ``delete_agent``. Supply a same-org agent so the ownership check passes for
     the legitimate (same-org) principal these tests use."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_make_agent()):
         yield
 
 
@@ -103,7 +103,7 @@ _UPDATE_BODY: dict[str, Any] = {
     "template_id": None,
 }
 
-_AGENT_PATCH_PREFIX = "modulo.api.routes.agents."
+_AGENT_PATCH_PREFIX = "farna.api.routes.agents."
 
 
 def _crud_cases() -> list[dict[str, object]]:
@@ -269,8 +269,8 @@ def test_create_agent_with_max_input_length(client: TestClient) -> None:
     agent = _make_agent()
     agent.max_input_length = 5000
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 201
@@ -281,8 +281,8 @@ def test_create_agent_without_max_input_length_defaults_to_null(client: TestClie
     agent = _make_agent()
     agent.max_input_length = None
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=_AGENT_BODY)
     assert resp.status_code == 201
@@ -293,9 +293,9 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     agent = _make_agent()
     agent.max_input_length = 10000
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.update_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.update_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "max_input_length": 10000})
     assert resp.status_code == 200
@@ -417,7 +417,7 @@ def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) 
     """
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-    from modulo.db.models.agent import Agent
+    from farna.db.models.agent import Agent
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     agent_id = uuid.uuid4()
@@ -461,7 +461,7 @@ def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) 
 
     client.app.dependency_overrides[get_db_session] = override_session
 
-    with patch("modulo.api.routes.agents.set_rls_org"):
+    with patch("farna.api.routes.agents.set_rls_org"):
         resp = client.patch(f"/api/v1/agents/{agent_id}", json={**_UPDATE_BODY, "name": "Updated"})
 
     assert resp.status_code == 200, resp.text
@@ -483,8 +483,8 @@ def test_create_generic_agent_with_library_id_skips_description_check(client: Te
     agent = _make_agent()
     agent.library_id = uuid.UUID(body["library_id"])
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 201
@@ -502,8 +502,8 @@ def test_create_generic_agent_with_description_succeeds(client: TestClient) -> N
     agent = _make_agent()
     agent.description = "Valid generic agent"
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 201
@@ -514,8 +514,8 @@ def test_update_generic_agent_clearing_description_returns_422(client: TestClien
     agent = _make_agent()
     agent.description = "Current description"
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "description": ""})
     assert resp.status_code == 422
@@ -527,9 +527,9 @@ def test_update_library_agent_clearing_description_succeeds(client: TestClient) 
     agent.library_id = uuid.uuid4()
     agent.description = "library-sourced"
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.update_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.update_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "description": ""})
     assert resp.status_code == 200
@@ -539,8 +539,8 @@ def test_update_agent_making_non_executable_without_description_returns_422(clie
     agent = _make_agent()
     agent.description = ""
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(
             f"/api/v1/agents/{_AGENT_ID}",
@@ -561,7 +561,7 @@ def _foreign_org_agent() -> MagicMock:
 def test_update_agent_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: a foreign-org principal must not update an agent it
     does not own. The ownership check must raise 404 before any write."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json=_UPDATE_BODY)
     assert resp.status_code == 404
 
@@ -569,7 +569,7 @@ def test_update_agent_foreign_org_returns_404(client: TestClient) -> None:
 def test_delete_agent_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: a foreign-org principal must not delete an agent it
     does not own."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
         resp = client.delete(f"/api/v1/agents/{_AGENT_ID}")
     assert resp.status_code == 404
 
@@ -577,7 +577,7 @@ def test_delete_agent_foreign_org_returns_404(client: TestClient) -> None:
 def test_apply_prompt_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: applying an optimized prompt to a foreign-org agent
     must be denied with 404."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
         resp = client.post(
             f"/api/v1/agents/{_AGENT_ID}/prompts/v1/apply",
             json={"suggested_prompt": "x"},
@@ -588,7 +588,7 @@ def test_apply_prompt_foreign_org_returns_404(client: TestClient) -> None:
 def test_rollback_prompt_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: rolling back a foreign-org agent's prompt must be
     denied with 404."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_foreign_org_agent()):
         resp = client.put(
             f"/api/v1/agents/{_AGENT_ID}/prompts/rollback/v1",
             json={},
@@ -608,8 +608,8 @@ def test_create_agent_schema_profile_persists(client: TestClient) -> None:
     agent.schema_profile = "provider-strict"
     body = {**_AGENT_BODY, "schema_profile": "provider-strict"}
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent) as mock_create,
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent) as mock_create,
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 201
@@ -624,8 +624,8 @@ def test_create_agent_schema_profile_none_by_default(client: TestClient) -> None
     agent = _make_agent()
     agent.schema_profile = None
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=agent) as mock_create,
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=agent) as mock_create,
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=_AGENT_BODY)
     assert resp.status_code == 201
@@ -644,7 +644,7 @@ def test_create_agent_with_unpinned_git_prompt_is_rejected(client: TestClient) -
         **_AGENT_BODY,
         "prompt_template": "git+https://github.com/example/repo@main#prompts/x.md",
     }
-    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+    with patch("farna.api.routes.agents.create_agent") as mock_create:
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 422
     assert "not pinned" in resp.json()["detail"]
@@ -653,7 +653,7 @@ def test_create_agent_with_unpinned_git_prompt_is_rejected(client: TestClient) -
 
 def test_create_agent_with_malformed_git_prompt_is_rejected(client: TestClient) -> None:
     body = {**_AGENT_BODY, "prompt_template": "git+https://github.com/example/repo"}
-    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+    with patch("farna.api.routes.agents.create_agent") as mock_create:
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 422
     assert "invalid git content ref" in resp.json()["detail"]
@@ -667,8 +667,8 @@ def test_create_agent_with_pinned_git_prompt_is_accepted(client: TestClient) -> 
         "agent_commands": ["git+https://github.com/example/other@" + "b" * 40 + "#cmd.sh"],
     }
     with (
-        patch("modulo.api.routes.agents.create_agent", return_value=_make_agent()),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.create_agent", return_value=_make_agent()),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 201
@@ -679,7 +679,7 @@ def test_create_agent_with_git_ref_among_several_commands_is_rejected(client: Te
         **_AGENT_BODY,
         "agent_commands": ["echo hi", "git+https://github.com/example/repo@" + "a" * 40 + "#cmd.sh"],
     }
-    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+    with patch("farna.api.routes.agents.create_agent") as mock_create:
         resp = client.post("/api/v1/agents", json=body)
     assert resp.status_code == 422
     assert "whole field" in resp.json()["detail"]
@@ -687,7 +687,7 @@ def test_create_agent_with_git_ref_among_several_commands_is_rejected(client: Te
 
 
 def test_update_agent_with_unpinned_git_prompt_is_rejected(client: TestClient) -> None:
-    with patch("modulo.api.routes.agents.update_agent") as mock_update:
+    with patch("farna.api.routes.agents.update_agent") as mock_update:
         resp = client.patch(
             f"/api/v1/agents/{_AGENT_ID}",
             json={**_UPDATE_BODY, "prompt_template": "git+https://github.com/example/repo@main#prompts/x.md"},
@@ -702,9 +702,9 @@ def test_update_agent_unrelated_field_with_stale_stored_prompt_is_not_retroactiv
     stored prompt (exclude_unset semantics) — retroactive breakage of unrelated
     edits is out of scope; run-time rendering stays fail-closed regardless."""
     with (
-        patch("modulo.api.routes.agents.update_agent", return_value=_make_agent()),
-        patch("modulo.api.routes.agents.set_rls_org"),
-        patch("modulo.api.routes.agents._validate_agent_git_content") as mock_gate,
+        patch("farna.api.routes.agents.update_agent", return_value=_make_agent()),
+        patch("farna.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents._validate_agent_git_content") as mock_gate,
     ):
         resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "name": "Renamed"})
     assert resp.status_code == 200

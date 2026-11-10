@@ -20,12 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.saq_worker as sw
-from modulo.core.cleanup_jobs import trigger_events_cleanup as trigger_events_module
-from modulo.core.cleanup_jobs import webhook_dedup_cleanup as webhook_dedup_module
-from modulo.core.cleanup_jobs.trigger_events_cleanup import cleanup_old_trigger_events
-from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_old_webhook_events
-from modulo.db.models.trigger_event import TriggerEvent
+import farna.core.saq_worker as sw
+from farna.core.cleanup_jobs import trigger_events_cleanup as trigger_events_module
+from farna.core.cleanup_jobs import webhook_dedup_cleanup as webhook_dedup_module
+from farna.core.cleanup_jobs.trigger_events_cleanup import cleanup_old_trigger_events
+from farna.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_old_webhook_events
+from farna.db.models.trigger_event import TriggerEvent
 
 
 @dataclass(frozen=True)

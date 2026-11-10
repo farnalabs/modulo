@@ -16,11 +16,11 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -105,7 +105,7 @@ def client() -> Generator[TestClient, None, None]:
     # The URL shape/SSRF floor resolves DNS; unit tests use example hosts that
     # do not resolve, so stub the floor here. The SSRF behaviour itself is
     # covered by ``ssrf_client`` below.
-    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+    with patch("farna.api.routes.admin_notifications.validate_outbound_url"):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -122,7 +122,7 @@ def ssrf_client() -> Generator[TestClient, None, None]:
 
 
 def test_create_webhook_with_team_id_returns_201(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -149,7 +149,7 @@ def test_create_webhook_with_team_id_returns_201(client: TestClient) -> None:
 
 
 def test_create_webhook_without_team_id_is_org_wide(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -171,7 +171,7 @@ def test_create_webhook_without_team_id_is_org_wide(client: TestClient) -> None:
 
 
 def test_create_webhook_with_unknown_team_returns_422(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=False)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -195,7 +195,7 @@ def test_create_webhook_with_unknown_team_returns_422(client: TestClient) -> Non
 
 
 def test_create_webhook_with_invalid_team_uuid_returns_422(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -248,7 +248,7 @@ def test_update_webhook_rejects_internal_url(ssrf_client: TestClient) -> None:
 
 
 def test_update_webhook_reassigns_team_id(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
         ep = _make_mock_endpoint(team_id=None)
         session.get = AsyncMock(return_value=ep)
@@ -271,7 +271,7 @@ def test_update_webhook_reassigns_team_id(client: TestClient) -> None:
 
 
 def test_update_webhook_unknown_team_returns_422(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=False)
         ep = _make_mock_endpoint(team_id=None)
         session.get = AsyncMock(return_value=ep)
@@ -293,7 +293,7 @@ def test_update_webhook_unknown_team_returns_422(client: TestClient) -> None:
 
 
 def test_update_webhook_omitting_team_id_keeps_existing_scope(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
         ep = _make_mock_endpoint(team_id=_TEAM_ID)
         session.get = AsyncMock(return_value=ep)
@@ -317,7 +317,7 @@ def test_update_webhook_omitting_team_id_keeps_existing_scope(client: TestClient
 
 def test_update_webhook_accepts_explicit_null_url_and_events(client: TestClient) -> None:
     """An explicit JSON null means "leave unchanged" and must not be rejected."""
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_session_with_team(team_present=True)
         ep = _make_mock_endpoint()
         session.get = AsyncMock(return_value=ep)
@@ -344,7 +344,7 @@ def test_update_webhook_accepts_explicit_null_url_and_events(client: TestClient)
 
 
 def test_list_webhooks_echoes_team_id(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         result = MagicMock()
         result.scalars.return_value = [_make_mock_endpoint(team_id=_TEAM_ID)]
@@ -366,7 +366,7 @@ def test_list_webhooks_echoes_team_id(client: TestClient) -> None:
 
 
 def test_get_webhook_echoes_team_id(client: TestClient) -> None:
-    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+    with patch("farna.api.routes.admin_notifications.set_rls_org"):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=_make_mock_endpoint(team_id=_TEAM_ID))
 
@@ -391,7 +391,7 @@ async def test_retry_one_delivery_fails_closed_on_ssrf_rebind() -> None:
     pinned_async_client, so a saved webhook URL whose host re-resolves to a
     blocked internal address (169.254.169.254) fails closed — recorded as an
     error with no request issued — rather than POSTing to the unvalidated host."""
-    from modulo.api.routes.admin_notifications import _retry_one_delivery
+    from farna.api.routes.admin_notifications import _retry_one_delivery
 
     ep = _make_mock_endpoint()
     delivery = MagicMock()
@@ -410,8 +410,8 @@ async def test_retry_one_delivery_fails_closed_on_ssrf_rebind() -> None:
     principal = TenantPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
 
     with (
-        patch("modulo.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
-        patch("modulo.api.routes.admin_notifications._record_delivery_error", new=AsyncMock()) as mock_record,
+        patch("farna.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
+        patch("farna.api.routes.admin_notifications._record_delivery_error", new=AsyncMock()) as mock_record,
     ):
         resp, error = await _retry_one_delivery(session, principal, _make_settings(), delivery, ep)
 
@@ -431,7 +431,7 @@ async def test_test_webhook_fails_closed_on_ssrf_rebind() -> None:
     POSTing to the unvalidated host with a plain client (validate-at-save-only
     leaves a DNS-rebinding window, and the route returns up to 500 chars of the
     response body, which would make it a readable SSRF primitive)."""
-    from modulo.api.routes.admin_notifications import test_webhook
+    from farna.api.routes.admin_notifications import test_webhook
 
     ep = _make_mock_endpoint()
     session = _make_mock_session()
@@ -448,8 +448,8 @@ async def test_test_webhook_fails_closed_on_ssrf_rebind() -> None:
     unpinned_post = AsyncMock()
 
     with (
-        patch("modulo.api.routes.admin_notifications.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
+        patch("farna.api.routes.admin_notifications.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
         patch.object(httpx.AsyncClient, "post", new=unpinned_post),
     ):
         result = await test_webhook(_WEBHOOK_ID, session=session, principal=principal, settings=_make_settings())
@@ -465,7 +465,7 @@ async def test_test_webhook_posts_through_pinned_client() -> None:
     """FAR-517 happy path: the test POST goes out on the pinned client (not a
     plain ``httpx.AsyncClient``), the pinned client is closed afterwards, and
     the endpoint's response is surfaced to the caller."""
-    from modulo.api.routes.admin_notifications import test_webhook
+    from farna.api.routes.admin_notifications import test_webhook
 
     ep = _make_mock_endpoint()
     session = _make_mock_session()
@@ -480,8 +480,8 @@ async def test_test_webhook_posts_through_pinned_client() -> None:
         return pinned
 
     with (
-        patch("modulo.api.routes.admin_notifications.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
+        patch("farna.api.routes.admin_notifications.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.admin_notifications.pinned_async_client", new=_fake_pinned),
     ):
         result = await test_webhook(_WEBHOOK_ID, session=session, principal=principal, settings=_make_settings())
 

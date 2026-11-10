@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+from farna.core.lifecycle_map.validation import LifecycleMapContentError
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/lifecycle_maps/crud.feature")
@@ -98,7 +98,7 @@ def lifecycle_map_exists_with_version_and_manual_stage(
 @when(parsers.parse('I create a lifecycle map named "{name}" with visibility "{visibility}"'))
 def post_create_lifecycle_map(name: str, visibility: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
     payload = {"name": name, "visibility": visibility}
-    with patch("modulo.api.routes.lifecycle_maps.create_lifecycle_map", new=AsyncMock()) as mock_create:
+    with patch("farna.api.routes.lifecycle_maps.create_lifecycle_map", new=AsyncMock()) as mock_create:
         mock_lm = _make_lifecycle_map(name=name, visibility=visibility)
         mock_create.return_value = mock_lm
         resp = client.post("/api/v1/lifecycle-maps", json=payload)
@@ -110,7 +110,7 @@ def post_create_lifecycle_map(name: str, visibility: str, ctx: dict[str, Any], r
 def get_export_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None:
     lm = ctx.get("lifecycle_map", _make_lifecycle_map())
     lm.content_json = {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []}
-    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+    with patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
         mock_get.return_value = lm
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/export")
     _store_response(request, ctx, resp)
@@ -150,7 +150,7 @@ def post_import_lifecycle_map_v1(name: str, ctx: dict[str, Any], request: Any, c
         "name": name,
         "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
     }
-    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+    with patch("farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
         mock_lm = _make_lifecycle_map(name=name)
         mock_import.return_value = mock_lm
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -178,7 +178,7 @@ def post_import_lifecycle_map_with_versions(name: str, ctx: dict[str, Any], requ
             },
         ],
     }
-    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+    with patch("farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
         mock_lm = _make_lifecycle_map(name=name)
         mock_import.return_value = mock_lm
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -196,11 +196,11 @@ def post_import_lifecycle_map_malformed_versions(request: Any, client: Any) -> N
         "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
         "versions": [{"version": "nope", "stages": [], "edges": []}],
     }
-    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+    from farna.core.lifecycle_map.import_export import LifecycleMapBundleError
 
     bundle_error = LifecycleMapBundleError("Lifecycle map 'versions' entry #0 'version' must be an integer, got 'nope'")
     with patch(
-        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        "farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
         new=AsyncMock(side_effect=bundle_error),
     ):
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -254,7 +254,7 @@ def post_contribute_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, 
         p.updated_at = datetime.now(UTC)
         return p
 
-    with patch("modulo.api.routes.library.contribute_primitive", new=AsyncMock(return_value=_primitive())):
+    with patch("farna.api.routes.library.contribute_primitive", new=AsyncMock(return_value=_primitive())):
         resp = client.post("/api/v1/libraries/community/contribute", json=payload)
     _store_response(request, ctx, resp)
     ctx["contributed"] = name
@@ -268,7 +268,7 @@ def post_import_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, clie
         "name": name,
         "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
     }
-    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+    with patch("farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
         mock_lm = _make_lifecycle_map(name=name)
         mock_import.return_value = mock_lm
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -300,8 +300,8 @@ def non_lifecycle_map_primitive_exists(ctx: dict[str, Any]) -> None:
 @when("I create a lifecycle map from the primitive")
 def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
     prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map")
-    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
-    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+    from farna.core.lifecycle_map.import_export import LifecycleMapBundleError
+    from farna.core.lifecycle_map.validation import LifecycleMapContentError
 
     async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
         if prim.primitive_type != "lifecycle_map":
@@ -311,8 +311,8 @@ def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, 
         return _make_lifecycle_map(name=prim.name)
 
     with (
-        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
-        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+        patch("farna.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("farna.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
     _store_response(request, ctx, resp)
@@ -322,14 +322,14 @@ def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, 
 @when("I create a lifecycle map from a primitive that conflicts with an existing map's pipeline")
 def post_create_lifecycle_map_from_conflicting_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
     prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map", name="SDLC Workflow")
-    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+    from farna.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
 
     async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
         raise LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
 
     with (
-        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
-        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+        patch("farna.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("farna.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
     _store_response(request, ctx, resp)
@@ -338,7 +338,7 @@ def post_create_lifecycle_map_from_conflicting_primitive(ctx: dict[str, Any], re
 @when("I create a lifecycle map from missing primitive")
 def post_create_lifecycle_map_from_missing_primitive(request: Any, client: Any) -> None:
     missing_id = uuid.uuid4()
-    with patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=None)):
+    with patch("farna.api.routes.library.get_primitive", new=AsyncMock(return_value=None)):
         resp = client.post(f"/api/v1/libraries/{missing_id}/create-lifecycle-map")
     _store_response(request, ctx={}, resp=resp)
 
@@ -354,11 +354,11 @@ def post_import_lifecycle_map_conflict(request: Any, client: Any) -> None:
             "edges": [],
         },
     }
-    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+    from farna.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
 
     conflict_error = LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
     with patch(
-        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        "farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
         new=AsyncMock(side_effect=conflict_error),
     ):
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -373,10 +373,10 @@ def post_import_lifecycle_map_invalid(ctx: dict[str, Any], request: Any, client:
         "name": "Broken",
         "content_json": {"stages": "not-an-array"},
     }
-    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+    from farna.core.lifecycle_map.validation import LifecycleMapContentError
 
     with patch(
-        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        "farna.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
         new=AsyncMock(side_effect=LifecycleMapContentError("content_json.stages must be an array")),
     ):
         resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
@@ -385,7 +385,7 @@ def post_import_lifecycle_map_invalid(ctx: dict[str, Any], request: Any, client:
 
 @when("I list lifecycle maps")
 def get_list_lifecycle_maps(ctx: dict[str, Any], request: Any, client: Any) -> None:
-    with patch("modulo.api.routes.lifecycle_maps.list_lifecycle_maps", new=AsyncMock()) as mock_list:
+    with patch("farna.api.routes.lifecycle_maps.list_lifecycle_maps", new=AsyncMock()) as mock_list:
         mock_list.return_value = MagicMock(items=[_make_lifecycle_map()], total=1, page=1, page_size=20)
         resp = client.get("/api/v1/lifecycle-maps")
     _store_response(request, ctx, resp)
@@ -394,7 +394,7 @@ def get_list_lifecycle_maps(ctx: dict[str, Any], request: Any, client: Any) -> N
 @when("I get the lifecycle map by id")
 def get_lifecycle_map_by_id(ctx: dict[str, Any], request: Any, client: Any) -> None:
     lm = ctx.get("lifecycle_map", _make_lifecycle_map())
-    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+    with patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
         mock_get.return_value = lm
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}")
     _store_response(request, ctx, resp)
@@ -402,7 +402,7 @@ def get_lifecycle_map_by_id(ctx: dict[str, Any], request: Any, client: Any) -> N
 
 @when(parsers.parse('I get lifecycle map by id "{lm_id}"'))
 def get_lifecycle_map_by_raw_id(lm_id: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
-    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+    with patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
         mock_get.return_value = None
         resp = client.get(f"/api/v1/lifecycle-maps/{lm_id}")
     _store_response(request, ctx, resp)
@@ -410,7 +410,7 @@ def get_lifecycle_map_by_raw_id(lm_id: str, ctx: dict[str, Any], request: Any, c
 
 @when("I get the deleted lifecycle map by id")
 def get_deleted_lifecycle_map_by_id(ctx: dict[str, Any], request: Any, client: Any) -> None:
-    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+    with patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
         mock_get.return_value = None
         resp = client.get(f"/api/v1/lifecycle-maps/{uuid.uuid4()}")
     _store_response(request, ctx, resp)
@@ -420,8 +420,8 @@ def get_deleted_lifecycle_map_by_id(ctx: dict[str, Any], request: Any, client: A
 def put_update_lifecycle_map_name(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
-        patch("modulo.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
+        patch("farna.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
     ):
         mock_get.return_value = current
         updated = _make_lifecycle_map(name=name, version=current.version, content_json=current.content_json)
@@ -435,8 +435,8 @@ def put_update_lifecycle_map_name(name: str, ctx: dict[str, Any], request: Any, 
 def put_update_lifecycle_map_description(description: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
-        patch("modulo.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
+        patch("farna.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
     ):
         mock_get.return_value = current
         updated = _make_lifecycle_map(
@@ -455,8 +455,8 @@ def put_update_lifecycle_map_content(count: int, ctx: dict[str, Any], request: A
     stages = [{"id": f"stage-{i}", "name": f"Stage {i}", "type": "modulo"} for i in range(count)]
     content_json = {"stages": stages}
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
-        patch("modulo.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get,
+        patch("farna.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
     ):
         mock_get.return_value = current
         updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json=content_json)
@@ -470,7 +470,7 @@ def put_update_lifecycle_map_content(count: int, ctx: dict[str, Any], request: A
 def delete_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None:
     lm = ctx.get("lifecycle_map", _make_lifecycle_map())
     deleted_id = str(lm.id)
-    with patch("modulo.api.routes.lifecycle_maps.delete_lifecycle_map", new=AsyncMock()) as mock_delete:
+    with patch("farna.api.routes.lifecycle_maps.delete_lifecycle_map", new=AsyncMock()) as mock_delete:
         mock_delete.return_value = True
         resp = client.delete(f"/api/v1/lifecycle-maps/{deleted_id}")
     _store_response(request, ctx, resp)
@@ -490,7 +490,7 @@ def save_version_of_lifecycle_map(count: int, ctx: dict[str, Any], request: Any,
     """
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     stages = [{"id": f"stage-{i}", "name": f"Stage {i}", "type": "modulo"} for i in range(count)]
-    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+    with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
         updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json={"stages": stages})
         mock_save.return_value = updated
         resp = client.post(
@@ -514,7 +514,7 @@ def save_version_with_circular_transition(ctx: dict[str, Any], request: Any, cli
         {"id": "edge-0", "source": "stage-0", "target": "stage-1"},
         {"id": "edge-1", "source": "stage-1", "target": "stage-0"},
     ]
-    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+    with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
         mock_save.side_effect = LifecycleMapContentError(
             "lifecycle-map content: stage transitions form a cycle: stage-0 -> stage-1 -> stage-0"
         )
@@ -532,7 +532,7 @@ def save_version_with_dangling_edge(ctx: dict[str, Any], request: Any, client: A
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
     edges = [{"id": "edge-0", "source": "stage-0", "target": "stage-ghost"}]
-    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+    with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
         mock_save.side_effect = LifecycleMapContentError(
             "lifecycle-map edge/transition #0 (id 'edge-0'): target stage 'stage-ghost' is not defined in stages"
         )
@@ -552,7 +552,7 @@ def save_version_with_duplicate_stage_ids(ctx: dict[str, Any], request: Any, cli
         {"id": "stage-0", "name": "Stage 0", "type": "modulo"},
         {"id": "stage-0", "name": "Stage 0 again", "type": "manual"},
     ]
-    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+    with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
         mock_save.side_effect = LifecycleMapContentError(
             "lifecycle-map stage #1: duplicate stage id 'stage-0' (already used by stage #0)"
         )
@@ -566,7 +566,7 @@ def save_version_with_duplicate_stage_ids(ctx: dict[str, Any], request: Any, cli
 @when("I get the lifecycle map versions")
 def get_lifecycle_map_versions(ctx: dict[str, Any], request: Any, client: Any) -> None:
     lm = ctx.get("lifecycle_map", _make_lifecycle_map())
-    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+    with patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
         mock_get.return_value = lm
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/versions")
     _store_response(request, ctx, resp)
@@ -584,8 +584,8 @@ def save_version_capture_audit(ctx: dict[str, Any], request: Any, client: Any, m
     begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
     mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
     with (
-        patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
     ):
         updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json={"stages": stages})
         mock_save.return_value = updated
@@ -605,7 +605,7 @@ def save_version_as_current_user(ctx: dict[str, Any], request: Any, client: Any)
     created_by reflects the saving account, not a static null."""
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
-    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+    with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
         updated = _make_lifecycle_map(
             name=current.name,
             version=current.version + 1,
@@ -639,8 +639,8 @@ def restore_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any, mock_s
     begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
     mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
     with (
-        patch("modulo.api.routes.lifecycle_maps.restore_lifecycle_map", new=AsyncMock()) as mock_restore,
-        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+        patch("farna.api.routes.lifecycle_maps.restore_lifecycle_map", new=AsyncMock()) as mock_restore,
+        patch("farna.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
     ):
         mock_restore.return_value = restored
         resp = client.post(f"/api/v1/lifecycle-maps/{current.id}/restore")
@@ -673,7 +673,7 @@ def lifecycle_map_with_dangling_legacy_content(ctx: dict[str, Any], request: Any
 
 @when("the legacy content backfill cleans the map")
 def legacy_backfill_cleans_map(ctx: dict[str, Any]) -> None:
-    from modulo.core.lifecycle_map.validation import clean_legacy_content
+    from farna.core.lifecycle_map.validation import clean_legacy_content
 
     lm = ctx.get("lifecycle_map")
     assert lm is not None, "No lifecycle map in context"
@@ -684,7 +684,7 @@ def legacy_backfill_cleans_map(ctx: dict[str, Any]) -> None:
 
 @then("the repaired map content is accepted by editor validation")
 def repaired_map_content_accepted(ctx: dict[str, Any]) -> None:
-    from modulo.core.lifecycle_map.validation import normalize_content
+    from farna.core.lifecycle_map.validation import normalize_content
 
     cleaned = ctx.get("cleaned_content")
     assert cleaned is not None, "The backfill step did not run"
@@ -752,12 +752,12 @@ def self_report_with_stage_id(
         return 1
 
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
         patch(
-            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            "farna.api.routes.lifecycle_maps.confirm_reported_refs",
             new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "agent"}], 0)),
         ),
-        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+        patch("farna.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
     ):
         resp = client.post(
             f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",
@@ -898,9 +898,9 @@ def get_journey_detail(kind: str, ref: str, ctx: dict[str, Any], request: Any, c
     runs = ctx.get("journey_runs", [])
     journey_result = None if journey is None else (journey, False)
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
-        patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=journey_result)),
-        patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=runs)),
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("farna.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=journey_result)),
+        patch("farna.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=runs)),
     ):
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/journeys/{kind}/{ref}")
     _store_response(request, ctx, resp)
@@ -913,8 +913,8 @@ def list_map_journeys_filtered(ref: str, ctx: dict[str, Any], request: Any, clie
     journey_2 = _make_journey_row(lm.id, "github_pr", "123", stage_id="Merge")
     stub = AsyncMock(return_value=([(journey_1, False), (journey_2, True)], "cursor-token"))
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
-        patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=stub),
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("farna.api.routes.lifecycle_maps.list_map_journeys", new=stub),
     ):
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/journeys", params={"ref": ref})
     _store_response(request, ctx, resp)
@@ -941,12 +941,12 @@ def self_report_work_item(kind: str, ref: str, ctx: dict[str, Any], request: Any
         return 1
 
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
         patch(
-            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            "farna.api.routes.lifecycle_maps.confirm_reported_refs",
             new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "agent"}], 0)),
         ),
-        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+        patch("farna.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
     ):
         resp = client.post(
             f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",
@@ -973,12 +973,12 @@ def self_report_ref_and_malformed(kind: str, ref: str, ctx: dict[str, Any], requ
         return 0
 
     with (
-        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch("farna.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
         patch(
-            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            "farna.api.routes.lifecycle_maps.confirm_reported_refs",
             new=AsyncMock(return_value=([], 1)),
         ),
-        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+        patch("farna.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
     ):
         resp = client.post(
             f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",

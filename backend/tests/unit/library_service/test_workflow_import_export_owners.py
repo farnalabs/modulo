@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.core.workflow_import_export import (
+from farna.core.workflow_import_export import (
     _ImportContext,
     _resolve_owner_emails_for_export,
     _resolve_owner_emails_for_import,
@@ -123,7 +123,7 @@ class TestResolveOwnerEmailsForImport:
         session.execute = AsyncMock()
         ctx = _ctx(session)
         with patch(
-            "modulo.core.workflow_import_export.get_account_by_email",
+            "farna.core.workflow_import_export.get_account_by_email",
             new=AsyncMock(return_value=None),
         ):
             result = await _resolve_owner_emails_for_import(ctx, {"business_owner_email": "ghost@example.com"})
@@ -137,11 +137,11 @@ class TestResolveOwnerEmailsForImport:
         account = SimpleNamespace(id=_BUSINESS_ID)
         with (
             patch(
-                "modulo.core.workflow_import_export.get_account_by_email",
+                "farna.core.workflow_import_export.get_account_by_email",
                 new=AsyncMock(return_value=account),
             ),
             patch(
-                "modulo.core.workflow_import_export.validate_accountability_owner",
+                "farna.core.workflow_import_export.validate_accountability_owner",
                 new=AsyncMock(side_effect=HTTPException(status_code=422, detail="is deactivated")),
             ),
         ):
@@ -155,11 +155,11 @@ class TestResolveOwnerEmailsForImport:
         ctx = _ctx(session)
         with (
             patch(
-                "modulo.core.workflow_import_export.get_account_by_email",
+                "farna.core.workflow_import_export.get_account_by_email",
                 new=AsyncMock(side_effect=[SimpleNamespace(id=_BUSINESS_ID), SimpleNamespace(id=_RELIABILITY_ID)]),
             ),
             patch(
-                "modulo.core.workflow_import_export.validate_accountability_owner",
+                "farna.core.workflow_import_export.validate_accountability_owner",
                 new=AsyncMock(),
             ) as validate,
         ):

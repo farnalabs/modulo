@@ -15,22 +15,22 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.typed_judge.config import typed_config_questions
-from modulo.core.eval_engine.typed_judge.envelope import build_question_prompt
-from modulo.core.system_maps_ai_discovery import build_discovery_prompt
-from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_folder import PipelineFolder
-from modulo.db.models.trigger import Trigger
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
-from modulo.settings import Settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.typed_judge.config import typed_config_questions
+from farna.core.eval_engine.typed_judge.envelope import build_question_prompt
+from farna.core.system_maps_ai_discovery import build_discovery_prompt
+from farna.core.system_maps_discovery import DiscoverySource, discover_draft
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_folder import PipelineFolder
+from farna.db.models.trigger import Trigger
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend, normalize_input
+from farna.settings import Settings
 
 pytestmark = pytest.mark.integration
 

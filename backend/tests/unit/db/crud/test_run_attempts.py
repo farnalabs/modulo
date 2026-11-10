@@ -28,14 +28,14 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud import run_attempts as crud
-from modulo.db.crud.run_attempts import (
+from farna.db.crud import run_attempts as crud
+from farna.db.crud.run_attempts import (
     RunAttemptRunNotFoundError,
     close_attempt,
     list_attempts,
     start_attempt,
 )
-from modulo.db.models.run_attempt import ATTEMPT_TERMINAL_REASON_VALUES, RunAttempt
+from farna.db.models.run_attempt import ATTEMPT_TERMINAL_REASON_VALUES, RunAttempt
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")

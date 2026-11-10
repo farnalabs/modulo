@@ -20,8 +20,8 @@ from typing import Any, Self
 
 import pytest
 
-from modulo.db.migrations import _lock_state
-from modulo.db.migrations import env as cached_env
+from farna.db.migrations import _lock_state
+from farna.db.migrations import env as cached_env
 
 
 @pytest.fixture(autouse=True)

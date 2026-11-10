@@ -21,8 +21,8 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories.system_map import SystemMapRepository
-from modulo.db.rls import set_rls_user_context
+from farna.db.repositories.system_map import SystemMapRepository
+from farna.db.rls import set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

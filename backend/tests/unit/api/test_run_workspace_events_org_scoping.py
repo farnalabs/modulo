@@ -16,11 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 _VALID_32 = "a" * 32
@@ -84,7 +84,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 def test_workspace_events_404_on_foreign_org_run(client: TestClient, mock_session: AsyncMock) -> None:
     """A run id belonging to another organisation answers 404, not 200 []."""
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run:
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run:
         mock_get_run.return_value = None
         response = client.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
@@ -111,7 +111,7 @@ def test_workspace_events_returns_events_for_owned_run_after_org_check(
     result.scalars.return_value.all.return_value = [event]
     mock_session.execute = AsyncMock(return_value=result)
 
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run:
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock) as mock_get_run:
         mock_get_run.return_value = MagicMock()
         response = client.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
@@ -129,7 +129,7 @@ def test_workspace_events_audit_query_carries_org_predicate(client: TestClient, 
     result.scalars.return_value.all.return_value = []
     mock_session.execute = AsyncMock(return_value=result)
 
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock):
         response = client.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
     assert response.status_code == 200

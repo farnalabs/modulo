@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 from tests.unit.cron_helpers._helpers import _Begin
 
 ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
@@ -135,7 +135,7 @@ async def _run_attribution(
     with (
         patch.object(ch, "_open_factory", lambda: lambda: session),
         patch.object(ch, "_set_rls_org", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=finalize_mock),
+        patch("farna.core.cost_controller.finalize.finalize_failed_run", new=finalize_mock),
     ):
         await ch._attribute_age_gate_derived_cost(RUN, ORG)
     return finalize_mock, session
@@ -182,8 +182,8 @@ class TestAttributeAgeGateDerivedCost:
         with (
             patch.object(ch, "_open_factory", lambda: lambda: session),
             patch.object(ch, "_set_rls_org", new=AsyncMock()),
-            patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
-            patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=finalize),
+            patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+            patch("farna.core.cost_controller.finalize.finalize_failed_run", new=finalize),
         ):
             await ch._attribute_age_gate_derived_cost(RUN, ORG)
 
@@ -242,7 +242,7 @@ class TestAttributeAgeGateDerivedCost:
         with (
             patch.object(ch, "_open_factory", lambda: lambda: _FakeSession(_row())),
             patch.object(ch, "_set_rls_org", new=AsyncMock()),
-            patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
+            patch("farna.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
         ):
             await ch._attribute_age_gate_derived_cost(RUN, ORG)
             await ch._attribute_age_gate_derived_cost(run_b, ORG)
@@ -256,7 +256,7 @@ class TestAttributeAgeGateDerivedCost:
         with (
             patch.object(ch, "_open_factory", lambda: lambda: session),
             patch.object(ch, "_set_rls_org", new=AsyncMock()),
-            patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=finalize),
+            patch("farna.core.cost_controller.finalize.finalize_failed_run", new=finalize),
             pytest.raises(asyncio.CancelledError),
         ):
             await ch._attribute_age_gate_derived_cost(RUN, ORG)

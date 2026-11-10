@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from modulo.core import hitl_email_alerts
-from modulo.core.email_service import EmailSendingError
-from modulo.core.hitl_email_alerts import (
+from farna.core import hitl_email_alerts
+from farna.core.email_service import EmailSendingError
+from farna.core.hitl_email_alerts import (
     dispatch_hitl_email_alerts,
     resolve_hitl_email_pref,
     resolve_hitl_email_recipients,
@@ -25,7 +25,7 @@ from modulo.core.hitl_email_alerts import (
     send_hitl_email_alerts,
 )
 
-# The lazy ``patch("modulo.db.session.get_shared_engine")`` in
+# The lazy ``patch("farna.db.session.get_shared_engine")`` in
 # test_dispatch_session_factory_builds_on_the_shared_engine imports
 # modulo.db.session at TEST time; its module-level ``_build_engine()`` needs
 # Settings. There is no ``.env`` in worktrees, so provide the minimum env the
@@ -197,7 +197,7 @@ class TestDispatchHitlEmailAlerts:
         with (
             patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
             patch.object(hitl_email_alerts, "send_email", side_effect=EmailSendingError("smtp down")),
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             await dispatch_hitl_email_alerts(_session_returning(rows), _ORG, _PIPELINE, _RUN, _GATE)
 
@@ -224,7 +224,7 @@ class TestDispatchHitlEmailAlerts:
         with (
             patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
             patch.object(hitl_email_alerts, "send_email") as mock_send,
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             await dispatch_hitl_email_alerts(session, _ORG, _PIPELINE, _RUN, _GATE)
 
@@ -282,7 +282,7 @@ class TestScheduleHitlEmailDispatch:
     def test_dispatch_session_factory_builds_on_the_shared_engine(self) -> None:
         """One engine per process: the factory must build on get_shared_engine
         (a second engine would bypass the shared pool + its sizing)."""
-        with patch("modulo.db.session.get_shared_engine") as mock_engine:
+        with patch("farna.db.session.get_shared_engine") as mock_engine:
             factory = hitl_email_alerts._dispatch_session_factory()
         mock_engine.assert_called_once()
         assert isinstance(factory, async_sessionmaker)
@@ -315,7 +315,7 @@ class TestScheduleHitlEmailDispatch:
                 AsyncMock(side_effect=RuntimeError("db gone")),
             ),
             patch.object(hitl_email_alerts, "send_hitl_email_alerts") as mock_send,
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
             await _drain_tasks()
@@ -326,7 +326,7 @@ class TestScheduleHitlEmailDispatch:
     async def test_session_factory_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             patch.object(hitl_email_alerts, "_dispatch_session_factory", side_effect=RuntimeError("no engine")),
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
             await _drain_tasks()
@@ -336,7 +336,7 @@ class TestScheduleHitlEmailDispatch:
     async def test_task_reference_retained_while_pending_then_cleared(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             patch.object(hitl_email_alerts, "_dispatch_session_factory", side_effect=RuntimeError("no engine")),
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
             assert hitl_email_alerts._PENDING_DISPATCH_TASKS
@@ -345,7 +345,7 @@ class TestScheduleHitlEmailDispatch:
 
     def test_schedule_without_running_loop_returns(self, caplog: pytest.LogCaptureFixture) -> None:
         """No running event loop (sync caller): log and return, never raise."""
-        with caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"):
             schedule_hitl_email_dispatch(_ORG, _PIPELINE, _RUN, _GATE)
         assert "hitl_email.dispatch_no_running_loop" in caplog.text
 
@@ -435,7 +435,7 @@ class TestBuildEmailBriefing:
         }
 
     def test_full_briefing_renders_all_fields(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         subject, body_html, body_text = _build_email(_GATE, _RUN_LINK, self._full_briefing())
         assert _GATE in subject
@@ -454,7 +454,7 @@ class TestBuildEmailBriefing:
         assert _RUN_LINK in body_html
 
     def test_partial_briefing_description_only(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"description": "Review the output"}
         _, body_html, body_text = _build_email(_GATE, _RUN_LINK, briefing)
@@ -464,7 +464,7 @@ class TestBuildEmailBriefing:
         assert "Review the output" in body_html
 
     def test_partial_briefing_condition_only(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {
             "condition_result": {
@@ -478,7 +478,7 @@ class TestBuildEmailBriefing:
         assert "Description:" not in body_text
 
     def test_none_briefing_legacy_format(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         _, body_html, body_text = _build_email(_GATE, _RUN_LINK, None)
         assert f"Gate: {_GATE}" in body_text
@@ -487,14 +487,14 @@ class TestBuildEmailBriefing:
         assert f"Gate: {_GATE}" in body_html
 
     def test_empty_briefing_legacy_format(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         _, _, body_text = _build_email(_GATE, _RUN_LINK, {})
         assert f"Gate: {_GATE}" in body_text
         assert "Description:" not in body_text
 
     def test_html_escape_in_description(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"description": "<script>alert('xss')</script>"}
         _, body_html, body_text = _build_email(_GATE, _RUN_LINK, briefing)
@@ -503,7 +503,7 @@ class TestBuildEmailBriefing:
         assert "<script>" in body_text  # plain text is not escaped
 
     def test_html_escape_in_reason(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"reason": "Risk: <b>high</b>"}
         _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
@@ -511,7 +511,7 @@ class TestBuildEmailBriefing:
         assert "&lt;b&gt;high&lt;/b&gt;" in body_html
 
     def test_html_escape_in_condition_value(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {
             "condition_result": {
@@ -524,7 +524,7 @@ class TestBuildEmailBriefing:
         assert "&lt;img" in body_html
 
     def test_html_escape_in_artifact_summary(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"artifacts": [{"node_id": "n1", "summary": "Output: <b>bold</b>"}]}
         _, body_html, _ = _build_email(_GATE, _RUN_LINK, briefing)
@@ -532,7 +532,7 @@ class TestBuildEmailBriefing:
         assert "&lt;b&gt;bold&lt;/b&gt;" in body_html
 
     def test_artifact_truncation_with_marker(self) -> None:
-        from modulo.core.hitl_email_alerts import _EMAIL_BODY_BUDGET_CHARS, _build_email
+        from farna.core.hitl_email_alerts import _EMAIL_BODY_BUDGET_CHARS, _build_email
 
         long_summary = "x" * 2000
         briefing = {"artifacts": [{"node_id": "n1", "summary": long_summary}]}
@@ -541,7 +541,7 @@ class TestBuildEmailBriefing:
         assert len(body_text) < _EMAIL_BODY_BUDGET_CHARS + 300  # some header overhead
 
     def test_condition_result_absent_key_does_not_crash(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"condition_result": None}
         subject, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
@@ -549,7 +549,7 @@ class TestBuildEmailBriefing:
         assert "Condition:" not in body_text
 
     def test_artifacts_empty_list_no_artifact_section(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {"artifacts": []}
         _, _, body_text = _build_email(_GATE, _RUN_LINK, briefing)
@@ -557,7 +557,7 @@ class TestBuildEmailBriefing:
 
     def test_render_briefing_sections_skips_lines_without_separator(self) -> None:
         """A truncated/marker line without 'label: value' contributes no paragraph."""
-        from modulo.core.hitl_email_alerts import _render_briefing_sections
+        from farna.core.hitl_email_alerts import _render_briefing_sections
 
         rendered = _render_briefing_sections("Description: ok\nno separator here")
         assert "<p><strong>Description:</strong> ok</p>" in rendered
@@ -565,7 +565,7 @@ class TestBuildEmailBriefing:
 
     def test_artifact_with_blank_summary_is_omitted(self) -> None:
         """An artifact whose summary is blank contributes no Artifact section."""
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         briefing = {
             "description": "Review the output",
@@ -577,7 +577,7 @@ class TestBuildEmailBriefing:
 
     def test_gate_label_html_escaped_in_briefing_path(self) -> None:
         """gate_label with HTML is escaped in the briefing-path HTML body."""
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         xss_label = "<script>alert(1)</script>"
         briefing = {"description": "test"}
@@ -593,7 +593,7 @@ class TestBuildEmailBriefing:
         long description so truncation would land inside one if the old
         code path were still active.
         """
-        from modulo.core.hitl_email_alerts import _build_email
+        from farna.core.hitl_email_alerts import _build_email
 
         # Each "foo &amp; bar " is 16 chars.  Enough to exceed the budget.
         long_desc = ("foo &amp; bar " * 200).strip()
@@ -646,7 +646,7 @@ class TestDeadlineEmail:
     time-boxed copy — same resolver, same send contract, distinct subject."""
 
     def test_subject_and_body_carry_gate_pipeline_and_time_left(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_deadline_email
+        from farna.core.hitl_email_alerts import _build_deadline_email
 
         subject, body_html, body_text = _build_deadline_email(_GATE, _RUN_LINK, "Improve Security", 12)
         assert subject == f"HITL review deadline approaching - {_GATE}"
@@ -660,7 +660,7 @@ class TestDeadlineEmail:
         assert _RUN_LINK in body_html
 
     def test_html_escapes_gate_label_and_pipeline(self) -> None:
-        from modulo.core.hitl_email_alerts import _build_deadline_email
+        from farna.core.hitl_email_alerts import _build_deadline_email
 
         _, body_html, _ = _build_deadline_email("<script>x</script>", _RUN_LINK, "<b>pipe</b>", 5)
         assert "<script>" not in body_html
@@ -691,7 +691,7 @@ class TestDeadlineEmail:
         with (
             patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
             patch.object(hitl_email_alerts, "send_email", side_effect=EmailSendingError("smtp down")),
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)
         assert "hitl_email.dispatch_failed" in caplog.text
@@ -710,7 +710,7 @@ class TestDeadlineEmail:
         marker, so raising would lose the warning AND fail the cron."""
         with (
             patch.object(hitl_email_alerts, "get_settings", side_effect=RuntimeError("no settings")),
-            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+            caplog.at_level(logging.WARNING, logger="farna.core.hitl_email_alerts"),
         ):
             await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)
         assert "hitl_email.dispatch_failed" in caplog.text

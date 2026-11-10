@@ -15,8 +15,8 @@ class TestBuildResumeExecutorNotifierInit:
     """FAR-882: notifier construction failure NEVER aborts the executor build —
     every init failure degrades to ``notifier=None`` (best-effort side effect)."""
 
-    @patch("modulo.api.routes.hitl.Notifier")
-    @patch("modulo.api.routes.hitl.get_settings")
+    @patch("farna.api.routes.hitl.Notifier")
+    @patch("farna.api.routes.hitl.get_settings")
     def test_value_error_caught_fail_open(self, mock_settings: MagicMock, mock_notifier_cls: MagicMock) -> None:
         """A bad fernet key raises ValueError — notifier is None but executor
         still builds (fail-open for notification side-effect)."""
@@ -26,13 +26,13 @@ class TestBuildResumeExecutorNotifierInit:
         )
         mock_notifier_cls.side_effect = ValueError("Invalid Fernet key")
 
-        from modulo.api.routes.hitl import _build_resume_executor
+        from farna.api.routes.hitl import _build_resume_executor
 
         executor = _build_resume_executor(MagicMock())
         assert executor is not None
 
-    @patch("modulo.api.routes.hitl.Notifier")
-    @patch("modulo.api.routes.hitl.get_settings")
+    @patch("farna.api.routes.hitl.Notifier")
+    @patch("farna.api.routes.hitl.get_settings")
     def test_type_error_caught_fail_open(self, mock_settings: MagicMock, mock_notifier_cls: MagicMock) -> None:
         """TypeError from Notifier init is caught (fail-open)."""
         mock_settings.return_value = MagicMock(
@@ -41,13 +41,13 @@ class TestBuildResumeExecutorNotifierInit:
         )
         mock_notifier_cls.side_effect = TypeError("bad key type")
 
-        from modulo.api.routes.hitl import _build_resume_executor
+        from farna.api.routes.hitl import _build_resume_executor
 
         executor = _build_resume_executor(MagicMock())
         assert executor is not None
 
-    @patch("modulo.api.routes.hitl.Notifier")
-    @patch("modulo.api.routes.hitl.get_settings")
+    @patch("farna.api.routes.hitl.Notifier")
+    @patch("farna.api.routes.hitl.get_settings")
     def test_runtime_error_caught_fail_open(self, mock_settings: MagicMock, mock_notifier_cls: MagicMock) -> None:
         """An unexpected RuntimeError (e.g. settings/read failure) from Notifier
         init must ALSO degrade to notifier=None — the resume still runs; only
@@ -59,7 +59,7 @@ class TestBuildResumeExecutorNotifierInit:
         )
         mock_notifier_cls.side_effect = RuntimeError("unexpected")
 
-        from modulo.api.routes.hitl import _build_resume_executor
+        from farna.api.routes.hitl import _build_resume_executor
 
         executor = _build_resume_executor(MagicMock())
         assert executor is not None

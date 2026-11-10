@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -137,7 +137,7 @@ def test_validate_retry_policy_message_parity(payload: object, expected_message:
     """Each failure class raises the EXACT message the pre-refactor inline
     validator raised (first-issue parity — the delegation must not change a
     single 422 detail byte)."""
-    from modulo.api.routes.pipelines import _validate_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
 
     with pytest.raises(ValueError, match=re.escape(expected_message)) as exc_info:
         _validate_retry_policy(payload)
@@ -147,7 +147,7 @@ def test_validate_retry_policy_message_parity(payload: object, expected_message:
 def test_validate_retry_policy_delegation_equivalence_multi_error_payload() -> None:
     """A payload with MULTIPLE faults surfaces the FIRST issue only (the inline
     validator raised on first fault — no error aggregation was introduced)."""
-    from modulo.api.routes.pipelines import _validate_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
 
     # 'on' fault comes before the max_retries fault — 'on' message wins.
     with pytest.raises(ValueError, match=r"'on' contains unknown values"):
@@ -155,7 +155,7 @@ def test_validate_retry_policy_delegation_equivalence_multi_error_payload() -> N
 
 
 def test_validate_retry_policy_delegates_valid_payloads_unchanged() -> None:
-    from modulo.api.routes.pipelines import _validate_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
 
     valid = {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 5}
     assert _validate_retry_policy(valid) is valid
@@ -172,9 +172,9 @@ def test_create_pipeline_persists_retry_policy(client: TestClient) -> None:
     pipeline.retry_policy = {"on": ["stall"], "max_retries": 2}
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -217,9 +217,9 @@ def test_create_pipeline_accepts_empty_retry_policy(client: TestClient) -> None:
     pipeline.retry_policy = {}
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline", "retry_policy": {}})
 
@@ -232,9 +232,9 @@ def test_create_pipeline_accepts_all_valid_events(client: TestClient) -> None:
     pipeline.retry_policy = {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 5}
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/pipelines",
@@ -257,12 +257,12 @@ def test_update_pipeline_sets_retry_policy(client: TestClient) -> None:
     pipeline.retry_policy = {"on": ["timeout"], "max_retries": 1}
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -278,12 +278,12 @@ def test_update_pipeline_clears_retry_policy_with_empty_dict(client: TestClient)
     pipeline.retry_policy = {}
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"retry_policy": {}})
 
@@ -297,12 +297,12 @@ def test_update_pipeline_accepts_eval_failed_retry_event(client: TestClient) -> 
     pipeline.retry_policy = {"on": ["eval_failed"], "max_retries": 1}
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -344,9 +344,9 @@ def test_create_pipeline_accepts_backoff_schedule(client: TestClient) -> None:
     pipeline.retry_policy = _SCHEDULE_OK
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline", "retry_policy": _SCHEDULE_OK})
 
@@ -433,9 +433,9 @@ def test_create_pipeline_accepts_legacy_backoff_alongside_new_validation(client:
     pipeline.retry_policy = legacy
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline", "retry_policy": legacy})
 
@@ -453,12 +453,12 @@ def test_update_pipeline_canonicalizes_integral_float_delay(client: TestClient) 
     }
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -485,13 +485,13 @@ def test_update_pipeline_unknown_top_level_key_warns_but_writes(client: TestClie
     pipeline.retry_policy = {"on": ["failure"], "max_retries": 2}
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.logger.warning") as warn_mock,
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.logger.warning") as warn_mock,
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -507,8 +507,8 @@ def test_update_pipeline_unknown_top_level_key_warns_but_writes(client: TestClie
 def test_validate_retry_policy_graph_validator_parity_for_valid_legacy_payload() -> None:
     """GraphValidator emits NO error for a legacy payload the API accepts —
     the delegation cannot silently tighten the accepted surface."""
-    from modulo.api.routes.pipelines import _validate_retry_policy
-    from modulo.core.graph_validator import GraphValidator, ValidationResult
+    from farna.api.routes.pipelines import _validate_retry_policy
+    from farna.core.graph_validator import GraphValidator, ValidationResult
 
     legacy = {"on": ["failure"], "max_retries": 2, "backoff": 1.5}
     result = ValidationResult()

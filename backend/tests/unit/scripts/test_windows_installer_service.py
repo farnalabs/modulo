@@ -1,8 +1,8 @@
 """FAR-2346 - Alpha installs a foreground shortcut and never registers a service.
 
 Windows service mode is deferred to Beta (FAR-2347). The launcher has no Windows
-service seam yet (``TODO(P3)`` in ``backend/src/modulo/launcher/entry.py``) and
-``backend/src/modulo/launcher/service.py`` refuses on Windows, so an installer
+service seam yet (``TODO(P3)`` in ``backend/src/farna/launcher/entry.py``) and
+``backend/src/farna/launcher/service.py`` refuses on Windows, so an installer
 that runs ``sc.exe create`` on every install attempts a known-impossible action.
 Alpha's launch path is the Start Menu shortcut, which runs ``modulo.exe start``
 in the foreground.

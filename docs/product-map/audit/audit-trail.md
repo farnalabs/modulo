@@ -3,31 +3,31 @@ id: feat-audit
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/audit.py
-  - backend/src/modulo/api/routes/admin_system_audit.py
-  - backend/src/modulo/core/audit_logger/__init__.py
-  - backend/src/modulo/core/audit_logger/append_only.py
-  - backend/src/modulo/core/audit_logger/background.py
-  - backend/src/modulo/core/audit_logger/hashing.py
-  - backend/src/modulo/core/evidence_pack/
-  - backend/src/modulo/cli/evidence.py
-  - backend/src/modulo/core/audit_coverage.py
-  - backend/src/modulo/core/cron_helpers.py
-  - backend/src/modulo/core/eval_engine/execute_suite_run.py
-  - backend/src/modulo/core/run_admission.py
-  - backend/src/modulo/core/run_terminal_advance.py
-  - backend/src/modulo/core/runner_capacity.py
-  - backend/src/modulo/core/saq_worker.py
-  - backend/src/modulo/db/crud/pipeline.py
-  - backend/src/modulo/db/crud/system_audit_event.py
-  - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
-  - backend/src/modulo/db/seed.py
-  - backend/src/modulo/cli/users.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/db/models/audit_event.py
-  - backend/src/modulo/core/system_audit_logger.py
-  - backend/src/modulo/db/models/system_audit_event.py
-  - backend/src/modulo/db/migrations/versions/0285_system_audit_events.py
+  - backend/src/farna/api/routes/audit.py
+  - backend/src/farna/api/routes/admin_system_audit.py
+  - backend/src/farna/core/audit_logger/__init__.py
+  - backend/src/farna/core/audit_logger/append_only.py
+  - backend/src/farna/core/audit_logger/background.py
+  - backend/src/farna/core/audit_logger/hashing.py
+  - backend/src/farna/core/evidence_pack/
+  - backend/src/farna/cli/evidence.py
+  - backend/src/farna/core/audit_coverage.py
+  - backend/src/farna/core/cron_helpers.py
+  - backend/src/farna/core/eval_engine/execute_suite_run.py
+  - backend/src/farna/core/run_admission.py
+  - backend/src/farna/core/run_terminal_advance.py
+  - backend/src/farna/core/runner_capacity.py
+  - backend/src/farna/core/saq_worker.py
+  - backend/src/farna/db/crud/pipeline.py
+  - backend/src/farna/db/crud/system_audit_event.py
+  - backend/src/farna/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/farna/db/seed.py
+  - backend/src/farna/cli/users.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/db/models/audit_event.py
+  - backend/src/farna/core/system_audit_logger.py
+  - backend/src/farna/db/models/system_audit_event.py
+  - backend/src/farna/db/migrations/versions/0285_system_audit_events.py
   - frontend/src/views/AdminAuditView.vue
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py

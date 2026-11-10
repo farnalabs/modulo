@@ -11,15 +11,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.rating import (
+from farna.db.crud.base import PageResult
+from farna.db.crud.rating import (
     CopyToAdaptError,
     DuplicateRatingError,
     RatingCooldownError,
     SelfRatingError,
 )
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.primitive_rating import PrimitiveRating
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.primitive_rating import PrimitiveRating
 from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session
 
 scenarios("../features/library/browse.feature")
@@ -86,7 +86,7 @@ def _patch_service_create() -> patch:
     """Patch library_service.create_library_primitive so freshly-created ORM
     objects carry id/created_at/updated_at — the mock session never applies
     the DB server defaults, which would otherwise break response validation."""
-    from modulo.core.library_service import create_library_primitive as real_create
+    from farna.core.library_service import create_library_primitive as real_create
 
     async def _create(*args: Any, **kwargs: Any) -> LibraryPrimitive:
         prim = await real_create(*args, **kwargs)
@@ -96,7 +96,7 @@ def _patch_service_create() -> patch:
         prim.updated_at = now
         return prim
 
-    return patch("modulo.core.library_service.create_library_primitive", new=_create)
+    return patch("farna.core.library_service.create_library_primitive", new=_create)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ def _org_has_local_primitives(ctx: dict[str, Any]) -> None:
 def _community_primitives_exist(ctx: dict[str, Any]) -> None:
     """Community primitives are built into the library_service module.
     This step is a no-op — the 5 built-in community primitives are
-    (schema x2, agent x2, workflow x1) from modulo.core.library_service.
+    (schema x2, agent x2, workflow x1) from farna.core.library_service.
     """
 
 
@@ -600,8 +600,8 @@ def _submit_rating_for(ctx: dict[str, Any], client, name: str, value: str, comme
     rating = _make_rating(pid, thumbs_up=thumbs_up, comment=comment)
     error = ctx.get("rating_error")
     with (
-        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
-        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+        patch("farna.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("farna.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
     ):
         if error is not None:
             mock_submit.side_effect = error
@@ -629,7 +629,7 @@ def _submit_rating_with_comment(client, name: str, value: str, comment: str, ctx
 def _request_aggregate_rating(client, name: str, ctx: dict[str, Any], request) -> None:
     pid = _rating_id(name)
     avg, count = ctx.get("rating_aggregate", (None, 0))
-    with patch("modulo.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(avg, count)):
+    with patch("farna.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(avg, count)):
         ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings/aggregate")
     request.node._resp = ctx["response"]
 
@@ -639,7 +639,7 @@ def _request_ratings_list(client, name: str, ctx: dict[str, Any], request) -> No
     pid = _rating_id(name)
     ratings = ctx.get("ratings", [])
     result = PageResult(items=ratings, total=len(ratings), page=1, page_size=20)
-    with patch("modulo.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=result):
+    with patch("farna.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=result):
         ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings")
     request.node._resp = ctx["response"]
 
@@ -650,8 +650,8 @@ def _update_rating(client, name: str, value: str, ctx: dict[str, Any], request) 
     pid = _rating_id(name)
     thumbs_up = value.strip().lower() == "true"
     with (
-        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
-        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+        patch("farna.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("farna.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
     ):
         mock_submit.side_effect = DuplicateRatingError("You have already rated this primitive")
         ctx["response"] = client.post(f"/api/v1/libraries/{pid}/ratings", json={"thumbs_up": thumbs_up})
@@ -743,10 +743,10 @@ def _post_create_library_primitive(client, docstring, ctx: dict[str, Any], reque
     tier = data.get("tier", "native")
     created = _make_primitive_dict(name=data["name"], slug=data["slug"], tier=tier)
     with (
-        patch("modulo.api.routes.library.get_primitive_by_slug", return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", return_value=created),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_primitive_by_slug", return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", return_value=created),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         ctx["response"] = client.post("/api/v1/libraries", json=data)
     request.node._resp = ctx["response"]
@@ -760,8 +760,8 @@ def _response_has_tier(ctx: dict[str, Any], expected_tier: str) -> None:
 
 def _make_tiered_primitive(*, name: str, slug: str, tier: str) -> Any:
     """Build a real LibraryPrimitive with an explicit tier, mirroring _make_modulo."""
-    from modulo.core.library_service import MODULO_ORG_ID
-    from modulo.db.models.library_primitive import LibraryPrimitive
+    from farna.core.library_service import MODULO_ORG_ID
+    from farna.db.models.library_primitive import LibraryPrimitive
 
     now = datetime(2025, 1, 1, tzinfo=UTC)
     return LibraryPrimitive(
@@ -805,8 +805,8 @@ def _list_libraries_with_primitives(client: Any, ctx: dict[str, Any], params: di
     tiered = ctx.get("tier_primitives")
     assert tiered is not None, "No tiered primitives in context — use the Given step"
     with (
-        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
-        patch("modulo.core.library_service._filter_community", return_value=[]),
+        patch("farna.core.library_service._filter_modulo", return_value=tiered),
+        patch("farna.core.library_service._filter_community", return_value=[]),
     ):
         ctx["response"] = client.get("/api/v1/libraries", params=params)
 
@@ -827,8 +827,8 @@ def _viewer_lists_libraries_with_include_in_dev(viewer_client: Any, ctx: dict[st
     tiered = ctx.get("tier_primitives")
     assert tiered is not None, "No tiered primitives in context — use the Given step"
     with (
-        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
-        patch("modulo.core.library_service._filter_community", return_value=[]),
+        patch("farna.core.library_service._filter_modulo", return_value=tiered),
+        patch("farna.core.library_service._filter_community", return_value=[]),
     ):
         ctx["response"] = viewer_client.get("/api/v1/libraries", params={"include_in_dev": "true"})
     request.node._resp = ctx["response"]
@@ -890,9 +890,9 @@ def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[
     updated["id"] = str(pid)
     updated["auto_update"] = auto_update
     with (
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=updated),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         ctx["response"] = client.patch(
             f"/api/v1/libraries/{pid}",

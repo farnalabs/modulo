@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
-from modulo.core.eval_engine.coverage_gap import (
+from farna.core.eval_engine.coverage_gap import (
     CoverageGapSummary,
     _canonical_json,
     _coverage_data_point_run_ids,
@@ -24,7 +24,7 @@ from modulo.core.eval_engine.coverage_gap import (
     compute_variant_divergence,
     evaluate_coverage_gap,
 )
-from modulo.core.eval_engine.execute_suite_run import (
+from farna.core.eval_engine.execute_suite_run import (
     SuiteJudgingBudgetExhaustedError,
     SuiteRunExecutionError,
     _budget_exhausted,
@@ -42,13 +42,13 @@ from modulo.core.eval_engine.execute_suite_run import (
     exclude_eval_families,
     is_eval_trigger,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode
-from modulo.core.pipeline_engine.errors import (
+from farna.core.eval_engine.typed_judge import JudgeErrorCode
+from farna.core.pipeline_engine.errors import (
     NodeMissingModelBackendError,
     RouterNoMatchError,
 )
-from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError
-from modulo.core.pipeline_impact import (
+from farna.core.pipeline_engine.node_runner import ConnectorNodeFailedError
+from farna.core.pipeline_impact import (
     _check_edge_repoint_breaking,
     check_port_change_breaking,
     compute_port_change_impact,
@@ -57,7 +57,7 @@ from modulo.core.pipeline_impact import (
     node_port_signature,
     normalise_edge_port_delta,
 )
-from modulo.db.models.eval_suite_run import SuiteRunState
+from farna.db.models.eval_suite_run import SuiteRunState
 
 
 class TestCoverageGapBoundaries:
@@ -351,11 +351,11 @@ class TestCoverageGapRemainingBranches:
         def _raise_type_error(*args: object, **kwargs: object) -> str:
             raise TypeError("bad")
 
-        monkeypatch.setattr("modulo.core.eval_engine.coverage_gap.json.dumps", _raise_type_error)
+        monkeypatch.setattr("farna.core.eval_engine.coverage_gap.json.dumps", _raise_type_error)
         assert _canonical_json({"value": 1}) == "{'value': 1}"
 
     def test_duplicate_variant_and_incomplete_results_are_ignored(self) -> None:
-        from modulo.core.eval_engine.coverage_gap import _eval_values_by_variant, _variant_representatives
+        from farna.core.eval_engine.coverage_gap import _eval_values_by_variant, _variant_representatives
 
         first = uuid.uuid4()
         duplicate = uuid.uuid4()
@@ -376,7 +376,7 @@ class TestCoverageGapRemainingBranches:
         assert not _eval_values_by_variant(results, {first, duplicate}, keys, representatives)
 
     async def test_compute_coverage_gap_requires_scope_and_handles_empty_batch(self) -> None:
-        from modulo.core.eval_engine.coverage_gap import compute_coverage_gap
+        from farna.core.eval_engine.coverage_gap import compute_coverage_gap
 
         session = AsyncMock()
         with pytest.raises(ValueError, match="provide batch_id or variant_group_id"):
@@ -384,7 +384,7 @@ class TestCoverageGapRemainingBranches:
 
         with pytest.MonkeyPatch.context() as patcher:
             patcher.setattr(
-                "modulo.core.eval_engine.coverage_gap._load_runs",
+                "farna.core.eval_engine.coverage_gap._load_runs",
                 AsyncMock(return_value=[]),
             )
             summary = await compute_coverage_gap(session, org_id=uuid.uuid4(), batch_id=uuid.uuid4())
@@ -392,7 +392,7 @@ class TestCoverageGapRemainingBranches:
         assert summary.run_count == 0
 
     async def test_batch_loader_and_output_reader_are_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.core.eval_engine import coverage_gap
+        from farna.core.eval_engine import coverage_gap
 
         run = SimpleNamespace(id=uuid.uuid4(), status="complete", variant_config_snapshot={"variant_id": "v"})
         batch_loader = AsyncMock(return_value=[run])
@@ -410,8 +410,8 @@ class TestCoverageGapRemainingBranches:
 
 class TestExecuteSuiteRunRemainingBranches:
     async def test_transition_rejects_unpersisted_and_illegal_runs(self) -> None:
-        from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
-        from modulo.db.models.eval_suite_run import IllegalStateTransitionError
+        from farna.core.eval_engine.execute_suite_run import _suite_run_transition
+        from farna.db.models.eval_suite_run import IllegalStateTransitionError
 
         session = AsyncMock()
         with pytest.raises(ValueError, match="persisted"):
@@ -426,8 +426,8 @@ class TestExecuteSuiteRunRemainingBranches:
             await _suite_run_transition(session, run, SuiteRunState.RUNNING)
 
     async def test_transition_detects_optimistic_lock_loss(self) -> None:
-        from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
-        from modulo.db.models.eval_suite_run import OptimisticLockError
+        from farna.core.eval_engine.execute_suite_run import _suite_run_transition
+        from farna.db.models.eval_suite_run import OptimisticLockError
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
@@ -443,7 +443,7 @@ class TestExecuteSuiteRunRemainingBranches:
             await _suite_run_transition(session, run, SuiteRunState.RUNNING)
 
     async def test_loader_not_found_errors_are_typed(self) -> None:
-        from modulo.core.eval_engine.execute_suite_run import load_dataset, load_model_backend, load_suite
+        from farna.core.eval_engine.execute_suite_run import load_dataset, load_model_backend, load_suite
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
@@ -468,7 +468,7 @@ class TestExecuteSuiteRunRemainingBranches:
 
                 return _result()
 
-        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.time.monotonic", lambda: 10.0)
+        monkeypatch.setattr("farna.core.eval_engine.execute_suite_run.time.monotonic", lambda: 10.0)
         with pytest.raises(SuiteJudgingBudgetExhaustedError):
             await _evaluate_within_budget(_Engine(), {}, definition, run, None, 9.0)
 
@@ -477,15 +477,15 @@ class TestExecuteSuiteRunRemainingBranches:
                 awaitable.close()
             raise TimeoutError
 
-        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.time.monotonic", lambda: 0.0)
-        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.asyncio.wait_for", _raise_timeout)
+        monkeypatch.setattr("farna.core.eval_engine.execute_suite_run.time.monotonic", lambda: 0.0)
+        monkeypatch.setattr("farna.core.eval_engine.execute_suite_run.asyncio.wait_for", _raise_timeout)
         with pytest.raises(SuiteJudgingBudgetExhaustedError):
             await _evaluate_within_budget(_Engine(), {}, definition, run, None, 1.0)
         exhausted = _budget_exhausted_result(definition, run)
         assert exhausted.judge_verdict.error_code is JudgeErrorCode.JUDGE_TIMEOUT
 
     async def test_claimed_cost_and_sync_judge_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.core.eval_engine.execute_suite_run import _score_case
+        from farna.core.eval_engine.execute_suite_run import _score_case
 
         run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4(), claimed_cost=None)
         case = SimpleNamespace(input_payload={"x": 1})
@@ -502,7 +502,7 @@ class TestExecuteSuiteRunRemainingBranches:
         )
         session = AsyncMock()
         claimed = AsyncMock()
-        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run._claim_case_cost", claimed)
+        monkeypatch.setattr("farna.core.eval_engine.execute_suite_run._claim_case_cost", claimed)
         results, errored = await _score_case(
             session,
             run,
@@ -534,7 +534,7 @@ class TestExecuteSuiteRunRemainingBranches:
         claimed.assert_awaited_once()
 
     def test_resolvers_and_tally_cover_remaining_boundaries(self) -> None:
-        from modulo.core.eval_engine.execute_suite_run import _failure_detail, _resolve_suite_ceiling
+        from farna.core.eval_engine.execute_suite_run import _failure_detail, _resolve_suite_ceiling
 
         assert _resolve_suite_ceiling(SimpleNamespace(extra={"suite_ceiling": 2}), None) == Decimal(2)
         assert _resolve_suite_ceiling(SimpleNamespace(extra={"suite_ceiling": None}), Decimal(3)) == Decimal(3)
@@ -544,7 +544,7 @@ class TestExecuteSuiteRunRemainingBranches:
 
 class TestPipelineImpactRemainingBranches:
     def test_schema_refs_and_port_delta_edges(self) -> None:
-        from modulo.core.pipeline_impact import _normalise_port_entry, _port_schema_ref, _ports_list
+        from farna.core.pipeline_impact import _normalise_port_entry, _port_schema_ref, _ports_list
 
         assert _port_schema_ref({"name": "p", "ref": 4}) == "4"
         assert _port_schema_ref({"name": "p"}) is None

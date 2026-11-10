@@ -30,8 +30,8 @@ from ``_check_human_only_gate``.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import review_hitl
-from modulo.auth.permissions import is_delegable
+from farna.api.mcp_server import review_hitl
+from farna.auth.permissions import is_delegable
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000013")
@@ -73,7 +73,7 @@ class _DelegatedTokenContext:
     """
 
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_key_grants,
@@ -92,7 +92,7 @@ class _DelegatedTokenContext:
         _ctx_key_grants.set(_HITL_GRANTS)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_key_grants,
@@ -138,10 +138,10 @@ def _run_and_snapshot(human_only: bool) -> tuple[MagicMock, MagicMock, str]:
 class TestHitlDelegationTokenBoundary(_DelegatedTokenContext):
     """One delegated token: allowed on a non-``human_only`` gate, denied on one."""
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.HITLManager")
-    @patch("modulo.api.mcp_server._build_resume_executor")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.HITLManager")
+    @patch("farna.api.mcp_server._build_resume_executor")
+    @patch("farna.api.mcp_server._session")
     async def test_hitl_grant_decides_non_human_only_gate(
         self,
         mock_session: AsyncMock,
@@ -184,10 +184,10 @@ class TestHitlDelegationTokenBoundary(_DelegatedTokenContext):
         # FAR-2328: a successful approve resumes inline via the executor.
         executor.resume.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.HITLManager")
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.HITLManager")
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_same_hitl_grant_denied_at_runtime_on_human_only_gate(
         self,
         mock_session: AsyncMock,

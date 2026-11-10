@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ArtifactTooLargeError,
     BackendUnreachableError,
     ProviderCapabilityUnsupportedError,
@@ -44,8 +44,8 @@ from modulo.core.runtime_provider import (
     WorkspaceNetworkValidationError,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -312,7 +312,7 @@ async def test_dispatch_route_new_family_error_propagates_unwrapped() -> None:
     """Site A: ``except ProviderNotConfiguredError`` in
     ``resolve_sandbox_dispatch_route`` must NOT rewrap a new-family error as
     ``SandboxDispatchUnboundError``."""
-    from modulo.core.bundled_runner import runner_dispatch
+    from farna.core.bundled_runner import runner_dispatch
 
     def _boom_hub(**_kwargs: object):
         raise RateLimitedError("substrate rate limit / quota exceeded")
@@ -331,8 +331,8 @@ async def test_dispatch_route_new_family_error_propagates_unwrapped() -> None:
 async def test_dispatch_route_config_error_still_becomes_dispatch_unbound() -> None:
     """Site A, untouched side: ``ProviderNotConfiguredError`` from the hub is
     still converted to ``SandboxDispatchUnboundError`` (behaviour unchanged)."""
-    from modulo.core.bundled_runner import runner_dispatch
-    from modulo.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
+    from farna.core.bundled_runner import runner_dispatch
+    from farna.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
 
     def _config_boom(**_kwargs: object):
         raise ProviderNotConfiguredError("runner_docker", "MODULO_DOCKER_HOST")
@@ -352,7 +352,7 @@ async def test_shell_connector_new_family_error_not_flattened_to_value_error() -
     """Site B: the shell connector's fail-soft ``except
     ProviderNotConfiguredError -> ValueError`` must NOT flatten a new-family
     error."""
-    from modulo.connectors.shell import ShellConnector
+    from farna.connectors.shell import ShellConnector
 
     class _GoneHub:
         def resolve(self, profile: object) -> object:
@@ -374,7 +374,7 @@ async def test_shell_connector_new_family_error_not_flattened_to_value_error() -
 async def test_shell_connector_config_error_still_flattened_to_value_error() -> None:
     """Site B, untouched side: ``ProviderNotConfiguredError`` still becomes
     the connector's fail-soft plain ``ValueError`` (behaviour unchanged)."""
-    from modulo.connectors.shell import ShellConnector
+    from farna.connectors.shell import ShellConnector
 
     class _UnconfiguredHub:
         def resolve(self, profile: object) -> object:
@@ -398,7 +398,7 @@ async def test_sandbox_test_stream_surfaces_new_family_as_generic_failed_event()
     ``except ProviderNotConfiguredError`` block is NOT swallowed by that
     handler — it propagates to the stream's existing outer catch-all, which
     emits the generic failed SSE event (no config-remediation copy)."""
-    from modulo.api.routes import environment_profiles as ep
+    from farna.api.routes import environment_profiles as ep
 
     class _RateHub:
         def resolve(self, profile: object) -> object:
@@ -428,7 +428,7 @@ async def test_sandbox_test_stream_config_error_still_gets_remediation_copy(
 ) -> None:
     """Site C, untouched side: ``ProviderNotConfiguredError`` still surfaces
     through the INNER handler with its remediation copy (behaviour unchanged)."""
-    from modulo.api.routes import environment_profiles as ep
+    from farna.api.routes import environment_profiles as ep
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     profile = SimpleNamespace(id=uuid.uuid4(), provider_type="e2b")
@@ -452,7 +452,7 @@ async def test_sandbox_test_stream_config_error_still_gets_remediation_copy(
 
 
 def test_new_family_exported_from_package() -> None:
-    import modulo.core.runtime_provider as pkg
+    import farna.core.runtime_provider as pkg
 
     for name in (
         "RuntimeProviderError",

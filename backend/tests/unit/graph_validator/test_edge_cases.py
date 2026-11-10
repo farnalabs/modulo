@@ -11,10 +11,10 @@ from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core import graph_validator as _gv_module
-from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.core.graph_validator._types import try_parse_uuids
-from modulo.core.graph_validator.category_validator import validate_node_category
+from farna.core import graph_validator as _gv_module
+from farna.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator._types import try_parse_uuids
+from farna.core.graph_validator.category_validator import validate_node_category
 from tests.unit.graph_validator._helpers import (
     codes_of as _codes,
 )

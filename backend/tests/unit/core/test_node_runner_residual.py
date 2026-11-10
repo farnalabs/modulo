@@ -25,10 +25,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus
-from modulo.core.pipeline_engine.node_runner import (
+import farna.core.pipeline_engine.llm_judge as llm_judge
+import farna.core.pipeline_engine.node_runner as nr
+from farna.connectors.base import CIRun, CIRunLog, CIRunStatus
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     ScriptBudgetKilledError,
     ScriptInvalidOutputError,
@@ -38,7 +38,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_connector_fn,
     make_sandbox_agent_fn,
 )
-from modulo.core.pipeline_engine.schema_repair import SchemaValidationOutcome
+from farna.core.pipeline_engine.schema_repair import SchemaValidationOutcome
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _ORG_UUID = uuid.UUID(_ORG_ID)
@@ -233,7 +233,7 @@ def test_compute_sandbox_cost_non_finite_total_returns_zero(monkeypatch: pytest.
 def test_bridge_escalation_failure_detail_parses_marker():
     """A stopped loop (dedicated exit code + marker) yields a summary-only
     escalation detail; other exits / missing markers yield None."""
-    from modulo.core.guardrails.loop_intercept import BRIDGE_ESCALATED_EXIT_CODE, BRIDGE_ESCALATED_MARKER
+    from farna.core.guardrails.loop_intercept import BRIDGE_ESCALATED_EXIT_CODE, BRIDGE_ESCALATED_MARKER
 
     marker = BRIDGE_ESCALATED_MARKER + json.dumps(
         {
@@ -265,7 +265,7 @@ async def test_read_log_tail_via_provider_resolves_e2b_override(monkeypatch: pyt
     the runtime-config bridge and hands it to the provider builder — an
     override wins over the legacy env var (fails without the bridge: the
     builder would receive the stale env key)."""
-    from modulo.core.runtime_config.store import get_runtime_config_store
+    from farna.core.runtime_config.store import get_runtime_config_store
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
@@ -331,7 +331,7 @@ async def test_write_raw_output_marker_stamps_derived_key_without_promotion():
         attempt_key="run:run-1:node:n1:0",
         marker=marker,
     )
-    from modulo.core.pipeline_engine.idempotency import node_idempotency_key
+    from farna.core.pipeline_engine.idempotency import node_idempotency_key
 
     expected = node_idempotency_key(f"{_ORG_ID}:9", "n1", index=None, payload=None)
     assert marker["idempotency_key"] == expected
@@ -343,7 +343,7 @@ async def test_write_raw_output_marker_row_missing_logs_and_skips(caplog):
     def _factory() -> _FakeSession:
         return session
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         await nr._write_raw_output_marker(
             _factory,
             org_uuid=_ORG_UUID,
@@ -438,7 +438,7 @@ async def test_read_gate_markers_db_failure_fails_open(caplog):
     session = _FakeSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         got = await nr._read_run_raw_output_markers_for_gate(
             lambda: session, run_id=_RUN_ID, org_id_raw=_ORG_ID, claim_lease="tok", node_id="n1"
         )
@@ -592,7 +592,7 @@ def test_connector_on_unknown_reader_raise_falls_back(caplog):
         def on_unknown_for(self, resource: str) -> str:
             raise RuntimeError("policy unreadable")
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         mode = nr._connector_on_unknown(_Conn(), "command")
     assert mode == "fail_open"
     assert any("on_unknown_read_failed" in m for m in caplog.messages)
@@ -691,7 +691,7 @@ async def test_stamp_connector_write_delivered_reraises_cancellation():
 async def test_stamp_connector_write_delivered_lost_marker_warns(caplog):
     with (
         patch.object(nr, "_persist_raw_output_marker", new=AsyncMock(return_value=False)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
     ):
         await nr._stamp_connector_write_delivered(
             lambda: None, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", resource="r", filters={}, data={}
@@ -733,7 +733,7 @@ async def test_mark_connector_write_no_delivery_reraises_cancellation():
 
 def _enable_write_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: SimpleNamespace(modulo_connector_write_gate_enabled=True),
     )
 
@@ -823,7 +823,7 @@ async def test_conformance_gate_no_session_factory_fast_path(monkeypatch: pytest
     ctx = (None, _ORG_ID, None, "pipe-1", None, False)
     monkeypatch.setattr(nr, "get_conformance_ctx", lambda: ctx)
     check = AsyncMock()
-    monkeypatch.setattr("modulo.core.guardrails.conformance.check_node_start", check)
+    monkeypatch.setattr("farna.core.guardrails.conformance.check_node_start", check)
     blocked = await nr._run_conformance_gate({}, node_id="n1")
     assert blocked is False
     check.assert_not_awaited()
@@ -833,7 +833,7 @@ async def test_conformance_gate_empty_pipeline_id_fast_path(monkeypatch: pytest.
     ctx = (lambda: None, _ORG_ID, None, "", None, False)
     monkeypatch.setattr(nr, "get_conformance_ctx", lambda: ctx)
     check = AsyncMock()
-    monkeypatch.setattr("modulo.core.guardrails.conformance.check_node_start", check)
+    monkeypatch.setattr("farna.core.guardrails.conformance.check_node_start", check)
     blocked = await nr._run_conformance_gate({}, node_id="n1")
     assert blocked is False
     check.assert_not_awaited()
@@ -843,14 +843,14 @@ async def test_conformance_gate_unparseable_pipeline_fast_path(monkeypatch: pyte
     ctx = (lambda: None, _ORG_ID, None, "not-a-uuid", None, False)
     monkeypatch.setattr(nr, "get_conformance_ctx", lambda: ctx)
     check = AsyncMock()
-    monkeypatch.setattr("modulo.core.guardrails.conformance.check_node_start", check)
+    monkeypatch.setattr("farna.core.guardrails.conformance.check_node_start", check)
     blocked = await nr._run_conformance_gate({}, node_id="n1")
     assert blocked is False
     check.assert_not_awaited()
 
 
 async def test_conformance_audit_reraises_cancellation(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core import audit_logger
+    from farna.core import audit_logger
 
     async def _cancelled(*args: Any, **kwargs: Any) -> None:
         raise asyncio.CancelledError
@@ -906,7 +906,7 @@ def test_render_agent_prompt_llm_routing_no_prompt_no_append():
 
 
 async def test_invoke_node_model_without_hub_raises(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_model_backend_hub", lambda: None)
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_model_backend_hub", lambda: None)
     with pytest.raises(RuntimeError, match="ModelBackendHub not available"):
         await nr._invoke_node_model("prompt", "11111111-2222-3333-4444-555555555555", "n1")
 
@@ -946,7 +946,7 @@ def test_model_judge_non_json_response_is_malformed(monkeypatch: pytest.MonkeyPa
 
     The raw model text is never copied into the human-readable detail.
     """
-    from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+    from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 
     judge = llm_judge.build_model_judge_callable(MagicMock(), _judge_backend_id())
     monkeypatch.setattr(llm_judge, "run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
@@ -1026,7 +1026,7 @@ def test_gate_eval_target_missing_contract_falls_back():
 
 async def test_reject_correction_inner_dispatches():
     dispatch = AsyncMock()
-    with patch("modulo.core.feedback_manager.dispatch_reject_correction", dispatch):
+    with patch("farna.core.feedback_manager.dispatch_reject_correction", dispatch):
         await nr._dispatch_reject_correction_inner(
             "factory", "org", "run-1", "node-1", {"k": 1}, {"action": "rejected", "reason": "bad"}, "gate-1"
         )
@@ -1039,7 +1039,7 @@ async def test_reject_correction_inner_dispatches():
 async def test_reject_correction_inner_reraises_cancellation():
     dispatch = AsyncMock(side_effect=asyncio.CancelledError())
     with (
-        patch("modulo.core.feedback_manager.dispatch_reject_correction", dispatch),
+        patch("farna.core.feedback_manager.dispatch_reject_correction", dispatch),
         pytest.raises(asyncio.CancelledError),
     ):
         await nr._dispatch_reject_correction_inner(
@@ -1050,8 +1050,8 @@ async def test_reject_correction_inner_reraises_cancellation():
 async def test_reject_correction_inner_swallows_db_error(caplog):
     dispatch = AsyncMock(side_effect=RuntimeError("db down"))
     with (
-        patch("modulo.core.feedback_manager.dispatch_reject_correction", dispatch),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        patch("farna.core.feedback_manager.dispatch_reject_correction", dispatch),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         await nr._dispatch_reject_correction_inner(
             "factory", "org", "run-1", "node-1", {}, {"action": "rejected"}, "gate-1"
@@ -1104,7 +1104,7 @@ async def test_reject_correction_best_effort_ignores_non_reject_or_missing_conte
 
 
 def _gate_eval_fixtures(node_id: str | None, failure_behaviour: str = "warn"):
-    from modulo.core.eval_engine import EvalDefinition, EvalType
+    from farna.core.eval_engine import EvalDefinition, EvalType
 
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
@@ -1119,7 +1119,7 @@ def _gate_eval_fixtures(node_id: str | None, failure_behaviour: str = "warn"):
 
 
 async def test_run_evals_persist_before_decide_reraises_cancellation():
-    from modulo.core.pipeline_engine import eval_persist_order
+    from farna.core.pipeline_engine import eval_persist_order
 
     session = _FakeSession()
     session.add = lambda obj: (_ for _ in ()).throw(asyncio.CancelledError())
@@ -1141,8 +1141,8 @@ async def test_run_evals_persist_before_decide_reraises_cancellation():
 
 
 async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
-    from modulo.core.eval_engine import EvalBlockedError
-    from modulo.core.pipeline_engine import eval_persist_order
+    from farna.core.eval_engine import EvalBlockedError
+    from farna.core.pipeline_engine import eval_persist_order
 
     # (a) warn eval: raising session add → helper returns without raising,
     # and nothing is persisted.
@@ -1191,7 +1191,7 @@ async def test_run_evals_persist_before_decide_persistence_failure_boundaries():
 
 
 async def test_run_evals_persist_before_decide_skips_without_run_id():
-    from modulo.core.pipeline_engine import eval_persist_order
+    from farna.core.pipeline_engine import eval_persist_order
 
     session = _FakeSession()
     add_calls: list[object] = []
@@ -1253,7 +1253,7 @@ def _connector_node_def(**overrides: Any) -> dict[str, Any]:
 
 
 def test_resolve_binding_connector_no_hub_returns_note_artifact(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_connector_hub", lambda: None)
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_connector_hub", lambda: None)
     connector, error = nr._resolve_binding_connector({"instance_id": str(uuid.uuid4())}, "n1")
     assert connector is None
     assert error["artifacts"][0]["output"] == {"note": "no connector hub"}
@@ -1261,7 +1261,7 @@ def test_resolve_binding_connector_no_hub_returns_note_artifact(monkeypatch: pyt
 
 
 def test_resolve_binding_connector_missing_instance_id(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_connector_hub", lambda: _StubHub())
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_connector_hub", lambda: _StubHub())
     connector, error = nr._resolve_binding_connector({}, "n1")
     assert connector is None
     assert error["artifacts"][0]["error"] == "no connector instance_id"
@@ -1269,7 +1269,7 @@ def test_resolve_binding_connector_missing_instance_id(monkeypatch: pytest.Monke
 
 def test_resolve_binding_connector_scope_denied(monkeypatch: pytest.MonkeyPatch):
     hub = _StubHub()
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
     connector, error = nr._resolve_binding_connector(
         {"instance_id": str(uuid.uuid4()), "type": "github"}, "n1", allowed_connectors=["slack"]
     )
@@ -1280,7 +1280,7 @@ def test_resolve_binding_connector_scope_denied(monkeypatch: pytest.MonkeyPatch)
 
 def test_resolve_binding_connector_hub_get_raises(monkeypatch: pytest.MonkeyPatch):
     hub = _StubHub(raise_on_get=RuntimeError("unresolvable"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
     connector, error = nr._resolve_binding_connector({"instance_id": str(uuid.uuid4()), "type": "github"}, "n1")
     assert connector is None
     assert "connector error" in error["artifacts"][0]["error"]
@@ -1288,7 +1288,7 @@ def test_resolve_binding_connector_hub_get_raises(monkeypatch: pytest.MonkeyPatc
 
 def test_resolve_binding_connector_success(monkeypatch: pytest.MonkeyPatch):
     hub = _StubHub()
-    monkeypatch.setattr("modulo.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
+    monkeypatch.setattr("farna.core.pipeline_engine.decorator.get_connector_hub", lambda: hub)
     connector, error = nr._resolve_binding_connector({"instance_id": str(uuid.uuid4()), "type": "github"}, "n1")
     assert connector is hub._connector
     assert error is None
@@ -1354,7 +1354,7 @@ def test_connector_binding_defaults_dump_empty_dicts_not_null():
     is exactly what produced the ``"filters": null`` rows the engine cannot
     iterate.
     """
-    from modulo.api.routes.pipelines import ConnectorBinding
+    from farna.api.routes.pipelines import ConnectorBinding
 
     binding = ConnectorBinding(type="github", instance_id=uuid.uuid4())
     dumped = binding.model_dump(mode="json")
@@ -1495,7 +1495,7 @@ async def test_run_connector_action_dispatch_unknown_action_raises():
 
 
 async def test_dispatch_node_routes_to_get_run_status():
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     connector = _DispatchStubConnector()
     set_connector_hub(_StubHub(connector=connector))
@@ -1511,7 +1511,7 @@ async def test_dispatch_node_routes_to_get_run_status():
 
 
 async def test_dispatch_node_defaults_to_dispatch_action_trigger_run():
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     connector = _DispatchStubConnector()
     set_connector_hub(_StubHub(connector=connector))
@@ -1549,7 +1549,7 @@ def test_dispatch_node_invalid_dispatch_action_raises():
 
 async def test_dispatch_node_bypasses_write_gate(monkeypatch: pytest.MonkeyPatch):
     """FAR-1141/FAR-458: a dispatch is NOT a write — no gate, no delivery stamp."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     gate = AsyncMock(side_effect=AssertionError("dispatch must not enter the write gate"))
     monkeypatch.setattr(nr, "_connector_write_gate_phase", gate)
@@ -1628,7 +1628,7 @@ def _dispatch_trigger_node_def(**overrides: Any) -> dict[str, Any]:
 
 async def _run_dispatch_node(node_def: dict[str, Any], connector: Any) -> dict[str, Any]:
     """Build + run one dispatch node against *connector* (hub set, then cleared)."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     set_connector_hub(_StubHub(connector=connector))
     try:
@@ -1767,7 +1767,7 @@ def test_dispatch_wait_timeout_run_retry_policy_never_redispatches():
     code-agnostic), so the structural gate is the dispatch node's
     ``idempotent=false`` — a non-idempotent graph suppresses EVERY retry path
     (FAR-295), and the registry marks the code ``retryable=False``."""
-    from modulo.core.pipeline_engine.executor import _retry_after_policy, _retry_policy_applies
+    from farna.core.pipeline_engine.executor import _retry_after_policy, _retry_policy_applies
 
     policy = {"max_retries": 3}  # absent `on` = every retryable event (FAR-649)
     budget = _retry_after_policy(policy, "failed", "DispatchWaitTimeoutError", "wait window expired")
@@ -1785,7 +1785,7 @@ def test_dispatch_wait_timeout_run_retry_policy_never_redispatches():
 
 def _api_dispatch_node(**overrides: Any) -> Any:
     """A minimal API-graph dispatch node payload (POST /pipelines graph shape)."""
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     payload: dict[str, Any] = {
         "id": str(uuid.uuid4()),
@@ -1825,7 +1825,7 @@ def test_api_dispatch_wait_fields_rejected_off_dispatch_nodes():
         "position": {"x": 0, "y": 0},
         "agent_id": str(uuid.uuid4()),
     }
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     with pytest.raises(ValidationError, match="Only a dispatch node"):
         PipelineGraphNode.model_validate({**agent_payload, "await_completion": True})
@@ -1868,7 +1868,7 @@ def test_api_agent_node_rejects_a_dispatch_connector_binding():
     nothing. Rejected here so a stored graph can never disagree with the
     engine's routing (REST, MCP and ``modulo apply`` all model-validate through
     this class; the classifier additionally reads such a binding as ``query``)."""
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     agent_payload = {
         "id": str(uuid.uuid4()),
@@ -1903,24 +1903,24 @@ def test_api_agent_node_rejects_a_dispatch_connector_binding():
 
 
 def test_guard_connector_secret_output_violation(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.capability_scope import ScopeViolationError
+    from farna.core.capability_scope import ScopeViolationError
 
     def _boom(result: Any, node_id: str) -> None:
         raise ScopeViolationError(node_id=node_id, target="secret-object", kind="secret")
 
-    monkeypatch.setattr("modulo.core.capability_scope.assert_no_secret_objects", _boom)
+    monkeypatch.setattr("farna.core.capability_scope.assert_no_secret_objects", _boom)
     block = nr._guard_connector_secret_output({"leak": True}, "n1")
     assert block is not None
     assert "scope.violation" in block["artifacts"][0]["error"]
 
 
 def test_guard_connector_secret_output_clean(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("modulo.core.capability_scope.assert_no_secret_objects", lambda result, node_id: None)
+    monkeypatch.setattr("farna.core.capability_scope.assert_no_secret_objects", lambda result, node_id: None)
     assert nr._guard_connector_secret_output({"ok": True}, "n1") is None
 
 
 async def test_connector_node_no_hub_returns_note():
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     set_connector_hub(None)
     try:
@@ -1933,7 +1933,7 @@ async def test_connector_node_no_hub_returns_note():
 
 
 async def test_connector_node_missing_instance_id_fails():
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"] = {"type": "github"}
@@ -1948,7 +1948,7 @@ async def test_connector_node_missing_instance_id_fails():
 
 
 async def test_connector_node_query_success_completes():
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     set_connector_hub(_StubHub())
     try:
@@ -1961,7 +1961,7 @@ async def test_connector_node_query_success_completes():
 
 
 async def test_connector_node_connector_raise_returns_failure_envelope(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     class _FailingConnector:
         async def query(self, q: Any) -> Any:
@@ -1988,7 +1988,7 @@ async def test_connector_node_connector_raise_returns_failure_envelope(monkeypat
 
 
 async def test_connector_node_write_reported_failure_returns_failed_artifact(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     class _ReportedFailureConnector:
         async def write(self, payload: Any) -> Any:
@@ -2014,7 +2014,7 @@ async def test_connector_node_write_reported_failure_returns_failed_artifact(mon
 
 
 async def test_connector_node_reported_failure_uses_secret_guard_reason(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     class _ReportedFailureConnector:
         async def write(self, payload: Any) -> Any:
@@ -2042,7 +2042,7 @@ async def test_connector_node_reported_failure_uses_secret_guard_reason(monkeypa
 
 
 async def test_connector_node_dispatch_raise_uses_side_effect_unknown(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     class _RaisingDispatchConnector(_DispatchStubConnector):
         async def trigger_run(
@@ -2075,7 +2075,7 @@ async def test_connector_node_dispatch_raise_uses_side_effect_unknown(monkeypatc
 
 
 async def test_connector_node_write_success_stamps_and_completes(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"]["operation"] = "write"
@@ -2095,7 +2095,7 @@ async def test_connector_node_write_success_stamps_and_completes(monkeypatch: py
 
 
 async def test_connector_node_write_raise_returns_failure_envelope(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     class _RaisingConnector:
         async def write(self, payload: Any) -> Any:
@@ -2122,7 +2122,7 @@ async def test_connector_node_write_raise_returns_failure_envelope(monkeypatch: 
 
 
 async def test_connector_node_write_gate_suppresses(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"]["operation"] = "write"
@@ -2133,7 +2133,7 @@ async def test_connector_node_write_gate_suppresses(monkeypatch: pytest.MonkeyPa
     class _S:
         modulo_connector_write_gate_enabled = True
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
     suppressed = nr._idempotency_gate_skipped_envelope("conn-node")
     with (
         patch.object(nr, "_connector_write_gate", new=AsyncMock(return_value=suppressed)),
@@ -2147,7 +2147,7 @@ async def test_connector_node_write_gate_suppresses(monkeypatch: pytest.MonkeyPa
 
 
 async def test_connector_node_write_intent_persisted_before_write(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"]["operation"] = "write"
@@ -2159,7 +2159,7 @@ async def test_connector_node_write_intent_persisted_before_write(monkeypatch: p
     class _S:
         modulo_connector_write_gate_enabled = True
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
     with (
         patch.object(nr, "_connector_write_gate", new=AsyncMock(return_value=None)),
         patch.object(nr, "_persist_connector_write_intent", new=AsyncMock()) as intent,
@@ -2173,7 +2173,7 @@ async def test_connector_node_write_intent_persisted_before_write(monkeypatch: p
 
 
 async def test_connector_node_write_intent_persist_failure_never_fails_node(caplog, monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"]["operation"] = "write"
@@ -2182,11 +2182,11 @@ async def test_connector_node_write_intent_persist_failure_never_fails_node(capl
     class _S:
         modulo_connector_write_gate_enabled = True
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
     with (
         patch.object(nr, "_connector_write_gate", new=AsyncMock(return_value=None)),
         patch.object(nr, "_persist_connector_write_intent", new=AsyncMock(side_effect=RuntimeError("intent db down"))),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         fn = make_connector_fn(node_def)
         result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
@@ -2196,13 +2196,13 @@ async def test_connector_node_write_intent_persist_failure_never_fails_node(capl
 
 
 async def test_connector_node_secret_guard_blocks_output(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.capability_scope import ScopeViolationError
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.capability_scope import ScopeViolationError
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     def _boom(result: Any, node_id: str) -> None:
         raise ScopeViolationError(node_id=node_id, target="leak", kind="secret")
 
-    monkeypatch.setattr("modulo.core.capability_scope.assert_no_secret_objects", _boom)
+    monkeypatch.setattr("farna.core.capability_scope.assert_no_secret_objects", _boom)
     set_connector_hub(_StubHub())
     try:
         fn = make_connector_fn(_connector_node_def())
@@ -2216,7 +2216,7 @@ async def test_connector_node_secret_guard_blocks_output(monkeypatch: pytest.Mon
 async def test_connector_node_scope_violation_fails_before_hub():
     """A node whose capability_scope excludes its bound connector fails FAST —
     the hub is never consulted (deny-by-default, FAR-418)."""
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def(capability_scope={"allowed_connectors": ["slack"]})
     hub = _StubHub()
@@ -2232,7 +2232,7 @@ async def test_connector_node_scope_violation_fails_before_hub():
 
 
 async def test_connector_node_write_intent_persist_reraises_cancellation(monkeypatch: pytest.MonkeyPatch):
-    from modulo.core.pipeline_engine.decorator import set_connector_hub
+    from farna.core.pipeline_engine.decorator import set_connector_hub
 
     node_def = _connector_node_def()
     node_def["connector_binding"]["operation"] = "write"
@@ -2241,7 +2241,7 @@ async def test_connector_node_write_intent_persist_reraises_cancellation(monkeyp
     class _S:
         modulo_connector_write_gate_enabled = True
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
     with (
         patch.object(nr, "_connector_write_gate", new=AsyncMock(return_value=None)),
         patch.object(nr, "_persist_connector_write_intent", new=AsyncMock(side_effect=asyncio.CancelledError())),
@@ -2297,12 +2297,12 @@ async def test_sandbox_secret_ref_resolver_error_returns_none(caplog, monkeypatc
     class _S:
         fernet_key = "b" * 44
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: _S())
     monkeypatch.setattr(
-        "modulo.core.secrets_backend.create_secrets_backend",
+        "farna.core.secrets_backend.create_secrets_backend",
         MagicMock(side_effect=RuntimeError("vault unavailable")),
     )
-    with caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"):
         value = await nr._sandbox_resolve_secret_ref(
             "MY_SECRET", session_factory=lambda: _FakeSession(), org_id=_ORG_ID
         )
@@ -2365,7 +2365,7 @@ async def test_acquire_dispatch_marker_threads_via_provider_into_the_gate(monkey
     to ``acquire_runner_dispatch_slot``, so the capacity gate's own marker is
     stamped at build time (previously only the post-create rewrite carried it).
     """
-    import modulo.core.runner_capacity as rc
+    import farna.core.runner_capacity as rc
 
     seen: dict[str, Any] = {}
 
@@ -2456,8 +2456,8 @@ async def test_mint_run_api_key_falls_back_to_first_admin(monkeypatch: pytest.Mo
 
     session = _FakeSession(_route)
     minted = AsyncMock(return_value=(MagicMock(), "raw-key"))
-    monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", minted)
-    monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
+    monkeypatch.setattr("farna.auth.api_key.mint_run_api_key", minted)
+    monkeypatch.setattr("farna.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
     value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
@@ -2474,8 +2474,8 @@ async def test_mint_run_api_key_no_account_returns_none(monkeypatch: pytest.Monk
         return r
 
     session = _FakeSession(_route)
-    monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock())
-    monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
+    monkeypatch.setattr("farna.auth.api_key.mint_run_api_key", AsyncMock())
+    monkeypatch.setattr("farna.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
     value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
@@ -2484,7 +2484,7 @@ async def test_mint_run_api_key_no_account_returns_none(monkeypatch: pytest.Monk
 
 async def test_mint_run_api_key_reraises_cancellation(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(side_effect=asyncio.CancelledError())
+        "farna.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(side_effect=asyncio.CancelledError())
     )
     with pytest.raises(asyncio.CancelledError):
         await nr._sandbox_issue_run_credential_for_sandbox(
@@ -2503,8 +2503,8 @@ async def test_mint_run_api_key_mint_failure_returns_none(monkeypatch: pytest.Mo
         return r
 
     session = _FakeSession(_route)
-    monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
+    monkeypatch.setattr("farna.auth.api_key.mint_run_api_key", AsyncMock(return_value=None))
+    monkeypatch.setattr("farna.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
     value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
@@ -2579,7 +2579,7 @@ def test_watchdog_stream_chunk_without_broker_is_noop():
 
 
 def test_watchdog_stream_chunk_empty_chunk_returns():
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     broker = RunEventBroker(uuid.uuid4())
     wd = _watchdog()
@@ -2590,7 +2590,7 @@ def test_watchdog_stream_chunk_empty_chunk_returns():
 
 
 def test_watchdog_stream_chunk_closed_broker_stops_streaming():
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     broker = RunEventBroker(uuid.uuid4())
     broker.close()
@@ -2602,12 +2602,12 @@ def test_watchdog_stream_chunk_closed_broker_stops_streaming():
 
 
 def test_watchdog_stream_chunk_publish_failure_is_isolated(caplog):
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     broker = RunEventBroker(uuid.uuid4())
     with (
         patch.object(broker, "publish", MagicMock(side_effect=OSError("socket down"))),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         wd = _watchdog()
         wd._stream_broker = broker
@@ -2640,7 +2640,7 @@ async def test_watchdog_drain_read_failure_keeps_offset(caplog):
     sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=10))
     sandbox.files.read = AsyncMock(side_effect=OSError("read failed"))
     wd = _watchdog(sandbox=sandbox)
-    with caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"):
         await wd.drain_sandbox_log()
     assert wd._drain_offset == 0
     assert not wd._drained_chunks
@@ -2652,7 +2652,7 @@ async def test_watchdog_drain_probe_failure_keeps_offset_and_preserves_exc(caplo
     sandbox = MagicMock()
     sandbox.files.get_info = AsyncMock(side_effect=OSError("session factory down"))
     wd = _watchdog(sandbox=sandbox)
-    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.node_runner"):
         await wd.drain_sandbox_log()
     assert wd._drain_offset == 0
     assert not wd._drained_chunks
@@ -2676,7 +2676,7 @@ async def test_watchdog_probe_log_growth_failure_is_quiet(caplog):
     sandbox = MagicMock()
     sandbox.files.get_info = AsyncMock(side_effect=OSError("probe failed"))
     wd = _watchdog(sandbox=sandbox, watch_log_path="/home/user/out.json")
-    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.node_runner"):
         await wd.probe_log_growth()
     assert wd._watch_log_prev_size is None
     assert any("watch_log_probe_failed" in m for m in caplog.messages)
@@ -2735,7 +2735,7 @@ async def test_watchdog_probe_filesystem_list_failure_is_quiet(caplog):
     sandbox = MagicMock()
     sandbox.files.list = AsyncMock(side_effect=OSError("list failed"))
     wd = _watchdog(sandbox=sandbox, watch_globs=["*.log"])
-    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.node_runner"):
         await wd.probe_filesystem()
     assert not wd._fs_state
     assert any("watch_fs_probe_failed" in m for m in caplog.messages)
@@ -2796,7 +2796,7 @@ async def test_watchdog_probe_filesystem_invalid_listing_is_quiet(caplog):
     sandbox.files.list = AsyncMock(return_value=_BadListing())
     wd = _watchdog(sandbox=sandbox, watch_globs=["*.log"])
     wd._fs_min_stat_interval = 0.0
-    with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.node_runner"):
         await wd.probe_filesystem()
     # FAR-1050 R6: an unreadable listing now surfaces at the provider boundary
     # (list_files), so it lands on the probe-failure token rather than the
@@ -2866,7 +2866,7 @@ async def test_watchdog_enforce_resource_limits_compare_failure_fails_open(caplo
     sandbox = MagicMock()
     sandbox.get_metrics = AsyncMock(return_value=_BadMetrics())
     wd = _watchdog(sandbox=sandbox, resource_limits={"cpu_usage_pct": 50}, sandbox_mode="script")
-    with caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"):
         killed = await wd.enforce_resource_limits()
     assert killed is False
     assert any("resource_metrics_compare_failed" in m for m in caplog.messages)
@@ -2905,7 +2905,7 @@ async def test_watchdog_kill_for_budget_failure_sets_flag_and_warns(caplog):
     sandbox = MagicMock()
     sandbox.kill = AsyncMock(side_effect=RuntimeError("kill failed"))
     wd = _watchdog(sandbox=sandbox)
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
         await wd.kill_sandbox_for_budget("n1", reason="resource_limits_exceeded")
     assert wd.budget_killed is True
     assert any("resource_kill_failed" in m for m in caplog.messages)
@@ -3086,7 +3086,7 @@ async def test_sandbox_e2b_create_passes_resolved_api_key(monkeypatch: pytest.Mo
     must lose. Fails without the fix: ``create`` is called with no
     ``api_key=`` and the e2b SDK resolves the legacy env var itself.
     """
-    from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+    from farna.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.setenv("E2B_API_KEY", "stale-legacy-env-key")
@@ -3110,7 +3110,7 @@ async def test_sandbox_invalid_stall_timeout_falls_back_with_warning(caplog):
     sandbox = _make_sandbox_mock()
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3123,7 +3123,7 @@ async def test_sandbox_teardown_kill_failure_is_logged_not_raised(caplog):
     sandbox.kill = AsyncMock(side_effect=RuntimeError("kill down"))
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3146,7 +3146,7 @@ async def test_sandbox_success_delivery_marker_persist_failure_is_isolated(caplo
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "_persist_raw_output_marker", new=AsyncMock(side_effect=RuntimeError("marker db down"))),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3196,8 +3196,8 @@ async def test_sandbox_success_delivery_marker_prefers_drained_stdout():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.db.crud.run_node_outputs.read_run_node_outputs_raw", _read_empty),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", _mirror_legacy_write),
+        patch("farna.db.crud.run_node_outputs.read_run_node_outputs_raw", _read_empty),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", _mirror_legacy_write),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3226,7 +3226,7 @@ async def test_sandbox_command_timeout_kill_failure_still_raises_retryable(caplo
     fn = make_sandbox_agent_fn(_sandbox_node_def(timeout_seconds=30))
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -3241,11 +3241,11 @@ async def test_sandbox_gate_killswitch_read_failure_fails_open(monkeypatch: pyte
     def _boom() -> Any:
         raise RuntimeError("settings down")
 
-    monkeypatch.setattr("modulo.settings.get_settings", _boom)
+    monkeypatch.setattr("farna.settings.get_settings", _boom)
     sandbox = _make_sandbox_mock()
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3274,7 +3274,7 @@ async def test_sandbox_dispatch_marker_clear_failure_is_logged(caplog):
     sandbox = _make_sandbox_mock()
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(state)
     assert result["telemetry"]["status"] == "completed"
@@ -3369,11 +3369,11 @@ async def test_sandbox_loop_intercept_setup_failure_falls_back_to_plain_command(
     sandbox = _make_sandbox_mock()
     with (
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=AsyncMock(side_effect=RuntimeError("guardrail db down")),
         ),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3452,8 +3452,8 @@ async def test_sandbox_cancellation_final_drain_failure_is_isolated(caplog):
     sandbox.kill = AsyncMock()
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT", 0.0),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        patch("farna.core.pipeline_engine.node_runner._IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT", 0.0),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
@@ -3575,7 +3575,7 @@ async def test_sandbox_cancellation_triage_marker_lands_outside_the_attempt_key(
         await fn(_run_state())
 
     triage_key = captured["attempt_key"]
-    from modulo.db.crud.run_node_outputs import UNKNOWN_NODE_ID, parse_marker_node_id
+    from farna.db.crud.run_node_outputs import UNKNOWN_NODE_ID, parse_marker_node_id
 
     assert triage_key.startswith(f"cancel-triage:{_RUN_ID}:n1:")
     # Unparseable by the marker grammar -> the __unknown__ sentinel node id.
@@ -3666,7 +3666,7 @@ async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
         patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(side_effect=RuntimeError("logs down"))),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
@@ -3775,10 +3775,10 @@ async def test_sandbox_loop_intercept_bridge_wires_files_env_and_wrapped_command
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=_bridge_load_mock([MagicMock()]),
         ),
-        patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
+        patch("farna.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3805,7 +3805,7 @@ async def test_sandbox_loop_intercept_bridge_setup_cancellation_reraises():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=_bridge_load_mock(asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -3823,11 +3823,11 @@ async def test_sandbox_loop_intercept_teardown_failure_is_isolated(caplog):
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            "farna.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
             new=_bridge_load_mock([MagicMock()]),
         ),
-        patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
-        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        patch("farna.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
+        caplog.at_level(logging.ERROR, logger="farna.core.pipeline_engine.node_runner"),
     ):
         result = await fn(_run_state())
     assert result["telemetry"]["status"] == "completed"
@@ -3878,7 +3878,7 @@ async def test_sandbox_script_capacity_gate_skips_unparseable_org(monkeypatch: p
     counts = AsyncMock()
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.db.crud.run.get_sandbox_concurrency_limit", new=counts),
+        patch("farna.db.crud.run.get_sandbox_concurrency_limit", new=counts),
     ):
         result = await fn({**_run_state(), "_org_id": "not-a-uuid"})
     assert result["telemetry"]["status"] == "completed"
@@ -3900,11 +3900,11 @@ async def test_sandbox_script_capacity_check_failure_fails_open(caplog, monkeypa
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            "farna.db.crud.run.get_sandbox_concurrency_limit",
             new=AsyncMock(side_effect=RuntimeError("capacity db down")),
         ),
-        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
-        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        patch("farna.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        caplog.at_level(logging.WARNING, logger="farna.core.runner_capacity"),
     ):
         result = await fn({**_run_state(), "_claim_lease": "tok"})
     assert result["telemetry"]["status"] == "completed"
@@ -3925,10 +3925,10 @@ async def test_sandbox_script_capacity_check_cancellation_reraises(monkeypatch: 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            "farna.db.crud.run.get_sandbox_concurrency_limit",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
-        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        patch("farna.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn({**_run_state(), "_claim_lease": "tok"})
@@ -3999,7 +3999,7 @@ async def test_sandbox_schema_enforcement_record_persisted(monkeypatch: pytest.M
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "set_rls_org", AsyncMock()),
-        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        patch("farna.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
     ):
         result = await fn(_SANDBOX_SCHEMA_STATE)
     assert result["telemetry"]["status"] == "completed"
@@ -4018,7 +4018,7 @@ async def test_sandbox_schema_enforcement_persist_failure_is_swallowed(monkeypat
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "set_rls_org", AsyncMock()),
-        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        patch("farna.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
     ):
         result = await fn(_SANDBOX_SCHEMA_STATE)
     assert result["telemetry"]["status"] == "completed"
@@ -4039,7 +4039,7 @@ async def test_sandbox_schema_enforcement_persist_cancellation_propagates(
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "set_rls_org", AsyncMock()),
-        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        patch("farna.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_SANDBOX_SCHEMA_STATE)
@@ -4064,7 +4064,7 @@ async def test_sandbox_terminal_schema_failure_persists_enforcement_record(
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch.object(nr, "set_rls_org", AsyncMock()),
-        patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
+        patch("farna.db.crud.run_node_outputs.persist_schema_enforcement_record", persist),
         pytest.raises(ScriptInvalidOutputError, match="schema"),
     ):
         await fn(_SANDBOX_SCHEMA_STATE)

@@ -31,7 +31,7 @@ def ctx() -> dict:
 
 @given("a PagerDuty connector configured with valid credentials")
 def pagerduty_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.pagerduty import PagerDutyConnector
+    from farna.connectors.pagerduty import PagerDutyConnector
 
     ctx["connector"] = PagerDutyConnector(token=_TOKEN)
     ctx["valid"] = True
@@ -39,7 +39,7 @@ def pagerduty_connector_valid(ctx: dict) -> None:
 
 @given("a PagerDuty connector configured with invalid credentials")
 def pagerduty_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.pagerduty import PagerDutyConnector
+    from farna.connectors.pagerduty import PagerDutyConnector
 
     ctx["connector"] = PagerDutyConnector(token=_TOKEN)
     ctx["valid"] = False
@@ -60,7 +60,7 @@ def pagerduty_health_check(ctx: dict) -> None:
 
 @when("the connector queries incidents")
 def pagerduty_query_incidents(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     incidents = [
         {"id": "I1", "title": "Production outage", "status": "triggered"},
@@ -75,7 +75,7 @@ def pagerduty_query_incidents(ctx: dict) -> None:
 
 @when("the connector queries services")
 def pagerduty_query_services(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     services = [
         {"id": "S1", "name": "Web API", "status": "active"},
@@ -90,7 +90,7 @@ def pagerduty_query_services(ctx: dict) -> None:
 
 @when(parsers.parse('the connector triggers an incident with title "{title}" and service "{service}"'))
 def pagerduty_write_trigger_incident(title: str, service: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/incidents").mock(
@@ -103,7 +103,7 @@ def pagerduty_write_trigger_incident(title: str, service: str, ctx: dict) -> Non
 
 @when(parsers.parse('the connector acknowledges incident "{incident_id}"'))
 def pagerduty_write_acknowledge(incident_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.put(f"{_BASE}/incidents/{incident_id}").mock(
@@ -116,7 +116,7 @@ def pagerduty_write_acknowledge(incident_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector resolves incident "{incident_id}"'))
 def pagerduty_write_resolve(incident_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.put(f"{_BASE}/incidents/{incident_id}").mock(

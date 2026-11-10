@@ -14,9 +14,9 @@ from typing import Any, cast
 
 import pytest
 
-from modulo.core.library.workflows import __all__ as workflow_exports
-from modulo.core.library.workflows import definitions as workflow_defs
-from modulo.core.seed_data.library_schemas import SCHEMAS
+from farna.core.library.workflows import __all__ as workflow_exports
+from farna.core.library.workflows import definitions as workflow_defs
+from farna.core.seed_data.library_schemas import SCHEMAS
 
 from .helpers import (
     KNOWN_AGENTS,
@@ -134,7 +134,7 @@ def test_no_unexported_workflows() -> None:
 
 def test_package_reexports_every_workflow() -> None:
     """Every workflow in the definitions module is re-exported by the package."""
-    import modulo.core.library as library_package
+    import farna.core.library as library_package
 
     for name in workflow_exports:
         assert getattr(library_package, name) is getattr(workflow_defs, name)

@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.rating import (
+from farna.db.crud.base import PageResult
+from farna.db.crud.rating import (
     CopyToAdaptError,
     DuplicateRatingError,
     RatingCooldownError,
@@ -19,9 +19,9 @@ from modulo.db.crud.rating import (
     submit_rating,
     update_primitive_ratings_aggregate,
 )
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
-from modulo.db.models.primitive_rating import PrimitiveRating
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.primitive_abuse_report import PrimitiveAbuseReport
+from farna.db.models.primitive_rating import PrimitiveRating
 
 
 @pytest.fixture

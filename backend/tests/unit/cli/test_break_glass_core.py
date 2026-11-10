@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.cli.break_glass import (
+from farna.cli.break_glass import (
     ActivationTxnError,
     DeactivateAtomicityError,
     DeactivateRefusedError,
@@ -162,9 +162,9 @@ class TestCoreActivate:
         result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         session.execute = AsyncMock(return_value=result)
         with (
-            patch("modulo.cli.break_glass.set_rls_org", AsyncMock()) as rls,
-            patch("modulo.cli.break_glass.hash_password", MagicMock(return_value="$2b$h")) as hasher,
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock()) as audit,
+            patch("farna.cli.break_glass.set_rls_org", AsyncMock()) as rls,
+            patch("farna.cli.break_glass.hash_password", MagicMock(return_value="$2b$h")) as hasher,
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock()) as audit,
         ):
             credential = await activate(
                 session,
@@ -190,9 +190,9 @@ class TestCoreActivate:
         free = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         session.execute = AsyncMock(side_effect=[taken, taken, free])
         with (
-            patch("modulo.cli.break_glass.set_rls_org", AsyncMock()),
-            patch("modulo.cli.break_glass.hash_password", MagicMock(return_value="$2b$12$")),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock()),
+            patch("farna.cli.break_glass.set_rls_org", AsyncMock()),
+            patch("farna.cli.break_glass.hash_password", MagicMock(return_value="$2b$12$")),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock()),
         ):
             credential = await activate(session, now=_NOW, org_id=_ORG_ID, ttl_minutes=60, actor="op", reason="r")
         assert credential
@@ -203,7 +203,7 @@ class TestCoreActivate:
         taken = MagicMock(scalar_one_or_none=MagicMock(return_value=uuid.uuid4()))
         session.execute = AsyncMock(return_value=taken)
         with (
-            patch("modulo.cli.break_glass.set_rls_org", AsyncMock()),
+            patch("farna.cli.break_glass.set_rls_org", AsyncMock()),
             pytest.raises(ActivationTxnError, match="after 5 attempts"),
         ):
             await activate(session, now=_NOW, org_id=_ORG_ID, ttl_minutes=60, actor="op", reason="r")
@@ -214,8 +214,8 @@ class TestCoreDeactivate:
         session = _mock_session()
         rows = [_bg_row(), _bg_row(id=uuid.UUID("00000000-0000-0000-0000-00000000000c"))]
         with (
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)) as audit,
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)) as audit,
         ):
             result = await deactivate(
                 session,
@@ -237,8 +237,8 @@ class TestCoreDeactivate:
         session = _mock_session()
         rows = [_bg_row(), _bg_row(id=uuid.UUID("00000000-0000-0000-0000-00000000000c"))]
         with (
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
         ):
             result = await deactivate(
                 session,
@@ -255,7 +255,7 @@ class TestCoreDeactivate:
         session = _mock_session()
 
         with (
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
             pytest.raises(OrgNotFoundError),
         ):
             await deactivate(
@@ -272,7 +272,7 @@ class TestCoreDeactivate:
         session = _mock_session()
         rows = [_bg_row()]
         with (
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
             pytest.raises(DeactivateRefusedError),
         ):
             await deactivate(
@@ -305,8 +305,8 @@ class TestCoreDeactivate:
             session = self._failing_session(sqlstate)
             rows = [_bg_row()]
             with (
-                patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
-                patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
+                patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=rows)),
+                patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
                 pytest.raises(expected),
             ):
                 await deactivate(session, org_id=_ORG_ID, account_id=None, actor="op", reason="x", force=True, now=_NOW)
@@ -320,9 +320,9 @@ class TestCoreForceLastAdmin:
     async def test_no_admins_refuses(self) -> None:
         session = _mock_session()
         with (
-            patch("modulo.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
+            patch("farna.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
             pytest.raises(PreconditionError, match="no live non-break-glass admins to remove"),
         ):
             await force_last_admin(session, org_id=_ORG_ID, actor="op", reason="r", now=_NOW)
@@ -330,9 +330,9 @@ class TestCoreForceLastAdmin:
     async def test_break_glass_only_org_refuses(self) -> None:
         session = _mock_session()
         with (
-            patch("modulo.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=[])),
             patch(
-                "modulo.cli.break_glass._bg_accounts_for_org",
+                "farna.cli.break_glass._bg_accounts_for_org",
                 AsyncMock(return_value=[_bg_row()]),
             ),
             pytest.raises(PreconditionError, match="refusing to remove a live break-glass account"),
@@ -343,7 +343,7 @@ class TestCoreForceLastAdmin:
         session = _mock_session()
         admins = [self._admin(), self._admin()]
         with (
-            patch("modulo.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
+            patch("farna.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
             pytest.raises(PreconditionError, match="exactly one"),
         ):
             await force_last_admin(session, org_id=_ORG_ID, actor="op", reason="r", now=_NOW)
@@ -352,8 +352,8 @@ class TestCoreForceLastAdmin:
         session = _mock_session()
         admins = [self._admin()]
         with (
-            patch("modulo.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)) as audit,
+            patch("farna.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)) as audit,
         ):
             result = await force_last_admin(session, org_id=_ORG_ID, actor="operator", reason="r", now=_NOW)
         assert result["removed_account_id"] == str(admins[0].id)
@@ -363,13 +363,13 @@ class TestCoreForceLastAdmin:
         assert str(admins[0].id) in audit.call_args.kwargs["payload_json"]["summary"]
 
     async def test_custom_error_maps_to_atomicity(self) -> None:
-        from modulo.cli.break_glass import DeactivateAtomicityError
+        from farna.cli.break_glass import DeactivateAtomicityError
 
         session = _mock_session()
         admins = [SimpleNamespace(id=uuid.UUID(int=0))]
         with (
-            patch("modulo.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
-            patch("modulo.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
+            patch("farna.cli.break_glass._live_non_bg_admins", AsyncMock(return_value=admins)),
+            patch("farna.cli.break_glass.append_audit_event", AsyncMock(return_value=None)),
         ):
             session.flush = AsyncMock(side_effect=SQLAlchemyError("weird state"))
             with pytest.raises(DeactivateAtomicityError, match="transaction failed"):
@@ -453,7 +453,7 @@ class TestStatusRows:
         pairs_result.all = MagicMock(return_value=[self._pair(account, org)])
         session.execute = AsyncMock(return_value=pairs_result)
         with patch(
-            "modulo.cli.break_glass._latest_activation_actor_reason",
+            "farna.cli.break_glass._latest_activation_actor_reason",
             AsyncMock(return_value={str(_ORG_ID): ("operator", "TKT-7")}),
         ):
             rows = await status_rows(session, org_id=_ORG_ID, all_rows=True, now=_NOW)
@@ -514,7 +514,7 @@ class TestSmoke:
 
 class TestEngineFactory:
     def test_engine_cached_per_url(self) -> None:
-        import modulo.cli.break_glass as bg
+        import farna.cli.break_glass as bg
 
         engine_one = bg.get_break_glass_engine(_make_settings())
         engine_two = bg.get_break_glass_engine(_make_settings())
@@ -530,7 +530,7 @@ class TestEngineFactory:
         """FAR-1524: the module-cached break-glass engine takes pool_recycle
         from Settings.db_pool_recycle_seconds and must stay strictly below
         the Fly HAProxy 30m session window (1800 s)."""
-        import modulo.cli.break_glass as bg
+        import farna.cli.break_glass as bg
 
         saved_engine = bg._bg_engine
         saved_url = bg._bg_engine_url
@@ -555,7 +555,7 @@ class TestEngineFactory:
     def test_engine_translates_sslmode_for_tls_deploy(self) -> None:
         """FAR-1440: a ``?sslmode=require`` break-glass URL must not be forced
         to plaintext (nor passed raw to asyncpg, which TypeErrors)."""
-        import modulo.cli.break_glass as bg
+        import farna.cli.break_glass as bg
 
         saved_engine = bg._bg_engine
         saved_url = bg._bg_engine_url
@@ -578,7 +578,7 @@ class TestEngineFactory:
             bg._bg_engine_url = saved_url
 
     def test_factory_cached_per_url(self) -> None:
-        import modulo.cli.break_glass as bg
+        import farna.cli.break_glass as bg
 
         settings = _make_settings()
         factory_one = bg.get_break_glass_session_factory(settings)
@@ -592,7 +592,7 @@ class TestEngineSslPosture:
 
     def _isolate(self, monkeypatch: pytest.MonkeyPatch) -> Any:
         """Reset the module-level engine/factory caches (restored on teardown)."""
-        import modulo.cli.break_glass as bg
+        import farna.cli.break_glass as bg
 
         for name in ("_bg_engine", "_bg_engine_url", "_bg_factory", "_bg_factory_url"):
             monkeypatch.setattr(bg, name, None, raising=False)
@@ -708,7 +708,7 @@ class TestRenderAndContextHelpers:
 
         ctx.obj = {}
         fake = object()
-        with patch("modulo.cli.break_glass.get_break_glass_session_factory", return_value=fake) as getter:
+        with patch("farna.cli.break_glass.get_break_glass_session_factory", return_value=fake) as getter:
             assert _factory_from_ctx(ctx, SimpleNamespace()) is fake
         getter.assert_called_once()
         assert ctx.obj["session_factory"] is fake

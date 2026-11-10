@@ -32,14 +32,14 @@ def ctx() -> dict:
 
 @given("an Opsgenie connector with valid API key")
 def opsgenie_connector(ctx: dict) -> None:
-    from modulo.connectors.opsgenie import OpsgenieConnector
+    from farna.connectors.opsgenie import OpsgenieConnector
 
     ctx["connector"] = OpsgenieConnector(api_key=API_KEY)
 
 
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def opsgenie_query_with_limit(ctx: dict, resource: str, limit: int) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     data, total = _opsgenie_resource_fixture(resource)
     with respx.mock:
@@ -56,7 +56,7 @@ def opsgenie_query_with_limit(ctx: dict, resource: str, limit: int) -> None:
 
 @when(parsers.parse('I query resource "{resource}" with status "{status}"'))
 def opsgenie_query_alerts_status(ctx: dict, resource: str, status: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     data = [
         {"id": "A1", "message": "Production down", "status": status},
@@ -72,7 +72,7 @@ def opsgenie_query_alerts_status(ctx: dict, resource: str, status: str) -> None:
 
 @when(parsers.parse('I query resource "{resource}" with cursor "{cursor}"'))
 def opsgenie_query_alerts_cursor(ctx: dict, resource: str, cursor: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     data = [{"id": "A11", "message": "Page two"}]
     with respx.mock:
@@ -93,7 +93,7 @@ def opsgenie_query_alerts_cursor(ctx: dict, resource: str, cursor: str) -> None:
 
 @when(parsers.parse('I query resource "{resource}" with identifierType "{id_type}" and id "{alert_id}"'))
 def opsgenie_query_alert_by_id(ctx: dict, resource: str, id_type: str, alert_id: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     data = {"id": alert_id, "message": "Disk full", "status": "open"}
     with respx.mock:
@@ -107,7 +107,7 @@ def opsgenie_query_alert_by_id(ctx: dict, resource: str, id_type: str, alert_id:
 
 @when(parsers.parse('I query resource "{resource}" with id "{alert_id}"'))
 def opsgenie_query_alert_subresource(ctx: dict, resource: str, alert_id: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     if resource == "alert_notes":
         data = [
@@ -126,7 +126,7 @@ def opsgenie_query_alert_subresource(ctx: dict, resource: str, alert_id: str) ->
 
 @when(parsers.parse('I query resource "{resource}" with schedule_id "{schedule_id}"'))
 def opsgenie_query_on_calls(ctx: dict, resource: str, schedule_id: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     data = {
         "parent": {"id": schedule_id, "name": "Primary On-Call"},
@@ -145,7 +145,7 @@ def opsgenie_query_on_calls(ctx: dict, resource: str, schedule_id: str) -> None:
 
 @when(parsers.parse('I write resource "{resource}" with message "{message}"'))
 def opsgenie_write_alert(ctx: dict, resource: str, message: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/alerts").mock(
@@ -161,7 +161,7 @@ def opsgenie_write_alert(ctx: dict, resource: str, message: str) -> None:
 
 @when(parsers.parse('I write resource "{resource}" with id "{alert_id}"'))
 def opsgenie_write_alert_by_id(ctx: dict, resource: str, alert_id: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(
@@ -174,7 +174,7 @@ def opsgenie_write_alert_by_id(ctx: dict, resource: str, alert_id: str) -> None:
 
 @when(parsers.parse('I write resource "{resource}" with id "{alert_id}" and note "{note}"'))
 def opsgenie_write_alert_note(ctx: dict, resource: str, alert_id: str, note: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/alerts/{alert_id}/notes").mock(
@@ -189,7 +189,7 @@ def opsgenie_write_alert_note(ctx: dict, resource: str, alert_id: str, note: str
 
 @when(parsers.parse('I write resource "{resource}" with id "{alert_id}" and end_time "{end_time}"'))
 def opsgenie_write_alert_snooze(ctx: dict, resource: str, alert_id: str, end_time: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/alerts/{alert_id}/snooze").mock(

@@ -3,7 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import resource_pipeline_detail
+from farna.api.mcp_server import resource_pipeline_detail
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -55,7 +55,7 @@ def _mock_scalar_one_or_none(value) -> MagicMock:
 
 class TestResourcePipelineDetailAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -63,14 +63,14 @@ class TestResourcePipelineDetailAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await resource_pipeline_detail(pipeline_id=str(uuid.uuid4()))
         assert "revoked" in result.lower() or "expired" in result.lower()
@@ -83,7 +83,7 @@ class TestResourcePipelineDetailAuth:
 
 class TestResourcePipelineDetailSuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -91,16 +91,16 @@ class TestResourcePipelineDetailSuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_pipeline_detail(
         self,
         mock_session: AsyncMock,
@@ -134,9 +134,9 @@ class TestResourcePipelineDetailSuccess:
         assert "Snapshot count: 5" in result
         assert "2026-06-20T14:30:00+00:00" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.api.mcp_server._session")
     async def test_inactive_when_no_nodes(
         self,
         mock_session: AsyncMock,
@@ -163,9 +163,9 @@ class TestResourcePipelineDetailSuccess:
         assert "Snapshot count: 0" in result
         assert "Last run" not in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.api.mcp_server._session")
     async def test_none_description(
         self,
         mock_session: AsyncMock,
@@ -188,9 +188,9 @@ class TestResourcePipelineDetailSuccess:
 
         assert "(none)" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.get_pipeline")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.get_pipeline")
+    @patch("farna.api.mcp_server._session")
     async def test_pipeline_not_found(
         self,
         mock_session: AsyncMock,
@@ -206,8 +206,8 @@ class TestResourcePipelineDetailSuccess:
 
         assert "not found" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_pipeline_id_returns_error(
         self,
         mock_session: AsyncMock,

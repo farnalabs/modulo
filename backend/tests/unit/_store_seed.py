@@ -13,8 +13,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.run_node_outputs import replace_run_node_outputs, write_run_markers
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run_node_outputs import replace_run_node_outputs, write_run_markers
+from farna.db.rls import set_rls_org
 
 
 async def seed_run_blobs(

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import HumanMessage
 
-from modulo.core.model_backend_hub import (
+from farna.core.model_backend_hub import (
     _CUSTOM_ENDPOINT_KWARGS,
     _NON_OPENAI_COMPATIBLE,
     BASE_URL_CAPABLE_PROVIDERS,
@@ -21,7 +21,7 @@ from modulo.core.model_backend_hub import (
     _build_custom_stub_backend,
     supports_custom_base_url,
 )
-from modulo.model_backends.base import HealthResult
+from farna.model_backends.base import HealthResult
 
 
 class _DummyBackend:
@@ -47,7 +47,7 @@ def test_build_backend_bedrock_missing_secret_key() -> None:
 
 
 def test_build_backend_bedrock_routes_with_region_default() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend(
             "bedrock",
@@ -66,7 +66,7 @@ def test_build_backend_bedrock_routes_with_region_default() -> None:
 
 
 def test_build_backend_bedrock_uses_configured_region() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend(
             "bedrock",
@@ -88,7 +88,7 @@ def test_build_backend_vertexai_missing_project() -> None:
 
 
 def test_build_backend_vertexai_routes_with_location_default() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend("vertexai", "chirp", {"project": "my-proj"}, {})
     assert result.kwargs == {
@@ -110,7 +110,7 @@ def test_build_backend_api_key_required_providers_require_api_key(provider: str)
 
 
 def test_build_backend_non_openai_provider_passes_api_key_and_model() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend("anthropic", "claude-3", {"api_key": "sk-a"}, {"max_tokens": 512})
     assert result.kwargs == {"api_key": "sk-a", "model_id": "claude-3", "max_tokens": 512}
@@ -122,7 +122,7 @@ def test_build_backend_non_openai_provider_passes_api_key_and_model() -> None:
 
 
 def test_build_backend_openai_compatible_uses_provider_default_base_url() -> None:
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend("groq", "llama3", {"api_key": "k"}, {})
     assert result.kwargs == {
@@ -134,7 +134,7 @@ def test_build_backend_openai_compatible_uses_provider_default_base_url() -> Non
 
 
 def test_build_backend_openai_uses_no_default_base_url() -> None:
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend("openai", "gpt-4o", {"api_key": "k"}, {})
     assert result.kwargs["base_url"] is None
@@ -142,7 +142,7 @@ def test_build_backend_openai_uses_no_default_base_url() -> None:
 
 
 def test_build_backend_openai_compatible_accepts_custom_base_url() -> None:
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "ollama",
@@ -159,7 +159,7 @@ def test_build_backend_openai_compatible_accepts_custom_base_url() -> None:
 
 
 def test_build_backend_opencode_routes_to_opencode_backend() -> None:
-    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+    with patch("farna.model_backends.opencode.OpenCodeBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend("opencode", "glm-5.3-flash", {"api_key": "k"}, {"temperature": 0})
     assert isinstance(result, _DummyBackend)
@@ -168,7 +168,7 @@ def test_build_backend_opencode_routes_to_opencode_backend() -> None:
 
 
 def test_build_backend_opencode_missing_api_key_defaults_to_empty() -> None:
-    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+    with patch("farna.model_backends.opencode.OpenCodeBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend("opencode", "glm-5.3-flash", {}, {})
     assert not result.kwargs["api_key"]
@@ -185,7 +185,7 @@ def test_build_backend_azure_openai_missing_endpoint() -> None:
 
 
 def test_build_backend_azure_openai_routes() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend(
             "azure_openai",
@@ -213,7 +213,7 @@ def test_build_backend_watsonx_missing_project_id() -> None:
 
 
 def test_build_backend_watsonx_routes() -> None:
-    with patch("modulo.core.model_backend_hub._backend_class") as klass:
+    with patch("farna.core.model_backend_hub._backend_class") as klass:
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         result = _build_backend(
             "watsonx",
@@ -238,7 +238,7 @@ def test_build_backend_plugin_provider_missing_api_key() -> None:
     registry = MagicMock()
     registry.has_model_backend.return_value = True
     with (
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=registry),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=registry),
         pytest.raises(ValueError, match="api_key"),
     ):
         _build_backend("my-plugin", "model", {}, {})
@@ -248,7 +248,7 @@ def test_build_backend_plugin_provider_routes() -> None:
     registry = MagicMock()
     registry.has_model_backend.return_value = True
     registry.build_model_backend.return_value = _DummyBackend()
-    with patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=registry):
+    with patch("farna.core.model_backend_hub.get_plugin_registry", return_value=registry):
         result = _build_backend("my-plugin", "model", {"api_key": "k"}, {"max_tokens": 1})
     assert isinstance(result, _DummyBackend)
     registry.build_model_backend.assert_called_once_with("my-plugin", "model", "k", max_tokens=1)
@@ -259,7 +259,7 @@ def test_build_backend_plugin_provider_build_failure_wrapped() -> None:
     registry.has_model_backend.return_value = True
     registry.build_model_backend.side_effect = RuntimeError("plugin exploded")
     with (
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=registry),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=registry),
         pytest.raises(ValueError, match="Failed to build plugin model backend"),
     ):
         _build_backend("my-plugin", "model", {"api_key": "k"}, {})
@@ -270,7 +270,7 @@ def test_build_backend_plugin_provider_cancellation_propagates() -> None:
     registry.has_model_backend.return_value = True
     registry.build_model_backend.side_effect = asyncio.CancelledError()
     with (
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=registry),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=registry),
         pytest.raises(asyncio.CancelledError),
     ):
         _build_backend("my-plugin", "model", {"api_key": "k"}, {})
@@ -338,7 +338,7 @@ def test_backend_class_imports_provider_module() -> None:
 
 def test_build_backend_openai_honours_custom_base_url() -> None:
     """``openai`` has no default URL — a credential base_url must be used."""
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "openai",
@@ -350,7 +350,7 @@ def test_build_backend_openai_honours_custom_base_url() -> None:
 
 
 def test_build_backend_named_local_provider_custom_base_url_overrides_default() -> None:
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "ollama",
@@ -363,7 +363,7 @@ def test_build_backend_named_local_provider_custom_base_url_overrides_default() 
 
 def test_build_backend_legacy_default_params_base_url_is_honoured_without_duplicate_kwarg() -> None:
     """A base_url left in default_params (pre-FAR-2046 UI) must not raise TypeError."""
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "openai",
@@ -376,7 +376,7 @@ def test_build_backend_legacy_default_params_base_url_is_honoured_without_duplic
 
 
 def test_build_backend_credentials_base_url_wins_over_legacy_default_params() -> None:
-    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+    with patch("farna.model_backends.module.OpenAICompatibleBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "openai",
@@ -388,7 +388,7 @@ def test_build_backend_credentials_base_url_wins_over_legacy_default_params() ->
 
 
 def test_build_backend_opencode_honours_custom_base_url() -> None:
-    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+    with patch("farna.model_backends.opencode.OpenCodeBackend") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             "opencode",
@@ -404,8 +404,8 @@ def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> N
     import logging
 
     with (
-        patch("modulo.core.model_backend_hub._backend_class") as klass,
-        caplog.at_level(logging.WARNING, logger="modulo.core.model_backend_hub"),
+        patch("farna.core.model_backend_hub._backend_class") as klass,
+        caplog.at_level(logging.WARNING, logger="farna.core.model_backend_hub"),
     ):
         klass.side_effect = lambda *_a, **_k: _DummyBackend
         _build_backend(
@@ -463,7 +463,7 @@ def test_capability_map_is_the_single_source_of_truth() -> None:
 def test_build_backend_passes_custom_endpoint_to_capable_adapter(
     provider: str, class_name: str, endpoint_kwarg: str, creds: dict[str, str]
 ) -> None:
-    with patch(f"modulo.model_backends.{provider}.{class_name}") as klass:
+    with patch(f"farna.model_backends.{provider}.{class_name}") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
             provider,
@@ -489,11 +489,11 @@ async def test_capable_adapter_health_check_probes_its_effective_endpoint(
     provider: str, module_name: str, class_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The health check must probe the custom endpoint, not the vendor default."""
-    module = __import__(f"modulo.model_backends.{module_name}", fromlist=[class_name])
+    module = __import__(f"farna.model_backends.{module_name}", fromlist=[class_name])
     health_mock = AsyncMock(return_value=HealthResult(ok=True))
     # FAR-2046: adapters validate a custom endpoint at construction; resolve the
     # non-routable test host to a public address so construction clears the gate.
-    monkeypatch.setattr("modulo.core.ssrf._resolve_all_sync", lambda _host: ["93.184.216.34"])
+    monkeypatch.setattr("farna.core.ssrf._resolve_all_sync", lambda _host: ["93.184.216.34"])
     with patch.object(module, "openai_compatible_health_check", new=health_mock):
         backend = _build_backend(
             provider,

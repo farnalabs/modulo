@@ -42,24 +42,24 @@ import pytest
 from sqlalchemy import DateTime, Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import pipeline_execution as pe
-from modulo.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
-from modulo.core.lifecycle_map.advancement import _ADVANCE_SQL, _evidence_timestamp, advance_journeys
-from modulo.core.pipeline_execution import (
+from farna.core import pipeline_execution as pe
+from farna.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
+from farna.core.lifecycle_map.advancement import _ADVANCE_SQL, _evidence_timestamp, advance_journeys
+from farna.core.pipeline_execution import (
     _advance_journeys_from_stored_refs,
     fail_run_terminal,
     mark_complete,
     stale_run_recovery_sweep,
 )
-from modulo.db.lifecycle_refs import canonical_work_item_id
-from modulo.db.models.base import Base
-from modulo.db.models.journey import Journey
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import JourneyFact
-from modulo.db.models.run_node_outputs import RunNodeOutput
-from modulo.settings import get_settings, work_item_refs_cap
+from farna.db.lifecycle_refs import canonical_work_item_id
+from farna.db.models.base import Base
+from farna.db.models.journey import Journey
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import JourneyFact
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.settings import get_settings, work_item_refs_cap
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -790,11 +790,11 @@ def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_components(*_a: Any, **_k: Any) -> list[Any]:
         return []
 
-    monkeypatch.setattr("modulo.core.cost_controller.finalize.record_run_facts", _noop)
-    monkeypatch.setattr("modulo.core.cost_controller.finalize._ledger_block", _noop)
-    monkeypatch.setattr("modulo.core.cost_controller.finalize.load_live_components", _fake_components)
+    monkeypatch.setattr("farna.core.cost_controller.finalize.record_run_facts", _noop)
+    monkeypatch.setattr("farna.core.cost_controller.finalize._ledger_block", _noop)
+    monkeypatch.setattr("farna.core.cost_controller.finalize.load_live_components", _fake_components)
     # ``finalize_cost`` resolves ``get_settings`` from ITS OWN module namespace
-    # (``from modulo.settings import get_settings``), so patch the name there —
+    # (``from farna.settings import get_settings``), so patch the name there —
     # stubbing ``modulo.settings.get_settings`` does not reach it. The stub
     # carries the default unified refs cap because ``work_item_refs_cap`` reads
     # settings too; a bare ``MagicMock`` coerces to ``1`` (``int(MagicMock)``)
@@ -804,13 +804,13 @@ def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
     # settings-module cache the refs cap reads.
     stub_settings = MagicMock()
     stub_settings.modulo_work_item_refs_cap = 100
-    monkeypatch.setattr("modulo.core.cost_controller.finalize.get_settings", lambda: stub_settings)
+    monkeypatch.setattr("farna.core.cost_controller.finalize.get_settings", lambda: stub_settings)
     monkeypatch.setattr(
-        "modulo.core.cost_controller.finalize.build_telemetry",
+        "farna.core.cost_controller.finalize.build_telemetry",
         lambda _enriched, _components: ({}, {}),
     )
     monkeypatch.setattr(
-        "modulo.core.cost_controller.finalize.build_cost_breakdown",
+        "farna.core.cost_controller.finalize.build_cost_breakdown",
         lambda _telemetry, _components, settings=None, rejected_zero_nodes=None, rejection_reasons=None: (
             [],
             Decimal(0),
@@ -875,8 +875,8 @@ class TestFinalizeJourneyHook:
         async def _boom(*_a: Any, **_k: Any) -> int:
             raise RuntimeError("journey explosion")
 
-        monkeypatch.setattr("modulo.core.cost_controller.finalize.advance_journeys", _boom)
-        with caplog.at_level("ERROR", logger="modulo.core.cost_controller.finalize"):
+        monkeypatch.setattr("farna.core.cost_controller.finalize.advance_journeys", _boom)
+        with caplog.at_level("ERROR", logger="farna.core.cost_controller.finalize"):
             await _advance_journeys_on_terminal(session, run, "complete", {})
         assert any("journey_advance_failed" in m for m in caplog.messages)
         # Nothing escaped — and no journey was written.
@@ -893,7 +893,7 @@ class TestAgentMintFlagFinalize:
 
     @pytest.fixture(autouse=True)
     def _clear_flag_caches(self) -> Generator[None]:
-        from modulo.core.runtime_config import org_flags as org_flags_mod
+        from farna.core.runtime_config import org_flags as org_flags_mod
 
         org_flags_mod.clear_org_flag_cache()
         yield
@@ -903,11 +903,11 @@ class TestAgentMintFlagFinalize:
     def agent_counts(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
         counts = {"minted": 0, "suppressed": 0}
         monkeypatch.setattr(
-            "modulo.core.cost_controller.finalize.record_refs_agent_minted",
+            "farna.core.cost_controller.finalize.record_refs_agent_minted",
             lambda n=1: counts.__setitem__("minted", counts["minted"] + n),
         )
         monkeypatch.setattr(
-            "modulo.core.cost_controller.finalize.record_refs_agent_mint_suppressed_by_flag",
+            "farna.core.cost_controller.finalize.record_refs_agent_mint_suppressed_by_flag",
             lambda n=1: counts.__setitem__("suppressed", counts["suppressed"] + n),
         )
         return counts
@@ -956,7 +956,7 @@ class TestAgentMintFlagFinalize:
         agent_counts: dict,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from modulo.core.runtime_config import org_flags as org_flags_mod
+        from farna.core.runtime_config import org_flags as org_flags_mod
 
         async def _boom(*_a: Any, **_k: Any) -> Any:
             raise RuntimeError("db outage")
@@ -1010,7 +1010,7 @@ class TestAgentMintFlagFinalize:
         journey.latest_provenance = "caller"
         journey.first_seen_source = "caller"
         await session.flush()
-        from modulo.core.lifecycle_map.advancement import upsert_ref_provenances
+        from farna.core.lifecycle_map.advancement import upsert_ref_provenances
 
         considered, minted, suppressed = await upsert_ref_provenances(
             session,
@@ -1063,7 +1063,7 @@ class TestFinalizeCostWiring:
         # a bound RLS org (fail-closed); production finalize sessions are
         # org-bound, and the SQLite-side binding mirrors that contract (bound
         # after _seed_run so the fixture's lazy transaction is active).
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, _ORG)
         await _seed_journey_by_kind(session, "github_pr", "456")
@@ -1097,10 +1097,10 @@ class TestFinalizeCostWiring:
         async def _boom(*_a: Any, **_k: Any) -> int:
             raise RuntimeError("journey explosion")
 
-        monkeypatch.setattr("modulo.core.cost_controller.finalize.advance_journeys", _boom)
+        monkeypatch.setattr("farna.core.cost_controller.finalize.advance_journeys", _boom)
         run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
         run_id = run.id
-        with caplog.at_level("ERROR", logger="modulo.core.cost_controller.finalize"):
+        with caplog.at_level("ERROR", logger="farna.core.cost_controller.finalize"):
             await finalize_cost(
                 session,
                 run_id=run_id,
@@ -1132,7 +1132,7 @@ class TestJourneyFactsDenominators:
             captured.update(writer=writer, parse_failures=parse_failures, finalise_attempts=finalise_attempts)
 
         monkeypatch.setattr(
-            "modulo.core.cost_controller.finalize._record_journey_fact",
+            "farna.core.cost_controller.finalize._record_journey_fact",
             _fake_fact,
         )
         merged = {
@@ -1166,7 +1166,7 @@ class TestJourneyFactsDenominators:
             ("record_self_report_refs_capped", capped),
             ("record_unmatched_self_report_refs", unmatched),
         ):
-            monkeypatch.setattr(f"modulo.core.cost_controller.finalize.{name}", mock)
+            monkeypatch.setattr(f"farna.core.cost_controller.finalize.{name}", mock)
         merged = {
             "node1": {
                 "work_item_refs": [
@@ -1253,7 +1253,7 @@ class TestRawWriterJourneyAdvance:
         engine = MagicMock()
         engine.connect.return_value = _FakeAsyncConn(("id",))
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("farna.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
         await mark_complete(engine, "run-1", "org-1")  # type: ignore[arg-type]
         advanced.assert_awaited_once_with(engine, "run-1", "org-1", "complete")
 
@@ -1261,7 +1261,7 @@ class TestRawWriterJourneyAdvance:
         engine = MagicMock()
         engine.connect.return_value = _FakeAsyncConn(None)
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("farna.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
         await mark_complete(engine, "run-1", "org-1")  # type: ignore[arg-type]
         advanced.assert_not_awaited()
 
@@ -1269,7 +1269,7 @@ class TestRawWriterJourneyAdvance:
         engine = MagicMock()
         engine.connect.return_value = _FakeAsyncConn(("id",))
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("farna.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
         ok = await fail_run_terminal(  # type: ignore[arg-type]
             engine,
             "run-1",
@@ -1284,7 +1284,7 @@ class TestRawWriterJourneyAdvance:
         engine = MagicMock()
         engine.connect.return_value = _FakeAsyncConn(None)
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("farna.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
         ok = await fail_run_terminal(  # type: ignore[arg-type]
             engine,
             "run-1",
@@ -1365,12 +1365,12 @@ class TestStaleRunSweepJourneyAdvance:
 
         monkeypatch.setattr(pe, "get_settings", lambda: self._settings())
         advanced = AsyncMock()
-        monkeypatch.setattr("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", advanced)
-        monkeypatch.setattr("modulo.core.run_terminal_advance.record_terminal_failed_fact", AsyncMock())
-        monkeypatch.setattr("modulo.core.audit_logger.background.record_run_state_change_audits", AsyncMock())
+        monkeypatch.setattr("farna.core.run_terminal_advance.advance_journeys_from_stored_refs", advanced)
+        monkeypatch.setattr("farna.core.run_terminal_advance.record_terminal_failed_fact", AsyncMock())
+        monkeypatch.setattr("farna.core.audit_logger.background.record_run_state_change_audits", AsyncMock())
         if stranded_row is not None:
             monkeypatch.setattr(
-                "modulo.core.pipeline_execution._re_dispatch_capacity_blocked",
+                "farna.core.pipeline_execution._re_dispatch_capacity_blocked",
                 AsyncMock(return_value="enqueued"),
             )
         result = await stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]

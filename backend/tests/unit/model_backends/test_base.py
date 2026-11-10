@@ -14,7 +14,7 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage
 
-from modulo.model_backends.base import (
+from farna.model_backends.base import (
     HEALTH_DETAIL_MAX_LENGTH,
     ModelBackendBase,
     _parse_server_time,
@@ -133,7 +133,7 @@ class TestOpenAICompatibleHealthCheck:
     async def test_invalid_endpoint_value_error_is_a_connection_failure(self):
         """An unbuildable endpoint is a connection failure, not an uncaught error."""
         with patch(
-            "modulo.model_backends.base.pinned_async_client_sync",
+            "farna.model_backends.base.pinned_async_client_sync",
             side_effect=ValueError("invalid base url"),
         ):
             result = await openai_compatible_health_check(

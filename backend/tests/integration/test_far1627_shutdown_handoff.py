@@ -53,10 +53,10 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.cron_helpers import _build_re_dispatch_predicate
-from modulo.core.pipeline_engine.error_codes import map_legacy_code
-from modulo.core.pipeline_execution import claim_run_async
-from modulo.core.worker_handoff import (
+from farna.core.cron_helpers import _build_re_dispatch_predicate
+from farna.core.pipeline_engine.error_codes import map_legacy_code
+from farna.core.pipeline_execution import claim_run_async
+from farna.core.worker_handoff import (
     WORKER_LOST_DETAIL,
     WORKER_LOST_ERROR_CODE,
     InFlightRunRegistry,
@@ -64,7 +64,7 @@ from modulo.core.worker_handoff import (
     handback_inflight_runs,
     track_inflight_run,
 )
-from modulo.db.models.run import Run
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
@@ -273,7 +273,7 @@ async def _stop_worker_with_shutdown_hook(db_engine: AsyncEngine) -> None:
     """
     from saq import Worker
 
-    import modulo.core.saq_worker as sw
+    import farna.core.saq_worker as sw
 
     worker = Worker(
         queue=MagicMock(),  # stop() never uses the queue

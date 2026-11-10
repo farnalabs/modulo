@@ -44,30 +44,30 @@ import sqlalchemy as sa
 from sqlalchemy import Table, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import cron_helpers
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine.recovery import (
+from farna.core import cron_helpers
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     guardrail_override,
 )
-from modulo.core.pipeline_execution import claim_resume_run_async
-from modulo.db.crud.run import create_run
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.evidence import Evidence
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
+from farna.core.pipeline_execution import claim_resume_run_async
+from farna.db.crud.run import create_run
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.evidence import Evidence
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -314,7 +314,7 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
     # lexicographically in the same order.
     from datetime import UTC, datetime
 
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     stale_seconds = int(get_settings().run_claim_stale_seconds)
     if session.get_bind().dialect.name == "postgresql":
@@ -489,7 +489,7 @@ async def pg_url() -> AsyncIterator[str]:
         yield env_url
         return
 
-    from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+    from farna.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 
     # Resolve Docker availability BEFORE constructing a container: docker-py
     # leaks an unclosed socket when a container is built against a missing

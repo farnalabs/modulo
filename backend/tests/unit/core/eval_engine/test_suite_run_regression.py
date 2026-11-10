@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.eval_engine.regression import detect_regressions
+from farna.core.eval_engine.regression import detect_regressions
 
 _EXPECTED_LEGACY_SQL = """
             SELECT

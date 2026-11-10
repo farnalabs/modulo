@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from modulo.core.eval_engine import EvalType
+from farna.core.eval_engine import EvalType
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -54,7 +54,7 @@ class TestHitlHumanOnlyEnforcement:
         Non-browser credentials (API keys, non-browser JWTs) cannot claim or
         decide human_only gates.
         """
-        from modulo.db.crud.hitl_review_config import human_only_effective
+        from farna.db.crud.hitl_review_config import human_only_effective
 
         config_default: dict[str, bool] = {}
         assert human_only_effective(config_default) is True
@@ -67,13 +67,13 @@ class TestHitlHumanOnlyEnforcement:
 
     def test_hitl_claim_route_enforces_human_only_gate(self) -> None:
         """The REST claim route calls the human-only gate before claiming."""
-        source = _read("backend/src/modulo/api/routes/hitl.py")
+        source = _read("backend/src/farna/api/routes/hitl.py")
         assert "_enforce_human_only_gate(" in source
         assert ', "claim")' in source
 
     def test_hitl_mcp_claim_path_enforces_human_only_gate(self) -> None:
         """The MCP claim path applies the same human-only gate as REST."""
-        source = _read("backend/src/modulo/api/mcp_server.py")
+        source = _read("backend/src/farna/api/mcp_server.py")
         assert "_check_human_only_gate(" in source
 
 
@@ -86,7 +86,7 @@ class TestLlmJudgeSoftSignal:
 
     def test_llm_judge_guard_instruction_prevents_injection(self) -> None:
         """LLM-judge input is wrapped with a guard instruction and delimiters."""
-        from modulo.core.eval_engine import (
+        from farna.core.eval_engine import (
             _CONTENT_BEGIN,
             _CONTENT_END,
             _DELIMITER_STRIP_PATTERN,
@@ -121,7 +121,7 @@ class TestLlmJudgeSoftSignal:
 
     def test_llm_judge_timeout_bounds_fail_closed(self) -> None:
         """LLM-judge timeouts are bounded and surface as a fail-closed verdict."""
-        from modulo.core.pipeline_engine.llm_judge import (
+        from farna.core.pipeline_engine.llm_judge import (
             BACKEND_INVOKE_TIMEOUT_SECONDS,
             SYNC_BRIDGE_TIMEOUT_SECONDS,
             _timeout_detail,
@@ -164,7 +164,7 @@ class TestCredentialIsolation:
 
     def test_model_backend_hub_decrypts_per_run_and_rotates(self) -> None:
         """ModelBackendHub holds run-scoped credentials and a fallback chain."""
-        hub_source = _read("backend/src/modulo/core/model_backend_hub/__init__.py")
+        hub_source = _read("backend/src/farna/core/model_backend_hub/__init__.py")
         assert "self._creds" in hub_source
         assert "self._creds.clear()" in hub_source
         assert "self._fallbacks" in hub_source

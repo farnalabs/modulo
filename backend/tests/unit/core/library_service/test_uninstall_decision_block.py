@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.core.library_service.uninstall import uninstall_collection
+from farna.core.library_service.uninstall import uninstall_collection
 
 
 def _decision_fk_error() -> IntegrityError:

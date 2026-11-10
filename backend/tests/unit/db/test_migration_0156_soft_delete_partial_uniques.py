@@ -30,22 +30,22 @@ from types import ModuleType
 from sqlalchemy import Index
 from sqlalchemy.sql.elements import TextClause
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0156_add_soft_delete_partial_uniques"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 # (index name, model class path, table name) — the 0156 indexes that still have
 # a live ORM model.
 _INDEXES: tuple[tuple[str, str, str], ...] = (
-    ("uq_pipelines_org_name", "modulo.db.models.pipeline:Pipeline", "pipelines"),
-    ("uq_variant_groups_org_name", "modulo.db.models.variant_group:VariantGroup", "variant_groups"),
+    ("uq_pipelines_org_name", "farna.db.models.pipeline:Pipeline", "pipelines"),
+    ("uq_variant_groups_org_name", "farna.db.models.variant_group:VariantGroup", "variant_groups"),
     (
         "uq_environment_profiles_org_name",
-        "modulo.db.models.environment_profile:EnvironmentProfile",
+        "farna.db.models.environment_profile:EnvironmentProfile",
         "environment_profiles",
     ),
-    ("uq_composite_templates_org_name", "modulo.db.models.composite_template:CompositeTemplate", "composite_templates"),
-    ("uq_lifecycle_maps_org_name", "modulo.db.models.lifecycle_map:LifecycleMap", "lifecycle_maps"),
+    ("uq_composite_templates_org_name", "farna.db.models.composite_template:CompositeTemplate", "composite_templates"),
+    ("uq_lifecycle_maps_org_name", "farna.db.models.lifecycle_map:LifecycleMap", "lifecycle_maps"),
 )
 
 # 0156 indexes whose table survives in migration history but whose ORM model was

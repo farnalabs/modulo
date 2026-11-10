@@ -31,8 +31,8 @@ def _bdd_get_export(request) -> None:
 
     active = _active_client(request)
     with (
-        patch("modulo.api.routes.audit.export_chain") as mock_export,
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.export_chain") as mock_export,
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         mock_export.return_value = {
             "items": [{"id": "evt-1", "event_type": "pipeline.run"}],
@@ -48,8 +48,8 @@ def _bdd_get_export(request) -> None:
 @when(parsers.parse("I request GET /api/v1/admin/audit/export?event_type={event_type}"))
 def _bdd_get_export_filtered(client: TestClient, request, event_type: str) -> None:
     with (
-        patch("modulo.api.routes.audit.export_chain") as mock_export,
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.export_chain") as mock_export,
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         mock_export.return_value = {
             "items": [],
@@ -65,8 +65,8 @@ def _bdd_get_export_filtered(client: TestClient, request, event_type: str) -> No
 @when("I request GET /api/v1/admin/audit/verify")
 def _bdd_get_verify(client: TestClient, request) -> None:
     with (
-        patch("modulo.api.routes.audit.verify_chain") as mock_verify,
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.verify_chain") as mock_verify,
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         mock_verify.return_value = {
             "valid": True,

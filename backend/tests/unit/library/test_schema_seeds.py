@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from modulo.core.seed_data.library_schemas import SCHEMAS
+from farna.core.seed_data.library_schemas import SCHEMAS
 
 from .helpers import (
     VALID_FORMATS,

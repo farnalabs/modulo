@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import GraphPosition, PipelineGraphNode
-from modulo.core.pipeline_engine.scatter_join import (
+from farna.api.routes.pipelines import GraphPosition, PipelineGraphNode
+from farna.core.pipeline_engine.scatter_join import (
     FanOutCapExceededError,
     FanOutConfig,
     JoinAggregateSpec,

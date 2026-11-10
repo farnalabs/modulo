@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 
-from modulo.core.guardrails.config import GuardrailPin
-from modulo.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
+from farna.core.guardrails.config import GuardrailPin
+from farna.core.guardrails.materialise import seed_org_guardrail_rows_for_pipeline
 
 _ORG_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
@@ -62,9 +62,9 @@ class TestSeedOrgGuardrailRowsForPipeline:
     async def test_no_pin_is_a_noop(self) -> None:
         session = AsyncMock()
         with (
-            patch("modulo.db.crud.guardrail_config.get_guardrail_pin", new_callable=AsyncMock, return_value=None),
+            patch("farna.db.crud.guardrail_config.get_guardrail_pin", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -91,12 +91,12 @@ class TestSeedOrgGuardrailRowsForPipeline:
         session = AsyncMock()
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin("not: [valid: yaml"),
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
             pytest.raises(HTTPException) as exc_info,
@@ -122,12 +122,12 @@ class TestSeedOrgGuardrailRowsForPipeline:
         session = AsyncMock()
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value={},
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -151,12 +151,12 @@ class TestSeedOrgGuardrailRowsForPipeline:
         session = AsyncMock()
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin(None),
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -174,12 +174,12 @@ class TestSeedOrgGuardrailRowsForPipeline:
         session = AsyncMock()
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin(_EMPTY_YAML),
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -196,17 +196,17 @@ class TestSeedOrgGuardrailRowsForPipeline:
         session = AsyncMock()
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin(_VALID_YAML),
             ),
             patch(
-                "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+                "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -231,17 +231,17 @@ class TestSeedOrgGuardrailRowsForPipeline:
         existing = _eval_row(name="no-aws-keys", node_id=None)
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin(_VALID_YAML),
             ),
             patch(
-                "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+                "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
                 new_callable=AsyncMock,
                 return_value=[existing],
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):
@@ -262,17 +262,17 @@ class TestSeedOrgGuardrailRowsForPipeline:
         node_bound = _eval_row(name="no-aws-keys", node_id=uuid.uuid4())
         with (
             patch(
-                "modulo.db.crud.guardrail_config.get_guardrail_pin",
+                "farna.db.crud.guardrail_config.get_guardrail_pin",
                 new_callable=AsyncMock,
                 return_value=_pin(_VALID_YAML),
             ),
             patch(
-                "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+                "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
                 new_callable=AsyncMock,
                 return_value=[node_bound],
             ),
             patch(
-                "modulo.core.guardrails.materialise.create_or_update_eval",
+                "farna.core.guardrails.materialise.create_or_update_eval",
                 new_callable=AsyncMock,
             ) as mock_create,
         ):

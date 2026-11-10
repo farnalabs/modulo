@@ -38,12 +38,12 @@ import pytest
 from sqlalchemy import Column, MetaData, Table, Text, Uuid, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 
 ORG = uuid.uuid4()
 STALE_WINDOW_SECONDS = 600

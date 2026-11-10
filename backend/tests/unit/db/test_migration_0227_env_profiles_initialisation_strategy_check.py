@@ -27,9 +27,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from modulo.db.models.environment_profile import INITIALISATION_STRATEGIES
+from farna.db.models.environment_profile import INITIALISATION_STRATEGIES
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0227_env_profiles_initialisation_strategy_check"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -75,7 +75,7 @@ def test_check_sql_and_name_drift_guard_matches_model() -> None:
     """The migration's CHECK expression and constraint name must match the ORM
     ``CheckConstraint`` declared on ``EnvironmentProfile`` — same vocabulary,
     same name, or the DB constraint and the ORM contract disagree."""
-    from modulo.db.models.environment_profile import (
+    from farna.db.models.environment_profile import (
         EnvironmentProfile,
         _initialisation_strategy_check_sql,
     )

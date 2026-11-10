@@ -28,7 +28,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.hitl_manager.deadline_warning import dispatch_deadline_notifications
+from farna.core.hitl_manager.deadline_warning import dispatch_deadline_notifications
 
 pytestmark = pytest.mark.integration
 
@@ -335,7 +335,7 @@ def _seeded_run_ids(w: _World) -> set[uuid.UUID]:
 
 
 async def _dispatch(w: _World, redis_client: _FakeRedis, send: AsyncMock) -> list[dict[str, Any]]:
-    with patch("modulo.core.hitl_manager.deadline_warning.send_hitl_deadline_alerts", send):
+    with patch("farna.core.hitl_manager.deadline_warning.send_hitl_deadline_alerts", send):
         return await dispatch_deadline_notifications(
             w.factory,
             grace_seconds=_GRACE,

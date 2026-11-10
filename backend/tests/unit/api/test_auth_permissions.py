@@ -20,13 +20,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes.auth import _SYSTEM_ONLY_PERMISSIONS, _effective_permission_names
-from modulo.api.routes.auth import router as auth_router
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.permissions import PERMISSIONS
-from modulo.auth.team_rbac import org_role_level
-from modulo.settings import get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.routes.auth import _SYSTEM_ONLY_PERMISSIONS, _effective_permission_names
+from farna.api.routes.auth import router as auth_router
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.auth.permissions import PERMISSIONS
+from farna.auth.team_rbac import org_role_level
+from farna.settings import get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -56,7 +56,7 @@ def _system_only_keys_from_the_live_app() -> set[str]:
     scoped_hybrid / system_or_org) is subtracted: an org role can reach it, so
     it is not system-only.
     """
-    from modulo.api.main import app as live_app
+    from farna.api.main import app as live_app
     from tests.unit.api.route_introspection import get_all_apiroutes, get_permission_tag
 
     system_gated: set[str] = set()
@@ -92,7 +92,7 @@ def _client_with_principal(
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    from modulo.auth.dependencies import get_current_user
+    from farna.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_settings] = lambda: MagicMock()
@@ -129,7 +129,7 @@ def test_permissions_are_exactly_the_registry_names_for_the_live_role(
     with (
         _client_with_principal(app, _principal(org_role=role)) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value=role),
         ),
     ):
@@ -147,7 +147,7 @@ def test_live_role_wins_over_the_token_claim(app: FastAPI) -> None:
     with (
         _client_with_principal(app, _principal(org_role="admin")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="viewer"),
         ),
     ):
@@ -199,7 +199,7 @@ def test_permissions_are_sorted(app: FastAPI) -> None:
     with (
         _client_with_principal(app, _principal(org_role="operator")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="operator"),
         ),
     ):
@@ -221,7 +221,7 @@ def test_org_admin_is_not_told_they_hold_strict_system_admin_keys(app: FastAPI) 
     with (
         _client_with_principal(app, _principal(org_role="admin")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="admin"),
         ),
     ):
@@ -243,7 +243,7 @@ def test_viewer_still_holds_the_viewer_floor(app: FastAPI) -> None:
     with (
         _client_with_principal(app, _principal(org_role="viewer")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="viewer"),
         ),
     ):
@@ -269,7 +269,7 @@ def test_removed_member_is_denied_with_401(app: FastAPI) -> None:
     with (
         _client_with_principal(app, _principal(org_role="admin")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -285,7 +285,7 @@ def test_unknown_live_role_fails_closed_with_an_empty_list(app: FastAPI) -> None
     with (
         _client_with_principal(app, _principal(org_role="viewer")) as client,
         patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="wizard"),
         ),
     ):

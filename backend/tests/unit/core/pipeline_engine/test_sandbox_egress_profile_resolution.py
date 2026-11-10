@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from tests.unit.api.mock_session import make_session_factory
 
-from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
 _ORG_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -128,11 +128,11 @@ class TestProfileNetworkPolicyEgressResolution:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
             patch(
-                "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+                "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_e2b_route(profile)),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+                "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
         ):
@@ -154,11 +154,11 @@ class TestProfileNetworkPolicyEgressResolution:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
             patch(
-                "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+                "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_e2b_route(profile)),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+                "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
         ):
@@ -178,11 +178,11 @@ class TestProfileNetworkPolicyEgressResolution:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
             patch(
-                "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+                "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_e2b_route(profile)),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+                "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
         ):
@@ -202,11 +202,11 @@ class TestProfileNetworkPolicyEgressResolution:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
             patch(
-                "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+                "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_none_route()),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+                "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
         ):
@@ -222,7 +222,7 @@ class TestProfileNetworkPolicyEgressResolution:
         'selected' — the profile model carries no allowlist field, so this is
         a refusal.
         """
-        from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+        from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
         node_def = _script_node_def()
         fn = make_sandbox_agent_fn(node_def, session_factory=_SESSION_FACTORY_MOCK)
@@ -230,11 +230,11 @@ class TestProfileNetworkPolicyEgressResolution:
 
         with (
             patch(
-                "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+                "farna.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
                 new=AsyncMock(return_value=_e2b_route(profile)),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner.get_conformance_ctx",
+                "farna.core.pipeline_engine.node_runner.get_conformance_ctx",
                 return_value=None,
             ),
             pytest.raises(SandboxTierRefusedError, match="egress refused"),

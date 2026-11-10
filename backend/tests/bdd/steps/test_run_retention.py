@@ -70,7 +70,7 @@ def retention_ttl(days: int, ctx: dict[str, Any]) -> None:
 def nightly_retention_job(client: Any, ctx: dict[str, Any], request: Any) -> None:
     """Simulate the nightly retention job by calling the admin trigger endpoint."""
     with (
-        patch("modulo.api.routes.admin.batch_delete_old_terminal_runs", new_callable=AsyncMock) as mock_delete,
+        patch("farna.api.routes.admin.batch_delete_old_terminal_runs", new_callable=AsyncMock) as mock_delete,
     ):
         run_age = ctx.get("run_age_days", 95)
         ttl = ctx.get("retention_ttl_days", 90)
@@ -161,9 +161,9 @@ def runs_after_date(date: str, ctx: dict[str, Any]) -> None:
 def manual_purge(client: Any, date: str, request: Any, ctx: dict[str, Any]) -> None:
     """POST /api/v1/admin/purge to trigger a manual purge with date filter."""
     with (
-        patch("modulo.api.routes.admin.purge_runs", new_callable=AsyncMock) as mock_purge,
-        patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
+        patch("farna.api.routes.admin.purge_runs", new_callable=AsyncMock) as mock_purge,
+        patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
     ):
         deleted_count = ctx.get("expected_purge_count", 3)
         mock_purge.return_value = {"deleted_run_count": deleted_count}

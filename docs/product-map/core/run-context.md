@@ -3,12 +3,12 @@ id: feat-core-run-context
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/run_context/__init__.py
-  - backend/src/modulo/core/run_context/autonomy.py
-  - backend/src/modulo/core/run_context/autonomy_telemetry.py
-  - backend/src/modulo/core/pipeline_engine/executor.py
-  - backend/src/modulo/core/pipeline_engine/decorator.py
-  - backend/src/modulo/core/pipeline_engine/node_runner.py
+  - backend/src/farna/core/run_context/__init__.py
+  - backend/src/farna/core/run_context/autonomy.py
+  - backend/src/farna/core/run_context/autonomy_telemetry.py
+  - backend/src/farna/core/pipeline_engine/executor.py
+  - backend/src/farna/core/pipeline_engine/decorator.py
+  - backend/src/farna/core/pipeline_engine/node_runner.py
 unit-tests:
   - backend/tests/unit/core/run_context/test_run_context_bdd.py
   - backend/tests/unit/core/run_context/test_autonomy.py
