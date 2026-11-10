@@ -5,9 +5,9 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/schema'
 
 /**
- * Determination surface state (FAR-2471, FAR-2473).
+ * Determination surface state (FAR-2471, FAR-2473, FAR-2474).
  *
- * Four explicitly user-triggered operations:
+ * Five explicitly user-triggered operations:
  *
  * 1. ``runScan`` reads ``GET /api/v1/determination`` — the sampled connector
  *    sources and the inferred SDLC findings.
@@ -20,6 +20,11 @@ import type { components } from '../lib/api/schema'
  * 4. ``compareDrafts`` writes ``POST /api/v1/determination/compare`` — a pure,
  *    deterministic difference between a held baseline draft and the current
  *    draft. It persists nothing and activates nothing.
+ * 5. ``rerunDetermination`` writes ``POST /api/v1/determination/rerun`` — a
+ *    fresh attempt against the proposal on screen, with the review panel's
+ *    corrections carried forward by prior element id. It creates a new attempt
+ *    and reports what changed; it persists, activates, publishes and mutates
+ *    nothing, including the prior attempt it was given.
  *
  * Every type here is read from the generated OpenAPI schema — no wire shape is
  * declared by hand — so a backend contract change surfaces as a type error
@@ -41,14 +46,27 @@ export type EvidenceReference = components['schemas']['EvidenceReference']
 export type ProposalConfidence = components['schemas']['ProposalFact']['confidence']
 export type ProposalReviewState = components['schemas']['ProposalContract']['review_state']
 export type DeterminationComparison = components['schemas']['ProposalComparison']
+export type DeterminationRerunResult = components['schemas']['RerunResult']
+export type RerunAttemptSummary = components['schemas']['RerunAttemptSummary']
+export type ElementChange = components['schemas']['ElementChange']
+export type ElementChangeStatus = ElementChange['status']
+export type SourceInventoryChanges = components['schemas']['SourceInventoryChanges']
+export type CarriedForwardCorrections = components['schemas']['CarriedForwardCorrections']
 type DeterminationComparisonSide = components['schemas']['ProposalComparisonSide']
 
-/** The reviewer's edits, ready to be merged into a review request. */
-export interface ReviewSubmission {
-  decision: ProposalReviewDecision
-  reason: string | null
+/**
+ * The reviewer's corrections, as the review panel holds them and as a rerun
+ * carries them forward by prior element id.
+ */
+export interface ReviewCorrections {
   correctedDerivedElements: DerivedElementEdit[]
   removedDerivedElementIds: string[]
+}
+
+/** The reviewer's edits, ready to be merged into a review request. */
+export interface ReviewSubmission extends ReviewCorrections {
+  decision: ProposalReviewDecision
+  reason: string | null
   acknowledgedAssumptionIds: string[]
 }
 
@@ -66,11 +84,19 @@ export interface UseDeterminationResult {
   comparison: Ref<DeterminationComparison | null>
   comparisonLoading: Ref<boolean>
   comparisonError: Ref<string | null>
+  rerun: Ref<DeterminationRerunResult | null>
+  rerunLoading: Ref<boolean>
+  rerunError: Ref<string | null>
   proposal: ComputedRef<DeterminationProposal | null>
   busy: ComputedRef<boolean>
   runScan: () => Promise<void>
   generateDraft: () => Promise<void>
   submitReview: (submission: ReviewSubmission) => Promise<DeterminationReviewResponse | null>
+  /**
+   * Rerun determination against the proposal on screen, carrying the given
+   * review corrections forward. Nothing is persisted, activated or published.
+   */
+  rerunDetermination: (corrections: ReviewCorrections) => Promise<DeterminationRerunResult | null>
   /** Hold the current draft as the comparison baseline (in memory only). */
   holdBaseline: () => void
   /** Drop the held baseline and any comparison rendered against it. */
@@ -103,9 +129,23 @@ export function useDetermination(): UseDeterminationResult {
   const comparisonLoading = ref(false)
   const comparisonError = ref<string | null>(null)
 
+  /**
+   * The rerun comparison. Held in memory only, like the draft and the
+   * baseline: a rerun creates a new attempt server-side but never persists it
+   * as the proposal on screen - it changes nothing.
+   */
+  const rerun = ref<DeterminationRerunResult | null>(null)
+  const rerunLoading = ref(false)
+  const rerunError = ref<string | null>(null)
+
   const proposal = computed<DeterminationProposal | null>(() => draft.value?.proposal ?? null)
   const busy = computed(
-    () => scanLoading.value || draftLoading.value || reviewLoading.value || comparisonLoading.value,
+    () =>
+      scanLoading.value ||
+      draftLoading.value ||
+      reviewLoading.value ||
+      comparisonLoading.value ||
+      rerunLoading.value,
   )
 
   async function runScan(): Promise<void> {
@@ -145,6 +185,11 @@ export function useDetermination(): UseDeterminationResult {
       // reviewer's whole point of holding it is to compare later drafts.
       comparison.value = null
       comparisonError.value = null
+      // The rerun compared the previous proposal with its own fresh attempt;
+      // the proposal on screen has changed, so that comparison no longer
+      // describes what a rerun would start from.
+      rerun.value = null
+      rerunError.value = null
     } finally {
       draftLoading.value = false
     }
@@ -178,6 +223,36 @@ export function useDetermination(): UseDeterminationResult {
       return response.data
     } finally {
       reviewLoading.value = false
+    }
+  }
+
+  async function rerunDetermination(
+    corrections: ReviewCorrections,
+  ): Promise<DeterminationRerunResult | null> {
+    const current = proposal.value
+    if (!current || rerunLoading.value) return null
+    rerunLoading.value = true
+    rerunError.value = null
+    // Never leave a previous rerun result on screen while a new one is in
+    // flight: a failed rerun must not read as the outcome of this attempt.
+    rerun.value = null
+    try {
+      const body: components['schemas']['ProposalRerunRequest'] = {
+        prior_proposal: current,
+        corrected_derived_elements: corrections.correctedDerivedElements,
+        removed_derived_element_ids: corrections.removedDerivedElementIds,
+      }
+      const response = await api.POST('/api/v1/determination/rerun', { body })
+      if (response.error || !response.data) {
+        // A refused rerun arrives as a 422 ProblemDetail; surface its detail
+        // verbatim (the translation only supplies the context).
+        rerunError.value = errorText(response.error, 'views.DeterminationView.rerun_failed')
+        return null
+      }
+      rerun.value = response.data
+      return response.data
+    } finally {
+      rerunLoading.value = false
     }
   }
 
@@ -257,11 +332,15 @@ export function useDetermination(): UseDeterminationResult {
     comparison,
     comparisonLoading,
     comparisonError,
+    rerun,
+    rerunLoading,
+    rerunError,
     proposal,
     busy,
     runScan,
     generateDraft,
     submitReview,
+    rerunDetermination,
     holdBaseline,
     clearBaseline,
     compareDrafts,

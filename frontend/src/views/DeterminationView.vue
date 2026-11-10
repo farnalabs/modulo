@@ -63,20 +63,36 @@
       :loading="reviewLoading"
       :error="reviewError"
       @submit="onReviewSubmit"
+      @corrections-change="onCorrectionsChange"
     />
     <p v-else class="text-sm text-muted-foreground" data-testid="determination-review-unavailable">
       {{ $t('views.DeterminationView.review_needs_proposal') }}
     </p>
+
+    <DeterminationRerunPanel
+      :proposal="proposal"
+      :corrections="reviewCorrections"
+      :result="rerun"
+      :loading="rerunLoading"
+      :error="rerunError"
+      @rerun="onRerun"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import DeterminationScanPanel from '../components/determination/DeterminationScanPanel.vue'
 import DeterminationProposalPanel from '../components/determination/DeterminationProposalPanel.vue'
 import DeterminationComparisonPanel from '../components/determination/DeterminationComparisonPanel.vue'
 import DeterminationReviewPanel from '../components/determination/DeterminationReviewPanel.vue'
-import { useDetermination, type ReviewSubmission } from '../composables/useDetermination'
+import DeterminationRerunPanel from '../components/determination/DeterminationRerunPanel.vue'
+import {
+  useDetermination,
+  type ReviewCorrections,
+  type ReviewSubmission,
+} from '../composables/useDetermination'
 
 const {
   scan,
@@ -93,14 +109,35 @@ const {
   comparison,
   comparisonLoading,
   comparisonError,
+  rerun,
+  rerunLoading,
+  rerunError,
   busy,
   runScan,
   generateDraft,
   submitReview,
+  rerunDetermination,
   holdBaseline,
   clearBaseline,
   compareDrafts,
 } = useDetermination()
+
+/**
+ * The review panel's current corrections, kept here so the rerun action can
+ * carry exactly what the reviewer changed forward by prior element id.
+ */
+const reviewCorrections = ref<ReviewCorrections>({
+  correctedDerivedElements: [],
+  removedDerivedElementIds: [],
+})
+
+function onCorrectionsChange(corrections: ReviewCorrections): void {
+  reviewCorrections.value = corrections
+}
+
+function onRerun(): void {
+  void rerunDetermination(reviewCorrections.value)
+}
 
 function onReviewSubmit(submission: ReviewSubmission): void {
   void submitReview(submission)
