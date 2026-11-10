@@ -1,21 +1,21 @@
 # Security Policy
 
-Modulo is a self-hosted Delivery Governance Platform for governing the
+Farna Control is a self-hosted Delivery Governance Platform for governing the
 software development lifecycle as AI and automation take on more of the work.
 Its current implementation includes governed, repeatable AI-assisted software
-delivery pipelines. We take the security of Modulo and its users seriously. This document outlines our vulnerability disclosure process
+delivery pipelines. We take the security of Farna Control and its users seriously. This document outlines our vulnerability disclosure process
 and supported versions.
 
 ## Reporting a Vulnerability
 
 We encourage responsible disclosure. If you believe you have found a security
-vulnerability in Modulo, please report it to us immediately.
+vulnerability in Farna Control, please report it to us immediately.
 
 **Do not** open a public GitHub issue.
 
 ### Contact
 
-**Email**: `security@modulo.run`
+**Email**: `security@farna.dev`
 
 Prefer GitHub's built-in private reporting when possible: on the repository
 page, use **Report a vulnerability** (a private security advisory) — this is the preferred
@@ -47,7 +47,7 @@ The following are not considered in-scope for security reporting:
 
 - Self-XSS
 - Missing HTTP security headers on custom deployments (deployer responsibility)
-- Social engineering of Modulo maintainers
+- Social engineering of Farna Control maintainers
 - Vulnerabilities in third-party dependencies that are already patched in a
   newer version (upgrade first; report if the patched version has not been
   integrated)
@@ -85,9 +85,9 @@ bugs are treated as high priority and are not held for a full release cycle.
 
 ## Bug Bounty
 
-Modulo does not currently operate a bug bounty programme. We may introduce one
-as the project matures. In the interim, we gratefully acknowledge researchers
-in our release notes (with permission).
+Farna Control does not currently operate a bug bounty programme. We may
+introduce one as the project matures. In the interim, we gratefully acknowledge
+researchers in our release notes (with permission).
 
 ## Safe Harbour
 

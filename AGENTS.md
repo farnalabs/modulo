@@ -1,6 +1,6 @@
-# Modulo
+# Farna Control
 
-Product-specific agent guidance for the `farnalabs/modulo` repository.
+Product-specific agent guidance for the `farnalabs/farna-control` repository.
 
 ## What this repo is
 
@@ -60,7 +60,7 @@ modulo/
 > live in the workspace-level `AGENTS.md`.
 >
 > Relocated out of this file to the workspace-level `AGENTS.md` on 2026-09-17
-> ([PR #686](https://github.com/farnalabs/modulo/pull/686)):
+> ([PR #686](https://github.com/farnalabs/farna-control/pull/686)):
 >
 > - Postgres NUL-byte json-to-jsonb migration gotcha (2026-08-26)
 > - E2B sandbox `timeout_seconds` 1-hour cap (2026-08-31)

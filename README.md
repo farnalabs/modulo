@@ -1,17 +1,17 @@
-# Modulo
+# Farna Control
 
 <p align="center">
-  <img src="docs/assets/modulo-logo.svg" width="200" alt="Modulo logo"/>
+  <img src="docs/assets/farna-control-logo.svg" width="360" alt="Farna Control logo"/>
 </p>
 
 <p align="center">
-  <em>Modulo is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work — recording, evaluating, controlling, and improving automated work across your SDLC.</em>
+  <em>Farna Control is a self-hosted Delivery Governance Platform. Govern the software development lifecycle as AI and automation take on more of the work — recording, evaluating, controlling, and improving automated work across your SDLC.</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/farnalabs/modulo/actions"><img src="https://img.shields.io/github/actions/workflow/status/farnalabs/modulo/ci.yml?branch=main&amp;label=CI&amp;logo=github" alt="CI"/></a>
+  <a href="https://github.com/farnalabs/farna-control/actions"><img src="https://img.shields.io/github/actions/workflow/status/farnalabs/farna-control/ci.yml?branch=main&amp;label=CI&amp;logo=github" alt="CI"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License"/></a>
-  <a href="https://modulo.run/docs/what-is-modulo"><img src="https://img.shields.io/badge/docs-modulo.run-blue" alt="Docs"/></a>
+  <a href="https://farna.dev/control/docs"><img src="https://img.shields.io/badge/docs-farna.dev-blue" alt="Docs"/></a>
   <a href="https://app.modulo.run"><img src="https://img.shields.io/badge/app-app.modulo.run-blue" alt="App"/></a>
 </p>
 
@@ -27,13 +27,13 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/dashboard-screenshot.png" width="960" alt="Modulo dashboard showing pipelines, runs, and spend overview"/>
+  <img src="docs/assets/dashboard-screenshot.png" width="960" alt="Farna Control dashboard showing pipelines, runs, and spend overview"/>
 </p>
 
 > [!WARNING]
-> **Alpha software.** Modulo is under active development. Interfaces, database
-> migrations, configuration, and deployment procedures may change. Evaluate it
-> before using it with production data and keep current backups.
+> **Alpha software.** Farna Control is under active development. Interfaces,
+> database migrations, configuration, and deployment procedures may change.
+> Evaluate it before using it with production data and keep current backups.
 
 ## Table of Contents
 - [What it is](#what-it-is)
@@ -49,7 +49,7 @@
 
 ## What it is
 
-Modulo is a Delivery Governance Platform you own and run. It records, evaluates, controls, and improves automated work across the software development lifecycle — including code, dependencies and licensing, security, release, documentation and knowledge, evidence, and remediation — while keeping execution, approvals, audit data, and credentials under the operator's control.
+Farna Control is a Delivery Governance Platform you own and run. It records, evaluates, controls, and improves automated work across the software development lifecycle — including code, dependencies and licensing, security, release, documentation and knowledge, evidence, and remediation — while keeping execution, approvals, audit data, and credentials under the operator's control.
 
 The operating loop is **record → evaluate → control → improve**: capture what automated work did, assess its outputs and evidence, apply gates and human decisions where needed, then use the results to improve the delivery system. Issue-to-PR is one governed workflow in that system, not the whole product. The platform is not generic workflow automation, primarily governance of agent internals, or a prescriptive software factory; software-factory language is only a supporting implementation frame.
 
@@ -61,16 +61,16 @@ documentation and tests before relying on a capability.
 
 ## Core concepts
 
-**Pipelines.** Modulo is a visual, composable pipeline of atomic AI agents —
-agent, manual, and approval (human-in-the-loop gate) nodes, with conditional
-routing and parallel fan-out — that automates work between your existing
-tools. Runs are executed, evaluated, and audited.
+**Pipelines.** Farna Control is a visual, composable pipeline of atomic AI
+agents — agent, manual, and approval (human-in-the-loop gate) nodes, with
+conditional routing and parallel fan-out — that automates work between your
+existing tools. Runs are executed, evaluated, and audited.
 
 **Bring your own agent runtime.** Agents run in an agentic sandbox platform of
 your choice (for example E2B, a cloud sandbox platform for AI agents, or local
-Docker). Modulo dispatches work to the sandbox, collects the structured output,
-and owns the governance around it: auth, audit, cost tracking, and evaluation
-gates.
+Docker). Farna Control dispatches work to the sandbox, collects the structured
+output, and owns the governance around it: auth, audit, cost tracking, and
+evaluation gates.
 
 **Schemas everywhere.** Each stage you configure can declare typed JSON
 Schemas for its input and output. Schemas define the contracts between
@@ -99,8 +99,8 @@ it.
 The shortest local evaluation uses Docker Desktop and Docker Compose:
 
 ```bash
-git clone https://github.com/farnalabs/modulo.git
-cd modulo
+git clone https://github.com/farnalabs/farna-control.git
+cd farna-control
 # Generate the credential-encryption key ONCE, before the first start.
 printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose up -d
@@ -220,20 +220,21 @@ prerequisites.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Modulo is
-alpha software, so focused changes with tests and documentation are easiest to
-review. Use GitHub issues for reproducible bugs and scoped feature proposals.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Farna
+Control is alpha software, so focused changes with tests and documentation are
+easiest to review. Use GitHub issues for reproducible bugs and scoped feature
+proposals.
 
 ## Security
 
-Do not report vulnerabilities in a public issue. Use GitHub's private **Report a vulnerability** flow or email `security@modulo.run` with reproduction details. See [SECURITY.md](SECURITY.md).
+Do not report vulnerabilities in a public issue. Use GitHub's private **Report a vulnerability** flow or email `security@farna.dev` with reproduction details. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Modulo is licensed under the [Business Source License 1.1](LICENSE).
-Production use of Modulo is permitted, including personal, internal and
-commercial use, for Modulo itself and for any modified version or derivative
-work you create, except offering Modulo or such a version to third parties as
-a paid hosted or managed service that provides substantially the same
-functionality as Modulo. Each release converts to the Apache License 2.0 on its
-stated Change Date, three years after release.
+Farna Control is licensed under the [Business Source License 1.1](LICENSE).
+Production use of Farna Control is permitted, including personal, internal and
+commercial use, for Farna Control itself and for any modified version or
+derivative work you create, except offering Farna Control or such a version to
+third parties as a paid hosted or managed service that provides substantially
+the same functionality as Farna Control. Each release converts to the Apache
+License 2.0 on its stated Change Date, three years after release.
