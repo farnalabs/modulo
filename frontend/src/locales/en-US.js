@@ -5072,6 +5072,9 @@ export default {
     }
   },
   "components": {
+    "LogoMark": {
+      "logo": "Farna Control logo"
+    },
     "DataTable": {
       "scroll_instructions": "Swipe horizontally to view all table columns.",
       "scroll_region_label": "Scrollable table"
