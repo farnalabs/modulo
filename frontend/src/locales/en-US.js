@@ -5335,9 +5335,6 @@ export default {
         }
       }
     },
-    "LogoMark": {
-      "modulo_logo": "Modulo logo"
-    },
     "AppLayout": {
       "all_features": "All Features",
       "modulo": "Modulo",
