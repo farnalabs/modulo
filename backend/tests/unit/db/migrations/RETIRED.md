@@ -1,0 +1,107 @@
+# Retired migration tests
+
+Date: 2026-11-11
+
+Context: Stage 6 replaced the 244-file historical Alembic chain with four native baseline migrations (`0001_baseline_schema`, `0002_baseline_rls`, `0003_baseline_privileges`, and `0004_baseline_seed_data`). The baseline was verified catalogue-equivalent to the historical chain across 15 schema sections. The tests listed below were retired because they exercised deleted revision modules, downgrade paths, migration-chain positions, intermediate backfills, or source text belonging only to the historical chain. Final-state schema and data coverage remains in the baseline catalogue-equivalence verification and the surviving model/runtime tests; this ledger preserves the audit trail for the historical test corpus rather than weakening assertions until they pass for a different reason.
+
+## Retired files
+
+Each row retires the entire file. The tests in these files shared one historical subject, so the file-level entry is the appropriate ledger unit.
+
+| File | What it asserted | Why it is no longer verifiable | Baseline coverage |
+|---|---|---|---|
+| `tests/unit/db/test_migration_0115_notification_preferences.py` | Historical notification-preferences migration upgrade/downgrade and policy lifecycle. | Revision 0115 and its reversible intermediate state disappeared. | `0001_baseline_schema.py` / `0002_baseline_rls.py` |
+| `tests/unit/db/test_migration_0129_runs_json_to_jsonb.py` | Historical JSON-to-JSONB conversion helpers and revision metadata. | The one-time legacy conversion and revision 0129 disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0147_json_to_jsonb_standardize.py` | Historical JSON-to-JSONB standardisation helpers and revision metadata. | The one-time legacy conversion and revision 0147 disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0151_constraints.py` | Constraint additions and downgrade guards for revision 0151. | The intermediate revision and downgrade path disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0156_soft_delete_partial_uniques.py` | Six partial unique indexes created by revision 0156. | The historical migration module disappeared; its chain-specific source contract is unreachable. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0171_runs_list_indexes.py` | Historical runs list index and downgrade. | Revision 0171 and its intermediate downgrade state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0178_env_profiles_runner_docker.py` | Historical runner Docker environment migration and downgrade. | Revision 0178 and its intermediate shape disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0179_drop_workspace_leases.py` | Dropping and recreating the historical workspace-leases table. | The historical drop/recreate transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0180_hitl_parked_status.py` | HITL parked-status upgrade/downgrade DDL. | Revision 0180 and its reversible intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0181_org_api_keys_scope.py` | Historical org API-key scope DDL portability and downgrade. | Revision 0181 and its historical transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0190_hitl_claim_context_json.py` | Historical HITL claim context column migration and downgrade. | Revision 0190 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0191_bundled_runner_seed_backfill.py` | One-off bundled-runner seed backfill and captured-row downgrade. | Fresh baseline data has no legacy rows requiring that transform. | `0004_baseline_seed_data.py` |
+| `tests/unit/db/test_migration_0194_uuid_pk_server_defaults.py` | UUID primary-key default migration and downgrade symmetry. | Revision 0194 and its intermediate transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0195_hitl_claim_gate_config_json.py` | Historical HITL claim-gate config DDL and downgrade. | Revision 0195 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0200_runner_marker_sweep_index.py` | Runner-marker sweep index migration source contract. | Revision 0200 and its chain position disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0203_triggers_add_name.py` | Trigger-name column migration chain position and DDL. | Revision 0203 and its historical chain position disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0206_deleted_defaults_signal_check.py` | Historical deleted-defaults signal check migration behavior. | Revision 0206 and its intermediate check state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0207_collection_install_tracking.py` | Collection-install tracking DDL and ownership ceremony. | Revision 0207 and its intermediate ownership state disappeared. | `0001_baseline_schema.py` / `0002_baseline_rls.py` |
+| `tests/unit/db/test_migration_0209_collection_install_id_entity_columns.py` | Historical collection-install index/column downgrade behavior. | Revision 0209 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0216_0217_sweep_detection.py` | Historical sweep-detection migration and exact downgrade symmetry. | Revisions 0216/0217 and their intermediate states disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0219_eval_cluster_check_constraints.py` | Eval-cluster checks and guarded downgrade. | Revision 0219 and its intermediate constraint transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0227_env_profiles_initialisation_strategy_check.py` | Historical environment-profile check constraint behavior. | Revision 0227 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0251_schema_enforcement.py` | Historical schema-enforcement idempotent upgrade. | Revision 0251 and its intermediate DDL disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0254_drain_gate.py` | Historical drain-gate SQL behavior during migration. | Revision 0254 and its historical transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0257_rename_remy_to_assistant.py` | Historical Remy-to-assistant rename and downgrade safety. | The rename transition and revision 0257 disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0259_pipeline_snapshot_max_autonomy_check.py` | Historical pipeline-snapshot autonomy check and model parity. | Revision 0259 and its intermediate check state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0261_decision_record_payload.py` | Historical decision-record payload index migration. | Revision 0261 and its chain-specific source disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0264_pipelines_max_autonomy_ge_default.py` | Historical pipeline autonomy vocabulary/check parity. | Revision 0264 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0265_hitl_review_window.py` | Historical HITL review-window check parity. | Revision 0265 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0267_notification_hot_query_indexes.py` | Historical notification lookup index additions/drops. | Revision 0267 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0268_webhook_lookup_expiry_indexes.py` | Historical webhook lookup index ordering. | Revision 0268 and its chain-specific index migration disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0269_webhook_dedup_check_constraints.py` | Historical webhook dedup checks. | Revision 0269 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0270_pipeline_snapshots_max_autonomy_ge_default.py` | Historical snapshot autonomy vocabulary parity. | Revision 0270 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0271_org_api_keys_revocation_sweep_indexes.py` | Historical org-key revocation indexes and downgrade. | Revision 0271 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0272_oauth_client_revoke_lookup_indexes.py` | Historical OAuth-client revocation indexes and downgrade. | Revision 0272 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py` | Historical workspace-drift partial-index predicate parity. | Revision 0278 and its chain-specific index migration disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0281_org_api_keys_grants.py` | Historical org-key grants migration rollback caveat. | Revision 0281 and its rollback-only source contract disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0284_add_rejected_run_status.py` | Historical rejected-status widening and downgrade ordering. | Revision 0284 and its intermediate vocabulary state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0288_runs_execution_origin.py` | Historical execution-origin column addition/removal. | Revision 0288 and its intermediate shape disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0289_pipelines_environment_profile.py` | Historical pipeline environment-profile column parity. | Revision 0289 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0290_scheduled_reports_due_scan.py` | Historical scheduled-report due-scan index source. | Revision 0290 and its chain-specific source contract disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0291_invitations_lookup_constraints.py` | Historical invitation lookup constraint downgrade behavior. | Revision 0291 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0292_audit_events_resource_lookup.py` | Historical audit-event lookup constraint downgrade behavior. | Revision 0292 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0294_eval_results_org_fk.py` | Historical eval-result org-FK DDL and downgrade uniqueness. | Revision 0294 and its intermediate transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0295_decision_record_event_identity.py` | Historical decision-record identity transition and downgrade. | Revision 0295 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0298_accounts_kind.py` | Historical accounts-kind chain position. | Revision 0298 and its historical chain position disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0299_accounts_service_identity.py` | Historical service-identity check and downgrade. | Revision 0299 and its intermediate check state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0302_runs_run_grouping.py` | Historical run-grouping constraint downgrade ordering. | Revision 0302 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0304_metrics_staging_recorded_at_index.py` | Historical metrics staging index downgrade. | Revision 0304 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0305_guardrail_escalate_action.py` | Historical guardrail vocabulary and source-edit guard. | Revision 0305 and its historical source contract disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0306_trigger_secret_encryption.py` | Historical trigger-secret encryption migration no-op downgrade. | Revision 0306 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0307_runs_guardrail_override_resume_pending.py` | Historical run guardrail override column downgrade. | Revision 0307 and its intermediate shape disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0308_runs_dispatch_phase_history.py` | Historical dispatch-phase history columns and downgrade. | Revision 0308 and its intermediate shape disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0309_hitl_claims_decision_sweep.py` | Historical HITL decision sweep index downgrade. | Revision 0309 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0310_library_cluster_db_hardening.py` | Historical library-cluster index DDL source contract. | Revision 0310 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0311_library_cluster_schema_hygiene.py` | Historical publisher check parity. | Revision 0311 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0312_memberships_active_lookups.py` | Historical membership lookup migration source contract. | Revision 0312 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0313_collection_install_drop_installed_entities.py` | Historical collection-install column restoration on downgrade. | Revision 0313 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0314_external_agents_mcp_servers.py` | Historical MCP-server migration/model check parity. | Revision 0314 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0315_service_accounts_lifecycle.py` | Historical service-account lifecycle downgrade DDL. | Revision 0315 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0316_policy_gate_evaluation_mode.py` | Historical policy-gate table downgrade contract. | Revision 0316 and its intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0323_pipeline_snapshots_substantive_version_index.py` | Historical snapshot substantive-version index SQL shape. | Revision 0323 and its chain-specific source contract disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0328_evidence_index_aggregate_indexes.py` | Historical evidence aggregate indexes and downgrade. | Revision 0328 and its intermediate index state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0329_run_attempts.py` | Historical run-attempt terminal-reason vocabulary parity. | Revision 0329 and its intermediate vocabulary state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0330_backfill_progress.py` | Historical eval-result backfill/final-state assertion tied to revision 0330. | The one-time backfill and revision 0330 disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0333_trigger_event_findings.py` | Historical trigger-event findings constraint ownership. | Revision 0333 and its intermediate constraint state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0334_runs_webhook_decay_sweep_index.py` | Historical webhook-decay partial-index predicate. | Revision 0334 and its chain-specific index migration disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0336_drop_analytics_kill_switch_row.py` | Historical seed-row deletion and downgrade preservation. | The intermediate seed transition and revision 0336 disappeared. | `0004_baseline_seed_data.py` |
+| `tests/unit/db/test_migration_0339_triggers_name_not_null.py` | Historical trigger-name NOT NULL transition and uniqueness. | Revision 0339 and its intermediate transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_0340_drop_assistant_ui_driving_flag_row.py` | Historical feature-flag seed-row deletion and downgrade preservation. | The intermediate seed transition and revision 0340 disappeared. | `0004_baseline_seed_data.py` |
+| `tests/unit/db/test_migration_0346_org_api_keys_role_scope.py` | Historical org-key role-scope predicate parity. | Revision 0346 and its intermediate RLS state disappeared. | `0001_baseline_schema.py` / `0002_baseline_rls.py` |
+| `tests/unit/db/test_migration_0347_system_maps_version_aware.py` | One-time system-map effective-date backfill. | Fresh baseline data has no legacy rows requiring that transform. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_assistant_tables.py` | Historical assistant-table creation and downgrade. | The old migration module and its intermediate downgrade path disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_guardrail_kill_switch.py` | Historical kill-switch migration ownership and revision placement. | The old revision ownership/placement is no longer reachable. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_guardrail_trust_pr_b.py` | Historical guardrail trust migration upgrade/downgrade. | The historical revision and intermediate guardrail state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_guardrail_trust_pr_c.py` | Historical model/migration drift guard for a deleted revision. | The deleted revision module and its source contract disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_ongoing_trigger.py` | Historical trigger-type widening ceremony. | The intermediate NOT VALID/validation transition disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_reconcile_staging_schema.py` | Historical staging-schema reconciliation chain and org-FK hardening. | The reconciliation revisions and their intermediate state disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_run_node_outputs.py` | Historical migration coverage-verification failure path. | The deleted migration's source and coverage ceremony disappeared. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_migration_sync_feature_flag_catalog.py` | Historical feature-flag catalogue reconciliation chain. | The intermediate reconciliation revisions disappeared. | `0004_baseline_seed_data.py` |
+| `tests/unit/db/test_migration_team_visibility_rls.py` | Historical team-visibility RLS policy lifecycle and downgrade. | The intermediate policy transition and deleted revision disappeared. | `0002_baseline_rls.py` |
+
+## Additional migration-named tests retired
+
+The following broader unit-test files were also retired because their migration-only tests were tied to deleted historical revision modules or migration-chain positions:
+
+| File | Scope | Baseline coverage |
+|---|---|---|
+| `tests/unit/db/test_eval_dataset.py` | Three migration-specific tests for revision 0131, including FORCE RLS and reversibility; remaining tests were inseparable from the same deleted migration subject. | `0001_baseline_schema.py` / `0002_baseline_rls.py` |
+| `tests/unit/db/test_eval_suite_run.py` | Two migration-specific tests for historical revision DDL and reversibility; file-level retirement avoids retaining tests that pass only through stale migration imports. | `0001_baseline_schema.py` / `0002_baseline_rls.py` |
+| `tests/unit/db/test_eval_versioning.py` | Three migration-chain/version cutover tests tied to revision 0138. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_rls_coverage.py` | Historical migration strict-RLS source checks. | `0002_baseline_rls.py` |
+| `tests/unit/db/test_run_cancel_reason.py` | Historical migration vocabulary/column/revision tests. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_run_status_vocabulary.py` | Historical widening migration and downgrade tests. | `0001_baseline_schema.py` |
+| `tests/unit/db/test_trigger_event_vocabulary.py` | Historical trigger-event vocabulary migration tests. | `0001_baseline_schema.py` |
