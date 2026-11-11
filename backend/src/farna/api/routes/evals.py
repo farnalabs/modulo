@@ -4084,6 +4084,8 @@ async def _insert_eval_definition(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if req.node_id is not None:
+                _require_gate_action_permission(principal, permission=_PERMISSION_GATE_CREATE)
 
             try:
                 eval_row = await create_or_update_eval(

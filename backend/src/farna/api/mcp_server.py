@@ -6121,6 +6121,26 @@ def _assert_gate_write_scope(permission: str) -> None:
         raise MCPAuthorizationError(f"Permission '{permission}' is not granted to this credential")
 
 
+def _assert_gate_transition_scope(current_action: str | None, new_action: str, reason: str | None) -> str | None:
+    """Enforce the transition-specific gate permission and normalize its reason."""
+    if new_action not in {"warn", "block"}:
+        raise MCPAuthorizationError("PolicyGate action must be 'warn' or 'block'")
+    if current_action == new_action or current_action is None:
+        if current_action is None and new_action == "block":
+            _assert_gate_write_scope("gate.enforcement.raise")
+        return (reason or "").strip() or None
+    if current_action == "warn" and new_action == "block":
+        _assert_gate_write_scope("gate.enforcement.raise")
+        return (reason or "").strip() or None
+    if current_action == "block" and new_action == "warn":
+        _assert_gate_write_scope("gate.enforcement.weaken")
+        normalized = (reason or "").strip()
+        if not normalized:
+            raise MCPAuthorizationError("A non-blank reason is required when weakening a policy gate")
+        return normalized
+    raise MCPAuthorizationError("Unsupported PolicyGate action transition")
+
+
 def _assert_eval_definition_write_scope(action: str, minimum_role: str) -> None:
     """Raise MCPAuthorizationError when the caller is below ``minimum_role``.
 
@@ -6209,6 +6229,8 @@ async def _create_eval_definition_impl(
     config_json: dict[str, Any] | None,
     pass_threshold: float | None,
     suite_id: str | None,
+    failure_behaviour: str = "warn",
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Persist a new eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
@@ -6227,6 +6249,7 @@ async def _create_eval_definition_impl(
     _assert_eval_definition_write_scope("create", "operator")
     if node_id is not None:
         _assert_gate_write_scope("gate.create")
+        _assert_gate_transition_scope(None, failure_behaviour, reason)
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -6276,7 +6299,7 @@ async def _create_eval_definition_impl(
                 name=name,
                 eval_type=eval_type,
                 config_json=cfg,
-                failure_behaviour="warn",
+                failure_behaviour=failure_behaviour,
                 pass_threshold=pass_threshold,
                 suite_id=suite_id,
             )
@@ -6305,6 +6328,8 @@ async def create_eval_definition(
     config_json: dict[str, Any] | None = None,
     pass_threshold: float | None = None,
     suite_id: str | None = None,
+    failure_behaviour: str = "warn",
+    reason: str | None = None,
 ) -> dict[str, Any]:
     return await _create_eval_definition_impl(
         pipeline_id,
@@ -6314,6 +6339,8 @@ async def create_eval_definition(
         config_json,
         pass_threshold,
         suite_id,
+        failure_behaviour,
+        reason,
     )
 
 
@@ -6371,6 +6398,8 @@ async def _update_eval_definition_impl(
     config_json: dict[str, Any] | None,
     pass_threshold: float | None,
     suite_id: str | None,
+    failure_behaviour: str | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Apply a partial update to an eval definition (an ``Eval`` row); shared with the MCP tool wrapper.
 
@@ -6418,6 +6447,10 @@ async def _update_eval_definition_impl(
     from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 
     async with _session(org_id) as s:
+        if failure_behaviour is not None:
+            from farna.db.crud._gate_advisory_lock import acquire_gate_advisory_lock
+
+            await acquire_gate_advisory_lock(eid, s)
         eval_row = await _load_eval_def(s, org_id, eid)
         if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
@@ -6437,9 +6470,18 @@ async def _update_eval_definition_impl(
         effective_node_id = updates.get("node_id", eval_row.node_id)
         if current_gate is not None:
             _assert_gate_write_scope("gate.edit")
-        elif effective_node_id is not None:
+        elif effective_node_id is not None and failure_behaviour is not None:
             _assert_gate_write_scope("gate.create")
         current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+        requested_failure_behaviour = failure_behaviour if failure_behaviour is not None else current_failure_behaviour
+        transition_reason = _assert_gate_transition_scope(current_failure_behaviour if current_gate is not None else None, requested_failure_behaviour, reason) if failure_behaviour is not None and effective_node_id is not None else None
+        if current_gate is not None and transition_reason is not None:
+            current_gate.pre_version_raw = {
+                **(current_gate.pre_version_raw or {}),
+                "previous_action": current_failure_behaviour,
+                "new_action": requested_failure_behaviour,
+                "reason": transition_reason,
+            }
         # FAR-939 chunk 12 §3.1: preserve the live gate's evaluation mode
         # across an MCP eval edit — mirrors the failure_behaviour
         # preservation above (an eval edit must not silently reset a
@@ -6469,7 +6511,7 @@ async def _update_eval_definition_impl(
                 name=updates.get("name") or eval_row.name or "",
                 eval_type=updates.get("eval_type", eval_row.eval_type),
                 config_json=updates.get("config_json", eval_row.config_json),
-                failure_behaviour=current_failure_behaviour,
+                failure_behaviour=current_failure_behaviour if failure_behaviour is None else requested_failure_behaviour,
                 pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                 suite_id=updates.get("suite_id", eval_row.suite_id),
                 write_options=EvalWriteOptions(
@@ -6509,6 +6551,8 @@ async def update_eval_definition(
     config_json: dict[str, Any] | None = None,
     pass_threshold: float | None = None,
     suite_id: str | None = None,
+    failure_behaviour: str | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     return await _update_eval_definition_impl(
         eval_id,
@@ -6518,6 +6562,8 @@ async def update_eval_definition(
         config_json,
         pass_threshold,
         suite_id,
+        failure_behaviour,
+        reason,
     )
 
 
