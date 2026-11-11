@@ -287,7 +287,10 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
 async def test_soft_deleted_team_hidden_but_row_persists(db_engine: AsyncEngine) -> None:
     """A soft-deleted team disappears from lists/lookups but the row persists with deleted_at set."""
     org = await _create_org(db_engine, f"softdel-{uuid.uuid4().hex[:8]}")
-    user = await _create_user(db_engine, org, "softdel@test.com")
+    # The integration DB is session-scoped and never truncated, and accounts.email
+    # is globally unique: a fixed address collides with the same fixture in
+    # test_org_deletion.py whenever both modules share one process/worker.
+    user = await _create_user(db_engine, org, f"softdel-{org.hex[:8]}@test.com")
 
     from farna.db.crud.team import create_team, delete_team, get_team, get_team_by_name, list_teams
 
