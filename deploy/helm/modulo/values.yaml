@@ -17,7 +17,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 # -- Image Pull Secrets -----------------------------------------------------
-# Required for private GHCR images (ghcr.io/farnalabs/modulo/*).
+# Required for private GHCR images (ghcr.io/farnalabs/farna-control/*).
 # Example: imagePullSecrets: [{name: ghcr-secret}]
 # Public images would remove the need for this.
 imagePullSecrets: []
@@ -173,7 +173,7 @@ backend:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     # Digest takes precedence over tag when both are set.
     # Example: sha256:abc123...
     digest: ""
@@ -241,7 +241,7 @@ saqRunner:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.
@@ -274,7 +274,7 @@ saqSystem:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.
@@ -309,7 +309,7 @@ frontend:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/frontend
+    repository: ghcr.io/farnalabs/farna-control/frontend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.

@@ -110,7 +110,7 @@ jobs:
               compose = yaml.safe_load(handle)
 
           pinned = compose["services"]["modulo"]["image"]
-          expected = f"ghcr.io/farnalabs/modulo:{tag}"
+          expected = f"ghcr.io/farnalabs/farna-control:{tag}"
           print(f"Bundled image reference: {pinned}")
           if pinned != expected:
               sys.exit(f"bundled compose pins {pinned!r}, expected the immutable {expected!r}")
@@ -332,7 +332,7 @@ jobs:
           with open(compose_path, encoding="utf-8") as handle:
               compose = yaml.safe_load(handle)
           image = compose.get("services", {}).get("modulo", {}).get("image")
-          prefix = "ghcr.io/farnalabs/modulo:"
+          prefix = "ghcr.io/farnalabs/farna-control:"
           if not isinstance(image, str) or not image.startswith(prefix):
               sys.exit(f"predecessor compose has invalid modulo image reference: {image!r}")
           tag = image[len(prefix):]
@@ -358,13 +358,13 @@ jobs:
           # Resolve the exact manifest digest through the authenticated registry
           # path, then require GitHub-published provenance for that digest.
           echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          old_image="ghcr.io/farnalabs/modulo:${old_tag}"
+          old_image="ghcr.io/farnalabs/farna-control:${old_tag}"
           old_digest="$(docker buildx imagetools inspect "$old_image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           if [[ ! "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::could not resolve a valid GHCR manifest digest for ${old_image}: ${old_digest:-<empty>}"
             exit 1
           fi
-          old_subject="oci://ghcr.io/farnalabs/modulo@${old_digest}"
+          old_subject="oci://ghcr.io/farnalabs/farna-control@${old_digest}"
           if ! gh attestation verify "$old_subject" --repo "${{ github.repository }}" --format json > "$RUNNER_TEMP/predecessor-image-attestation.json"; then
             echo "::error::no verifiable build provenance for ${old_subject}; refusing Docker upgrade/rollback coverage"
             exit 1

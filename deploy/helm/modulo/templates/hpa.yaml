@@ -2,16 +2,16 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "modulo.fullname" . }}-backend
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-backend
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "modulo.fullname" . }}-backend
+    name: {{ include "farna-control.fullname" . }}-backend
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
@@ -31,16 +31,16 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "modulo.fullname" . }}-frontend
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-frontend
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: frontend
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "modulo.fullname" . }}-frontend
+    name: {{ include "farna-control.fullname" . }}-frontend
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

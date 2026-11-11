@@ -77,7 +77,7 @@ def test_transform_compose_content_hardpins_tag_and_removes_watchdog():
   redis:
     image: redis:8-alpine
   modulo:
-    image: ghcr.io/farnalabs/modulo:${TAG:?TAG is required - set the Modulo version you intend to run}
+    image: ghcr.io/farnalabs/farna-control:${TAG:?TAG is required - set the Modulo version you intend to run}
     ports:
       - "${PORT:-80}:80"
   watchdog:
@@ -94,7 +94,7 @@ volumes:
     assert "services" in data
     services = data["services"]
     assert set(services.keys()) == {"postgres", "redis", "modulo"}
-    assert services["modulo"]["image"] == "ghcr.io/farnalabs/modulo:v0.4.0"
+    assert services["modulo"]["image"] == "ghcr.io/farnalabs/farna-control:v0.4.0"
     assert "watchdog" not in services
     assert "postgres_data" in data["volumes"]
     assert "redis_data" in data["volumes"]
@@ -113,7 +113,7 @@ def test_transform_compose_content_removes_watchdog_with_blank_line_in_block():
   redis:
     image: redis:8-alpine
   modulo:
-    image: ghcr.io/farnalabs/modulo:${TAG:?required}
+    image: ghcr.io/farnalabs/farna-control:${TAG:?required}
     ports:
       - "${PORT:-80}:80"
   watchdog:
@@ -153,14 +153,14 @@ volumes:
   postgres_data:
   redis_data:
 """
-    with pytest.raises(ValueError, match=r"Could not find 'image: ghcr\.io/farnalabs/modulo"):
+    with pytest.raises(ValueError, match=r"Could not find 'image: ghcr\.io/farnalabs/farna-control"):
         transform_compose_content(invalid_content, "v0.4.0")
 
 
 def test_generate_quickstart_md():
     md = generate_quickstart_md("0.4.0", "v0.4.0")
     assert "v0.4.0" in md
-    assert "ghcr.io/farnalabs/modulo:v0.4.0" in md
+    assert "ghcr.io/farnalabs/farna-control:v0.4.0" in md
     assert "docker compose up -d" in md
     assert "curl -f http://localhost:80/healthz/ready" in md
     assert "sha256sum --check SHA256SUMS" in md
@@ -214,7 +214,7 @@ def test_build_compose_release_end_to_end(tmp_path: Path):
 
     # Verify compose file has hard-pinned tag and no watchdog
     compose_data = yaml.safe_load((extracted_dir / "docker-compose.prod.yml").read_text(encoding="utf-8"))
-    assert compose_data["services"]["modulo"]["image"] == "ghcr.io/farnalabs/modulo:v0.4.0-rc1"
+    assert compose_data["services"]["modulo"]["image"] == "ghcr.io/farnalabs/farna-control:v0.4.0-rc1"
     assert "watchdog" not in compose_data["services"]
 
     # Verify docker-compose.yml is identical copy
@@ -240,8 +240,8 @@ def test_build_compose_release_distinguishes_rc_and_ga_image_pins(tmp_path: Path
     rc_image = _pinned_modulo_image(build_compose_release(version="0.5.1", tag="v0.5.1-rc2", output_dir=tmp_path / "rc"))
     ga_image = _pinned_modulo_image(build_compose_release(version="0.5.1", tag="v0.5.1", output_dir=tmp_path / "ga"))
 
-    assert rc_image == "ghcr.io/farnalabs/modulo:v0.5.1-rc2"
-    assert ga_image == "ghcr.io/farnalabs/modulo:v0.5.1"
+    assert rc_image == "ghcr.io/farnalabs/farna-control:v0.5.1-rc2"
+    assert ga_image == "ghcr.io/farnalabs/farna-control:v0.5.1"
     assert rc_image != ga_image
 
 
@@ -256,7 +256,7 @@ def test_build_compose_release_derives_tag_from_version(tmp_path: Path):
         f = tar.extractfile("docker-compose.prod.yml")
         assert f is not None
         data = yaml.safe_load(f.read().decode("utf-8"))
-        assert data["services"]["modulo"]["image"] == "ghcr.io/farnalabs/modulo:v0.5.1"
+        assert data["services"]["modulo"]["image"] == "ghcr.io/farnalabs/farna-control:v0.5.1"
 
 
 def test_build_compose_release_rejects_invalid_version(tmp_path: Path):
@@ -434,5 +434,5 @@ def test_bundled_compose_is_standalone_and_dropped_the_source_build():
     assert "watchdog" not in files
 
     # Every image is either a pinned upstream major or the immutable Modulo tag.
-    assert compose["services"]["modulo"]["image"].startswith("ghcr.io/farnalabs/modulo:")
+    assert compose["services"]["modulo"]["image"].startswith("ghcr.io/farnalabs/farna-control:")
     assert not compose["services"]["modulo"]["image"].endswith(":latest")

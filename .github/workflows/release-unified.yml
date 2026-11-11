@@ -537,7 +537,7 @@ jobs:
         # values are data, never code.
         env:
           VERSION: ${{ inputs.version }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
+          IMAGE_NAMESPACE: farnalabs/farna-control
         run: |
           set -euo pipefail
           declare -A IMAGE_CONTEXT=(
@@ -1738,7 +1738,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
           REGISTRY_USER: ${{ github.actor }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
+          IMAGE_NAMESPACE: farnalabs/farna-control
         shell: bash
         run: |
           set -euo pipefail
@@ -1895,7 +1895,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.promote.outputs.rc_tag }}
           REGISTRY_USER: ${{ github.actor }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
+          IMAGE_NAMESPACE: farnalabs/farna-control
         shell: bash
         run: |
           set -euo pipefail
@@ -1986,7 +1986,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           REGISTRY_USER: ${{ github.actor }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
+          IMAGE_NAMESPACE: farnalabs/farna-control
         shell: bash
         run: |
           set -euo pipefail
@@ -2886,7 +2886,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"
+          IMAGE="ghcr.io/farnalabs/farna-control:v${VERSION}"
           # An EMPTY docker config directory proves the pull is anonymous: any
           # ambient registry credential would otherwise let a private image
           # appear publishable, and the bundle would fail on the evaluator's
@@ -3219,35 +3219,35 @@ jobs:
         if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ghcr.io/farnalabs/farna-control
           subject-digest: ${{ needs.release.outputs.all_in_one_digest }}
 
       - name: Attest backend image
         if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository }}/backend
+          subject-name: ghcr.io/farnalabs/farna-control/backend
           subject-digest: ${{ needs.release.outputs.backend_digest }}
 
       - name: Attest frontend image
         if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository }}/frontend
+          subject-name: ghcr.io/farnalabs/farna-control/frontend
           subject-digest: ${{ needs.release.outputs.frontend_digest }}
 
       - name: Attest runner-opencode image
         if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository }}/runner-opencode
+          subject-name: ghcr.io/farnalabs/farna-control/runner-opencode
           subject-digest: ${{ needs.release.outputs.runner_opencode_digest }}
 
       - name: Verify image attestations
         if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
+          IMAGE_NAMESPACE: farnalabs/farna-control
           ALL_IN_ONE_DIGEST: ${{ needs.release.outputs.all_in_one_digest }}
           BACKEND_DIGEST: ${{ needs.release.outputs.backend_digest }}
           FRONTEND_DIGEST: ${{ needs.release.outputs.frontend_digest }}

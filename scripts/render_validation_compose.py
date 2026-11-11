@@ -13,7 +13,7 @@ def _print_stdout(msg: str) -> None:
     sys.stdout.write(msg + "\n")
 
 
-_IMAGE_LINE = re.compile(r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+$")
+_IMAGE_LINE = re.compile(r"(?m)^(\s*image:\s*ghcr\.io/farnalabs/farna-control:)[^\r\n]+$")
 _REPLACEMENT = "${TAG:?TAG is required - set the image tag for this matrix phase}"
 
 

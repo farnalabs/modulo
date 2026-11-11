@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# modulo-runner:opencode — the Bundled Runner first-party image (FAR-590, D4).
+# ghcr.io/farnalabs/farna-control/runner-opencode — the Bundled Runner first-party image (FAR-590, D4).
 #
 # Contains everything a Modulo sandbox_agent node needs to execute opencode
 # (or script-mode commands) inside a hardened workspace container:

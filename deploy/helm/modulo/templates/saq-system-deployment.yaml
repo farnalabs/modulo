@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "modulo.fullname" . }}-saq-system
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-saq-system
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: saq-system
 spec:
   replicas: {{ .Values.saqSystem.replicaCount }}
   selector:
     matchLabels:
-      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      {{- include "farna-control.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: saq-system
   template:
     metadata:
       labels:
-        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        {{- include "farna-control.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: saq-system
       {{- with .Values.saqSystem.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      serviceAccountName: {{ include "farna-control.serviceAccountName" . }}
       # Opt-in via serviceAccount.automountServiceAccountToken (default
       # false): the Kubernetes runtime provider has this workload
       # create/exec/log workspace pods in-cluster, so operators enabling that
@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: saq-system
-          image: {{ include "modulo.image" (dict "image" .Values.saqSystem.image "appVersion" .Chart.AppVersion) | quote }}
+          image: {{ include "farna-control.image" (dict "image" .Values.saqSystem.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.saqSystem.image.pullPolicy }}
           command:
             {{- toYaml .Values.saqSystem.command | nindent 12 }}
@@ -58,38 +58,38 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: DATABASE_URL
             - name: MODULO_SYSTEM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: MODULO_SYSTEM_DATABASE_URL
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: REDIS_URL
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: SECRET_KEY
             - name: FERNET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: FERNET_KEY
             - name: SAQ_AUTH_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: SAQ_AUTH_USERNAME
                   optional: true
             - name: SAQ_AUTH_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: SAQ_AUTH_PASSWORD
                   optional: true
             {{- range $key, $value := .Values.saqSystem.env }}
@@ -100,7 +100,7 @@ spec:
             {{- end }}
           envFrom:
             - configMapRef:
-                name: {{ include "modulo.fullname" . }}-config
+                name: {{ include "farna-control.fullname" . }}-config
           resources:
             limits:
               cpu: {{ .Values.saqSystem.resources.limits.cpu | quote }}

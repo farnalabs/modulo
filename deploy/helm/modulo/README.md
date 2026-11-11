@@ -121,7 +121,7 @@ The chart supports digest-pinned images for reproducibility:
 ```yaml
 backend:
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: sha256:abc123...  # Preferred: immutable reference
     tag: ""                   # Empty: defaults to the chart's appVersion
 ```
@@ -150,7 +150,7 @@ startup error instead. `REDIS_PASSWORD` is rendered only when
 
 ### Image Pull Secrets (Private GHCR Images)
 
-The GHCR images (`ghcr.io/farnalabs/modulo/backend`, `.../frontend`) are private.
+The GHCR images (`ghcr.io/farnalabs/farna-control/backend`, `.../frontend`) are private.
 Set `imagePullSecrets` to pull them:
 
 ```yaml

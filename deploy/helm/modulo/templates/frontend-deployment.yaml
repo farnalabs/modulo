@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "modulo.fullname" . }}-frontend
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-frontend
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: frontend
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
   selector:
     matchLabels:
-      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      {{- include "farna-control.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: frontend
   template:
     metadata:
       labels:
-        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        {{- include "farna-control.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: frontend
       {{- with .Values.frontend.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      serviceAccountName: {{ include "farna-control.serviceAccountName" . }}
       # The frontend is a static nginx SPA: it never calls the Kubernetes
       # API, even when the Kubernetes runtime provider is enabled on the
       # backend/SAQ workloads, so its token stays unmounted unconditionally
@@ -42,7 +42,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: {{ include "modulo.image" (dict "image" .Values.frontend.image "appVersion" .Chart.AppVersion) | quote }}
+          image: {{ include "farna-control.image" (dict "image" .Values.frontend.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
           # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the
@@ -106,7 +106,7 @@ spec:
           emptyDir: {}
         - name: nginx-config
           configMap:
-            name: {{ include "modulo.fullname" . }}-frontend-nginx
+            name: {{ include "farna-control.fullname" . }}-frontend-nginx
       {{- with .Values.frontend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

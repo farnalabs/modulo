@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "modulo.fullname" . }}-frontend-nginx
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-frontend-nginx
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: frontend
 data:
   default.conf: |
@@ -22,7 +22,7 @@ data:
 
         # Backend API — proxy to the in-cluster Service
         location /api/ {
-            proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};
+            proxy_pass http://{{ include "farna-control.fullname" . }}-backend:{{ .Values.backend.service.port }};
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_request_buffering on;
@@ -42,7 +42,7 @@ data:
         # of these paths match the static-extension regex below, so
         # `location /` never wins here.
         location /.well-known/ {
-            proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};
+            proxy_pass http://{{ include "farna-control.fullname" . }}-backend:{{ .Values.backend.service.port }};
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_request_buffering on;
@@ -57,7 +57,7 @@ data:
 
         # WebSocket
         location /ws {
-            proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};
+            proxy_pass http://{{ include "farna-control.fullname" . }}-backend:{{ .Values.backend.service.port }};
             proxy_http_version 1.1;
             proxy_request_buffering on;
             proxy_set_header Upgrade $http_upgrade;
@@ -70,7 +70,7 @@ data:
 
         # MCP server — HTTP+SSE streaming endpoint.
         location /mcp {
-            proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};
+            proxy_pass http://{{ include "farna-control.fullname" . }}-backend:{{ .Values.backend.service.port }};
             proxy_http_version 1.1;
             proxy_request_buffering on;
             proxy_set_header Host "127.0.0.1:{{ .Values.backend.service.port }}";

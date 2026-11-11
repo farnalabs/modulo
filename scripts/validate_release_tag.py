@@ -117,7 +117,7 @@ def resolve_previous_release(release_pages: Any, current: str) -> str | None:
 
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-_PINNED_IMAGE = "ghcr.io/farnalabs/modulo"
+_PINNED_IMAGE = "ghcr.io/farnalabs/farna-control"
 
 
 def _subject_digests(subject: Any) -> set[str]:
