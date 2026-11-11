@@ -17,7 +17,7 @@ import pytest
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"
