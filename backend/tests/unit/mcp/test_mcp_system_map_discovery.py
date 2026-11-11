@@ -419,7 +419,7 @@ def rest_client() -> Generator[TestClient, None, None]:
         key_grants=frozenset({"system_maps_access"}),
     )
 
-    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_settings] = lambda: _make_settings()
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = lambda: _Plan()
@@ -427,7 +427,10 @@ def rest_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_tenant_user] = lambda: principal
     app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
     try:
-        yield TestClient(app)
+        client = TestClient(app)
+        client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+        client.headers["X-CSRF-Token"] = "test-csrf-token"
+        yield client
     finally:
         app.dependency_overrides.clear()
 
@@ -573,18 +576,14 @@ def test_ai_discovery_errors_preserve_safe_structured_codes(
     message: str,
     extra: dict[str, str],
 ) -> None:
-    payload = _system_maps_http_error_payload(
-        StarletteHTTPException(status_code=status_code, detail={"code": code, "message": message, **extra})
-    )
+    payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=status_code, detail={"code": code, "message": message, **extra}))
     expected = {"error": code, "detail": message, **extra}
     assert payload == expected
 
 
 def test_http_error_payload_never_echoes_a_structured_detail() -> None:
     """A non-string detail is replaced by the safe constant."""
-    payload = _system_maps_http_error_payload(
-        StarletteHTTPException(status_code=404, detail={"internal": "do-not-leak"})
-    )
+    payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=404, detail={"internal": "do-not-leak"}))
 
     assert payload == {"error": "not_found", "detail": _MSG_UNEXPECTED_ERROR}
     assert "do-not-leak" not in payload["detail"]
@@ -609,9 +608,7 @@ async def test_discovery_session_yields_the_factory_session() -> None:
 
 @pytest.mark.asyncio
 async def test_programming_error_maps_to_migration_required() -> None:
-    result = await _call_tool_with_rest_handler_error(
-        ProgrammingError("SELECT 1", {}, Exception("column does not exist"))
-    )
+    result = await _call_tool_with_rest_handler_error(ProgrammingError("SELECT 1", {}, Exception("column does not exist")))
 
     assert result["error"] == "migration_required"
     assert result["detail"] == _MSG_DB_MIGRATION_REQUIRED
@@ -781,16 +778,15 @@ def test_route_handler_without_a_wrapper_is_used_as_is() -> None:
 
 
 def test_no_system_maps_tools_on_mcp_beyond_discovery() -> None:
-    """FAR-2288: discover_system_map is the ONLY System Maps tool on MCP.
+    """System Maps MCP exposes discovery and overview, but not authoring.
 
-    Authoring, publish, diff, restore, overview and revision reads are REST-only
-    and must not be registered on MCP.
+    Authoring, publish, diff, restore and revision reads remain REST-only.
     """
     from farna.api.mcp_server import mcp
     from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
     system_map_mcp_tools = {name for name in mcp._tool_manager._tools if "system_map" in name}
-    assert system_map_mcp_tools == {"discover_system_map"}
+    assert system_map_mcp_tools == {"discover_system_map", "get_system_map_overview"}
 
     forbidden_tool_names = {
         "create_system_map",
@@ -804,8 +800,47 @@ def test_no_system_maps_tools_on_mcp_beyond_discovery() -> None:
         "diff_system_map_revision",
         "restore_system_map_revision",
         "get_system_map_revision",
-        "get_system_map_overview",
     }
     for forbidden in forbidden_tool_names:
         assert forbidden not in mcp._tool_manager._tools
         assert forbidden not in TOOL_SCOPE_REQUIREMENTS
+
+
+@pytest.mark.asyncio
+async def test_system_map_overview_delegates_to_rest_handler() -> None:
+    from farna.api.mcp_server import get_system_map_overview
+
+    overview = SimpleNamespace(model_dump=MagicMock(return_value={"revision_id": str(_REVISION_ID), "nodes": []}))
+    rest_handler = AsyncMock(return_value=overview)
+    repository = object()
+    session = AsyncMock()
+
+    @asynccontextmanager
+    async def session_cm() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    with (
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.mcp_server._session", return_value=session_cm()),
+        patch("farna.api.mcp_server._check_agent_tool_scope"),
+        patch("farna.api.routes.system_maps.get_system_map_overview_endpoint", new=rest_handler),
+        patch("farna.api.routes.system_maps.get_repo", new=AsyncMock(return_value=repository)),
+    ):
+        result = await get_system_map_overview(map_id=_MAP_ID, revision_id=_REVISION_ID, window_days=14)
+
+    assert result == {"revision_id": str(_REVISION_ID), "nodes": []}
+    feature_gate.assert_awaited_once()
+    assert feature_gate.await_args.args[0] == ORG_ID
+    assert feature_gate.await_args.args[2] == "system_maps"
+    rest_handler.assert_awaited_once()
+    assert rest_handler.await_args.kwargs["repository"] is repository
+    assert rest_handler.await_args.kwargs["window_days"] == 14
+
+
+def test_system_map_overview_is_registered_without_unimplemented_tools() -> None:
+    from farna.api.mcp_server import mcp
+    from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+    assert "get_system_map_overview" in mcp._tool_manager._tools
+    assert TOOL_SCOPE_REQUIREMENTS["get_system_map_overview"] == "system_map.overview"
