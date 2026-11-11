@@ -468,13 +468,13 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="modulo_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value="function-ref")),
             ]
         )
         result = await smoke(session)
         assert result["connectivity"] == "ok"
-        assert result["session_user"] == "modulo_breakglass"
+        assert result["session_user"] == "farna_breakglass"
 
     async def test_probe_returns_wrong_value(self) -> None:
         session = _mock_session()
@@ -490,7 +490,7 @@ class TestSmoke:
                 MagicMock(scalar_one=MagicMock(return_value="postgres")),
             ]
         )
-        with pytest.raises(SmokeFailureError, match="modulo_breakglass"):
+        with pytest.raises(SmokeFailureError, match="farna_breakglass"):
             await smoke(session)
 
     async def test_function_missing(self) -> None:
@@ -498,7 +498,7 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="modulo_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value=None)),
             ]
         )
@@ -602,14 +602,10 @@ class TestEngineSslPosture:
         ("url", "expected_ssl"),
         [
             pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo", False, id="no-sslmode-explicit-false"),
-            pytest.param(
-                "postgresql+asyncpg://bg:bg@h:5432/modulo?sslmode=disable", False, id="disable-explicit-false"
-            ),
+            pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo?sslmode=disable", False, id="disable-explicit-false"),
         ],
     )
-    def test_plaintext_posture_passes_explicit_false(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, expected_ssl: bool
-    ) -> None:
+    def test_plaintext_posture_passes_explicit_false(self, monkeypatch: pytest.MonkeyPatch, url: str, expected_ssl: bool) -> None:
         bg = self._isolate(monkeypatch)
         with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
             engine = bg.get_break_glass_engine(

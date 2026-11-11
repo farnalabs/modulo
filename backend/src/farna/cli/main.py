@@ -119,7 +119,7 @@ def _init_once_register_legacy_commands() -> None:
     for name, command in _legacy_backup_cli.commands.items():
         existing = cli.commands.get(name)
         if existing is not None and existing is not command:
-            raise RuntimeError(f"command {name!r} is already registered on the modulo group")
+            raise RuntimeError(f"command {name!r} is already registered on the farna-control group")
         cli.add_command(command, name=name)
 
 
@@ -132,7 +132,7 @@ def _init_once_register_users_command() -> None:
 
     existing = cli.commands.get("users")
     if existing is not None and existing is not users:
-        raise RuntimeError("command 'users' is already registered on the modulo group")
+        raise RuntimeError("command 'users' is already registered on the farna-control group")
     cli.add_command(users, name="users")
 
 
@@ -145,7 +145,7 @@ def _init_once_register_evidence_command() -> None:
 
     existing = cli.commands.get("evidence")
     if existing is not None and existing is not evidence_command:
-        raise RuntimeError("command 'evidence' is already registered on the modulo group")
+        raise RuntimeError("command 'evidence' is already registered on the farna-control group")
     cli.add_command(evidence_command, name="evidence")
 
 
@@ -159,11 +159,37 @@ def _init_once_register_backfill_base_url_command() -> None:
     name = "backfill-model-backend-base-url"
     existing = cli.commands.get(name)
     if existing is not None and existing is not backfill_model_backend_base_url:
-        raise RuntimeError(f"command {name!r} is already registered on the modulo group")
+        raise RuntimeError(f"command {name!r} is already registered on the farna-control group")
     cli.add_command(backfill_model_backend_base_url, name=name)
 
 
 _init_once_register_backfill_base_url_command()
+
+
+def _init_once_register_migrate_command() -> None:
+    """Register the FAR-673 migrate command group (lazy module import)."""
+    from farna.cli.migrate import cli as migrate_cli
+
+    existing = cli.commands.get("migrate")
+    if existing is not None and existing is not migrate_cli:
+        raise RuntimeError("command 'migrate' is already registered on the farna-control group")
+    cli.add_command(migrate_cli, name="migrate")
+
+
+_init_once_register_migrate_command()
+
+
+def _init_once_register_break_glass_command() -> None:
+    """Register the break-glass command group (lazy module import)."""
+    from farna.cli.break_glass import cli as break_glass_cli
+
+    existing = cli.commands.get("break-glass")
+    if existing is not None and existing is not break_glass_cli:
+        raise RuntimeError("command 'break-glass' is already registered on the farna-control group")
+    cli.add_command(break_glass_cli, name="break-glass")
+
+
+_init_once_register_break_glass_command()
 
 
 # ---------------------------------------------------------------------------

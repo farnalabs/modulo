@@ -1,9 +1,9 @@
-"""modulo-migrate: CLI tool for org data migration (export/import/verify).
+"""farna-control migrate: CLI tool for org data migration (export/import/verify).
 
 Usage:
-  modulo-migrate export-org <org-id> --output ./export.jsonl [--pipelines-only] [--users-only]
-  modulo-migrate import-org <org-id> --input ./export.jsonl [--on-conflict skip|overwrite|merge]
-  modulo-migrate verify-export <org-id> --input ./export.jsonl
+  farna-control migrate export-org <org-id> --output ./export.jsonl [--pipelines-only] [--users-only]
+  farna-control migrate import-org <org-id> --input ./export.jsonl [--on-conflict skip|overwrite|merge]
+  farna-control migrate verify-export <org-id> --input ./export.jsonl
 """
 
 import asyncio
@@ -74,7 +74,7 @@ _DB_OP_TIMEOUT_SECONDS = 600
 
 
 def _resolve_admin_auth(token: str | None) -> str | None:
-    raw = token or os.environ.get("FARNA_CONTROL_MODULO_ADMIN_SECRET", "")
+    raw = token or os.environ.get("FARNA_CONTROL_ADMIN_SECRET", "")
     if not raw:
         return None
     if token:
@@ -489,9 +489,9 @@ def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) -> bool:
 @click.group()
 @click.option(
     "--token",
-    envvar="FARNA_CONTROL_MODULO_ADMIN_TOKEN",
+    envvar="FARNA_CONTROL_ADMIN_TOKEN",
     default=None,
-    help="Admin JWT (or set MODULO_ADMIN_TOKEN)",
+    help="Admin JWT (or set FARNA_CONTROL_ADMIN_TOKEN)",
 )
 @click.pass_context
 def cli(ctx: click.Context, token: str | None) -> None:
@@ -499,7 +499,7 @@ def cli(ctx: click.Context, token: str | None) -> None:
     ctx.ensure_object(dict)
     admin_id = _resolve_admin_auth(token)
     if admin_id is None:
-        raise click.ClickException("Admin authentication required. Provide --token / MODULO_ADMIN_TOKEN or set MODULO_ADMIN_SECRET environment variable.")
+        raise click.ClickException("Admin authentication required. Provide --token / FARNA_CONTROL_ADMIN_TOKEN or set FARNA_CONTROL_ADMIN_SECRET environment variable.")
     ctx.obj["admin_user_id"] = admin_id
 
 
