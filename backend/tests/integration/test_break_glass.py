@@ -53,11 +53,7 @@ async def _create_account(
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active, is_break_glass, break_glass_expires_at) "
-                "VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, is_break_glass, break_glass_expires_at) VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp)"),
             {
                 "id": str(acc_id),
                 "email": email or f"bg-{acc_id.hex[:12]}@example.com",
@@ -70,9 +66,7 @@ async def _create_account(
     return acc_id
 
 
-async def _create_membership(
-    engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin"
-) -> None:
+async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, :role)"),
@@ -108,57 +102,20 @@ async def bg_org(db_engine: AsyncEngine) -> uuid.UUID:
 
 async def test_break_glass_columns_and_check_exist(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = 'accounts' AND table_schema = 'public'"
-                    )
-                )
-            ).fetchall()
-        }
+        cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts' AND table_schema = 'public'"))).fetchall()}
         assert {"is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at"} <= cols
 
-        check = (
-            await conn.execute(
-                text(
-                    "SELECT 1 FROM pg_constraint WHERE conname = 'ck_accounts_break_glass_expiry' "
-                    "AND conrelid = 'public.accounts'::regclass"
-                )
-            )
-        ).scalar_one_or_none()
+        check = (await conn.execute(text("SELECT 1 FROM pg_constraint WHERE conname = 'ck_accounts_break_glass_expiry' AND conrelid = 'public.accounts'::regclass"))).scalar_one_or_none()
         assert check == 1
 
-        owners = {
-            row[0]: row[1]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
-                        "WHERE c.oid IN ('public.accounts'::regclass, 'public.org_memberships'::regclass, "
-                        "'public.token_families'::regclass, 'public.org_api_keys'::regclass)"
-                    )
-                )
-            ).fetchall()
-        }
+        owners = {row[0]: row[1] for row in (await conn.execute(text("SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c WHERE c.oid IN ('public.accounts'::regclass, 'public.org_memberships'::regclass, 'public.token_families'::regclass, 'public.org_api_keys'::regclass)"))).fetchall()}
         assert set(owners.values()) == {"modulo_migrate"}, owners
 
-        func_owner = (
-            await conn.execute(
-                text(
-                    "SELECT pg_get_userbyid(p.proowner) FROM pg_proc p "
-                    "WHERE p.oid = 'public.lookup_api_key_org(text)'::regprocedure"
-                )
-            )
-        ).scalar_one()
+        func_owner = (await conn.execute(text("SELECT pg_get_userbyid(p.proowner) FROM pg_proc p WHERE p.oid = 'public.lookup_api_key_org(text)'::regprocedure"))).scalar_one()
         assert func_owner == "modulo_migrate"
 
 
-async def test_break_glass_columns_not_writable_by_modulo_app(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_break_glass_columns_not_writable_by_modulo_app(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """The accounts UPDATE allow-list (active from (A)) blocks modulo_app from
     writing the break-glass columns while allowing the writable ones."""
     account_id = await _create_account(db_engine, is_break_glass=False)
@@ -181,9 +138,7 @@ async def test_break_glass_columns_not_writable_by_modulo_app(
 # ── caller-bound SECURITY DEFINER ────────────────────────────────────
 
 
-async def test_caller_with_no_shared_org_is_rejected_m2010(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_caller_with_no_shared_org_is_rejected_m2010(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     caller = await _create_account(db_engine)
     target = await _create_account(db_engine)
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
@@ -193,9 +148,7 @@ async def test_caller_with_no_shared_org_is_rejected_m2010(
     assert _pgcode_of(exc_info.value) == "M2010"
 
 
-async def test_last_admin_of_other_org_no_longer_blocks(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_last_admin_of_other_org_no_longer_blocks(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """FAR-539: the M2020 guard is PER-ORG — it covers only the orgs the call tombstones.
 
     The target shares bg_org with the caller (authorizing the call) AND is the
@@ -217,10 +170,7 @@ async def test_last_admin_of_other_org_no_longer_blocks(
     async with db_engine.connect() as conn:
         shared_membership = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(target), "oid": str(bg_org)},
             )
         ).scalar_one()
@@ -229,25 +179,18 @@ async def test_last_admin_of_other_org_no_longer_blocks(
         # The other org's membership (and its admin capability) is untouched.
         other_membership = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(target), "oid": str(other_org)},
             )
         ).scalar_one()
         assert other_membership is False
 
         # Per-org deactivation (FAR-533): the account stays active.
-        account_active = (
-            await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})
-        ).scalar_one()
+        account_active = (await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})).scalar_one()
         assert account_active is True
 
 
-async def test_last_admin_of_callers_org_still_refused(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_last_admin_of_callers_org_still_refused(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """The M2020 guard still protects the org being tombstoned.
 
     Self-deactivation: the caller IS the target and the last non-break-glass
@@ -267,19 +210,14 @@ async def test_last_admin_of_callers_org_still_refused(
     async with db_engine.connect() as conn:
         membership_deactivated = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(last_admin), "oid": str(bg_org)},
             )
         ).scalar_one()
         assert membership_deactivated is False
 
 
-async def test_bg_account_caller_last_admin_of_tombstoned_org_still_refused(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_bg_account_caller_last_admin_of_tombstoned_org_still_refused(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """A break-glass ACCOUNT caller (non-operator session) is excluded from the
     guard's admin count (``a.is_break_glass IS FALSE``), so removing the last
     non-break-glass admin of the org being tombstoned is still refused."""
@@ -295,9 +233,7 @@ async def test_bg_account_caller_last_admin_of_tombstoned_org_still_refused(
     assert _pgcode_of(exc_info.value) == "M2020"
 
 
-async def test_deactivation_succeeds_scoped_to_shared_org(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_deactivation_succeeds_scoped_to_shared_org(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     other_org = await _create_org(db_engine)
     caller = await _create_account(db_engine)
     target = await _create_account(db_engine)
@@ -315,19 +251,14 @@ async def test_deactivation_succeeds_scoped_to_shared_org(
     await _call_deactivate(modulo_app_engine, caller, target)
 
     async with db_engine.connect() as conn:
-        account_active = (
-            await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})
-        ).scalar_one()
+        account_active = (await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})).scalar_one()
         # FAR-533 (gh-1794): deactivation is PER-ORG — the membership
         # tombstone below is the signal, accounts.active stays true.
         assert account_active is True
 
         shared_membership = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(target), "oid": str(bg_org)},
             )
         ).scalar_one()
@@ -336,10 +267,7 @@ async def test_deactivation_succeeds_scoped_to_shared_org(
         # The non-shared org membership is untouched (scoped marker rows).
         other_membership = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(target), "oid": str(other_org)},
             )
         ).scalar_one()
@@ -357,9 +285,7 @@ async def test_target_missing_m2040(breakglass_engine: AsyncEngine, db_engine: A
     assert _pgcode_of(exc_info.value) == "M2040"
 
 
-async def test_force_requires_operator_and_set_role_does_not_qualify(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_force_requires_operator_and_set_role_does_not_qualify(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """force_last_admin is gated on session_user='modulo_breakglass'.
 
     A modulo_app session (SET ROLE modulo_app, session_user = superuser) and a
@@ -396,9 +322,7 @@ async def test_force_requires_operator_and_set_role_does_not_qualify(
         await set_role_engine.dispose()
 
 
-async def test_operator_real_login_force_removes_last_admin(
-    breakglass_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_operator_real_login_force_removes_last_admin(breakglass_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """The operator branch (REAL modulo_breakglass login) can force-remove the
     last non-break-glass admin."""
     target = await _create_account(db_engine)
@@ -408,25 +332,18 @@ async def test_operator_real_login_force_removes_last_admin(
     await _call_deactivate(breakglass_engine, operator, target, force=True)
 
     async with db_engine.connect() as conn:
-        active = (
-            await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})
-        ).scalar_one()
+        active = (await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(target)})).scalar_one()
         assert active is False
         membership_deactivated = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(target), "oid": str(bg_org)},
             )
         ).scalar_one()
         assert membership_deactivated is True
 
 
-async def test_operator_force_refused_without_force_last_admin(
-    breakglass_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_operator_force_refused_without_force_last_admin(breakglass_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     """Even the operator fires M2020 for the last non-bg admin unless force=true."""
     target = await _create_account(db_engine)
     await _create_membership(db_engine, org_id=bg_org, account_id=target, role="admin")
@@ -440,9 +357,7 @@ async def test_operator_force_refused_without_force_last_admin(
 # ── active IS TRUE membership JOIN (account-global deactivation fix) ──
 
 
-async def test_deactivated_account_resolves_none_role(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_deactivated_account_resolves_none_role(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     active_admin = await _create_account(db_engine, active=True)
     deactivated_admin = await _create_account(db_engine, active=False)
     await _create_membership(db_engine, org_id=bg_org, account_id=active_admin, role="admin")
@@ -490,10 +405,7 @@ async def test_scim_deactivate_and_recreate_reversible(db_engine: AsyncEngine, b
     async with db_engine.connect() as conn:
         membership_deactivated = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(scim_id), "oid": str(bg_org)},
             )
         ).scalar_one()
@@ -512,9 +424,7 @@ async def test_scim_deactivate_and_recreate_reversible(db_engine: AsyncEngine, b
 
     # Re-create of the SAME email (not a new one) clears the tombstone:
     async with factory() as session, session.begin():
-        original_email = (
-            await session.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(scim_id)})
-        ).scalar_one()
+        original_email = (await session.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(scim_id)})).scalar_one()
         recreated_same = await scim_create_user(
             session,
             org_id=bg_org,
@@ -529,35 +439,24 @@ async def test_scim_deactivate_and_recreate_reversible(db_engine: AsyncEngine, b
     async with db_engine.connect() as conn:
         membership_deactivated = (
             await conn.execute(
-                text(
-                    "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                    "WHERE account_id = :id AND organisation_id = :oid"
-                ),
+                text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :id AND organisation_id = :oid"),
                 {"id": str(scim_id), "oid": str(bg_org)},
             )
         ).scalar_one()
         assert membership_deactivated is False  # tombstone cleared on re-create
-        password_hash = (
-            await conn.execute(text("SELECT password_hash FROM accounts WHERE id = :id"), {"id": str(scim_id)})
-        ).scalar_one()
+        password_hash = (await conn.execute(text("SELECT password_hash FROM accounts WHERE id = :id"), {"id": str(scim_id)})).scalar_one()
         assert password_hash is None  # SCIM-managed re-create resets the hash
 
 
 # ── lookup_api_key_org regression (re-owned, still callable) ─────────
 
 
-async def test_lookup_api_key_org_regression(
-    modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID
-) -> None:
+async def test_lookup_api_key_org_regression(modulo_app_engine: AsyncEngine, db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
     key_id = uuid.uuid4()
     prefix = "bgtest1"
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, "
-                "hashed_secret, role, account_id, expires_at) "
-                "VALUES (:id, :oid, 'k', :prefix, 'x', 'runner', :acc, now() + interval '1 day')"
-            ),
+            text("INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, hashed_secret, role, account_id, expires_at) VALUES (:id, :oid, 'k', :prefix, 'x', 'runner', :acc, now() + interval '1 day')"),
             {
                 "id": str(key_id),
                 "oid": str(bg_org),
@@ -567,9 +466,7 @@ async def test_lookup_api_key_org_regression(
         )
 
     async with modulo_app_engine.connect() as conn:
-        resolved = (
-            await conn.execute(text("SELECT public.lookup_api_key_org(:prefix)"), {"prefix": prefix})
-        ).scalar_one()
+        resolved = (await conn.execute(text("SELECT public.lookup_api_key_org(:prefix)"), {"prefix": prefix})).scalar_one()
         assert str(resolved) == str(bg_org)
 
 
@@ -590,17 +487,13 @@ async def test_modulo_migrate_has_schema_usage(db_engine: AsyncEngine) -> None:
         await conn.execute(text("REVOKE USAGE ON SCHEMA public FROM PUBLIC"))
     try:
         async with db_engine.connect() as conn:
-            has_usage = (
-                await conn.execute(text("SELECT has_schema_privilege('modulo_migrate', 'public', 'USAGE')"))
-            ).scalar_one()
+            has_usage = (await conn.execute(text("SELECT has_schema_privilege('modulo_migrate', 'public', 'USAGE')"))).scalar_one()
             assert has_usage is True
 
             # Belt-and-braces: the function must actually resolve org_api_keys as
             # modulo_migrate (no UndefinedTableError). A missing-prefix lookup
             # returns NULL; a broken schema-USAGE grant raises.
-            resolved = (
-                await conn.execute(text("SELECT public.lookup_api_key_org('no_such_prefix_zz')"))
-            ).scalar_one_or_none()
+            resolved = (await conn.execute(text("SELECT public.lookup_api_key_org('no_such_prefix_zz')"))).scalar_one_or_none()
             assert resolved is None
     finally:
         # Restore the PUBLIC default so the shared session-scoped DB is untouched
@@ -621,21 +514,7 @@ async def test_break_glass_surface_present(db_engine: AsyncEngine) -> None:
     meaningful contract.
     """
     async with db_engine.connect() as conn:
-        cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = 'accounts' AND table_schema = 'public'"
-                    )
-                )
-            ).fetchall()
-        }
+        cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts' AND table_schema = 'public'"))).fetchall()}
         assert "is_break_glass" in cols
-        func_exists = (
-            await conn.execute(
-                text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL")
-            )
-        ).scalar_one()
+        func_exists = (await conn.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL"))).scalar_one()
         assert func_exists is True

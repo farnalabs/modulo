@@ -124,9 +124,7 @@ def _latest_boot_arg_record(
 
 
 @requires_posix
-def test_poisoned_artifact_refusal_and_verbatim_restore_recovers_previous(
-    tmp_path: Any, monkeypatch: Any, patched_trust_store: Any
-) -> None:
+def test_poisoned_artifact_refusal_and_verbatim_restore_recovers_previous(tmp_path: Any, monkeypatch: Any, patched_trust_store: Any) -> None:
     """A failing new-bundle boot prints the restore; executing it restores."""
     import subprocess
 
@@ -191,9 +189,7 @@ def test_poisoned_artifact_refusal_and_verbatim_restore_recovers_previous(
 
 
 @requires_posix
-def test_previous_release_seeded_then_upgraded_keeps_data_and_doctor_green(
-    tmp_path: Any, monkeypatch: Any, patched_trust_store: Any
-) -> None:
+def test_previous_release_seeded_then_upgraded_keeps_data_and_doctor_green(tmp_path: Any, monkeypatch: Any, patched_trust_store: Any) -> None:
     """The positive matrix entry: seed 1.1.0 -> upgrade to 1.2.0 -> intact."""
     plant = _boot_strap_matrix(tmp_path, monkeypatch)
     boot_records: list[tuple[Any, int]] = []
@@ -245,9 +241,7 @@ def test_previous_release_seeded_then_upgraded_keeps_data_and_doctor_green(
 
 
 @requires_posix
-def test_matrix_downgrade_refusal_leaves_previous_instead(
-    tmp_path: Any, monkeypatch: Any, patched_trust_store: Any
-) -> None:
+def test_matrix_downgrade_refusal_leaves_previous_instead(tmp_path: Any, monkeypatch: Any, patched_trust_store: Any) -> None:
     """A DB revision the target never shipped refuses BEFORE any swap."""
     plant = _boot_strap_matrix(tmp_path, monkeypatch, recorded_heads=["head-the-target-never-shipped"])
     boot, _ = _latest_boot_arg_record([])
@@ -269,9 +263,7 @@ def test_matrix_downgrade_refusal_leaves_previous_instead(
 
 
 @requires_posix
-def test_matrix_pg_major_mismatch_refusal_blocks_the_swap(
-    tmp_path: Any, monkeypatch: Any, patched_trust_store: Any
-) -> None:
+def test_matrix_pg_major_mismatch_refusal_blocks_the_swap(tmp_path: Any, monkeypatch: Any, patched_trust_store: Any) -> None:
     """Bundled PG 16-only: a 17 target HARD-refuses against a 16 data dir."""
     from farna.launcher import manifest as manifest_module
 
@@ -287,9 +279,7 @@ def test_matrix_pg_major_mismatch_refusal_blocks_the_swap(
     body["components"]["postgres"] = "17"
     fresh_bytes = json_module.dumps(body, indent=2, sort_keys=True).encode("utf-8")
     release.manifest.write_bytes(fresh_bytes)
-    _signature = manifest_module.sign_release_bytes(
-        fresh_bytes, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
-    )
+    _signature = manifest_module.sign_release_bytes(fresh_bytes, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX)
     release.signature.write_text(json_module.dumps(_signature), encoding="utf-8")
     with pytest.raises(upgrade_module.UpgradeError, match="major mismatch"):
         upgrade_module.perform_upgrade(

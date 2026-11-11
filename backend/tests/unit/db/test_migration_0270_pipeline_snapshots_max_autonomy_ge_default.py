@@ -66,18 +66,8 @@ _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 #: Both statements rank the SAME vocabulary through the SAME CASE shape - only
 #: the comparison operator differs (repair ``>`` == the check's ``<=``).
-_REPAIR_RANK_DEFAULT = (
-    "(CASE default_autonomy_level "
-    "WHEN 'manual_approval' THEN 0 "
-    "WHEN 'notify_on_complete' THEN 1 "
-    "WHEN 'fully_autonomous' THEN 2 END)"
-)
-_REPAIR_RANK_CEILING = (
-    "(CASE max_autonomy_level "
-    "WHEN 'manual_approval' THEN 0 "
-    "WHEN 'notify_on_complete' THEN 1 "
-    "WHEN 'fully_autonomous' THEN 2 END)"
-)
+_REPAIR_RANK_DEFAULT = "(CASE default_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)"
+_REPAIR_RANK_CEILING = "(CASE max_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)"
 
 
 def _load_migration() -> ModuleType:
@@ -175,9 +165,7 @@ class TestUpgrade:
         bind_execute_calls = op.get_bind.return_value.execute.call_args_list
         assert len(bind_execute_calls) == 1, "the repair must run through op.get_bind().execute exactly once"
         repair_sql = str(bind_execute_calls[0].args[0].text)
-        assert repair_sql.startswith("UPDATE pipeline_snapshots SET default_autonomy_level = max_autonomy_level"), (
-            repair_sql
-        )
+        assert repair_sql.startswith("UPDATE pipeline_snapshots SET default_autonomy_level = max_autonomy_level"), repair_sql
         assert logger.info.call_count == 1, "the repair rowcount must be logged exactly once"
         fmt, *args = logger.info.call_args.args
         assert "%s" in fmt or "%d" in fmt, fmt
@@ -273,9 +261,7 @@ class TestModelParity:
         assert predicate == str(_model_check().sqltext), (predicate, str(_model_check().sqltext))
 
     def test_migration_and_model_declare_the_same_name(self) -> None:
-        declared = {
-            c.name for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None
-        }
+        declared = {c.name for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None}
         assert _CONSTRAINT in declared, "model missing the constraint"
         assert _CONSTRAINT in _source(), "migration missing the constraint"
 

@@ -120,10 +120,7 @@ class TestModelParity:
     def test_model_declares_the_same_column(self) -> None:
         """Model and migration ship the column in the SAME change."""
         column = Run.__table__.columns.get(_COLUMN_NAME)
-        assert column is not None, (
-            f"Run must declare {_COLUMN_NAME} to stay in parity with migration 0307 — "
-            "a migration/model column drift is a review block"
-        )
+        assert column is not None, f"Run must declare {_COLUMN_NAME} to stay in parity with migration 0307 — a migration/model column drift is a review block"
         # NullType is the generic stand-in SQLAlchemy uses before dialect
         # resolution; the model's declared type must be Boolean.
         assert isinstance(column.type, Boolean), f"expected Boolean, got {type(column.type)!r}"

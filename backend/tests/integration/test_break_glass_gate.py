@@ -80,9 +80,7 @@ async def _boot_gate(
                 await asyncio.sleep(backoffs[attempt])
     else:
         if mode == "fail":
-            raise _BootGateError(
-                f"connectivity probe failed after {attempts} attempts (backoff {backoffs}): {last_error}"
-            ) from last_error
+            raise _BootGateError(f"connectivity probe failed after {attempts} attempts (backoff {backoffs}): {last_error}") from last_error
 
     violations = await allow_list_violations()
     if violations:

@@ -63,11 +63,7 @@ def _sign_licence(*, tier: str, features: list[str], expires_at: datetime, org_i
         "org_id": org_id,
     }
     sig_bytes = bytes.fromhex(sign_primitive(payload, _TEST_KP["private_key"]))
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -127,10 +123,7 @@ async def _create_org(
     org_id = org_id or uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, CAST(:settings AS json))"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, CAST(:settings AS json))"),
             {
                 "id": str(org_id),
                 "name": f"SSO Licence {org_id.hex[:8]}",
@@ -187,10 +180,7 @@ async def _create_account(engine: AsyncEngine, *, email: str) -> uuid.UUID:
     account_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true)"),
             {
                 "id": str(account_id),
                 "email": email,
@@ -204,10 +194,7 @@ async def _create_account(engine: AsyncEngine, *, email: str) -> uuid.UUID:
 async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role, joined_at) "
-                "VALUES (:id, :aid, :oid, :role, :joined)"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role, joined_at) VALUES (:id, :aid, :oid, :role, :joined)"),
             {
                 "id": str(uuid.uuid4()),
                 "aid": str(account_id),
@@ -298,9 +285,7 @@ async def _post_auth_plan(app_engine: AsyncEngine, org_id: uuid.UUID) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def test_expiry_inside_the_delivery_grace_keeps_team_capability(
-    sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
-) -> None:
+async def test_expiry_inside_the_delivery_grace_keeps_team_capability(sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     """A key that expired 1 day ago is inside the 14-day grace: Team is retained.
 
     The grace covers key DELIVERY (a self-hosted renewal is minted at the
@@ -333,9 +318,7 @@ async def test_expiry_inside_the_delivery_grace_keeps_team_capability(
     assert plan.feature_enabled("sso") is True
 
 
-async def test_expiry_past_the_delivery_grace_degrades_but_does_not_strand(
-    sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
-) -> None:
+async def test_expiry_past_the_delivery_grace_degrades_but_does_not_strand(sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     """A key that expired 15 days ago is past the grace: Team is off, sign-in is not.
 
     The other side of the boundary. Authentication is NOT the paid capability,
@@ -365,9 +348,7 @@ async def test_expiry_past_the_delivery_grace_degrades_but_does_not_strand(
     assert plan.feature_enabled("sso") is False
 
 
-async def test_absent_licence_still_lets_sso_users_reach_sign_in(
-    sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
-) -> None:
+async def test_absent_licence_still_lets_sso_users_reach_sign_in(sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     """No licence of any scope: same degraded posture as an expired one."""
     org_id = await _create_org(db_engine, settings_json={})
     provider_id = f"oidc-{org_id.hex[:8]}"
@@ -392,9 +373,7 @@ async def test_absent_licence_still_lets_sso_users_reach_sign_in(
 # ---------------------------------------------------------------------------
 
 
-async def test_admin_can_log_in_and_reach_the_licence_screen_past_grace(
-    sso_client: AsyncClient, db_engine: AsyncEngine
-) -> None:
+async def test_admin_can_log_in_and_reach_the_licence_screen_past_grace(sso_client: AsyncClient, db_engine: AsyncEngine) -> None:
     """INVARIANT: a lapsed licence never locks an administrator out.
 
     There is no licence state in which no administrator can reach the licence
@@ -463,9 +442,7 @@ async def test_non_admin_past_grace_gets_no_team_capability(sso_client: AsyncCli
 # ---------------------------------------------------------------------------
 
 
-async def test_org_scoped_team_key_enables_sso_for_its_org(
-    sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine
-) -> None:
+async def test_org_scoped_team_key_enables_sso_for_its_org(sso_client: AsyncClient, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
     """The paid org-level key is recognised pre-auth, without any system key."""
     org_id = uuid.uuid4()
     valid_key = _sign_licence(
@@ -493,9 +470,7 @@ async def test_org_scoped_team_key_enables_sso_for_its_org(
 # ---------------------------------------------------------------------------
 
 
-async def test_multi_org_instance_uses_system_scope_not_a_stray_org_key(
-    multi_org_sso_client: AsyncClient, db_engine: AsyncEngine
-) -> None:
+async def test_multi_org_instance_uses_system_scope_not_a_stray_org_key(multi_org_sso_client: AsyncClient, db_engine: AsyncEngine) -> None:
     """A genuine multi-org instance has no single trusted tenant.
 
     The former resolver returned ``org=None`` for >1 login-active org but the

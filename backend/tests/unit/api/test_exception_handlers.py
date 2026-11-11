@@ -357,11 +357,7 @@ class TestAllowHeaderOnLiveApp:
         assert response.status_code == 405
         assert response.json()["type"] == "urn:problem:modulo:method_not_allowed"
         advertised = {method.strip().upper() for method in response.headers["allow"].split(",") if method.strip()}
-        declared = {
-            method.upper()
-            for method in app.openapi()["paths"][path]
-            if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
-        }
+        declared = {method.upper() for method in app.openapi()["paths"][path] if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}}
         # HEAD/OPTIONS are framework-implied and absent from the document.
         assert declared - {"HEAD", "OPTIONS"} <= advertised
         assert advertised - declared <= {"HEAD", "OPTIONS"}

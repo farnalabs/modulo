@@ -40,8 +40,7 @@ def _seed_data_dir(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     (tmp_path / "launcher.log").write_text(
-        f"boot ok; url=postgresql://modulo:{POSTGRES_PASSWORD}@127.0.0.1:15432/postgres "
-        f"redis://:{REDIS_PASSWORD}:16379/0\n",
+        f"boot ok; url=postgresql://modulo:{POSTGRES_PASSWORD}@127.0.0.1:15432/postgres redis://:{REDIS_PASSWORD}:16379/0\n",
         encoding="utf-8",
     )
     (log_dir / "postgres.log").write_text(
@@ -110,11 +109,7 @@ def test_redact_text_masks_seeded_values_and_sensitive_kv() -> None:
 
 def test_report_zip_contains_no_secret_value(tmp_path: Path) -> None:
     _seed_data_dir(tmp_path)
-    doctor_output = (
-        "modulo doctor — data dir: <dir>\n"
-        f"  [ok  ] postgres password diagnostic {POSTGRES_PASSWORD}\n"
-        f"  [ok  ] redis {REDIS_PASSWORD}\n"
-    )
+    doctor_output = f"modulo doctor — data dir: <dir>\n  [ok  ] postgres password diagnostic {POSTGRES_PASSWORD}\n  [ok  ] redis {REDIS_PASSWORD}\n"
     out_path = build_report(tmp_path, tmp_path / "report.zip", doctor_output=doctor_output)
     with zipfile.ZipFile(out_path) as archive:
         names = archive.namelist()

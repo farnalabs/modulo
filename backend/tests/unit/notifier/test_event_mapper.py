@@ -194,8 +194,7 @@ _TEMPLATE_CASES: dict[str, tuple[dict[str, object], str, str, str | None]] = {
     "hitl_deadline_warning": (
         {"gate_label": "Security sign-off", "minutes_remaining": 3},
         "HITL review deadline approaching — my-pipeline",
-        'HITL gate "Security sign-off" on "my-pipeline" is due in 3 minutes. '
-        "Unreviewed, the run is cancelled at the deadline.",
+        'HITL gate "Security sign-off" on "my-pipeline" is due in 3 minutes. Unreviewed, the run is cancelled at the deadline.',
         f"/runs/{_PAYLOAD['run_id']}",
     ),
     # No action URL; formats pipeline_name.
@@ -216,8 +215,7 @@ _TEMPLATE_CASES: dict[str, tuple[dict[str, object], str, str, str | None]] = {
     "hitl_approve_sweep_suspected": (
         {"actor": str(_ACTOR), "approve_count": 6, "distinct_pipeline_count": 3, "window_seconds": 60},
         "HITL approve sweep suspected",
-        f"6 HITL reviews across 3 pipelines were approved by actor {_ACTOR} "
-        "within 60 seconds — possible bulk-approve sweep.",
+        f"6 HITL reviews across 3 pipelines were approved by actor {_ACTOR} within 60 seconds — possible bulk-approve sweep.",
         None,
     ),
     # The enforcement-gap alert pages the operator straight to the run.
@@ -231,16 +229,14 @@ _TEMPLATE_CASES: dict[str, tuple[dict[str, object], str, str, str | None]] = {
     "guardrail_kill_switch": (
         {},
         "Guardrails downgraded to observe (kill-switch enabled)",
-        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
-        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact.",
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now observe-only (shadow mode). Guardrails are computed and logged but never block or redact.",
         None,
     ),
     # An unexpected skip pages the operator straight to the run.
     "guardrail_unexpected_skip": (
         {"guardrail": "evaded", "reason": "cap_evaded"},
         "Guardrail skipped unexpectedly — evaded",
-        'Guardrail "evaded" was skipped for an unexpected reason (cap_evaded) — not explained by '
-        "a soft-deleted pinned guardrail. See the run for details.",
+        'Guardrail "evaded" was skipped for an unexpected reason (cap_evaded) — not explained by a soft-deleted pinned guardrail. See the run for details.',
         f"/runs/{_PAYLOAD['run_id']}",
     ),
 }
@@ -288,9 +284,7 @@ async def test_trigger_deactivated_ongoing_copy_unchanged(mapper: NotificationEv
     _, mock_create = await _call(mapper, "trigger_deactivated", payload=payload)
     kwargs = mock_create.await_args.kwargs
     assert kwargs["title"] == "Ongoing trigger auto-deactivated — my-pipeline"
-    assert kwargs["body"] == (
-        'Ongoing trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5).'
-    )
+    assert kwargs["body"] == ('Ongoing trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5).')
     assert kwargs["action_url"] is None
 
 
@@ -313,10 +307,7 @@ async def test_trigger_deactivated_cron_copy_is_type_accurate(mapper: Notificati
     _, mock_create = await _call(mapper, "trigger_deactivated", payload=payload)
     kwargs = mock_create.await_args.kwargs
     assert kwargs["title"] == "Cron trigger auto-deactivated — my-pipeline"
-    assert kwargs["body"] == (
-        'Cron trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5). '
-        "Auto-deactivation was enabled for this trigger via no_delivery_auto_deactivate."
-    )
+    assert kwargs["body"] == ('Cron trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5). Auto-deactivation was enabled for this trigger via no_delivery_auto_deactivate.')
     assert kwargs["action_url"] is None
 
 
@@ -382,9 +373,7 @@ async def test_missing_pipeline_name_key_does_not_crash(mapper: NotificationEven
 # ---------------------------------------------------------------------------
 
 
-async def test_ttl_hours_none_passes_no_expiry(
-    mapper: NotificationEventMapper, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_ttl_hours_none_passes_no_expiry(mapper: NotificationEventMapper, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config entry with ttl_hours=None passes no expires_at.
 
     No shipped event uses None since FAR-2138 retired ``system_announcement``;

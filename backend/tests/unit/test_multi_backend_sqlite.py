@@ -184,7 +184,5 @@ class TestSqliteMultiBackend:
 
             # Existing rows written before the fallback still deserialise:
             # the JSON column stores plain JSON text on SQLite.
-            raw = (
-                await session.execute(text("SELECT value FROM evidence WHERE key = 'capability_present'"))
-            ).scalar_one()
+            raw = (await session.execute(text("SELECT value FROM evidence WHERE key = 'capability_present'"))).scalar_one()
             assert isinstance(raw, str)

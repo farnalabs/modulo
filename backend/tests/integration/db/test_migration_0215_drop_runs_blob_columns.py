@@ -104,9 +104,7 @@ async def drop_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -116,15 +114,10 @@ async def drop_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     try:
         yield iso_url
     finally:
-        admin_engine = create_async_engine(
-            db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"}
-        )
+        admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
         async with admin_engine.connect() as conn:
             await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :n AND pid <> pg_backend_pid()"
-                ),
+                text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()"),
                 {"n": db_name},
             )
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
@@ -145,25 +138,15 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                    "VALUES (:id, 'drop@example.com', 'drop', 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'drop@example.com', 'drop', 'hash', 'local', true)"),
                 {"id": str(aid)},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'drop', 'drop', '{}'::json)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'drop', 'drop', '{}'::json)"),
                 {"id": str(oid)},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :aid, 'drop pipeline', 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :aid, 'drop pipeline', 10, 30, 300, '{}'::json, '[]'::json)"),
                 {"id": str(pid), "oid": str(oid), "aid": str(aid)},
             )
             await conn.execute(
@@ -229,11 +212,7 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
                         # shapes inlined as ::jsonb casts; run ids/keys are
                         # bound parameters).
                         "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "  # noqa: S608 - constant test literals, bound params for values
-                        "status, run_number, input_hash, langgraph_thread_id, created_at"
-                        + (", outputs_json, node_telemetry_json, raw_output_markers" if blobs_sql else "")
-                        + ") VALUES (:id, :oid, :pid, :sid, 'manual', :status, :run_number, 'ih', :thread, :created"
-                        + blobs_sql
-                        + ")"
+                        "status, run_number, input_hash, langgraph_thread_id, created_at" + (", outputs_json, node_telemetry_json, raw_output_markers" if blobs_sql else "") + ") VALUES (:id, :oid, :pid, :sid, 'manual', :status, :run_number, 'ih', :thread, :created" + blobs_sql + ")"
                     ),
                     {
                         "id": str(run_id),
@@ -253,21 +232,13 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
             # attempt key as the legacy dict with DIFFERENT content -> the
             # markers-subset parity step must abort on attempt 3.
             await conn.execute(
-                text(
-                    "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, "
-                    "raw_output_markers, created_at, updated_at) "
-                    "VALUES (:rid, 'n1', :key, :oid, CAST(:val AS jsonb), now(), now())"
-                ),
+                text("INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, raw_output_markers, created_at, updated_at) VALUES (:rid, 'n1', :key, :oid, CAST(:val AS jsonb), now(), now())"),
                 {"rid": str(run_c), "key": marker_c, "oid": str(oid), "val": '{"raw": "NEW-TABLE-MARK"}'},
             )
             # runB's pre-existing __final__ row diverges from the legacy blob
             # -> the parity step overwrites it LEGACY-AUTHORITATIVELY.
             await conn.execute(
-                text(
-                    "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, "
-                    "outputs_json, created_at, updated_at) "
-                    "VALUES (:rid, 'n1', '__final__', :oid, CAST(:out AS jsonb), now(), now())"
-                ),
+                text("INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json, created_at, updated_at) VALUES (:rid, 'n1', '__final__', :oid, CAST(:out AS jsonb), now(), now())"),
                 {"rid": str(run_b), "oid": str(oid), "out": '{"n1": {"v": "NEW"}}'},
             )
     finally:
@@ -307,10 +278,7 @@ async def _final_rows(db_url: str, run_id: uuid.UUID) -> list[tuple[str, str, An
     async with create_async_engine(db_url, poolclass=NullPool).connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT node_id, attempt_key, outputs_json, node_telemetry_json, raw_output_markers "
-                    "FROM run_node_outputs WHERE run_id = :rid ORDER BY node_id, attempt_key"
-                ),
+                text("SELECT node_id, attempt_key, outputs_json, node_telemetry_json, raw_output_markers FROM run_node_outputs WHERE run_id = :rid ORDER BY node_id, attempt_key"),
                 {"rid": str(run_id)},
             )
         ).all()
@@ -368,10 +336,7 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "UPDATE run_node_outputs SET raw_output_markers = CAST(:v AS jsonb) "
-                    "WHERE run_id = :rid AND attempt_key = :k"
-                ),
+                text("UPDATE run_node_outputs SET raw_output_markers = CAST(:v AS jsonb) WHERE run_id = :rid AND attempt_key = :k"),
                 {
                     "v": '{"raw": "LEGACY-MARK"}',
                     "rid": str(ids["runs"]["run_c"]),
@@ -386,26 +351,9 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     assert await _alembic_version(db_url) == MIGRATION_REV
 
     async with create_async_engine(db_url, poolclass=NullPool).connect() as conn:
-        cols = {
-            r[0]
-            for r in (
-                await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'runs'"))
-            ).all()
-        }
-        indexes = {
-            r[0] for r in (await conn.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))).all()
-        }
-        tables = {
-            r[0]
-            for r in (
-                await conn.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_name = 'run_node_outputs_quarantine'"
-                    )
-                )
-            ).all()
-        }
+        cols = {r[0] for r in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'runs'"))).all()}
+        indexes = {r[0] for r in (await conn.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))).all()}
+        tables = {r[0] for r in (await conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_name = 'run_node_outputs_quarantine'"))).all()}
     assert not ({*RUN_LEGACY_COLUMNS} & cols), "the three runs blob columns must be GONE post-0215"
     assert SWEEP_INDEX not in indexes, "the 0193 sweep index must be dropped with the columns"
     assert tables == {"run_node_outputs_quarantine"}, "the quarantine table survives"
@@ -432,9 +380,7 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     assert len(unknown) == 1, "the sentinel-squatting key must land in a '__unknown__' node row"
     assert unknown[0][1] == "legacy_chunk:weird"
     assert unknown[0][4] == "payload"
-    assert not [r for r in rows if r[1] == "__final__"], (
-        "the unknown-status population must repair through the MARKERS leg ONLY — 0192's twin geometry"
-    )
+    assert not [r for r in rows if r[1] == "__final__"], "the unknown-status population must repair through the MARKERS leg ONLY — 0192's twin geometry"
 
     # Downgrade NEVER rewinds. (Programmatic command.downgrade() leaves
     # cmd_opts unset and env.py's upgrade-at-head fast-path would skip the

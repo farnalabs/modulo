@@ -31,9 +31,7 @@ from alembic.operations import Operations
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_NAME = "0340_drop_assistant_ui_driving_flag_row"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0339_triggers_name_not_null"
 _RETIRED_NAME = "assistant_ui_driving"
 _OTHER_NAME = "assistant"
@@ -53,25 +51,13 @@ def _scaffold(conn: sa.Connection) -> None:
     """The pre-migration catalog shape plus one retired row and one live row."""
     conn.execute(sa.text("CREATE TABLE tier_catalog (tier_id TEXT PRIMARY KEY)"))
     conn.execute(sa.text("INSERT INTO tier_catalog (tier_id) VALUES ('community')"))
+    conn.execute(sa.text("CREATE TABLE feature_flag_catalog (name TEXT PRIMARY KEY, description TEXT, tier_id TEXT NOT NULL REFERENCES tier_catalog (tier_id), depends_on TEXT, is_active BOOLEAN DEFAULT 1)"))
     conn.execute(
-        sa.text(
-            "CREATE TABLE feature_flag_catalog ("
-            "name TEXT PRIMARY KEY, description TEXT, tier_id TEXT NOT NULL "
-            "REFERENCES tier_catalog (tier_id), depends_on TEXT, is_active BOOLEAN DEFAULT 1)"
-        )
-    )
-    conn.execute(
-        sa.text(
-            "INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) "
-            "VALUES (:name, 'retired', 'community', NULL, 1)"
-        ),
+        sa.text("INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) VALUES (:name, 'retired', 'community', NULL, 1)"),
         {"name": _RETIRED_NAME},
     )
     conn.execute(
-        sa.text(
-            "INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) "
-            "VALUES (:name, 'live', 'community', NULL, 1)"
-        ),
+        sa.text("INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) VALUES (:name, 'live', 'community', NULL, 1)"),
         {"name": _OTHER_NAME},
     )
 
@@ -136,13 +122,7 @@ class TestUpgrade:
         with sqlite_engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE tier_catalog (tier_id TEXT PRIMARY KEY)"))
             conn.execute(sa.text("INSERT INTO tier_catalog (tier_id) VALUES ('community')"))
-            conn.execute(
-                sa.text(
-                    "CREATE TABLE feature_flag_catalog ("
-                    "name TEXT PRIMARY KEY, description TEXT, tier_id TEXT NOT NULL, "
-                    "depends_on TEXT, is_active BOOLEAN)"
-                )
-            )
+            conn.execute(sa.text("CREATE TABLE feature_flag_catalog (name TEXT PRIMARY KEY, description TEXT, tier_id TEXT NOT NULL, depends_on TEXT, is_active BOOLEAN)"))
         _run(sqlite_engine, _load_migration())
         assert not _names(sqlite_engine)
 

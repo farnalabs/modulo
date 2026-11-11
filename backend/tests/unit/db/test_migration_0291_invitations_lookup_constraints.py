@@ -170,9 +170,7 @@ class TestPredicateParity:
         conditions = _live_conditions(Invitation)
         rendered = " AND ".join(str(c) for c in conditions[:2])
         normalized = rendered.replace('"invitations".', "").replace("invitations.", "")
-        assert normalized == _LIVE_WHERE, (
-            f"migration predicate drifted from _live_conditions: {normalized!r} != {_LIVE_WHERE!r}"
-        )
+        assert normalized == _LIVE_WHERE, f"migration predicate drifted from _live_conditions: {normalized!r} != {_LIVE_WHERE!r}"
 
     def test_expiry_range_term_is_not_part_of_the_partial_predicate(self) -> None:
         """``expires_at > now()`` cannot be an index condition on the composite
@@ -234,11 +232,7 @@ class TestModelParity:
 def _insert_invitation(engine: object, org_role: str, token_hash: str) -> None:
     with engine.connect() as conn:  # type: ignore[attr-defined]
         conn.execute(
-            text(
-                "INSERT INTO invitations (id, organisation_id, email, display_name, "
-                "org_role, token_hash, invited_by, expires_at) "
-                "VALUES (:id, :org, :email, :name, :role, :token, :by, :expires)"
-            ),
+            text("INSERT INTO invitations (id, organisation_id, email, display_name, org_role, token_hash, invited_by, expires_at) VALUES (:id, :org, :email, :name, :role, :token, :by, :expires)"),
             {
                 "id": uuid.uuid4().hex,
                 "org": uuid.uuid4().hex,

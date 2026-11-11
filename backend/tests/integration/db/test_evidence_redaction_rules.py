@@ -36,15 +36,7 @@ from farna.db.models.evidence_redaction_rule import EvidenceRedactionRule
 
 pytestmark = pytest.mark.integration
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0320_evidence_redaction_rules.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0320_evidence_redaction_rules.py"
 
 _BOTH_CLASSES = frozenset({"sensitive_output", "internal_metadata"})
 
@@ -90,11 +82,7 @@ async def _insert_rule(
     rule_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evidence_redaction_rules "
-                "(id, organisation_id, key_pattern, role, redacted_fields) "
-                "VALUES (:id, :org, :kp, :role, :fields)"
-            ),
+            text("INSERT INTO evidence_redaction_rules (id, organisation_id, key_pattern, role, redacted_fields) VALUES (:id, :org, :kp, :role, :fields)"),
             {"id": str(rule_id), "org": str(org_id), "kp": key_pattern, "role": role, "fields": redacted_fields},
         )
     return rule_id
@@ -105,9 +93,7 @@ async def _insert_rule(
 # ---------------------------------------------------------------------------
 
 
-async def test_catch_all_seed_redacts_unclassified_key_for_viewer(
-    db_engine: AsyncEngine, db_session: AsyncSession
-) -> None:
+async def test_catch_all_seed_redacts_unclassified_key_for_viewer(db_engine: AsyncEngine, db_session: AsyncSession) -> None:
     org_id = await _create_org(db_engine)
 
     # Run the migration's OWN seed statement (idempotent, guarded by NOT EXISTS).

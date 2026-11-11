@@ -32,20 +32,12 @@ async def _setup_org(engine: AsyncEngine):
         )
         acc_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
         )
         pipe_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
         )
     return org_id, acc_id, pipe_id
@@ -55,11 +47,7 @@ async def _insert_eval(engine, org_id, pipe_id, acc_id, node_id, eval_type="rege
     eval_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
-                "node_id, eval_type, config_json, version) "
-                "VALUES (:id, :oid, :pid, :aid, :nid, :et, '{}'::json, 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, eval_type, config_json, version) VALUES (:id, :oid, :pid, :aid, :nid, :et, '{}'::json, 1)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -76,10 +64,7 @@ async def _insert_gate(engine, org_id, eval_id, node_id, action="warn"):
     review_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                "action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"),
             {"id": str(review_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
         )
     return review_id
@@ -89,10 +74,7 @@ async def _insert_decision(engine, org_id, review_id, eval_id):
     decision_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
-                "VALUES (:id, :oid, :pgid, :eid)"
-            ),
+            text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) VALUES (:id, :oid, :pgid, :eid)"),
             {"id": str(decision_id), "oid": str(org_id), "pgid": str(review_id), "eid": str(eval_id)},
         )
     return decision_id
@@ -167,10 +149,7 @@ class TestC12CrossOrgFKRejection:
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO policy_gates (id, organisation_id, eval_id, "
-                        "node_id, action, version) VALUES (:id, :oid, :eid, :nid, 'warn', 1)"
-                    ),
+                    text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:id, :oid, :eid, :nid, 'warn', 1)"),
                     {"id": str(uuid.uuid4()), "oid": str(org_b), "eid": str(eval_a), "nid": str(node_a)},
                 )
 
@@ -188,10 +167,7 @@ class TestC12CrossOrgFKRejection:
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
-                        "VALUES (:id, :oid, :pgid, :eid)"
-                    ),
+                    text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) VALUES (:id, :oid, :pgid, :eid)"),
                     # gate_a belongs to org_a -- invalid for org_b's organisation_id.
                     {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_a), "eid": str(eval_b)},
                 )
@@ -210,10 +186,7 @@ class TestC12CrossOrgFKRejection:
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
-                        "VALUES (:id, :oid, :pgid, :eid)"
-                    ),
+                    text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) VALUES (:id, :oid, :pgid, :eid)"),
                     # eval_a belongs to org_a -- invalid for org_b's organisation_id.
                     {"id": str(uuid.uuid4()), "oid": str(org_b), "pgid": str(gate_b), "eid": str(eval_a)},
                 )
@@ -355,12 +328,7 @@ class TestC16EvalSchemaContract:
         from farna.db.models.eval import Eval
 
         async with db_engine.connect() as connection:
-            db_columns = await connection.run_sync(
-                lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("evals")}
-            )
+            db_columns = await connection.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("evals")})
         orm_columns = {column.name for column in Eval.__table__.columns}
         missing_in_db = orm_columns - db_columns
-        assert not missing_in_db, (
-            f"ORM columns absent from migrated schema: {sorted(missing_in_db)}. "
-            f"ORM: {sorted(orm_columns)}; DB: {sorted(db_columns)}"
-        )
+        assert not missing_in_db, f"ORM columns absent from migrated schema: {sorted(missing_in_db)}. ORM: {sorted(orm_columns)}; DB: {sorted(db_columns)}"

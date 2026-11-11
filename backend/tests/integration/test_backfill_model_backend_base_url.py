@@ -55,10 +55,7 @@ async def _create_account(engine: AsyncEngine) -> uuid.UUID:
     account_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_id), "email": f"backfill-{account_id.hex[:12]}@example.com", "name": "Backfill"},
         )
     return account_id
@@ -68,11 +65,7 @@ async def _create_team(engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.
     team_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO teams (id, organisation_id, name, account_id, "
-                "notification_endpoints, settings) "
-                "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json)"
-            ),
+            text("INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json)"),
             {
                 "id": str(team_id),
                 "oid": str(org_id),
@@ -122,9 +115,7 @@ async def _create_backend(
         )
         if seed_secret is not None:
             await conn.execute(
-                text(
-                    "INSERT INTO secrets (id, organisation_id, key, encrypted_value) VALUES (:id, :oid, :key, :value)"
-                ),
+                text("INSERT INTO secrets (id, organisation_id, key, encrypted_value) VALUES (:id, :oid, :key, :value)"),
                 {
                     "id": str(uuid.uuid4()),
                     "oid": str(org_id),
@@ -180,10 +171,7 @@ async def _secret_count(engine: AsyncEngine, org_id: uuid.UUID, backend_id: uuid
 async def _audit_payloads(engine: AsyncEngine, org_id: uuid.UUID, event_type: str) -> list[dict[str, Any]]:
     async with engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT payload_json FROM audit_events WHERE organisation_id = :oid AND event_type = :etype "
-                "ORDER BY created_at"
-            ),
+            text("SELECT payload_json FROM audit_events WHERE organisation_id = :oid AND event_type = :etype ORDER BY created_at"),
             {"oid": str(org_id), "etype": event_type},
         )
         raw = [row[0] for row in result.all()]

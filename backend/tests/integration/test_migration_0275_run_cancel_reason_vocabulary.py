@@ -60,11 +60,7 @@ PREV_REV = "0274_policy_gate_pin_fingerprint_operator_control"
 
 # The constraint EXACTLY as the deployed pre-rename 0260 created it — the
 # world FAR-1104's in-place edit of that shipped migration never repaired.
-_DEPLOYED_OLD_CHECK = (
-    "ALTER TABLE public.runs ADD CONSTRAINT ck_runs_cancel_reason CHECK ("
-    "cancel_reason IS NULL OR "
-    "cancel_reason IN ('user_requested', 'agent_requested', 'hitl_gate_expired', 'hitl_gate_missing'))"
-)
+_DEPLOYED_OLD_CHECK = "ALTER TABLE public.runs ADD CONSTRAINT ck_runs_cancel_reason CHECK (cancel_reason IS NULL OR cancel_reason IN ('user_requested', 'agent_requested', 'hitl_gate_expired', 'hitl_gate_missing'))"
 
 _GRACE_SECONDS = 3600
 
@@ -108,9 +104,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     iso_url = _swap_db_name(db_url, db_name)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     monkeypatch.setenv("DATABASE_URL", iso_url)
@@ -206,14 +200,7 @@ async def _cancel_reason_of(engine: AsyncEngine, run_id: uuid.UUID) -> str | Non
 async def _constraint_state(engine: AsyncEngine) -> tuple[str, bool]:
     """``(pg_get_constraintdef, convalidated)`` for ``ck_runs_cancel_reason``."""
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint "
-                    "WHERE conname = 'ck_runs_cancel_reason' AND conrelid = 'public.runs'::regclass"
-                )
-            )
-        ).first()
+        row = (await conn.execute(text("SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint WHERE conname = 'ck_runs_cancel_reason' AND conrelid = 'public.runs'::regclass"))).first()
     assert row is not None, "ck_runs_cancel_reason must exist after the migration"
     return row[0], bool(row[1])
 

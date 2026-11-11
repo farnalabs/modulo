@@ -94,9 +94,7 @@ def test_dispatch_step_sets_github_token() -> None:
             break
     assert dispatch_step is not None, "Dispatch the Branch Fixer step missing"
     env = dispatch_step.get("env", {})
-    assert "GH_TOKEN" in env, (
-        "Dispatch step env must set GH_TOKEN so the in-flight dedup `gh run list` can auth (FAR-805 review)"
-    )
+    assert "GH_TOKEN" in env, "Dispatch step env must set GH_TOKEN so the in-flight dedup `gh run list` can auth (FAR-805 review)"
 
 
 # --- manual-delivery label honour ---
@@ -226,9 +224,7 @@ def test_dispatch_failure_posts_a_pr_comment() -> None:
     429, concurrent-run limit) and the conflicted PR carried nothing saying
     reconciliation had been attempted and refused."""
     block = _dispatch_step_block()
-    assert 'gh pr comment "$PR_NUM"' in block, (
-        "Dispatch-failure arm must post a `gh pr comment` on the affected PR (FAR-1949)"
-    )
+    assert 'gh pr comment "$PR_NUM"' in block, "Dispatch-failure arm must post a `gh pr comment` on the affected PR (FAR-1949)"
 
 
 def test_dispatch_failure_comment_says_why_and_links_the_run() -> None:
@@ -241,33 +237,23 @@ def test_dispatch_failure_comment_says_why_and_links_the_run() -> None:
     # (FAR-2120 follow-up, PR #2133). The cap is now configurable
     # (DISPATCH_MAX_ATTEMPTS, default 8), so the message must not pin a number
     # — it states why by reporting the last HTTP status/detail instead.
-    why = (
-        "could NOT dispatch the Branch Fixer for this PR: every webhook attempt "
-        "failed (last HTTP ${LAST_HTTP}: ${DETAIL})"
-    )
+    why = "could NOT dispatch the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL})"
     assert why in block, "Undelivered-notification body must state why (HTTP status) (FAR-1949)"
-    assert "actions/runs/${{ github.run_id }}" in block, (
-        "Undelivered-notification body must carry the run URL (FAR-1949)"
-    )
+    assert "actions/runs/${{ github.run_id }}" in block, "Undelivered-notification body must carry the run URL (FAR-1949)"
 
 
 def test_dispatch_failure_error_names_the_pr() -> None:
     """FAR-1949: the ::error:: must name the affected PR so the line is
     attributable rather than an anonymous count."""
     block = _dispatch_step_block()
-    assert (
-        "::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: "
-        "${DETAIL}) after retries — this PR was never handed to the fixer."
-    ) in block, "Dispatch-failure ::error:: must name the affected PR (FAR-1949)"
+    assert ("::error::Branch Fixer dispatch failed for PR #$PR_NUM (HTTP ${LAST_HTTP}: ${DETAIL}) after retries — this PR was never handed to the fixer.") in block, "Dispatch-failure ::error:: must name the affected PR (FAR-1949)"
 
 
 def test_dispatch_failure_escalates_when_the_comment_fails() -> None:
     """FAR-1949: if the durable comment itself cannot be posted, that gap must
     not be silent — an escalated ::error:: names the PR."""
     block = _dispatch_step_block()
-    assert "::error::PR #$PR_NUM: could not post the undelivered-notification comment either" in block, (
-        "Missing escalated ::error:: for a failed undelivered-notification comment (FAR-1949)"
-    )
+    assert "::error::PR #$PR_NUM: could not post the undelivered-notification comment either" in block, "Missing escalated ::error:: for a failed undelivered-notification comment (FAR-1949)"
 
 
 def test_dispatch_failure_keeps_the_loud_failure_and_can_comment() -> None:
@@ -291,16 +277,10 @@ def test_dispatch_failure_comment_is_idempotent_via_marker() -> None:
     marker and be skipped when that marker already exists — the same
     idempotency the manual-delivery note in this workflow uses."""
     block = _dispatch_step_block()
-    assert "<!-- pr-conflict-reconciler:undelivered-dispatch -->" in block, (
-        "Undelivered-dispatch comment must carry a dedup marker (FAR-1949 review)"
-    )
-    assert 'gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments' in block, (
-        "Undelivered-dispatch arm must check for an existing marker comment (FAR-1949 review)"
-    )
+    assert "<!-- pr-conflict-reconciler:undelivered-dispatch -->" in block, "Undelivered-dispatch comment must carry a dedup marker (FAR-1949 review)"
+    assert 'gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments' in block, "Undelivered-dispatch arm must check for an existing marker comment (FAR-1949 review)"
     assert "UNDELIVERED_MARKER" in block, "Marker must be used in the jq existence check (FAR-1949 review)"
-    assert "already carries an undelivered-dispatch note" in block, (
-        "Undelivered-dispatch arm must skip reposting when the marker exists (FAR-1949 review)"
-    )
+    assert "already carries an undelivered-dispatch note" in block, "Undelivered-dispatch arm must skip reposting when the marker exists (FAR-1949 review)"
 
 
 def test_dispatch_failure_escalation_names_the_comment_failure_separately() -> None:
@@ -310,6 +290,4 @@ def test_dispatch_failure_escalation_names_the_comment_failure_separately() -> N
     comment could not be posted."""
     block = _dispatch_step_block()
     assert "comment post failed" in block, "Escalated ::error:: must name the comment failure (FAR-1949 review)"
-    assert "the dispatch failure was webhook HTTP" in block, (
-        "Escalated ::error:: must label the webhook status as the dispatch failure (FAR-1949 review)"
-    )
+    assert "the dispatch failure was webhook HTTP" in block, "Escalated ::error:: must label the webhook status as the dispatch failure (FAR-1949 review)"

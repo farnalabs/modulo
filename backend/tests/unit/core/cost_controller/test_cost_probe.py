@@ -546,9 +546,7 @@ async def test_probe_org_happy_path_records_signals() -> None:
     with (
         patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()) as mock_rls,
         patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
-        patch(
-            "farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[ok_run, bad_run])
-        ) as mock_sample,
+        patch("farna.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[ok_run, bad_run])) as mock_sample,
         patch("farna.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
         patch("farna.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
         patch("farna.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
@@ -572,9 +570,7 @@ async def test_probe_org_happy_path_records_signals() -> None:
 async def test_probe_org_records_clamped_skip_and_missing_rows() -> None:
     """Marker runs bump the clamped counter; missing ledger rows bump the WATCH counter."""
     session = _make_session()
-    clamped_run = _make_sampled_run(
-        total="99999999.999999", breakdown=[{"total_clamped": True, "amount_usd": "5.000000"}]
-    )
+    clamped_run = _make_sampled_run(total="99999999.999999", breakdown=[{"total_clamped": True, "amount_usd": "5.000000"}])
     with (
         patch("farna.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
         patch("farna.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),

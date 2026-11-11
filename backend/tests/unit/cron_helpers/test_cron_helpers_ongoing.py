@@ -227,9 +227,7 @@ class TestCountOngoingRuns:
         awaiting_human run parked (excluded from ONGOING_ACTIVE_STATUSES) and a
         target of 1, the top-up still creates 1 run."""
         now = datetime.now(UTC)
-        session = _RoutedSession(
-            trigger=_make_trigger(max_concurrent_runs=1, config_json={"snapshot_id": str(uuid.uuid4())})
-        )
+        session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=1, config_json={"snapshot_id": str(uuid.uuid4())}))
         outcome: dict[str, Any] = {}
         created, create_run, _ = await _run_topup(session, now=now, in_flight=0, outcome=outcome)
 
@@ -257,9 +255,7 @@ class TestOngoingTopup:
             assert call.kwargs["result"] == "accepted"
             assert call.kwargs["run_id"] is not None
         # last_fired_at is stamped only when runs are created.
-        assert any(
-            "update triggers" in str(s).lower() and "last_fired_at" in str(s).lower() for s, _ in session.executed
-        )
+        assert any("update triggers" in str(s).lower() and "last_fired_at" in str(s).lower() for s, _ in session.executed)
 
     @pytest.mark.asyncio
     async def test_at_target_is_noop(self) -> None:
@@ -273,9 +269,7 @@ class TestOngoingTopup:
         assert outcome["in_flight"] == 3
         create_run.assert_not_called()
         log_event.assert_not_called()
-        assert not any("update triggers" in str(s).lower() for s, _ in session.executed), (
-            "no-op must not stamp last_fired_at"
-        )
+        assert not any("update triggers" in str(s).lower() for s, _ in session.executed), "no-op must not stamp last_fired_at"
 
     @pytest.mark.asyncio
     async def test_above_target_is_noop(self) -> None:
@@ -373,9 +367,7 @@ class TestOngoingTopup:
         assert outcome["reason"] == "spend_limit"
         assert log_event.await_count == 1
         assert log_event.await_args.kwargs["result"] == "spend_limit_reached"
-        assert any(
-            "update triggers" in str(s).lower() and "last_fired_at" in str(s).lower() for s, _ in session.executed
-        )
+        assert any("update triggers" in str(s).lower() and "last_fired_at" in str(s).lower() for s, _ in session.executed)
 
     @pytest.mark.asyncio
     async def test_spend_limit_below_creates_runs(self) -> None:
@@ -446,9 +438,7 @@ class TestOngoingTopup:
         session = _RoutedSession(trigger=_make_trigger())
         create_run = AsyncMock(side_effect=PipelineNotRunnableError(state="deleted", pipeline_id=uuid.uuid4()))
         outcome: dict[str, Any] = {}
-        created, mock_cr, log_event = await _run_topup(
-            session, now=now, in_flight=0, outcome=outcome, create_run=create_run
-        )
+        created, mock_cr, log_event = await _run_topup(session, now=now, in_flight=0, outcome=outcome, create_run=create_run)
         assert created == []
         assert mock_cr.await_count == 1
         assert log_event.await_count == 0
@@ -666,9 +656,7 @@ class TestFireOngoingTrigger:
         async def fake_count(s: Any, trigger_id: uuid.UUID) -> int:
             return committed_in_flight.get(str(trigger_id), 0)
 
-        async def fake_dispatch(
-            q: Any, org_id: uuid.UUID, run_ids: list[uuid.UUID], redis_client: Any = None
-        ) -> list[dict[str, Any]]:
+        async def fake_dispatch(q: Any, org_id: uuid.UUID, run_ids: list[uuid.UUID], redis_client: Any = None) -> list[dict[str, Any]]:
             committed_in_flight[str(TRIGGER_ID)] = len(run_ids)
             return [{"run_id": str(rid), "outcome": "ok", "job_id": None} for rid in run_ids]
 
@@ -735,9 +723,7 @@ class TestFireOngoingTrigger:
                 latest_snapshot_id=str(uuid.uuid4()),
             )
 
-        stats_sets = [
-            c for c in redis_client.set.await_args_list if c.args[0] == f"{ch._ONGOING_STATS_KEY_PREFIX}:{TRIGGER_ID}"
-        ]
+        stats_sets = [c for c in redis_client.set.await_args_list if c.args[0] == f"{ch._ONGOING_STATS_KEY_PREFIX}:{TRIGGER_ID}"]
         assert stats_sets, "fire_ongoing_trigger must persist its per-trigger summary"
         assert stats_sets[0].kwargs["ex"] == ch._ONGOING_STATS_TTL_SECONDS
         # Derived from the ongoing cadence floor, not magic: a live trigger

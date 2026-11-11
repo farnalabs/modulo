@@ -175,9 +175,7 @@ class TestSystemMapMigratedSchema:
     async def test_migration_creates_indexes(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
             maps_indexes = await conn.run_sync(lambda c: {idx["name"] for idx in inspect(c).get_indexes("system_maps")})
-            revisions_indexes = await conn.run_sync(
-                lambda c: {idx["name"] for idx in inspect(c).get_indexes("system_map_revisions")}
-            )
+            revisions_indexes = await conn.run_sync(lambda c: {idx["name"] for idx in inspect(c).get_indexes("system_map_revisions")})
 
         for name in (
             "ix_system_maps_organisation_id",
@@ -230,21 +228,14 @@ class TestSystemMapMigratedSchema:
     @pytest.mark.asyncio
     async def test_owner_team_trigger_enforces_same_live_organisation(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
-            triggers = await conn.execute(
-                text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'system_maps'::regclass AND NOT tgisinternal")
-            )
+            triggers = await conn.execute(text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'system_maps'::regclass AND NOT tgisinternal"))
             trigger_names = {row[0] for row in triggers}
         assert "trg_system_maps_owner_team_tenant" in trigger_names
 
     @pytest.mark.asyncio
     async def test_reservation_run_trigger_enforces_same_organisation(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
-            triggers = await conn.execute(
-                text(
-                    "SELECT tgname FROM pg_trigger "
-                    "WHERE tgrelid = 'system_map_loop_reservations'::regclass AND NOT tgisinternal"
-                )
-            )
+            triggers = await conn.execute(text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'system_map_loop_reservations'::regclass AND NOT tgisinternal"))
             trigger_names = {row[0] for row in triggers}
         assert "trg_system_map_loop_reservations_run_id_tenant" in trigger_names
 
@@ -261,9 +252,7 @@ class TestSystemMapMigratedSchema:
             ("system_map_loop_reservations", "fk_system_map_loop_reservations_config"),
         ],
     )
-    async def test_migrated_composite_fk_matches_model(
-        self, db_engine: AsyncEngine, table: str, constraint_name: str
-    ) -> None:
+    async def test_migrated_composite_fk_matches_model(self, db_engine: AsyncEngine, table: str, constraint_name: str) -> None:
         model = next(model for model in _SYSTEM_MAP_MODELS if model.__tablename__ == table)
         model_constraint = next(item for item in model.__table__.constraints if item.name == constraint_name)
         expected_constrained = list(model_constraint.columns.keys())
@@ -311,9 +300,7 @@ class TestSystemMapMigratedSchema:
                 assert names <= actual, f"Unique constraints missing on {table}: {names - actual}"
 
     @pytest.mark.asyncio
-    async def test_migration_creates_partial_unique_indexes_on_attribution_bindings(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_migration_creates_partial_unique_indexes_on_attribution_bindings(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
             names = await conn.run_sync(_index_names, "system_map_attribution_bindings")
         assert "uq_attr_binding_trigger_per_pipeline_node" in names
@@ -327,10 +314,7 @@ class TestSystemMapMigratedSchema:
         async with db_engine.connect() as conn:
             actual = await conn.run_sync(_column_names, table)
         expected = {col.name for col in model.__table__.columns}
-        assert actual == expected, (
-            f"{table} model/migration drift: "
-            f"only-in-migration={sorted(actual - expected)}, only-in-model={sorted(expected - actual)}"
-        )
+        assert actual == expected, f"{table} model/migration drift: only-in-migration={sorted(actual - expected)}, only-in-model={sorted(expected - actual)}"
 
 
 @dataclass(frozen=True)
@@ -396,9 +380,7 @@ class TestSystemMapModelRoundTrip:
         )
 
     @pytest.mark.asyncio
-    async def test_published_revision_index_rejects_duplicate_published_rows(
-        self, db_session: AsyncSession, graph_parents: _GraphParents
-    ) -> None:
+    async def test_published_revision_index_rejects_duplicate_published_rows(self, db_session: AsyncSession, graph_parents: _GraphParents) -> None:
         first = graph_parents.revision
         first.status = "published"
         second = SystemMapRevision(
@@ -413,9 +395,7 @@ class TestSystemMapModelRoundTrip:
             await db_session.flush()
 
     @pytest.mark.asyncio
-    async def test_system_map_and_revision_round_trip(
-        self, db_session: AsyncSession, graph_parents: _GraphParents
-    ) -> None:
+    async def test_system_map_and_revision_round_trip(self, db_session: AsyncSession, graph_parents: _GraphParents) -> None:
         map_obj = graph_parents.map
         revision = graph_parents.revision
 
@@ -425,17 +405,13 @@ class TestSystemMapModelRoundTrip:
         assert loaded_map.account_id == graph_parents.account_id
         assert loaded_map.deleted_by is None
 
-        loaded_revision = (
-            await db_session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision.id))
-        ).scalar_one()
+        loaded_revision = (await db_session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision.id))).scalar_one()
         assert loaded_revision.revision_number == 1
         assert loaded_revision.content_json == {"test": "data"}
         assert loaded_revision.deleted_by is None
 
     @pytest.mark.asyncio
-    async def test_live_name_unique_index_rejects_duplicate_draft(
-        self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-    ) -> None:
+    async def test_live_name_unique_index_rejects_duplicate_draft(self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
         """Prove-the-fix: the DB guard behind the discovery check-then-insert.
 
         Two concurrent ``POST /system-maps/discover`` calls can both pass the
@@ -451,9 +427,7 @@ class TestSystemMapModelRoundTrip:
             await db_session.flush()
 
     @pytest.mark.asyncio
-    async def test_soft_deleted_map_name_can_be_reused(
-        self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-    ) -> None:
+    async def test_soft_deleted_map_name_can_be_reused(self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
         """The guard is partial: a retired map must not reserve its name forever."""
         name = f"Reusable Draft {uuid.uuid4().hex[:8]}"
         retired = SystemMap(
@@ -472,9 +446,7 @@ class TestSystemMapModelRoundTrip:
         assert replacement.id != retired.id
 
     @pytest.mark.asyncio
-    async def test_node_relationship_and_binding_round_trip(
-        self, db_session: AsyncSession, graph_parents: _GraphParents
-    ) -> None:
+    async def test_node_relationship_and_binding_round_trip(self, db_session: AsyncSession, graph_parents: _GraphParents) -> None:
         org_id = graph_parents.org_id
         revision = graph_parents.revision
         map_obj = graph_parents.map
@@ -512,30 +484,20 @@ class TestSystemMapModelRoundTrip:
         assert loaded_node.deleted_at is None
         assert loaded_node.deleted_by is None
 
-        loaded_rel = (
-            await db_session.execute(select(SystemMapRelationship).where(SystemMapRelationship.id == relationship.id))
-        ).scalar_one()
+        loaded_rel = (await db_session.execute(select(SystemMapRelationship).where(SystemMapRelationship.id == relationship.id))).scalar_one()
         assert loaded_rel.relationship_type == "flow"
         assert loaded_rel.deleted_by is None
 
-        loaded_binding = (
-            await db_session.execute(
-                select(SystemMapAttributionBinding).where(SystemMapAttributionBinding.id == binding.id)
-            )
-        ).scalar_one()
+        loaded_binding = (await db_session.execute(select(SystemMapAttributionBinding).where(SystemMapAttributionBinding.id == binding.id))).scalar_one()
         assert loaded_binding.system_map_id == map_obj.id
         assert loaded_binding.deleted_by is None
 
     @pytest.mark.asyncio
-    async def test_loop_config_attempt_and_reservation_round_trip(
-        self, db_session: AsyncSession, graph_parents: _GraphParents, test_snapshot: uuid.UUID
-    ) -> None:
+    async def test_loop_config_attempt_and_reservation_round_trip(self, db_session: AsyncSession, graph_parents: _GraphParents, test_snapshot: uuid.UUID) -> None:
         org_id = graph_parents.org_id
         loop_config = graph_parents.loop_config
 
-        loaded_config = (
-            await db_session.execute(select(SystemMapLoopConfig).where(SystemMapLoopConfig.id == loop_config.id))
-        ).scalar_one()
+        loaded_config = (await db_session.execute(select(SystemMapLoopConfig).where(SystemMapLoopConfig.id == loop_config.id))).scalar_one()
         assert loaded_config.budget_limit_usd == Decimal("100.00")
         assert loaded_config.deleted_by is None
 
@@ -547,13 +509,7 @@ class TestSystemMapModelRoundTrip:
         )
         run_id = uuid.uuid4()
         await db_session.execute(
-            text(
-                "INSERT INTO runs "
-                "(id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, "
-                "langgraph_thread_id) "
-                "VALUES (:id, :organisation_id, :pipeline_id, :snapshot_id, 'manual', :run_number, "
-                ":input_hash, :thread_id)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, langgraph_thread_id) VALUES (:id, :organisation_id, :pipeline_id, :snapshot_id, 'manual', :run_number, :input_hash, :thread_id)"),
             {
                 "id": run_id,
                 "organisation_id": org_id,
@@ -575,19 +531,11 @@ class TestSystemMapModelRoundTrip:
         db_session.add_all([attempt, reservation])
         await db_session.flush()
 
-        loaded_attempt = (
-            await db_session.execute(
-                select(SystemMapLoopAdmissionAttempt).where(SystemMapLoopAdmissionAttempt.id == attempt.id)
-            )
-        ).scalar_one()
+        loaded_attempt = (await db_session.execute(select(SystemMapLoopAdmissionAttempt).where(SystemMapLoopAdmissionAttempt.id == attempt.id))).scalar_one()
         assert loaded_attempt.status == "pending"
         assert loaded_attempt.deleted_by is None
 
-        loaded_reservation = (
-            await db_session.execute(
-                select(SystemMapLoopReservation).where(SystemMapLoopReservation.id == reservation.id)
-            )
-        ).scalar_one()
+        loaded_reservation = (await db_session.execute(select(SystemMapLoopReservation).where(SystemMapLoopReservation.id == reservation.id))).scalar_one()
         assert loaded_reservation.run_id == reservation.run_id
         assert loaded_reservation.status == "active"
         assert loaded_reservation.deleted_by is None
@@ -609,10 +557,7 @@ class TestSystemMapModelRoundTrip:
             {"id": foreign_org, "name": "Foreign System Map Org", "slug": f"foreign-{foreign_org.hex[:8]}"},
         )
         await db_session.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": foreign_account,
                 "email": f"foreign-{foreign_account.hex[:8]}@example.com",
@@ -620,12 +565,7 @@ class TestSystemMapModelRoundTrip:
             },
         )
         await db_session.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) VALUES "
-                "(:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": foreign_pipeline,
                 "oid": foreign_org,
@@ -644,11 +584,7 @@ class TestSystemMapModelRoundTrip:
             {"id": foreign_snapshot, "pipeline_id": foreign_pipeline, "oid": foreign_org},
         )
         await db_session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "run_number, input_hash, langgraph_thread_id) VALUES "
-                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999998, :input_hash, :thread_id)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999998, :input_hash, :thread_id)"),
             {
                 "id": foreign_run,
                 "oid": foreign_org,
@@ -690,10 +626,7 @@ class TestSystemMapModelRoundTrip:
             {"id": foreign_org, "name": "Foreign Update Org", "slug": f"foreign-update-{foreign_org.hex[:8]}"},
         )
         await db_session.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": foreign_account,
                 "email": f"foreign-update-{foreign_account.hex[:8]}@example.com",
@@ -701,12 +634,7 @@ class TestSystemMapModelRoundTrip:
             },
         )
         await db_session.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) VALUES "
-                "(:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": foreign_pipeline,
                 "oid": foreign_org,
@@ -725,11 +653,7 @@ class TestSystemMapModelRoundTrip:
             {"id": foreign_snapshot, "pipeline_id": foreign_pipeline, "oid": foreign_org},
         )
         await db_session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "run_number, input_hash, langgraph_thread_id) VALUES "
-                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999997, :input_hash, :thread_id)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999997, :input_hash, :thread_id)"),
             {
                 "id": foreign_run,
                 "oid": foreign_org,
@@ -741,11 +665,7 @@ class TestSystemMapModelRoundTrip:
         )
         own_run = uuid.uuid4()
         await db_session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "run_number, input_hash, langgraph_thread_id) VALUES "
-                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999996, :input_hash, :thread_id)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999996, :input_hash, :thread_id)"),
             {
                 "id": own_run,
                 "oid": test_org,

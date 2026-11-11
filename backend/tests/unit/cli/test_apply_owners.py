@@ -60,9 +60,7 @@ def _names(report: dict, status: str) -> list[str]:
 
 def _mock_users(*, items: list[dict] | None = None, status_code: int = 200) -> respx.Route:
     body = {"items": items or [], "total": len(items or []), "page": 1, "page_size": PAGE_SIZE}
-    return respx.get("https://api.test/api/v1/admin/users", params=_USERS_LIST_PARAMS).respond(
-        status_code=status_code, json=body
-    )
+    return respx.get("https://api.test/api/v1/admin/users", params=_USERS_LIST_PARAMS).respond(status_code=status_code, json=body)
 
 
 def _existing(*, owner_id: str | None = None) -> dict:

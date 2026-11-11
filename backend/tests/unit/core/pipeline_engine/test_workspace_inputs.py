@@ -57,13 +57,7 @@ def _has_sh() -> bool:
         return True
     # On Windows, prefer Git for Windows bash (which has git on PATH) over
     # WSL sh (which doesn't have Windows git on its PATH).
-    for candidate in (
-        Path(r"C:\Program Files\Git\bin\bash.exe"),
-        Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
-    ):
-        if candidate.is_file():
-            return True
-    return False
+    return any(candidate.is_file() for candidate in (Path(r"C:\Program Files\Git\bin\bash.exe"), Path(r"C:\Program Files (x86)\Git\bin\bash.exe")))
 
 
 def _find_bash() -> str:
@@ -90,20 +84,14 @@ class TestParseLsRemote:
     """Pure parsing tests — no I/O, no git calls."""
 
     def test_basic_refs(self) -> None:
-        output = (
-            "abc1234def0000000000000000000000000000\trefs/heads/main\n"
-            "def5678abc0000000000000000000000000000\trefs/tags/v1.0\n"
-        )
+        output = "abc1234def0000000000000000000000000000\trefs/heads/main\ndef5678abc0000000000000000000000000000\trefs/tags/v1.0\n"
         refs = parse_ls_remote(output)
         assert refs["refs/heads/main"] == "abc1234def0000000000000000000000000000"
         assert refs["refs/tags/v1.0"] == "def5678abc0000000000000000000000000000"
 
     def test_peeled_tag_overwrites_object_sha(self) -> None:
         """An annotated tag's peeled entry (commit SHA) replaces the tag object SHA."""
-        output = (
-            "1111111111111111111111111111111111111111\trefs/tags/v1.0\n"
-            "2222222222222222222222222222222222222222\trefs/tags/v1.0^{}\n"
-        )
+        output = "1111111111111111111111111111111111111111\trefs/tags/v1.0\n2222222222222222222222222222222222222222\trefs/tags/v1.0^{}\n"
         refs = parse_ls_remote(output)
         assert refs["refs/tags/v1.0"] == "2222222222222222222222222222222222222222"
         assert "refs/tags/v1.0^{}" not in refs
@@ -135,20 +123,13 @@ class TestParseLsRemote:
 
     def test_duplicate_ref_keeps_first_occurrence(self) -> None:
         """A repeated non-peeled ref does not overwrite the first SHA."""
-        output = (
-            "1111111111111111111111111111111111111111\trefs/heads/main\n"
-            "2222222222222222222222222222222222222222\trefs/heads/main\n"
-        )
+        output = "1111111111111111111111111111111111111111\trefs/heads/main\n2222222222222222222222222222222222222222\trefs/heads/main\n"
         refs = parse_ls_remote(output)
         assert refs["refs/heads/main"] == "1111111111111111111111111111111111111111"
 
     def test_empty_sha_or_ref_name_skipped(self) -> None:
         """An entry missing its SHA or its ref name is skipped, not stored."""
-        output = (
-            "\trefs/heads/empty-sha\n"
-            "abc1234def0000000000000000000000000000\t\n"
-            "abc1234def0000000000000000000000000000\trefs/heads/main\n"
-        )
+        output = "\trefs/heads/empty-sha\nabc1234def0000000000000000000000000000\t\nabc1234def0000000000000000000000000000\trefs/heads/main\n"
         refs = parse_ls_remote(output)
         assert refs == {"refs/heads/main": "abc1234def0000000000000000000000000000"}
 

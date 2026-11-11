@@ -90,10 +90,7 @@ async def test_list_runs_select_omits_heavy_payload_column(pagination_kwargs: di
     assert page.total == 0
     assert captured, "list_runs must execute its queries through the session"
     items_sql = _compile(_items_statement(captured)).lower()
-    assert f"runs.{column}" not in items_sql, (
-        f"the runs-list SELECT must not load heavy payload column {column!r} — "
-        "no list consumer reads it and detoasting it dominates the page latency"
-    )
+    assert f"runs.{column}" not in items_sql, f"the runs-list SELECT must not load heavy payload column {column!r} — no list consumer reads it and detoasting it dominates the page latency"
 
 
 @pytest.mark.parametrize("pagination_kwargs", _PAGINATION_MODES)
@@ -104,19 +101,14 @@ async def test_list_runs_select_keeps_contract_columns(pagination_kwargs: dict[s
 
     items_sql = _compile(_items_statement(captured)).lower()
     for column in _MUST_STAY_LOADED:
-        assert f"runs.{column}" in items_sql, (
-            f"the runs-list SELECT must keep loading {column!r} — list responses read it"
-        )
+        assert f"runs.{column}" in items_sql, f"the runs-list SELECT must keep loading {column!r} — list responses read it"
 
 
 def test_deferred_columns_are_heavy_payload_columns_only() -> None:
     """The deferral tuple must only ever name JSON/Text payload columns."""
     for name in _RUNS_LIST_DEFERRED_COLUMNS:
         column = Run.__table__.columns[name]
-        assert isinstance(column.type, (JSON, Text)), (
-            f"{name!r} is not a heavy payload column (type {column.type!r}) — "
-            "only megabyte-scale JSON/Text columns belong in _RUNS_LIST_DEFERRED_COLUMNS"
-        )
+        assert isinstance(column.type, (JSON, Text)), f"{name!r} is not a heavy payload column (type {column.type!r}) — only megabyte-scale JSON/Text columns belong in _RUNS_LIST_DEFERRED_COLUMNS"
 
 
 def test_deferral_excludes_consumer_read_columns() -> None:

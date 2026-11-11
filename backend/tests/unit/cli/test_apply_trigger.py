@@ -124,15 +124,9 @@ def _apply_trigger_routes(
     """Full list mocks; returns mutation routes for overrides."""
     _mock_current([], [])
     routes: dict[str, respx.Route] = {}
-    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=LIST_PARAMS).respond(
-        json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": 100}
-    )
-    routes["agents_get"] = respx.get("https://api.test/api/v1/agents", params=LIST_PARAMS).respond(
-        json={"items": [], "total": 0, "page": 1, "page_size": 100}
-    )
-    routes["triggers_get"] = respx.get("https://api.test/api/v1/triggers", params=LIST_PARAMS).respond(
-        json={"items": triggers, "total": len(triggers), "page": 1, "page_size": 100}
-    )
+    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=LIST_PARAMS).respond(json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": 100})
+    routes["agents_get"] = respx.get("https://api.test/api/v1/agents", params=LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+    routes["triggers_get"] = respx.get("https://api.test/api/v1/triggers", params=LIST_PARAMS).respond(json={"items": triggers, "total": len(triggers), "page": 1, "page_size": 100})
     routes["trigger_post"] = respx.post(re.compile(r"https://api\.test/api/v1/pipelines/[0-9a-f-]+/triggers")).mock(
         return_value=httpx.Response(
             201,
@@ -227,19 +221,7 @@ entities:
     def test_forward_reference_rejected_at_load(self) -> None:
         """A trigger referencing a pipeline declared in a LATER document is a
         load error (merge_entities), not a plan block."""
-        text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  triggers:\n"
-            "    - pipeline: nightly-report\n"
-            "      name: nightly\n"
-            "      trigger_type: cron\n"
-            "---\n"
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  pipelines:\n"
-            "    - name: nightly-report\n"
-        )
+        text = "api_version: modulo.dev/v1\nentities:\n  triggers:\n    - pipeline: nightly-report\n      name: nightly\n      trigger_type: cron\n---\napi_version: modulo.dev/v1\nentities:\n  pipelines:\n    - name: nightly-report\n"
         with pytest.raises(ApplyLoadError):
             parse_apply_documents(text)
 
@@ -331,10 +313,7 @@ entities:
         assert "agent 'missing-agent' not found" in blocked["nightly-report"]
         assert "nightly-report/nightly" in blocked
         assert "pipeline 'nightly-report' blocked upstream" in blocked["nightly-report/nightly"]
-        assert blocked["nightly-report/nightly"] == (
-            "pipeline 'nightly-report' blocked upstream: agent 'missing-agent' not found in target org - "
-            "declare the agent in this config or create it first; apply never auto-creates agents"
-        )
+        assert blocked["nightly-report/nightly"] == ("pipeline 'nightly-report' blocked upstream: agent 'missing-agent' not found in target org - declare the agent in this config or create it first; apply never auto-creates agents")
         assert not report["created"]
 
     @respx.mock
@@ -344,9 +323,7 @@ entities:
         entity is blocked for manual resolution instead of last-wins."""
         pipeline_id = "00000000-0000-0000-0000-0000000000aa"
         first = _trigger_row(pipeline_id=pipeline_id, name="nightly", trigger_id="00000000-0000-0000-0000-0000000000cc")
-        second = _trigger_row(
-            pipeline_id=pipeline_id, name="nightly", trigger_id="00000000-0000-0000-0000-0000000000dd"
-        )
+        second = _trigger_row(pipeline_id=pipeline_id, name="nightly", trigger_id="00000000-0000-0000-0000-0000000000dd")
         _apply_trigger_routes([_pipeline_row("nightly-report", pipeline_id)], [first, second])
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -375,9 +352,7 @@ class TestRefreshSecrets:
             cron_expression=None,
             config_json={"hmac_secret": "••••••", "note": "plain value"},
         )
-        routes = _apply_trigger_routes(
-            [_pipeline_row("nightly-report", "00000000-0000-0000-0000-0000000000aa")], [existing]
-        )
+        routes = _apply_trigger_routes([_pipeline_row("nightly-report", "00000000-0000-0000-0000-0000000000aa")], [existing])
         config = parse_apply_documents(_CONFIG_WITH_SECRET)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -449,9 +424,7 @@ class TestExecution:
         """The referenced pipeline was declared but its apply FAILED — the
         trigger fails (containment) instead of crashing the run."""
         routes = _apply_trigger_routes([], [])
-        routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(
-            side_effect=httpx.Response(500, json={"detail": "pipeline boom"})
-        )
+        routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(side_effect=httpx.Response(500, json={"detail": "pipeline boom"}))
         config = parse_apply_documents(
             """
 api_version: modulo.dev/v1
@@ -479,19 +452,7 @@ entities:
 
 class TestFailureIsolation:
     def _two_trigger_config_text(self) -> str:
-        return (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  triggers:\n"
-            "    - pipeline: nightly-report\n"
-            "      name: first\n"
-            "      trigger_type: cron\n"
-            '      cron_expression: "0 3 * * *"\n'
-            "    - pipeline: nightly-report\n"
-            "      name: second\n"
-            "      trigger_type: cron\n"
-            '      cron_expression: "0 4 * * *"\n'
-        )
+        return 'api_version: modulo.dev/v1\nentities:\n  triggers:\n    - pipeline: nightly-report\n      name: first\n      trigger_type: cron\n      cron_expression: "0 3 * * *"\n    - pipeline: nightly-report\n      name: second\n      trigger_type: cron\n      cron_expression: "0 4 * * *"\n'
 
     @respx.mock
     def test_create_400_isolates_entity(self) -> None:
@@ -586,9 +547,7 @@ class TestFailureIsolation:
         detail (never silenced)."""
         pipeline_id = "00000000-0000-0000-0000-0000000000aa"
         routes = _apply_trigger_routes([_pipeline_row("nightly-report", pipeline_id)], [])
-        routes["trigger_post"].mock(
-            return_value=httpx.Response(422, json={"detail": "ongoing triggers require daily_spend_limit"})
-        )
+        routes["trigger_post"].mock(return_value=httpx.Response(422, json={"detail": "ongoing triggers require daily_spend_limit"}))
         config = parse_apply_documents(
             """
 api_version: modulo.dev/v1
@@ -689,9 +648,7 @@ class TestExtractedTriggerHelpers:
     @respx.mock
     def test_resolves_config_when_not_preseeded_and_creates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HS", "resolved-hmac-secret")
-        route = respx.post(re.compile(r"https://api\.test/api/v1/pipelines/[0-9a-f-]+/triggers")).mock(
-            return_value=httpx.Response(201, json={"id": str(uuid.uuid4()), "name": "hook"})
-        )
+        route = respx.post(re.compile(r"https://api\.test/api/v1/pipelines/[0-9a-f-]+/triggers")).mock(return_value=httpx.Response(201, json={"id": str(uuid.uuid4()), "name": "hook"}))
         config = parse_apply_documents(_CONFIG_WITH_SECRET)
         entity = config.entities.triggers[0]
         with httpx.Client() as client:

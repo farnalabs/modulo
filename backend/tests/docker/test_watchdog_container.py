@@ -84,10 +84,7 @@ def _wait_for_log(container: Container, needle: bytes, timeout: float = 90.0) ->
             break
         time.sleep(0.5)
     state = container.attrs.get("State", {})
-    raise AssertionError(
-        f"did not find {needle!r} (status={container.status} exit={state.get('ExitCode')})\n"
-        f"logs:\n{logs.decode(errors='replace')}"
-    )
+    raise AssertionError(f"did not find {needle!r} (status={container.status} exit={state.get('ExitCode')})\nlogs:\n{logs.decode(errors='replace')}")
 
 
 def test_watchdog_starts_and_monitors_without_smtp_credentials(watchdog_image: str):

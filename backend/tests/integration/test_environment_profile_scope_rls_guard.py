@@ -65,10 +65,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"{label}-{account_id.hex[:12]}@example.com",
@@ -76,10 +73,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -175,9 +169,7 @@ async def _bind_pipeline(
 async def _pipeline_exists(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> bool:
     """Superuser read — the row demonstrably exists, RLS aside."""
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT id FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
-        ).scalar_one_or_none()
+        row = (await conn.execute(text("SELECT id FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})).scalar_one_or_none()
     return row is not None
 
 
@@ -197,21 +189,13 @@ async def _caller_can_see_pipeline(
         await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
         await conn.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": str(account_id)})
         await conn.execute(text("SELECT set_config('app.org_role', 'operator', true)"))
-        row = (
-            await conn.execute(text("SELECT id FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
-        ).scalar_one_or_none()
+        row = (await conn.execute(text("SELECT id FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})).scalar_one_or_none()
     return row is not None
 
 
 async def _read_profile_visibility(db_engine: AsyncEngine, profile_id: uuid.UUID) -> str:
     async with db_engine.connect() as conn:
-        return str(
-            (
-                await conn.execute(
-                    text("SELECT visibility FROM environment_profiles WHERE id = :id"), {"id": str(profile_id)}
-                )
-            ).scalar_one()
-        )
+        return str((await conn.execute(text("SELECT visibility FROM environment_profiles WHERE id = :id"), {"id": str(profile_id)})).scalar_one())
 
 
 async def _cleanup(

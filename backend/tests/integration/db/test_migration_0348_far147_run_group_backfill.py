@@ -141,25 +141,15 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     }
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'm0348@example.com', 'm0348', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'm0348@example.com', 'm0348', 'hash', 'local', true)"),
             {"id": str(ids["account"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'm0348', 'm0348', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'm0348', 'm0348', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :aid, 'm0348 pipeline', 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :aid, 'm0348 pipeline', 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(ids["pipeline"]), "oid": str(ids["org"]), "aid": str(ids["account"])},
         )
         await conn.execute(
@@ -194,11 +184,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
         for index, (key, thread, trigger_type, parent_key, group_key, kind) in enumerate(rows, start=1):
             await conn.execute(
                 text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                    "status, run_number, input_hash, langgraph_thread_id, parent_run_id, "
-                    "run_group_id, run_group_kind) "
-                    "VALUES (:id, :oid, :pid, :sid, :trigger_type, 'complete', :n, 'ih', :thread, "
-                    ":parent, :group, :kind)"
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, parent_run_id, run_group_id, run_group_kind) VALUES (:id, :oid, :pid, :sid, :trigger_type, 'complete', :n, 'ih', :thread, :parent, :group, :kind)"
                 ),
                 {
                     "id": str(ids[key]),

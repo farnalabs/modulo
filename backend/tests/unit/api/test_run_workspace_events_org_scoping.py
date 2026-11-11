@@ -99,9 +99,7 @@ def test_workspace_events_404_on_foreign_org_run(client: TestClient, mock_sessio
     assert not any("audit_events" in sql for sql in executed_sql)
 
 
-def test_workspace_events_returns_events_for_owned_run_after_org_check(
-    client: TestClient, mock_session: AsyncMock
-) -> None:
+def test_workspace_events_returns_events_for_owned_run_after_org_check(client: TestClient, mock_session: AsyncMock) -> None:
     """A valid (same-org) run returns its own events timeline."""
     result = MagicMock()
     event = MagicMock()

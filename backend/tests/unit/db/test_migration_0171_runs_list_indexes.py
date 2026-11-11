@@ -82,18 +82,12 @@ def test_model_declares_the_list_count_index_only() -> None:
     from farna.db.models.run import Run
 
     index_names = {idx.name for idx in Run.__table__.indexes}
-    assert "ix_runs_org_created_pipeline" in index_names, (
-        "model/migration drift: ix_runs_org_created_pipeline missing from Run"
-    )
+    assert "ix_runs_org_created_pipeline" in index_names, "model/migration drift: ix_runs_org_created_pipeline missing from Run"
     # 0155 already created ix_runs_organisation_status in the DB; the model
     # follows the file's existing convention of not declaring 0155's indexes,
     # and must never re-introduce the redundant ix_runs_org_status.
-    assert "ix_runs_org_status" not in index_names, (
-        "ix_runs_org_status duplicates 0155's ix_runs_organisation_status — do not re-add it"
-    )
-    assert "ix_runs_organisation_status" not in index_names, (
-        "0155's hot-query indexes are intentionally not declared on the model; keep that convention"
-    )
+    assert "ix_runs_org_status" not in index_names, "ix_runs_org_status duplicates 0155's ix_runs_organisation_status — do not re-add it"
+    assert "ix_runs_organisation_status" not in index_names, "0155's hot-query indexes are intentionally not declared on the model; keep that convention"
     # Parity on the INCLUDE column too: the model index must carry the same
     # non-key pipeline_id column the migration creates. Included columns live
     # in the postgresql dialect options, not in Index.columns.

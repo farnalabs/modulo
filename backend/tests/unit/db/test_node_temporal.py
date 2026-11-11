@@ -95,9 +95,7 @@ class TestNodeTemporalFields:
         table = Node.__table__
         table.to_metadata(meta)
 
-        constraints: dict[str, CheckConstraint] = {
-            c.name: c for c in meta.tables["nodes"].constraints if isinstance(c, CheckConstraint)
-        }
+        constraints: dict[str, CheckConstraint] = {c.name: c for c in meta.tables["nodes"].constraints if isinstance(c, CheckConstraint)}
 
         timeout_ck = constraints.get("ck_nodes_timeout_seconds")
         assert timeout_ck is not None

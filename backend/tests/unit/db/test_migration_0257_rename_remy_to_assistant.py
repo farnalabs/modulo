@@ -29,15 +29,7 @@ from alembic.operations import Operations
 from sqlalchemy import CheckConstraint, UniqueConstraint
 
 _MIGRATION_REVISION = "0257_rename_remy_to_assistant"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / f"{_MIGRATION_REVISION}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_REVISION}.py"
 
 _TABLE_RENAMES = (
     'ALTER TABLE public."remy_skills" RENAME TO "assistant_skills"',
@@ -62,14 +54,11 @@ _CONSTRAINT_RENAMES = (
 _INDEX_RENAMES = (
     'ALTER INDEX public."ix_remy_skills_organisation_id" RENAME TO "ix_assistant_skills_organisation_id"',
     'ALTER INDEX public."ix_remy_skills_account_id" RENAME TO "ix_assistant_skills_account_id"',
-    'ALTER INDEX public."ix_remy_context_sources_organisation_id" '
-    'RENAME TO "ix_assistant_context_sources_organisation_id"',
+    'ALTER INDEX public."ix_remy_context_sources_organisation_id" RENAME TO "ix_assistant_context_sources_organisation_id"',
 )
 _TRIGGER_RENAMES = (
-    'ALTER TRIGGER "trg_remy_skills_account_id_tenant" ON public."assistant_skills" '
-    'RENAME TO "trg_assistant_skills_account_id_tenant"',
-    'ALTER TRIGGER "trg_remy_context_sources_account_id_tenant" ON public."assistant_context_sources" '
-    'RENAME TO "trg_assistant_context_sources_account_id_tenant"',
+    'ALTER TRIGGER "trg_remy_skills_account_id_tenant" ON public."assistant_skills" RENAME TO "trg_assistant_skills_account_id_tenant"',
+    'ALTER TRIGGER "trg_remy_context_sources_account_id_tenant" ON public."assistant_context_sources" RENAME TO "trg_assistant_context_sources_account_id_tenant"',
 )
 _RLS_STATEMENTS = (
     'ALTER TABLE public."assistant_skills" ENABLE ROW LEVEL SECURITY',
@@ -77,13 +66,8 @@ _RLS_STATEMENTS = (
     'CREATE POLICY rls_org_isolation ON public."assistant_skills"',
     'CREATE POLICY rls_org_isolation ON public."assistant_context_sources"',
 )
-_CONFIG_FORWARD = (
-    "UPDATE system_config SET key = replace(key, 'remy_config:', 'assistant_config:') WHERE key LIKE 'remy_config:%'"
-)
-_CONFIG_REVERSE = (
-    "UPDATE system_config SET key = replace(key, 'assistant_config:', 'remy_config:') WHERE key LIKE "
-    "'assistant_config:%'"
-)
+_CONFIG_FORWARD = "UPDATE system_config SET key = replace(key, 'remy_config:', 'assistant_config:') WHERE key LIKE 'remy_config:%'"
+_CONFIG_REVERSE = "UPDATE system_config SET key = replace(key, 'assistant_config:', 'remy_config:') WHERE key LIKE 'assistant_config:%'"
 # feature_flag_catalog: each rename emits both the unique-safe UPDATE (new
 # name not yet present) and the DELETE of the old zombie row (new name
 # already seeded). Forward = remy -> assistant; reverse undoes it.
@@ -102,12 +86,7 @@ _FLAG_CATALOG_REVERSE = (
 # The full unique-safety branch per flag, in emission order: old-row-exists
 # guard, new-row-exists guard, then DELETE the old zombie / ELSE UPDATE.
 _FLAG_BRANCH_FORWARD = (
-    (
-        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN "
-        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN "
-        "DELETE FROM feature_flag_catalog WHERE name='remy'; "
-        "ELSE UPDATE feature_flag_catalog SET name='assistant' WHERE name='remy'; END IF;"
-    ),
+    ("IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN DELETE FROM feature_flag_catalog WHERE name='remy'; ELSE UPDATE feature_flag_catalog SET name='assistant' WHERE name='remy'; END IF;"),
     (
         "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy_ui_driving') THEN "
         "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant_ui_driving') THEN "
@@ -116,12 +95,7 @@ _FLAG_BRANCH_FORWARD = (
     ),
 )
 _FLAG_BRANCH_REVERSE = (
-    (
-        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN "
-        "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN "
-        "DELETE FROM feature_flag_catalog WHERE name='assistant'; "
-        "ELSE UPDATE feature_flag_catalog SET name='remy' WHERE name='assistant'; END IF;"
-    ),
+    ("IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant') THEN IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy') THEN DELETE FROM feature_flag_catalog WHERE name='assistant'; ELSE UPDATE feature_flag_catalog SET name='remy' WHERE name='assistant'; END IF;"),
     (
         "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='assistant_ui_driving') THEN "
         "IF EXISTS (SELECT 1 FROM feature_flag_catalog WHERE name='remy_ui_driving') THEN "
@@ -241,8 +215,7 @@ class TestPostgresDowngradeStructure:
             'RENAME CONSTRAINT "ck_assistant_context_sources_owner" TO "ck_remy_context_sources_owner"',
             'RENAME CONSTRAINT "ck_assistant_context_sources_mode" TO "ck_remy_context_sources_mode"',
             'RENAME CONSTRAINT "uq_assistant_context_sources_key" TO "uq_remy_context_sources_key"',
-            'RENAME CONSTRAINT "assistant_context_sources_organisation_id_fkey" '
-            'TO "remy_context_sources_organisation_id_fkey"',
+            'RENAME CONSTRAINT "assistant_context_sources_organisation_id_fkey" TO "remy_context_sources_organisation_id_fkey"',
             'RENAME CONSTRAINT "assistant_context_sources_account_id_fkey" TO "remy_context_sources_account_id_fkey"',
         ):
             assert fragment in sql
@@ -251,17 +224,14 @@ class TestPostgresDowngradeStructure:
         for fragment in (
             'ALTER INDEX public."ix_assistant_skills_organisation_id" RENAME TO "ix_remy_skills_organisation_id"',
             'ALTER INDEX public."ix_assistant_skills_account_id" RENAME TO "ix_remy_skills_account_id"',
-            'ALTER INDEX public."ix_assistant_context_sources_organisation_id" '
-            'RENAME TO "ix_remy_context_sources_organisation_id"',
+            'ALTER INDEX public."ix_assistant_context_sources_organisation_id" RENAME TO "ix_remy_context_sources_organisation_id"',
         ):
             assert fragment in sql
 
     def test_reverses_trigger_renames(self, sql: str) -> None:
         for fragment in (
-            'ALTER TRIGGER "trg_assistant_skills_account_id_tenant" ON public."assistant_skills" '
-            'RENAME TO "trg_remy_skills_account_id_tenant"',
-            'ALTER TRIGGER "trg_assistant_context_sources_account_id_tenant" ON public."assistant_context_sources" '
-            'RENAME TO "trg_remy_context_sources_account_id_tenant"',
+            'ALTER TRIGGER "trg_assistant_skills_account_id_tenant" ON public."assistant_skills" RENAME TO "trg_remy_skills_account_id_tenant"',
+            'ALTER TRIGGER "trg_assistant_context_sources_account_id_tenant" ON public."assistant_context_sources" RENAME TO "trg_remy_context_sources_account_id_tenant"',
         ):
             assert fragment in sql
 

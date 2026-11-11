@@ -58,16 +58,7 @@ from farna.db.models.eval_suite_run import (
 from farna.db.rls import _inject_tenant_filter
 
 _TENANT_KEY = "org_id"
-_MIGRATION_PATH = (
-    Path(__file__).parents[4]
-    / "backend"
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0137_eval_suite_run.py"
-)
+_MIGRATION_PATH = Path(__file__).parents[4] / "backend" / "src" / "farna" / "db" / "migrations" / "versions" / "0137_eval_suite_run.py"
 
 
 def _make_session() -> Session:
@@ -157,12 +148,8 @@ def test_definition_checksum_deterministic_and_order_insensitive() -> None:
     assert changed != left
     # membership order does not matter (sorted by id).
     other_id = uuid.uuid4()
-    a = compute_definition_checksum(
-        [{"id": definition_id, "config_json": {"pattern": "a|b"}}, {"id": other_id, "config_json": {"pattern": "z"}}]
-    )
-    b = compute_definition_checksum(
-        [{"id": other_id, "config_json": {"pattern": "z"}}, {"id": definition_id, "config_json": {"pattern": "a|b"}}]
-    )
+    a = compute_definition_checksum([{"id": definition_id, "config_json": {"pattern": "a|b"}}, {"id": other_id, "config_json": {"pattern": "z"}}])
+    b = compute_definition_checksum([{"id": other_id, "config_json": {"pattern": "z"}}, {"id": definition_id, "config_json": {"pattern": "a|b"}}])
     assert a == b
 
 

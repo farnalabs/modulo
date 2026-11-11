@@ -33,11 +33,7 @@ def test_organisation_declares_no_audit_columns(column: str) -> None:
     matching this non-declaration.
     """
     column_names = {c.key for c in sa_inspect(Organisation).columns}
-    assert column not in column_names, (
-        f"Organisation must not declare {column} — "
-        "see seed_demo.py and migration 0243. "
-        f"Currently mapped columns: {sorted(column_names)}"
-    )
+    assert column not in column_names, f"Organisation must not declare {column} — see seed_demo.py and migration 0243. Currently mapped columns: {sorted(column_names)}"
 
 
 def test_select_organisation_sql_omits_updated_at() -> None:
@@ -52,9 +48,7 @@ def test_select_organisation_sql_omits_updated_at() -> None:
     stmt = select(Organisation)
     compiled = stmt.compile()
     sql_lower = compiled.string.lower()
-    assert "updated_at" not in sql_lower, (
-        f"select(Organisation) must not reference updated_at in generated SQL. Generated SQL: {compiled.string}"
-    )
+    assert "updated_at" not in sql_lower, f"select(Organisation) must not reference updated_at in generated SQL. Generated SQL: {compiled.string}"
 
 
 def test_organisation_declares_created_at() -> None:

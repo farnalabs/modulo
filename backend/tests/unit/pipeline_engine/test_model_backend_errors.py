@@ -52,10 +52,7 @@ class TestClassifyProviderError:
 
     def test_insufficient_funds_matches_on_message_alone(self):
         """The message text classifies even when no status code is present."""
-        stdout = (
-            '{"type":"error","error":{"name":"APIError",'
-            '"data":{"message":"upstream request failed: INSUFFICIENT ACCOUNT FUNDS"}}}'
-        )
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"upstream request failed: INSUFFICIENT ACCOUNT FUNDS"}}}'
         assert classify_provider_error(stdout) == "model.insufficient_funds"
 
     def test_insufficient_funds_matches_on_status_code_alone(self):
@@ -70,30 +67,18 @@ class TestClassifyProviderError:
         (``str(exc)`` from the FAR-197 no-output ``SandboxNodeFailedError``), so
         the assertion pins the real call site's input rather than a snippet.
         """
-        detail = (
-            "Sandbox node failed (transient) after retries exhausted: "
-            "Sandbox agent produced no parseable output.json (exit code 0)\n"
-            "output.json was MISSING (the agent never wrote it)\n"
-            "sandbox id: iv32l0d6af178rk5ewf7l\n"
-            "--- stdout tail ---\n" + _CAPTURED_402_STDOUT_LINE
-        )
+        detail = "Sandbox node failed (transient) after retries exhausted: Sandbox agent produced no parseable output.json (exit code 0)\noutput.json was MISSING (the agent never wrote it)\nsandbox id: iv32l0d6af178rk5ewf7l\n--- stdout tail ---\n" + _CAPTURED_402_STDOUT_LINE
         assert classify_provider_error(detail) == "model.insufficient_funds"
 
     def test_insufficient_funds_wins_over_a_transient_signature(self):
         """A billing refusal outranks a transient signature in the same stream."""
-        stdout = (
-            '{"type":"error","error":{"name":"UnknownError",'
-            '"data":{"message":"The operation timed out."}}}\n' + _CAPTURED_402_STDOUT_LINE
-        )
+        stdout = '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}\n' + _CAPTURED_402_STDOUT_LINE
         assert classify_provider_error(stdout) == "model.insufficient_funds"
 
     def test_insufficient_funds_does_not_join_across_lines(self):
         """The match is bounded to ONE JSONL line: a ``"type":"error"`` event must
         not be joined to a ``"statusCode":402`` that lives on a DIFFERENT line."""
-        stdout = (
-            '{"type":"error","error":{"name":"APIError","data":{"message":"some unrelated failure"}}}\n'
-            '{"note":"unrelated later event","statusCode":402}'
-        )
+        stdout = '{"type":"error","error":{"name":"APIError","data":{"message":"some unrelated failure"}}}\n{"note":"unrelated later event","statusCode":402}'
         assert classify_provider_error(stdout) is None
 
     def test_insufficient_funds_status_code_lookahead_rejects_longer_code(self):
@@ -103,19 +88,12 @@ class TestClassifyProviderError:
 
     def test_timeout_unknown_error(self):
         """UnknownError with 'The operation timed out.' → model.provider_timeout."""
-        stdout = (
-            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"thinking..."}]}}\n'
-            '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}'
-        )
+        stdout = '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"thinking..."}]}}\n{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}'
         assert classify_provider_error(stdout) == "model.provider_timeout"
 
     def test_timeout_embedded_in_jsonl(self):
         """Timeout signature embedded in a larger JSONL stream."""
-        stdout = (
-            '{"type":"message","message":{"role":"assistant","content":[]}}\n'
-            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}\n'
-            '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}'
-        )
+        stdout = '{"type":"message","message":{"role":"assistant","content":[]}}\n{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}\n{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}'
         assert classify_provider_error(stdout) == "model.provider_timeout"
 
     def test_model_disabled_api_error(self):
@@ -240,10 +218,7 @@ class TestClassifyProviderError:
 
     def test_timeout_priority_over_connection(self):
         """First matching pattern wins — timeout before connection."""
-        stdout = (
-            '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}\n'
-            '{"type":"error","error":{"name":"APIConnectionError","data":{"message":"Connection refused"}}}'
-        )
+        stdout = '{"type":"error","error":{"name":"UnknownError","data":{"message":"The operation timed out."}}}\n{"type":"error","error":{"name":"APIConnectionError","data":{"message":"Connection refused"}}}'
         assert classify_provider_error(stdout) == "model.provider_timeout"
 
 

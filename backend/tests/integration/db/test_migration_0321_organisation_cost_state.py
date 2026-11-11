@@ -122,12 +122,7 @@ async def _seed(engine: AsyncEngine) -> None:
     """Seed at PREV_REV: one org with non-default cost values, one on defaults."""
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations "
-                "(id, name, slug, settings_json, max_run_cost_cents, spend_ceiling_cents, "
-                " org_cumulative_spend_cents) "
-                "VALUES (:id, :name, :slug, '{}'::json, :max_run, :ceiling, :cumulative)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, max_run_cost_cents, spend_ceiling_cents,  org_cumulative_spend_cents) VALUES (:id, :name, :slug, '{}'::json, :max_run, :ceiling, :cumulative)"),
             {
                 "id": str(uuid.uuid4()),
                 "name": "m0317-seeded",
@@ -150,13 +145,7 @@ class TestBackfill:
             async with engine.connect() as conn:
                 row = (
                     await conn.execute(
-                        text(
-                            "SELECT s.max_run_cost_cents, s.spend_ceiling_cents, "
-                            "s.org_cumulative_spend_cents "
-                            "FROM organisation_cost_state s "
-                            "JOIN organisations o ON o.id = s.org_id "
-                            "WHERE o.slug = :slug"
-                        ),
+                        text("SELECT s.max_run_cost_cents, s.spend_ceiling_cents, s.org_cumulative_spend_cents FROM organisation_cost_state s JOIN organisations o ON o.id = s.org_id WHERE o.slug = :slug"),
                         {"slug": _SEEDED_SLUG},
                     )
                 ).one()
@@ -168,16 +157,7 @@ class TestBackfill:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                rows = (
-                    await conn.execute(
-                        text(
-                            "SELECT o.slug, s.max_run_cost_cents, s.spend_ceiling_cents, "
-                            "s.org_cumulative_spend_cents "
-                            "FROM organisations o "
-                            "LEFT JOIN organisation_cost_state s ON s.org_id = o.id"
-                        )
-                    )
-                ).all()
+                rows = (await conn.execute(text("SELECT o.slug, s.max_run_cost_cents, s.spend_ceiling_cents, s.org_cumulative_spend_cents FROM organisations o LEFT JOIN organisation_cost_state s ON s.org_id = o.id"))).all()
             by_slug = {row[0]: tuple(row[1:]) for row in rows}
             assert by_slug[_SEEDED_SLUG] == (_SEEDED_MAX_RUN, _SEEDED_CEILING, _SEEDED_CUMULATIVE)
             assert by_slug[_PLAIN_SLUG] == (None, None, 0)
@@ -189,17 +169,7 @@ class TestBackfill:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                present = (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name FROM information_schema.columns "
-                            "WHERE table_name = 'organisations' "
-                            "AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', "
-                            "'org_cumulative_spend_cents') "
-                            "ORDER BY column_name"
-                        )
-                    )
-                ).scalars()
+                present = (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'organisations' AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', 'org_cumulative_spend_cents') ORDER BY column_name"))).scalars()
                 assert sorted(present) == [
                     "max_run_cost_cents",
                     "org_cumulative_spend_cents",
@@ -209,21 +179,14 @@ class TestBackfill:
                 # upgrade must not rewrite or null them out.
                 row = (
                     await conn.execute(
-                        text(
-                            "SELECT max_run_cost_cents, spend_ceiling_cents, "
-                            "org_cumulative_spend_cents FROM organisations WHERE slug = :slug"
-                        ),
+                        text("SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents FROM organisations WHERE slug = :slug"),
                         {"slug": _SEEDED_SLUG},
                     )
                 ).one()
             assert tuple(row) == (_SEEDED_MAX_RUN, _SEEDED_CEILING, _SEEDED_CUMULATIVE)
             # The CHECK that references the cumulative column was not dropped.
             async with engine.connect() as conn:
-                constraint = (
-                    await conn.execute(
-                        text("SELECT conname FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend'")
-                    )
-                ).scalar_one()
+                constraint = (await conn.execute(text("SELECT conname FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend'"))).scalar_one()
             assert constraint == "ck_organisations_cum_spend"
         finally:
             await engine.dispose()
@@ -236,18 +199,13 @@ class TestCheckConstraint:
         try:
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO organisations (id, name, slug, settings_json) "
-                        "VALUES (:id, :name, :slug, '{}'::json)"
-                    ),
+                    text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                     {"id": str(org_id), "name": "m0317-neg", "slug": "m0317-neg"},
                 )
             with pytest.raises(DBAPIError):
                 async with engine.begin() as conn:
                     await conn.execute(
-                        text(
-                            "INSERT INTO organisation_cost_state (org_id, org_cumulative_spend_cents) VALUES (:oid, -1)"
-                        ),
+                        text("INSERT INTO organisation_cost_state (org_id, org_cumulative_spend_cents) VALUES (:oid, -1)"),
                         {"oid": str(org_id)},
                     )
         finally:
@@ -260,34 +218,14 @@ class TestDowngrade:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                present = (
-                    await conn.execute(text("SELECT to_regclass('public.organisation_cost_state')"))
-                ).scalar_one()
+                present = (await conn.execute(text("SELECT to_regclass('public.organisation_cost_state')"))).scalar_one()
                 assert present is None
                 # The RLS policy is gone with the table (never left dangling).
-                policy_count = (
-                    await conn.execute(
-                        text(
-                            "SELECT count(*) FROM pg_policies "
-                            "WHERE tablename = 'organisation_cost_state' "
-                            "AND policyname = 'rls_org_isolation'"
-                        )
-                    )
-                ).scalar_one()
+                policy_count = (await conn.execute(text("SELECT count(*) FROM pg_policies WHERE tablename = 'organisation_cost_state' AND policyname = 'rls_org_isolation'"))).scalar_one()
                 assert policy_count == 0
                 # Additive means DOWNGRADE never touched the org columns either:
                 # they still exist and still hold the ORIGINAL seeded values.
-                columns = (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name FROM information_schema.columns "
-                            "WHERE table_name = 'organisations' "
-                            "AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', "
-                            "'org_cumulative_spend_cents') "
-                            "ORDER BY column_name"
-                        )
-                    )
-                ).scalars()
+                columns = (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'organisations' AND column_name IN ('max_run_cost_cents', 'spend_ceiling_cents', 'org_cumulative_spend_cents') ORDER BY column_name"))).scalars()
                 assert sorted(columns) == [
                     "max_run_cost_cents",
                     "org_cumulative_spend_cents",
@@ -295,19 +233,12 @@ class TestDowngrade:
                 ]
                 row = (
                     await conn.execute(
-                        text(
-                            "SELECT max_run_cost_cents, spend_ceiling_cents, "
-                            "org_cumulative_spend_cents FROM organisations WHERE slug = :slug"
-                        ),
+                        text("SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents FROM organisations WHERE slug = :slug"),
                         {"slug": _SEEDED_SLUG},
                     )
                 ).one()
                 assert tuple(row) == (_SEEDED_MAX_RUN, _SEEDED_CEILING, _SEEDED_CUMULATIVE)
-                constraint = (
-                    await conn.execute(
-                        text("SELECT conname FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend'")
-                    )
-                ).scalar_one()
+                constraint = (await conn.execute(text("SELECT conname FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend'"))).scalar_one()
                 assert constraint == "ck_organisations_cum_spend"
         finally:
             await engine.dispose()

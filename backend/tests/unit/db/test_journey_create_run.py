@@ -116,9 +116,7 @@ async def _seed_snapshot_graph(session: AsyncSession, graph: dict[str, Any]) -> 
     await session.flush()
 
 
-async def _seed_pipeline(
-    session: AsyncSession, *, owner_team_id: uuid.UUID | None, pipeline_id: uuid.UUID = _PIPELINE
-) -> None:
+async def _seed_pipeline(session: AsyncSession, *, owner_team_id: uuid.UUID | None, pipeline_id: uuid.UUID = _PIPELINE) -> None:
     session.add(
         Pipeline(
             id=pipeline_id,
@@ -182,9 +180,7 @@ class TestDeploymentDrainAdmission:
         run = await _create(session)
         assert run.status == "pending"
 
-    async def test_drain_flag_read_failure_propagates(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_drain_flag_read_failure_propagates(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """A read failure of the drain flag must propagate (fail closed), never
         silently admit a sandbox run while a drain may be active."""
         await _seed_org(session)
@@ -389,15 +385,7 @@ class TestJourneyHydration:
         await _seed_org(session)
         await _create(session, work_item_refs=_REF_ENTRIES)
         await _create(session, work_item_refs=_REF_ENTRIES)
-        rows = (
-            (
-                await session.execute(
-                    select(Journey).where(Journey.organisation_id == _ORG, Journey.kind == "github_issue")
-                )
-            )
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(Journey).where(Journey.organisation_id == _ORG, Journey.kind == "github_issue"))).scalars().all()
         assert len(rows) == 1
         assert rows[0].run_count == 0
         assert rows[0].latest_status is None
@@ -434,9 +422,7 @@ class TestDeterministicId:
 
 
 class TestFailOpen:
-    async def test_canonicalizer_failure_does_not_abort_create_run(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_canonicalizer_failure_does_not_abort_create_run(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         await _seed_org(session)
 
         def _boom(*_args: Any, **_kwargs: Any) -> uuid.UUID:

@@ -124,9 +124,7 @@ class TestUpgrade:
         executed = _executed("upgrade")
         assert len(executed) == len(_INDEXES), f"expected {len(_INDEXES)} statements, got {executed}"
         for name in _INDEXES:
-            assert _expected_create_statement(name) in executed, (
-                f"upgrade missing the exact statement for {name}: {_expected_create_statement(name)}"
-            )
+            assert _expected_create_statement(name) in executed, f"upgrade missing the exact statement for {name}: {_expected_create_statement(name)}"
 
     def test_partial_predicates_are_exact(self) -> None:
         """Each index carries precisely the predicate its read path filters on.
@@ -181,9 +179,7 @@ class TestModelParity:
         for name, (columns, _) in _INDEXES.items():
             assert name in declared, f"model/migration drift: {name} missing from the ORM"
             model_columns = tuple(col.name for col in declared[name].columns)
-            assert model_columns == columns, (
-                f"model/migration drift: {name} model columns {model_columns} != migration {columns}"
-            )
+            assert model_columns == columns, f"model/migration drift: {name} model columns {model_columns} != migration {columns}"
 
     def test_model_partial_predicates_match_the_migration(self) -> None:
         declared = _model_indexes()
@@ -193,9 +189,5 @@ class TestModelParity:
             sqlite_where = index.dialect_options["sqlite"].get("where")
             assert postgresql_where is not None, f"{name} model missing postgresql_where"
             assert sqlite_where is not None, f"{name} model missing sqlite_where"
-            assert str(postgresql_where) == predicate, (
-                f"model/migration drift: {name} postgresql_where {postgresql_where!s} != {predicate}"
-            )
-            assert str(sqlite_where) == predicate, (
-                f"model/migration drift: {name} sqlite_where {sqlite_where!s} != {predicate}"
-            )
+            assert str(postgresql_where) == predicate, f"model/migration drift: {name} postgresql_where {postgresql_where!s} != {predicate}"
+            assert str(sqlite_where) == predicate, f"model/migration drift: {name} sqlite_where {sqlite_where!s} != {predicate}"

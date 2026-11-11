@@ -104,9 +104,6 @@ def test_no_silent_sqlalchemy_error_swallow() -> None:
             if _handler_is_silent(node):
                 violations.append(f"  {path.relative_to(SRC.parent)}:{node.lineno}")
 
-    assert not violations, (
-        f"Found {len(violations)} silent except-SQLAlchemyError arm(s).\n"
-        "A database failure must be logged or surfaced - never folded into a\n"
-        "'not found' / empty result (FAR-1483). Log it (best-effort fails open\n"
-        "WITH a log) or raise so the route can answer 503.\n" + "\n".join(violations)
+    assert not violations, f"Found {len(violations)} silent except-SQLAlchemyError arm(s).\nA database failure must be logged or surfaced - never folded into a\n'not found' / empty result (FAR-1483). Log it (best-effort fails open\nWITH a log) or raise so the route can answer 503.\n" + "\n".join(
+        violations
     )

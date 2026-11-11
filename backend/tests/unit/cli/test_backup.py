@@ -992,9 +992,7 @@ class TestReEncryptCredentialsSync:
             ],
         }
 
-        result = _re_encrypt_credentials_sync(
-            "postgresql://localhost/db", creds, "old-key-1234567890", "new-key-1234567890"
-        )
+        result = _re_encrypt_credentials_sync("postgresql://localhost/db", creds, "old-key-1234567890", "new-key-1234567890")
 
         assert result == {"connector_instances": 1}
         mock_old.decrypt.assert_called_once()
@@ -1377,9 +1375,7 @@ class TestRestoreCli:
         (tmp_path / "checkpoint_blobs.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1525,9 +1521,7 @@ class TestRestoreCli:
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(
@@ -1773,9 +1767,7 @@ class TestRestoreIntegrity:
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1807,9 +1799,7 @@ class TestRestoreIntegrity:
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1834,9 +1824,7 @@ class TestRestoreIntegrity:
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1878,9 +1866,7 @@ class TestRestoreIntegrity:
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1917,9 +1903,7 @@ class TestRestoreIntegrity:
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("{bad json}", encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1959,9 +1943,7 @@ class TestRestoreIntegrity:
         (tmp_path / "checkpoint_blobs.json").write_text(json.dumps([{"id": "b1"}, {"id": "b2"}]), encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text(json.dumps([{"id": "c1"}]), encoding="utf-8")
         (tmp_path / "checkpoint_writes.json").write_text(json.dumps([]), encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": [], "model_backends": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])

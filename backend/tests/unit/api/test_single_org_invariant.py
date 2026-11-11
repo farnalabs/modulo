@@ -232,9 +232,7 @@ async def test_login_org_slug_ignored_when_multi_org_disabled() -> None:
             # (multi-org disabled → org_slug is stripped regardless of what the client sends)
             mock_login_txn.assert_called_once()
             call_kwargs = mock_login_txn.call_args
-            assert call_kwargs.kwargs.get("org_slug") is None or (
-                len(call_kwargs.args) > 0 and call_kwargs[1].get("org_slug") is None
-            )
+            assert call_kwargs.kwargs.get("org_slug") is None or (len(call_kwargs.args) > 0 and call_kwargs[1].get("org_slug") is None)
     finally:
         app.dependency_overrides.clear()
 

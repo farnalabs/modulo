@@ -253,9 +253,7 @@ class TestValidateRefEntryIntakePolicy:
     def test_extra_keys_are_stripped(self) -> None:
         """Only {kind, ref, source, status?} may be asserted — the engine owns
         source_node_id and any other caller-injected key is dropped."""
-        entry = validate_ref_entry(
-            {"kind": "feature", "ref": "1", "source": "caller", "source_node_id": "n1", "evil": True}
-        )
+        entry = validate_ref_entry({"kind": "feature", "ref": "1", "source": "caller", "source_node_id": "n1", "evil": True})
         assert entry == {"kind": "feature", "ref": "1", "source": "caller"}
 
 
@@ -366,9 +364,7 @@ class TestRefsSupplyChannels:
             trigger_type="webhook",
             input_payload={
                 "data": 1,
-                WORK_ITEM_REFS_KEY: [
-                    {"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5", "source": "agent"}
-                ],
+                WORK_ITEM_REFS_KEY: [{"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5", "source": "agent"}],
             },
         )
         # Canonicalised + engine-assigned (wire ``agent`` claim ignored).
@@ -564,11 +560,7 @@ class TestRankGuardedJourneyHydration:
                 {"kind": "github", "ref": "a/b#5"},
             ],
         )
-        rows = (
-            (await session.execute(select(Journey).where(Journey.organisation_id == _ORG, Journey.kind == "github")))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(Journey).where(Journey.organisation_id == _ORG, Journey.kind == "github"))).scalars().all()
         assert len(rows) == 1
         assert rows[0].provenance == "caller"
 
@@ -612,9 +604,7 @@ class TestAgentMintFlagHydration:
         )
         await session.flush()
 
-    async def test_flag_on_mints_agent_ref_with_agent_provenance(
-        self, session: AsyncSession, refs_events: list
-    ) -> None:
+    async def test_flag_on_mints_agent_ref_with_agent_provenance(self, session: AsyncSession, refs_events: list) -> None:
         await self._seed_org_with_flag(session, flag=True)
         await _hydrate_journeys(session, _ORG, [{"kind": "github", "ref": "a/b#5", "source": "agent"}])
         session.expire_all()
@@ -625,9 +615,7 @@ class TestAgentMintFlagHydration:
         assert ("agent_minted", {"count": 1}) in refs_events
         assert not any(e[0] == "agent_mint_suppressed_by_flag" for e in refs_events)
 
-    async def test_flag_omitted_stores_without_mint_and_counts_suppressed(
-        self, session: AsyncSession, refs_events: list
-    ) -> None:
+    async def test_flag_omitted_stores_without_mint_and_counts_suppressed(self, session: AsyncSession, refs_events: list) -> None:
         """No settings entry, no org row, or an explicit-false value: OFF."""
         await self._seed_org_with_flag(session, flag=False)
         await _hydrate_journeys(
@@ -650,9 +638,7 @@ class TestAgentMintFlagHydration:
         assert await _journey_for(session, "github", "a/b#5") is None
         assert ("agent_mint_suppressed_by_flag", {"count": 1}) in refs_events
 
-    async def test_flag_read_error_fails_closed_without_raising(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, refs_events: list
-    ) -> None:
+    async def test_flag_read_error_fails_closed_without_raising(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, refs_events: list) -> None:
         async def _boom(*_a: Any, **_k: Any) -> None:
             raise RuntimeError("db outage")
 
@@ -662,9 +648,7 @@ class TestAgentMintFlagHydration:
         assert await _journey_for(session, "github", "a/b#5") is None
         assert ("agent_mint_suppressed_by_flag", {"count": 1}) in refs_events
 
-    async def test_existing_row_is_provenance_noop_not_counted_as_mint(
-        self, session: AsyncSession, refs_events: list
-    ) -> None:
+    async def test_existing_row_is_provenance_noop_not_counted_as_mint(self, session: AsyncSession, refs_events: list) -> None:
         """An agent ref whose journey already exists (minted earlier by
         caller/derived above rank) is a rank-0 no-op: not a fresh mint, no
         agent stamp upgrade, no minted counter."""
@@ -683,9 +667,7 @@ class TestAgentMintFlagHydration:
         assert not any(e[0] == "agent_minted" for e in refs_events)
         assert not any(e[0] == "agent_mint_suppressed_by_flag" for e in refs_events)
 
-    async def test_agent_mint_never_downgrades_existing_higher_rank(
-        self, session: AsyncSession, refs_events: list
-    ) -> None:
+    async def test_agent_mint_never_downgrades_existing_higher_rank(self, session: AsyncSession, refs_events: list) -> None:
         """Multiple agent entries: only the genuinely-new row is minted and
         counted; the caller-owned row is untouched."""
         await self._seed_org_with_flag(session, flag=True)

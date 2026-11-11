@@ -254,9 +254,7 @@ _SONAR_TOKEN = "sonar_bearer_token_1234567809"
 async def test_github_redacts_token_from_401_error() -> None:
     connector = GitHubConnector(token=_GITHUB_TOKEN)
     with respx.mock:
-        respx.get("https://api.github.com/user/repos").mock(
-            return_value=httpx.Response(401, text=f"Bad credentials ({_GITHUB_TOKEN})")
-        )
+        respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(401, text=f"Bad credentials ({_GITHUB_TOKEN})"))
         with pytest.raises(GitHubError) as exinfo:
             await connector.query(ConnectorQuery(resource="repos"))
     assert _GITHUB_TOKEN not in str(exinfo.value)
@@ -266,9 +264,7 @@ async def test_github_redacts_token_from_401_error() -> None:
 async def test_gitlab_redacts_token_from_401_error() -> None:
     connector = GitLabConnector(token=_GITLAB_TOKEN)
     with respx.mock:
-        respx.get("https://gitlab.com/api/v4/projects").mock(
-            return_value=httpx.Response(401, text=f"Unauthorized ({_GITLAB_TOKEN})")
-        )
+        respx.get("https://gitlab.com/api/v4/projects").mock(return_value=httpx.Response(401, text=f"Unauthorized ({_GITLAB_TOKEN})"))
         with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="projects"))
     assert _GITLAB_TOKEN not in str(exinfo.value)
@@ -291,9 +287,7 @@ async def test_gitlab_redacts_token_from_health_check_detail() -> None:
 async def test_slack_redacts_token_from_401_error() -> None:
     connector = SlackConnector(bot_token=_SLACK_TOKEN)
     with respx.mock:
-        respx.get("https://slack.com/api/conversations.list").mock(
-            return_value=httpx.Response(401, text=f"invalid_auth ({_SLACK_TOKEN})")
-        )
+        respx.get("https://slack.com/api/conversations.list").mock(return_value=httpx.Response(401, text=f"invalid_auth ({_SLACK_TOKEN})"))
         with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="channels"))
     assert _SLACK_TOKEN not in str(exinfo.value)
@@ -303,9 +297,7 @@ async def test_slack_redacts_token_from_401_error() -> None:
 async def test_linear_redacts_token_from_401_error() -> None:
     connector = LinearConnector(token=_LINEAR_TOKEN)
     with respx.mock:
-        respx.post("https://api.linear.app/graphql").mock(
-            return_value=httpx.Response(401, text=f"Unauthorized ({_LINEAR_TOKEN})")
-        )
+        respx.post("https://api.linear.app/graphql").mock(return_value=httpx.Response(401, text=f"Unauthorized ({_LINEAR_TOKEN})"))
         with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="issue", filters={"issue_ref": "ENG-1"}))
     assert _LINEAR_TOKEN not in str(exinfo.value)
@@ -315,9 +307,7 @@ async def test_linear_redacts_token_from_401_error() -> None:
 async def test_jira_redacts_token_from_401_error() -> None:
     connector = JiraConnector(instance="your-domain.atlassian.net", creds={"token": _JIRA_TOKEN})
     with respx.mock:
-        respx.get("https://your-domain.atlassian.net/rest/api/3/issue/ENG-1").mock(
-            return_value=httpx.Response(401, text=f"Unauthorized ({_JIRA_TOKEN})")
-        )
+        respx.get("https://your-domain.atlassian.net/rest/api/3/issue/ENG-1").mock(return_value=httpx.Response(401, text=f"Unauthorized ({_JIRA_TOKEN})"))
         with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "ENG-1"}))
     assert _JIRA_TOKEN not in str(exinfo.value)
@@ -330,9 +320,7 @@ async def test_trello_ticket_tracker_redacts_credentials_from_401_error() -> Non
         creds={"api_key": _TRELLO_KEY, "token": _TRELLO_TOKEN},
     )
     with respx.mock:
-        respx.get("https://api.trello.com/1/boards/board123/cards").mock(
-            return_value=httpx.Response(401, text=f"invalid token ({_TRELLO_TOKEN})")
-        )
+        respx.get("https://api.trello.com/1/boards/board123/cards").mock(return_value=httpx.Response(401, text=f"invalid token ({_TRELLO_TOKEN})"))
         with pytest.raises(ValueError, match=r"\*\*\*") as exinfo:
             await connector.list_tickets()
     assert _TRELLO_TOKEN not in str(exinfo.value)
@@ -345,9 +333,7 @@ async def test_trello_connector_redacts_token_from_query_url() -> None:
     # (which echoes the request URL) contains them; the boundary redaction strips them.
     connector = TrelloConnector(api_key=_TRELLO_KEY, token=_TRELLO_TOKEN)
     with respx.mock:
-        respx.get("https://api.trello.com/1/members/me/boards").mock(
-            return_value=httpx.Response(500, text="server error")
-        )
+        respx.get("https://api.trello.com/1/members/me/boards").mock(return_value=httpx.Response(500, text="server error"))
         with pytest.raises(httpx.HTTPStatusError) as exinfo:
             await connector.query(ConnectorQuery(resource="boards"))
     assert _TRELLO_TOKEN not in str(exinfo.value)

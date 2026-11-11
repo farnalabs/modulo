@@ -146,9 +146,7 @@ async def _job_exists(redis_url: str, job_key: str) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_staled_running_run_with_evicted_job_is_redistpatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_staled_running_run_with_evicted_job_is_redistpatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     # Reconcile re-dispatches through dispatch_run; the SAQ path is the one under
     # test (shadow routes execute_run to Celery, which creates no SAQ job).
     from redis import asyncio as aioredis
@@ -179,9 +177,7 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
 
 
 @pytest.mark.asyncio
-async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """F6a review: a waiting HITL run is NEVER auto-redispatched by reconcile.
 
     Its ``execute_run`` job COMPLETED normally at the gate — TTL expiry + stale
@@ -220,9 +216,7 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
     try:
         async with eng.connect() as conn:
-            row = (
-                await conn.execute(text("SELECT claim_token, status FROM runs WHERE id=:rid"), {"rid": str(run_id)})
-            ).first()
+            row = (await conn.execute(text("SELECT claim_token, status FROM runs WHERE id=:rid"), {"rid": str(run_id)})).first()
     finally:
         await eng.dispose()
     assert row[0] == "token-a"  # claim token not rotated
@@ -230,9 +224,7 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
 
 
 @pytest.mark.asyncio
-async def test_capacity_deferred_run_redispatched_when_capacity_frees(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_capacity_deferred_run_redispatched_when_capacity_frees(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """F4 review: a capacity-deferred run (pending, dispatched_at NULL,
     dispatcher NULL) must be re-dispatched when capacity frees. dispatch_run
     returns deferred BEFORE recording dispatched_at/dispatcher, so the
@@ -269,9 +261,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
     try:
         async with eng.connect() as conn:
-            row = (
-                await conn.execute(text("SELECT dispatcher, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
-            ).first()
+            row = (await conn.execute(text("SELECT dispatcher, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})).first()
     finally:
         await eng.dispose()
     assert row[0] == "saq"
@@ -279,9 +269,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
 
 
 @pytest.mark.asyncio
-async def test_live_job_not_repaired(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_live_job_not_repaired(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue
 
@@ -300,9 +288,7 @@ async def test_live_job_not_repaired(
 
 
 @pytest.mark.asyncio
-async def test_two_connections_no_double_redispatch(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_two_connections_no_double_redispatch(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two concurrent dispatcher_reconcile() passes (separate NullPool engines,
     real Redis) must not double-execute the same staled run.
 
@@ -428,9 +414,7 @@ async def _read_run(db_engine: Any, run_id: uuid.UUID) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_pending_run_beyond_retry_budget_is_terminal_failed(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pending_run_beyond_retry_budget_is_terminal_failed(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """A pending run already at its policy ceiling is terminal-failed with the
     distinct code — never re-dispatched (which executed past the policy) and
     never left pending (which hid the cause until the age backstop).
@@ -462,9 +446,7 @@ async def test_pending_run_beyond_retry_budget_is_terminal_failed(
 
 
 @pytest.mark.asyncio
-async def test_pending_run_within_retry_budget_is_still_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pending_run_within_retry_budget_is_still_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """Durability preserved: a within-budget pending row keeps the recovery."""
     run_id, _ = await _seed_saq_run(
         db_engine,
@@ -486,9 +468,7 @@ async def test_pending_run_within_retry_budget_is_still_redispatched(
 
 
 @pytest.mark.asyncio
-async def test_running_run_beyond_retry_budget_is_untouched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_running_run_beyond_retry_budget_is_untouched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """The gate is PENDING-only: a running row (node started, executor gone) is
     held back by the existing belts, never terminal-failed by the budget gate —
     re-execution of a started node is unsafe.
@@ -530,9 +510,7 @@ async def test_running_run_beyond_retry_budget_is_untouched(
 
 
 @pytest.mark.asyncio
-async def test_running_pre_node_row_beyond_retry_budget_is_not_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_running_pre_node_row_beyond_retry_budget_is_not_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """FAR-2076: the gate covers EVERY non-terminal ``execute_run`` row.
 
     A ``running`` row whose last execution died PRE-NODE (phase ``claimed``,
@@ -566,9 +544,7 @@ async def test_running_pre_node_row_beyond_retry_budget_is_not_redispatched(
 
 
 @pytest.mark.asyncio
-async def test_soft_deleted_pipeline_still_applies_the_budget(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_soft_deleted_pipeline_still_applies_the_budget(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """FAR-1025 parity: an in-flight run whose pipeline was soft-deleted must
     still resolve its retry policy. Without the row select's
     ``include_soft_deleted`` opt-out the LEFT JOIN yields NULL, the gate

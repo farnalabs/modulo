@@ -57,10 +57,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -116,12 +113,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -207,12 +199,7 @@ async def test_post_node_eval_persists_via_evals_cutover(
     eval_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                "config_json, account_id) "
-                "VALUES (:id, :oid, :pid, CAST(:nid AS uuid), 'cutover-regex', 'regex', "
-                "CAST(:cfg AS json), :aid)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, CAST(:nid AS uuid), 'cutover-regex', 'regex', CAST(:cfg AS json), :aid)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -223,10 +210,7 @@ async def test_post_node_eval_persists_via_evals_cutover(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action) "
-                "VALUES (:id, :oid, :eid, CAST(:nid AS uuid), 'warn')"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action) VALUES (:id, :oid, :eid, CAST(:nid AS uuid), 'warn')"),
             {"id": str(uuid.uuid4()), "oid": str(org_id), "eid": str(eval_id), "nid": node_id},
         )
 
@@ -260,11 +244,7 @@ async def test_post_node_eval_persists_via_evals_cutover(
     async with db_engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT er.eval_id, er.passed, "
-                    "(EXISTS (SELECT 1 FROM evals e WHERE e.id = er.eval_id)) AS in_evals "
-                    "FROM eval_results er WHERE er.run_id = :rid"
-                ),
+                text("SELECT er.eval_id, er.passed, (EXISTS (SELECT 1 FROM evals e WHERE e.id = er.eval_id)) AS in_evals FROM eval_results er WHERE er.run_id = :rid"),
                 {"rid": str(run_id)},
             )
         ).fetchall()

@@ -41,9 +41,7 @@ def _classify(
     """Run ``_invocation_is_upgrade`` against a stubbed config/context."""
     migration_env.config = SimpleNamespace(cmd_opts=cmd_opts)
     if ctx_proxy_present:
-        proxy = (
-            None if ctx_fn_name is None else SimpleNamespace(context_opts={"fn": SimpleNamespace(__name__=ctx_fn_name)})
-        )
+        proxy = None if ctx_fn_name is None else SimpleNamespace(context_opts={"fn": SimpleNamespace(__name__=ctx_fn_name)})
         migration_env.context = SimpleNamespace(_proxy=proxy)
     else:
         migration_env.context = SimpleNamespace()
@@ -149,9 +147,7 @@ def test_config_none_falls_back_to_upgrade() -> None:
 
 
 def test_alembic_context_fn_name_reads_proxy_context_opts() -> None:
-    migration_env.context = SimpleNamespace(
-        _proxy=SimpleNamespace(context_opts={"fn": SimpleNamespace(__name__="downgrade")})
-    )
+    migration_env.context = SimpleNamespace(_proxy=SimpleNamespace(context_opts={"fn": SimpleNamespace(__name__="downgrade")}))
     assert migration_env._alembic_context_fn_name() == "downgrade"
 
 

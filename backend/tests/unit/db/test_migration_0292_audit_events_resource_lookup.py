@@ -184,9 +184,5 @@ class TestModelParity:
         # Migration-owned by 0165 (_MIGRATION_OWNED_CHECKS in
         # tests/integration/test_initial_migration.py): the ORM must not
         # declare the duplicate.
-        checks = {
-            constraint.name
-            for constraint in AuditChainHead.__table__.constraints
-            if isinstance(constraint, CheckConstraint)
-        }
+        checks = {constraint.name for constraint in AuditChainHead.__table__.constraints if isinstance(constraint, CheckConstraint)}
         assert not checks, checks

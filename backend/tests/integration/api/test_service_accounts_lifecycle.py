@@ -96,10 +96,7 @@ class TestServiceAccountLifecycle:
             row = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT kind, email, password_hash, auth_provider, sso_subject, active "
-                            "FROM accounts WHERE id = :id"
-                        ),
+                        text("SELECT kind, email, password_hash, auth_provider, sso_subject, active FROM accounts WHERE id = :id"),
                         {"id": str(sa_id)},
                     )
                 )
@@ -126,10 +123,7 @@ class TestServiceAccountLifecycle:
             key_row = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT account_id::text, role, scope, revoked_at, expires_at "
-                            "FROM org_api_keys WHERE id = :id"
-                        ),
+                        text("SELECT account_id::text, role, scope, revoked_at, expires_at FROM org_api_keys WHERE id = :id"),
                         {"id": str(minted.id)},
                     )
                 )
@@ -382,10 +376,7 @@ class TestServiceAccountLifecycle:
         with pytest.raises(DBAPIError):
             async with app_session.begin():
                 await app_session.execute(
-                    text(
-                        "INSERT INTO team_memberships (id, organisation_id, team_id, account_id, role) "
-                        "VALUES (:id, :oid, :tid, :aid, 'admin')"
-                    ),
+                    text("INSERT INTO team_memberships (id, organisation_id, team_id, account_id, role) VALUES (:id, :oid, :tid, :aid, 'admin')"),
                     {
                         "id": str(uuid.uuid4()),
                         "oid": str(test_org),

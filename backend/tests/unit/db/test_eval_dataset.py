@@ -31,16 +31,7 @@ from farna.db.models import (
 )
 from farna.db.soft_delete import include_soft_deleted
 
-_MIGRATION_PATH = (
-    Path(__file__).parents[4]
-    / "backend"
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0131_eval_dataset_corpus.py"
-)
+_MIGRATION_PATH = Path(__file__).parents[4] / "backend" / "src" / "farna" / "db" / "migrations" / "versions" / "0131_eval_dataset_corpus.py"
 
 
 def _make_session() -> Session:

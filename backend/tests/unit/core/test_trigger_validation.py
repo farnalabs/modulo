@@ -136,10 +136,7 @@ class TestMaxConcurrentRuns:
                 config_json=None,
                 pipeline_max_concurrent_runs=4,
             )
-        assert (
-            _raise_detail(excinfo.value) == "ongoing trigger target max_concurrent_runs cannot exceed the pipeline's "
-            "max_concurrent_runs (4)"
-        )
+        assert _raise_detail(excinfo.value) == "ongoing trigger target max_concurrent_runs cannot exceed the pipeline's max_concurrent_runs (4)"
 
     @pytest.mark.parametrize("pipeline_cap", [5, 10, 20])
     def test_target_at_or_below_pipeline_cap_accepted(self, pipeline_cap: int) -> None:
@@ -233,10 +230,7 @@ class TestScanInterval:
                 config_json={"scan_interval_seconds": "every-minute"},
                 pipeline_max_concurrent_runs=10,
             )
-        assert (
-            _raise_detail(excinfo.value)
-            == "ongoing trigger scan_interval_seconds must be an integer (number of seconds)"
-        )
+        assert _raise_detail(excinfo.value) == "ongoing trigger scan_interval_seconds must be an integer (number of seconds)"
 
 
 class TestCombinations:

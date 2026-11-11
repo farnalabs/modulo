@@ -205,12 +205,7 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, review_
     from farna.api.mcp_server import list_pending_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    review_id = (
-        review_id
-        or getattr(request.node, "_review_id", None)
-        or getattr(request.node, "_human_node", None)
-        or "pre-deploy"
-    )
+    review_id = review_id or getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
     claim = MagicMock()
     claim.run_id = run_id
     claim.review_id = review_id
@@ -266,9 +261,7 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
     from farna.api.mcp_server import review_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    review_id = (
-        getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
-    )
+    review_id = getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
     mock_run = MagicMock(id=run_id, status="awaiting_human", owner_team_id=None, pipeline_id=uuid.uuid4())
     session = _make_session_context(AsyncMock())
 
@@ -580,9 +573,7 @@ def run_waiting_human(node: str, request):
 def pending_gate_requires_human(request):
     data = _mcp_response_payload(request)
     run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
-    review_id = (
-        getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
-    )
+    review_id = getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
     gates = data.get("reviews", [])
     gate = next(
         (g for g in gates if g.get("run_id") == run_id_str and g.get("review_id") == review_id),

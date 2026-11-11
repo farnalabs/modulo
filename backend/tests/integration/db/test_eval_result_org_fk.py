@@ -49,20 +49,12 @@ async def _setup_org(engine: AsyncEngine):
         )
         acc_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
         )
         pipe_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
         )
     return org_id, acc_id, pipe_id
@@ -90,11 +82,7 @@ async def _insert_run(engine: AsyncEngine, org_id, pipe_id) -> uuid.UUID:
             {"id": str(snapshot_id), "pid": str(pipe_id), "oid": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "langgraph_thread_id, trigger_type, input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, trigger_type, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -111,11 +99,7 @@ async def _insert_eval(engine: AsyncEngine, org_id, pipe_id, acc_id, node_id) ->
     eval_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
-                "node_id, eval_type, config_json, version) "
-                "VALUES (:id, :oid, :pid, :aid, :nid, 'regex', '{}'::json, 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, eval_type, config_json, version) VALUES (:id, :oid, :pid, :aid, :nid, 'regex', '{}'::json, 1)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -131,10 +115,7 @@ async def _insert_eval_result(engine: AsyncEngine, org_id, eval_id, run_id, pass
     result_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
-                "VALUES (:id, :oid, :rid, :eid, :passed, :outcome)"
-            ),
+            text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:id, :oid, :rid, :eid, :passed, :outcome)"),
             {
                 "id": str(result_id),
                 "oid": str(org_id),
@@ -150,13 +131,7 @@ async def _insert_eval_result(engine: AsyncEngine, org_id, eval_id, run_id, pass
 async def _fk_row(conn, child_table: str, parent_table: str):
     """Return ``(conname, confdeltype, constraint_def)`` for the child→parent FK."""
     result = await conn.execute(
-        text(
-            "SELECT c.conname, c.confdeltype, pg_get_constraintdef(c.oid) "
-            "FROM pg_constraint c "
-            "WHERE c.conrelid = CAST(:child AS regclass) "
-            "  AND c.confrelid = CAST(:parent AS regclass) "
-            "  AND c.contype = 'f'"
-        ),
+        text("SELECT c.conname, c.confdeltype, pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = CAST(:child AS regclass)   AND c.confrelid = CAST(:parent AS regclass)   AND c.contype = 'f'"),
         {"child": child_table, "parent": parent_table},
     )
     row = result.fetchone()
@@ -194,11 +169,7 @@ class TestCompositeFkShape:
     @pytest.mark.asyncio
     async def test_evals_unique_id_organisation_id_exists(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
-            unique = await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM pg_constraint WHERE conname = 'uq_evals_id_organisation_id' AND contype = 'u'"
-                )
-            )
+            unique = await conn.execute(text("SELECT COUNT(*) FROM pg_constraint WHERE conname = 'uq_evals_id_organisation_id' AND contype = 'u'"))
         assert unique.scalar_one() == 1, "evals must carry UNIQUE (id, organisation_id) for the composite FK target"
 
 
@@ -251,10 +222,7 @@ class TestCrossOrgEnforcement:
                 await conn.execute(text(f'ALTER TABLE eval_results DISABLE TRIGGER "{_TENANT_TRIGGER}"'))
                 with pytest.raises(IntegrityError):
                     await conn.execute(
-                        text(
-                            "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
-                            "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
-                        ),
+                        text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:id, :oid, :rid, :eid, true, 'pass')"),
                         {"id": str(uuid.uuid4()), "oid": str(org_b), "rid": str(run_b), "eid": str(eval_a)},
                     )
             finally:

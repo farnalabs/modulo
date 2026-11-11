@@ -98,12 +98,7 @@ class TestRead:
 
 class TestChangedNames:
     def test_staged_diff_filters_to_migration_versions(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        stdout = (
-            "backend/src/farna/db/migrations/versions/0062_add_widget.py\n"
-            "backend/src/farna/api/routes/triggers.py\n"
-            "backend/src/farna/db/migrations/versions/0063_fix.py\n"
-            "README.md\n"
-        )
+        stdout = "backend/src/farna/db/migrations/versions/0062_add_widget.py\nbackend/src/farna/api/routes/triggers.py\nbackend/src/farna/db/migrations/versions/0063_fix.py\nREADME.md\n"
         calls: list[list[str]] = []
 
         def _fake_run(cmd, **_kwargs):
@@ -209,9 +204,7 @@ class TestMainClean:
 
 
 class TestMainCollisions:
-    def test_duplicate_prefix_involving_changed_file_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ) -> None:
+    def test_duplicate_prefix_involving_changed_file_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         versions = _prepare(tmp_path, monkeypatch, changed=["0062_add_widget.py"])
         _write_migration(versions, "0062_add_widget.py", "0062_a", "0061_x")
         _write_migration(versions, "0062_add_gadget.py", "0062_b", "0061_y")
@@ -221,9 +214,7 @@ class TestMainCollisions:
         assert "duplicate migration number '0062'" in err
         assert "FAILED" in err
 
-    def test_preexisting_collision_outside_changed_set_is_ignored(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ) -> None:
+    def test_preexisting_collision_outside_changed_set_is_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         versions = _prepare(tmp_path, monkeypatch, changed=["0099_unrelated.py"])
         _write_migration(versions, "0062_add_widget.py", "0062_a", "0061_x")
         _write_migration(versions, "0062_add_gadget.py", "0062_b", "0061_y")
@@ -249,9 +240,7 @@ class TestMainCollisions:
         assert "both declare down_revision 'shared_parent'" in err
         assert "unintended branch" in err
 
-    def test_falls_back_to_all_files_when_nothing_staged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ) -> None:
+    def test_falls_back_to_all_files_when_nothing_staged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         versions = _prepare(tmp_path, monkeypatch, changed=[])
         _write_migration(versions, "0062_a.py", "rev_a", "0061_x")
         _write_migration(versions, "0062_b.py", "rev_b", "0061_y")
@@ -279,9 +268,7 @@ class TestMainDiffRange:
 
 
 class TestMainAlembicProbe:
-    def test_multiple_heads_warns_but_still_passes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-    ) -> None:
+    def test_multiple_heads_warns_but_still_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         versions = _prepare(
             tmp_path,
             monkeypatch,

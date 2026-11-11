@@ -118,9 +118,7 @@ class TestBuildToolRegistry:
         result = await build_tool_registry()
         assert result is None
 
-    async def test_rebuild_after_cache_reset_reflects_new_tools(
-        self, fake_mcp: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_rebuild_after_cache_reset_reflects_new_tools(self, fake_mcp: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_mcp._tool_manager._tools = {"foo": _make_tool(name="foo")}
         await build_tool_registry()
         assert [d["function"]["name"] for d in get_mcp_tool_definitions()] == ["foo"]

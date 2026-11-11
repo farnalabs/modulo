@@ -280,9 +280,7 @@ async def test_execute_transient_budget_reads_the_pipeline_retry_policy():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     assert mock_finalize.await_args is not None
@@ -409,9 +407,7 @@ async def test_execute_provider_billing_refusal_is_not_retried():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # Terminal on attempt 1 — the retry budget (5) is irrelevant.
     assert result is final_run
@@ -496,12 +492,7 @@ async def test_execute_jsonl_402_is_terminal_and_alerts_as_insufficient_funds():
     from farna.core.notifier import EVENT_PROVIDER_FAILURE
     from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
-    diagnostic = (
-        "Sandbox agent command produced no output within 600s. Retained stdout tail: "
-        '{"type":"error","error":{"name":"APIError","data":'
-        '{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402,"isRetryable":false}}}'
-    )
+    diagnostic = 'Sandbox agent command produced no output within 600s. Retained stdout tail: {"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402,"isRetryable":false}}}'
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     final_run = _make_run(
         run_id=run.id,
@@ -535,9 +526,7 @@ async def test_execute_jsonl_402_is_terminal_and_alerts_as_insufficient_funds():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock(), notifier=notifier)
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # Terminal on attempt 1 — the full retry budget (5) must not be spent.
     assert result is final_run
@@ -590,9 +579,7 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     call = mock_finalize.await_args
@@ -650,9 +637,7 @@ async def test_execute_terminal_fails_sandbox_queue_timeout_with_correct_code():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     call = mock_finalize.await_args
@@ -702,9 +687,7 @@ async def test_execute_non_idempotent_graph_suppresses_transient_retry():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # Terminal-failed (execute returned normally) — NOT re-raised for retry.
     assert result is run
@@ -734,12 +717,7 @@ async def test_execute_refuses_requeue_for_non_retryable_provider_402():
     from farna.core.pipeline_engine.error_codes import is_retryable
     from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
-    diagnostic = (
-        "Sandbox agent command produced no output within 600s. Retained stdout tail: "
-        '{"type":"error","error":{"name":"APIError","data":'
-        '{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402,"isRetryable":false}}}'
-    )
+    diagnostic = 'Sandbox agent command produced no output within 600s. Retained stdout tail: {"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402,"isRetryable":false}}}'
     # Full retry budget left (node_attempt_count 1 < saq_run_retries 5).
     run = _make_run(claim_count=1, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
@@ -765,9 +743,7 @@ async def test_execute_refuses_requeue_for_non_retryable_provider_402():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # Terminal on the FIRST attempt — execute returned normally, no re-raise.
     assert result is run
@@ -852,9 +828,7 @@ async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     persisted = mock_finalize.await_args.kwargs["error_detail"]
@@ -945,9 +919,7 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     assert mock_finalize.await_args.kwargs.get("error_code") == "RuntimeError"
@@ -1001,9 +973,7 @@ async def test_execute_generic_exception_carrying_provider_refusal_is_reclassifi
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     call = mock_finalize.await_args
@@ -1050,9 +1020,7 @@ async def test_execute_generic_prestream_failure_keeps_its_class_name():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is final_run
     call = mock_finalize.await_args
@@ -1208,9 +1176,7 @@ async def test_execute_gate_suppresses_retry_when_delivery_marked():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # Gate fired: complete + harness.idempotency_gate, NOT failed.
     assert result is run
@@ -1261,9 +1227,7 @@ async def test_execute_gate_suppresses_retry_when_retries_exhausted():
         patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     assert result is run
     assert mock_finalize.await_args.kwargs["status"] == "complete"

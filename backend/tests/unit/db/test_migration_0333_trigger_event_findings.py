@@ -82,17 +82,11 @@ def test_finding_id_server_default_matches_migration() -> None:
 
 
 def test_trigger_event_composite_unique_key_is_model_owned_and_migration_managed() -> None:
-    constraint = next(
-        constraint
-        for constraint in TriggerEvent.__table__.constraints
-        if isinstance(constraint, sa.UniqueConstraint) and constraint.name == "uq_trigger_events_id_organisation_id"
-    )
+    constraint = next(constraint for constraint in TriggerEvent.__table__.constraints if isinstance(constraint, sa.UniqueConstraint) and constraint.name == "uq_trigger_events_id_organisation_id")
     assert tuple(column.name for column in constraint.columns) == ("id", "organisation_id")
     migration_text = _MIGRATION_PATH.read_text()
     assert "op.create_unique_constraint(" in migration_text
-    assert (
-        'op.drop_constraint("uq_trigger_events_id_organisation_id", "trigger_events", type_="unique")' in migration_text
-    )
+    assert 'op.drop_constraint("uq_trigger_events_id_organisation_id", "trigger_events", type_="unique")' in migration_text
     assert "DROP CONSTRAINT uq_trigger_events_id_organisation_id" not in migration_text
 
 
@@ -133,7 +127,5 @@ def test_downgrade_only_drops_constraint_owned_by_0333() -> None:
     recorder.get_bind.return_value = bind
     with patch.object(migration, "op", recorder):
         migration.downgrade()
-    recorder.drop_constraint.assert_called_once_with(
-        "uq_trigger_events_id_organisation_id", "trigger_events", type_="unique"
-    )
+    recorder.drop_constraint.assert_called_once_with("uq_trigger_events_id_organisation_id", "trigger_events", type_="unique")
     assert all("DROP CONSTRAINT" not in str(call) for call in recorder.execute.call_args_list)

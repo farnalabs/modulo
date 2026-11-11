@@ -163,9 +163,7 @@ def _upgrade_release_fixture(staging: Path, target_version: str = "1.2.0") -> Si
         extra_path.write_bytes(b"bundled binary bytes\n")
     artifact_names = ("launcher", "VERSION", "pg/bin/postgres", "redis/redis-server")
     (bundle_root / "SHA256SUMS").write_text("", encoding="utf-8")
-    digests = {
-        artifact: hashlib.sha256((bundle_root / artifact).read_bytes()).hexdigest() for artifact in artifact_names
-    }
+    digests = {artifact: hashlib.sha256((bundle_root / artifact).read_bytes()).hexdigest() for artifact in artifact_names}
     sums_payload = "".join(f"{digest}  {artifact}\n" for artifact, digest in digests.items())
     (bundle_root / "SHA256SUMS").write_text(sums_payload, encoding="utf-8")
     tarball_path = staging / f"modulo-{target_version}-linux-amd64.tar.gz"
@@ -198,9 +196,7 @@ def _upgrade_release_fixture(staging: Path, target_version: str = "1.2.0") -> Si
     manifest_payload = json_module.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
     manifest_path = staging / "RELEASE_MANIFEST.json"
     manifest_path.write_bytes(manifest_payload)
-    signature = manifest_module.sign_release_bytes(
-        manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
-    )
+    signature = manifest_module.sign_release_bytes(manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX)
     signature_path = staging / (manifest_module.MANIFEST_NAME + manifest_module.SIGNATURE_SUFFIX)
     signature_path.write_text(json_module.dumps(signature), encoding="utf-8")
     return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)

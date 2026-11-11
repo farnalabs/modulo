@@ -105,9 +105,7 @@ class TestRecordOwnerReadFailure:
 
         assert notifier_mod._owner_read_failures_total is None
 
-    def test_noop_when_counter_creation_fails(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_noop_when_counter_creation_fails(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         provider = MagicMock()
         meter = MagicMock()
         meter.create_counter.side_effect = RuntimeError("meter unavailable")

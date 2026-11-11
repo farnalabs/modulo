@@ -97,9 +97,7 @@ class TestWidenedRoleScopeCheck:
 
     @pytest.mark.parametrize("role", ["operator", "runner"])
     @pytest.mark.parametrize("scope", ["org", "user"])
-    def test_operator_and_runner_stay_valid_for_both_scopes(
-        self, sqlite_engine: sa.Engine, role: str, scope: str
-    ) -> None:
+    def test_operator_and_runner_stay_valid_for_both_scopes(self, sqlite_engine: sa.Engine, role: str, scope: str) -> None:
         with sqlite_engine.begin() as conn:
             _scaffold(conn)
         _run(sqlite_engine, _load_migration(), "upgrade")

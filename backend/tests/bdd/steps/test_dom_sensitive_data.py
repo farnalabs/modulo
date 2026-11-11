@@ -95,17 +95,13 @@ def retrieve_connector(client: Any, request: Any) -> None:
 @then(parsers.parse('the "{field}" field in config_json is masked'))
 def check_field_masked(request: Any, field: str) -> None:
     body = request.node._resp.json()
-    assert body["config_json"][field] == SENSITIVE_VALUE_MASK, (
-        f"Expected {field} to be masked, got {body['config_json'][field]!r}"
-    )
+    assert body["config_json"][field] == SENSITIVE_VALUE_MASK, f"Expected {field} to be masked, got {body['config_json'][field]!r}"
 
 
 @then(parsers.parse('the "{field}" field retains its original value'))
 def check_field_preserved(request: Any, field: str) -> None:
     body = request.node._resp.json()
-    assert body["config_json"][field] == "My Connector", (
-        f"Expected {field} to be 'My Connector', got {body['config_json'][field]!r}"
-    )
+    assert body["config_json"][field] == "My Connector", f"Expected {field} to be 'My Connector', got {body['config_json'][field]!r}"
 
 
 # ===========================================================================
@@ -214,9 +210,7 @@ def check_revealed_value(request: Any, expected: str) -> None:
 def check_reveal_token(request: Any) -> None:
     body = request.node._resp.json()
     assert "token" in body, "Response missing 'token' field"
-    assert len(body["token"]) == 36, (
-        f"Expected UUID-length token (36 chars), got {len(body['token'])}: {body['token']!r}"
-    )
+    assert len(body["token"]) == 36, f"Expected UUID-length token (36 chars), got {len(body['token'])}: {body['token']!r}"
 
 
 @then(parsers.parse('the response declares "{field}" as {value:d}'))

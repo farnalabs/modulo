@@ -115,25 +115,15 @@ def _markdown_files() -> list[Path]:
 
 
 def test_graph_index_exists():
-    assert GRAPH_INDEX.is_file(), (
-        f"product map graph index missing: {GRAPH_INDEX.relative_to(REPO_ROOT)} "
-        "(restore docs/product-map/README.md; CONTRIBUTING.md and the incident-response "
-        "playbook link into this directory)"
-    )
+    assert GRAPH_INDEX.is_file(), f"product map graph index missing: {GRAPH_INDEX.relative_to(REPO_ROOT)} (restore docs/product-map/README.md; CONTRIBUTING.md and the incident-response playbook link into this directory)"
 
 
 def test_graph_index_links_resolve():
     """The ``docs/product-map/README.md`` index only links entries that exist."""
     assert GRAPH_INDEX.is_file()
     index_text = GRAPH_INDEX.read_text(encoding="utf-8")
-    missing = sorted(
-        target
-        for target in {match.group(1) for match in _INDEX_LINK.finditer(index_text)}
-        if not (PRODUCT_MAP_DIR / target).is_file()
-    )
-    assert not missing, "docs/product-map/README.md links to missing feature-graph entries:\n" + "\n".join(
-        f"  {target}" for target in missing
-    )
+    missing = sorted(target for target in {match.group(1) for match in _INDEX_LINK.finditer(index_text)} if not (PRODUCT_MAP_DIR / target).is_file())
+    assert not missing, "docs/product-map/README.md links to missing feature-graph entries:\n" + "\n".join(f"  {target}" for target in missing)
 
 
 def test_every_graph_entry_reachable_from_index():
@@ -143,10 +133,7 @@ def test_every_graph_entry_reachable_from_index():
     linked = {match.group(1) for match in _INDEX_LINK.finditer(index_text)}
     for entry in _product_map_entry_paths():
         relative = entry.relative_to(PRODUCT_MAP_DIR).as_posix()
-        assert relative in linked, (
-            f"docs/product-map entry {relative} is not linked from README.md "
-            "(orphaned behaviour-tracker - unreachable from the product map)"
-        )
+        assert relative in linked, f"docs/product-map entry {relative} is not linked from README.md (orphaned behaviour-tracker - unreachable from the product map)"
 
 
 #: Section markers of the graph root's two indexes (see README.md). The docs
@@ -184,10 +171,7 @@ def _registry_index_section() -> str:
 def _registry_index_routes() -> dict[str, list[str]]:
     """Map each graph-root registry feature to the routes listed on its line."""
     section = _registry_index_section()
-    return {
-        match.group("feature"): re.findall(r"`([^`]+)`", match.group("routes"))
-        for match in _REGISTRY_ROUTE_LINE.finditer(section)
-    }
+    return {match.group("feature"): re.findall(r"`([^`]+)`", match.group("routes")) for match in _REGISTRY_ROUTE_LINE.finditer(section)}
 
 
 def _manifest_feature_routes() -> dict[str, list[tuple[str, str | None]]]:
@@ -219,17 +203,10 @@ def test_graph_root_registry_index_enumerates_every_manifest_feature():
     """
     assert GRAPH_INDEX.is_file()
     index_section = _registry_index_section()
-    missing = sorted(
-        feature
-        for feature in _manifest_features()
-        if _REGISTRY_INDEX_TOKEN.format(feature=feature) not in index_section
-    )
+    missing = sorted(feature for feature in _manifest_features() if _REGISTRY_INDEX_TOKEN.format(feature=feature) not in index_section)
     assert not missing, (
         "manifest-registered features missing from the graph-root registry index "
-        "(add each to the 'Index — manifest feature registry' section of "
-        + GRAPH_INDEX.relative_to(REPO_ROOT).as_posix()
-        + " so the graph root enumerates the full product surface):\n"
-        + "\n".join(f"  {feature}" for feature in missing)
+        "(add each to the 'Index — manifest feature registry' section of " + GRAPH_INDEX.relative_to(REPO_ROOT).as_posix() + " so the graph root enumerates the full product surface):\n" + "\n".join(f"  {feature}" for feature in missing)
     )
 
 
@@ -273,17 +250,8 @@ def test_graph_root_registry_routes_match_manifest():
                 unknown.setdefault(feature, []).append(path)
             elif path not in tagged:
                 misattributed.setdefault(feature, []).append(path)
-    assert not unknown, (
-        "graph-root registry index names routes that do not exist in "
-        + MANIFEST_PATH.relative_to(REPO_ROOT).as_posix()
-        + " (stale route citations):\n"
-        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(unknown.items()))
-    )
-    assert not misattributed, (
-        "graph-root registry index names routes that are not tagged with the feature "
-        "on that line (misattributed routes):\n"
-        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(misattributed.items()))
-    )
+    assert not unknown, "graph-root registry index names routes that do not exist in " + MANIFEST_PATH.relative_to(REPO_ROOT).as_posix() + " (stale route citations):\n" + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(unknown.items()))
+    assert not misattributed, "graph-root registry index names routes that are not tagged with the feature on that line (misattributed routes):\n" + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(misattributed.items()))
 
     missing: dict[str, list[str]] = {}
     for feature, entries in by_feature.items():
@@ -292,11 +260,7 @@ def test_graph_root_registry_routes_match_manifest():
         gap = public - listed
         if gap:
             missing[feature] = sorted(gap)
-    assert not missing, (
-        "public manifest routes missing from their feature's graph-root registry line "
-        "(add each to the 'Index — manifest feature registry' section):\n"
-        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(missing.items()))
-    )
+    assert not missing, "public manifest routes missing from their feature's graph-root registry line (add each to the 'Index — manifest feature registry' section):\n" + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(missing.items()))
 
 
 def test_every_manifest_feature_has_a_behaviour_tracker():
@@ -313,11 +277,8 @@ def test_every_manifest_feature_has_a_behaviour_tracker():
     """
     tracked = _product_map_entry_ids()
     missing = sorted(_manifest_features() - tracked)
-    assert not missing, (
-        "manifest-registered features with no docs/product-map/ behaviour-tracker "
-        "entry (the graph root claims every registered feature is tracked; add an "
-        "entry under docs/product-map/ keyed by the feature id, or drop the feature "
-        "from the manifest registry):\n" + "\n".join(f"  {feature}" for feature in missing)
+    assert not missing, "manifest-registered features with no docs/product-map/ behaviour-tracker entry (the graph root claims every registered feature is tracked; add an entry under docs/product-map/ keyed by the feature id, or drop the feature from the manifest registry):\n" + "\n".join(
+        f"  {feature}" for feature in missing
     )
 
 
@@ -367,11 +328,7 @@ def test_graph_tracker_status_matches_manifest_registry():
         "behaviour-tracker frontmatter 'status' disagrees with the manifest "
         "features registry for the same feat-* id — a reader of the graph gets "
         "the opposite coverage answer from the machine layer Assistant indexes "
-        "(aligned for the 2026-09-29 walk; keep the two layers in step):\n"
-        + "\n".join(
-            f"  {feat} -> manifest={info['manifest']!r} tracker={info['tracker']!r} in {info['entry']}"
-            for feat, info in sorted(mismatches.items())
-        )
+        "(aligned for the 2026-09-29 walk; keep the two layers in step):\n" + "\n".join(f"  {feat} -> manifest={info['manifest']!r} tracker={info['tracker']!r} in {info['entry']}" for feat, info in sorted(mismatches.items()))
     )
 
 
@@ -381,9 +338,7 @@ def test_graph_entry_feature_ids_are_unique():
     for entry in _product_map_entry_paths():
         entry_id = _frontmatter_id(entry)
         assert entry_id is not None, f"docs/product-map entry has no frontmatter id: {entry}"
-        assert _FEAT_LITERAL.fullmatch(entry_id), (
-            f"docs/product-map entry id {entry_id!r} in {entry} is not a feat-* id"
-        )
+        assert _FEAT_LITERAL.fullmatch(entry_id), f"docs/product-map entry id {entry_id!r} in {entry} is not a feat-* id"
         assert entry_id not in seen, f"duplicate docs/product-map entry id {entry_id!r}"
         seen[entry_id] = entry
 
@@ -502,11 +457,7 @@ def test_entry_file_references_resolve():
                 resolved = REPO_ROOT / ref.rstrip("/")
                 if not resolved.is_file() and not resolved.is_dir():
                     missing.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(f"{field}: {ref}")
-    assert not missing, (
-        "docs/product-map entries cite paths that do not exist in the repo"
-        " (stale code/bdd/unit-test coverage claims):\n"
-        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(missing.items()))
-    )
+    assert not missing, "docs/product-map entries cite paths that do not exist in the repo (stale code/bdd/unit-test coverage claims):\n" + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(missing.items()))
 
 
 def test_bdd_citations_are_registered_coverage():
@@ -536,11 +487,7 @@ def test_bdd_citations_are_registered_coverage():
                 continue
             if resolved not in registered:
                 unregistered.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(ref)
-    assert not unregistered, (
-        "bdd: citations under backend/tests/bdd/ that no step module loads — the"
-        " product map claims BDD coverage for feature files that never execute:\n"
-        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(unregistered.items()))
-    )
+    assert not unregistered, "bdd: citations under backend/tests/bdd/ that no step module loads — the product map claims BDD coverage for feature files that never execute:\n" + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(unregistered.items()))
 
 
 #: BDD ``.feature`` files under ``backend/tests/bdd/features/`` that no step
@@ -580,19 +527,11 @@ def test_no_unregistered_bdd_feature_files():
 
     new_orphans = orphans - tracked
     assert not new_orphans, (
-        "unregistered BDD feature files — no step module loads them via "
-        "scenarios(...), so their scenarios never execute:\n"
-        + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(new_orphans))
-        + "\nWire each up from a step module (and drop it from "
-        + "_ORPHANED_BDD_FEATURES) or delete it."
+        "unregistered BDD feature files — no step module loads them via scenarios(...), so their scenarios never execute:\n" + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(new_orphans)) + "\nWire each up from a step module (and drop it from " + "_ORPHANED_BDD_FEATURES) or delete it."
     )
 
     redundant = tracked - orphans
-    assert not redundant, (
-        "tracked orphan entries that are no longer orphaned (already wired up or "
-        "deleted) — shrink _ORPHANED_BDD_FEATURES so the debt list stays honest:\n"
-        + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(redundant))
-    )
+    assert not redundant, "tracked orphan entries that are no longer orphaned (already wired up or deleted) — shrink _ORPHANED_BDD_FEATURES so the debt list stays honest:\n" + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(redundant))
 
 
 def _feature_scenarios_fully_deselected(feature: Path) -> bool:
@@ -631,12 +570,7 @@ def test_feature_scenarios_fully_deselected_resets_tags_per_scenario(tmp_path: P
     """
     feature = tmp_path / "mixed.feature"
     feature.write_text(
-        "@awaiting-implementation\n"
-        "Scenario: pinned draft\n"
-        "  Given a step\n"
-        "\n"
-        "Scenario: executing coverage\n"
-        "  Given a step\n",
+        "@awaiting-implementation\nScenario: pinned draft\n  Given a step\n\nScenario: executing coverage\n  Given a step\n",
         encoding="utf-8",
     )
     assert _feature_scenarios_fully_deselected(feature) is False
@@ -645,13 +579,7 @@ def test_feature_scenarios_fully_deselected_resets_tags_per_scenario(tmp_path: P
 def test_feature_scenarios_fully_deselected_when_every_scenario_pinned(tmp_path: Path):
     feature = tmp_path / "all_pinned.feature"
     feature.write_text(
-        "@awaiting-implementation\n"
-        "Scenario: first draft\n"
-        "  Given a step\n"
-        "\n"
-        "@awaiting-implementation\n"
-        "Scenario: second draft\n"
-        "  Given a step\n",
+        "@awaiting-implementation\nScenario: first draft\n  Given a step\n\n@awaiting-implementation\nScenario: second draft\n  Given a step\n",
         encoding="utf-8",
     )
     assert _feature_scenarios_fully_deselected(feature) is True
@@ -735,15 +663,9 @@ def test_no_stale_dead_bdd_claims():
                 )
                 if registered_hit is None:
                     continue
-                stale.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(
-                    f"{name!r} (registered: {registered_hit})"
-                )
-    assert not stale, (
-        "behaviour-tracker prose claims these .feature files never execute / are "
-        "not registered, but a step module registers them via scenarios(...) — "
-        "stale 'dead BDD' claims: update the entry to cite them as executing "
-        "coverage and drop the gap:\n"
-        + "\n".join(f"  {entry} -> {', '.join(files)}" for entry, files in sorted(stale.items()))
+                stale.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(f"{name!r} (registered: {registered_hit})")
+    assert not stale, "behaviour-tracker prose claims these .feature files never execute / are not registered, but a step module registers them via scenarios(...) — stale 'dead BDD' claims: update the entry to cite them as executing coverage and drop the gap:\n" + "\n".join(
+        f"  {entry} -> {', '.join(files)}" for entry, files in sorted(stale.items())
     )
 
 
@@ -778,8 +700,7 @@ def test_no_bdd_citations_for_fully_deselected_features():
         ".feature file — every scenario is skipped by '-m not awaiting-implementation', "
         "so the product map claims BDD coverage that never executes. Archive or "
         "re-anchor the draft (and drop the bdd: citation, or un-deselect at least "
-        "one scenario) so the claim describes tests CI actually runs:\n"
-        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(deselected.items()))
+        "one scenario) so the claim describes tests CI actually runs:\n" + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(deselected.items()))
     )
 
 
@@ -802,11 +723,7 @@ def test_feature_references_resolve():
         for literal in sorted(_feature_literals_in_root(root)):
             if literal not in resolver:
                 dangling.setdefault(literal, []).append(str(root.relative_to(REPO_ROOT)))
-    assert not dangling, (
-        "feat-* references that resolve against no product-map feature"
-        " (not in frontend/src/manifest.yaml 'features:' and no docs/product-map entry):\n"
-        + "\n".join(f"  {feat} -> {', '.join(roots)}" for feat, roots in sorted(dangling.items()))
-    )
+    assert not dangling, "feat-* references that resolve against no product-map feature (not in frontend/src/manifest.yaml 'features:' and no docs/product-map entry):\n" + "\n".join(f"  {feat} -> {', '.join(roots)}" for feat, roots in sorted(dangling.items()))
 
 
 def _feature_literals_in_docs() -> dict[str, list[str]]:
@@ -842,11 +759,7 @@ def test_documentation_feature_references_resolve():
     assert resolver, "product map must register at least one feature"
 
     dangling = {feat: docs for feat, docs in sorted(_feature_literals_in_docs().items()) if feat not in resolver}
-    assert not dangling, (
-        "feat-* references in docs that resolve against no product-map feature"
-        " (not in frontend/src/manifest.yaml 'features:' and no docs/product-map entry):\n"
-        + "\n".join(f"  {feat} -> {', '.join(docs)}" for feat, docs in sorted(dangling.items()))
-    )
+    assert not dangling, "feat-* references in docs that resolve against no product-map feature (not in frontend/src/manifest.yaml 'features:' and no docs/product-map entry):\n" + "\n".join(f"  {feat} -> {', '.join(docs)}" for feat, docs in sorted(dangling.items()))
 
 
 def test_documented_graph_paths_resolve():
@@ -869,6 +782,4 @@ def test_documented_graph_paths_resolve():
             exists = resolved.is_file() if target.endswith(".md") else resolved.is_dir()
             if not exists:
                 missing.setdefault(f"docs/product-map/{target}", []).append(text_path.relative_to(REPO_ROOT).as_posix())
-    assert not missing, "docs reference docs/product-map/ files that do not exist:\n" + "\n".join(
-        f"  {target} -> {', '.join(docs)}" for target, docs in sorted(missing.items())
-    )
+    assert not missing, "docs reference docs/product-map/ files that do not exist:\n" + "\n".join(f"  {target} -> {', '.join(docs)}" for target, docs in sorted(missing.items()))

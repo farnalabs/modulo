@@ -233,9 +233,7 @@ class TestOrgTransactionLockBound:
         assert session.params[bound_at[0]] == {"val": f"{LOCK_TIMEOUT_MS}ms"}
         updates = session.executed("UPDATE runs")
         assert updates, f"the batch terminalizers never ran an UPDATE runs; statements={sqls}"
-        assert bound_at[0] < updates[0], (
-            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {updates[0]})"
-        )
+        assert bound_at[0] < updates[0], f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {updates[0]})"
 
     async def test_bound_precedes_the_per_row_writers_in_the_same_transaction(self) -> None:
         """The three PER-ROW writers — ``_fail_run_dispatch_failed`` (TTL
@@ -334,9 +332,7 @@ class TestLockTimeoutContract:
         timeout and never turned into a skip."""
         session = _OrgSession()
         with (
-            patch.object(
-                ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=asyncio.CancelledError()
-            ),
+            patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
             patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
             pytest.raises(asyncio.CancelledError),
         ):
@@ -392,9 +388,7 @@ async def _drive_body(
 
 
 class TestOrgLockTimeoutSkip:
-    async def test_lock_timeout_skips_the_org_with_a_warning_and_keeps_the_tick(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_lock_timeout_skips_the_org_with_a_warning_and_keeps_the_tick(self, caplog: pytest.LogCaptureFixture) -> None:
         """THE 55P03 case: org 1's sweep meets a held ``runs`` row lock and the
         BOUND fires. Its transaction rolled back WHOLE — not one of its
         terminalizations or repairs committed — so its counts and

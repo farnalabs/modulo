@@ -190,9 +190,7 @@ async def _new_private_db(db_url: str, prefix: str) -> tuple[str, str]:
     db_name, iso_url = await _fresh_db(db_url, prefix)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
     return db_name, iso_url
 
@@ -277,9 +275,7 @@ async def _assert_table_tuned(engine: AsyncEngine, table: str) -> None:
     expected = _EXPECTED_RELOPTIONS[table]
     actual = await _reloptions(engine, table)
     for key, want in expected.items():
-        assert actual.get(key) == want, (
-            f"{table}.{key}: expected {want!r}, got {actual.get(key)!r} (full reloptions: {actual!r})"
-        )
+        assert actual.get(key) == want, f"{table}.{key}: expected {want!r}, got {actual.get(key)!r} (full reloptions: {actual!r})"
 
 
 async def _assert_no_tuning(engine: AsyncEngine, table: str) -> None:
@@ -392,9 +388,7 @@ class TestDowngrade:
             assert await _alembic_version(engine) == PREV_REV
 
             runs_after = await _reloptions(engine, "runs")
-            assert runs_after == {"autovacuum_enabled": "true"}, (
-                f"downgrade must keep only 0276's reloption, got {runs_after!r}"
-            )
+            assert runs_after == {"autovacuum_enabled": "true"}, f"downgrade must keep only 0276's reloption, got {runs_after!r}"
             for table in ("checkpoints", "checkpoint_writes"):
                 left = await _reloptions(engine, table)
                 assert not left, f"downgrade must drop every tuned option on {table}, got {left!r}"
@@ -424,9 +418,7 @@ class TestFreshDatabase:
             await _assert_table_tuned(engine, "runs")
 
             for table in ("checkpoints", "checkpoint_writes"):
-                assert not await _table_exists(engine, table), (
-                    f"{table} is runtime-created, it must be absent on a fresh alembic-only database"
-                )
+                assert not await _table_exists(engine, table), f"{table} is runtime-created, it must be absent on a fresh alembic-only database"
         finally:
             await engine.dispose()
 
@@ -503,9 +495,7 @@ class TestFreshInstallBoot:
             # 1. The broken shape: 0279 is recorded, the tables are absent.
             assert await _alembic_version(engine) == MIGRATION_REV
             for table in ("checkpoints", "checkpoint_writes"):
-                assert not await _table_exists(engine, table), (
-                    f"{table} must not exist yet - alembic runs before the application's first boot"
-                )
+                assert not await _table_exists(engine, table), f"{table} must not exist yet - alembic runs before the application's first boot"
             # NEGATIVE CONTROL: the assertion below cannot pass against this
             # state, so the post-setup assertions discriminate rather than
             # passing vacuously.
@@ -546,11 +536,7 @@ def _tuning_failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.Lo
     only to a tuning failure, so this selects exactly the records under test
     without matching on message text.
     """
-    return [
-        record
-        for record in caplog.records
-        if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")
-    ]
+    return [record for record in caplog.records if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")]
 
 
 class TestSetupTuningFailureIsLogged:
@@ -591,9 +577,7 @@ class TestSetupTuningFailureIsLogged:
                 assert record.table in record.error
 
             for table in ("checkpoints", "checkpoint_writes"):
-                assert not await _table_exists(engine, table), (
-                    f"{table} must be untouched - only the tuning statements were replayed"
-                )
+                assert not await _table_exists(engine, table), f"{table} must be untouched - only the tuning statements were replayed"
         finally:
             await engine.dispose()
 

@@ -52,16 +52,11 @@ async def _seed_account(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -114,12 +109,7 @@ async def _seed_trigger(
     trigger_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, "
-                "max_concurrent_runs, config_json, account_id, deleted_at) "
-                "VALUES (:name, :id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid, "
-                "CASE WHEN :deleted THEN now() ELSE NULL END)"
-            ),
+            text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id, deleted_at) VALUES (:name, :id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid, CASE WHEN :deleted THEN now() ELSE NULL END)"),
             {
                 # ``name`` is NOT NULL since migration 0339 (FAR-2227), so a raw
                 # INSERT must supply it. Each call site passes a distinct name:
@@ -142,11 +132,7 @@ async def _seed_event(db_engine: AsyncEngine, org_id: uuid.UUID, trigger_id: uui
     event_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
-                "raw_payload_hash, validation_result) "
-                "VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted')"
-            ),
+            text("INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, raw_payload_hash, validation_result) VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted')"),
             {
                 "id": str(event_id),
                 "oid": str(org_id),
@@ -209,15 +195,9 @@ class TestAdminTriggerEventHistory:
         deleted_pipeline = await _seed_pipeline(db_engine, org_a, user_a, "Deleted pipeline", deleted=True)
 
         live_trigger = await _seed_trigger(db_engine, org_a, live_pipeline, user_a, name="live-trigger")
-        trigger_on_deleted_pipeline = await _seed_trigger(
-            db_engine, org_a, deleted_pipeline, user_a, name="trigger-on-deleted-pipeline"
-        )
-        deleted_trigger = await _seed_trigger(
-            db_engine, org_a, live_pipeline, user_a, name="deleted-trigger", deleted=True
-        )
-        deleted_trigger_on_deleted_pipeline = await _seed_trigger(
-            db_engine, org_a, deleted_pipeline, user_a, name="deleted-trigger-on-deleted-pipeline", deleted=True
-        )
+        trigger_on_deleted_pipeline = await _seed_trigger(db_engine, org_a, deleted_pipeline, user_a, name="trigger-on-deleted-pipeline")
+        deleted_trigger = await _seed_trigger(db_engine, org_a, live_pipeline, user_a, name="deleted-trigger", deleted=True)
+        deleted_trigger_on_deleted_pipeline = await _seed_trigger(db_engine, org_a, deleted_pipeline, user_a, name="deleted-trigger-on-deleted-pipeline", deleted=True)
 
         event_live = await _seed_event(db_engine, org_a, live_trigger)
         event_deleted_pipeline = await _seed_event(db_engine, org_a, trigger_on_deleted_pipeline)

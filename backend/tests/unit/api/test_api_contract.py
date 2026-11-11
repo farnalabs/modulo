@@ -185,10 +185,7 @@ class TestResponseModelCoverage:
         missing_rm = [r for r in routes if r["response_model"] is None]
 
         assert with_rm, "no /api/ routes declare a response model"
-        assert len(with_rm) > len(missing_rm), (
-            "the majority of /api/ routes must declare a response model; "
-            f"got {len(with_rm)} declared vs {len(missing_rm)} missing"
-        )
+        assert len(with_rm) > len(missing_rm), f"the majority of /api/ routes must declare a response model; got {len(with_rm)} declared vs {len(missing_rm)} missing"
 
     def test_response_model_is_pydantic_model(self) -> None:
         routes = get_api_routes()
@@ -208,11 +205,7 @@ class TestResponseModelCoverage:
                 non_pydantic.append((r["methods"][0], r["path"], str(rm)))
 
         assert pydantic_count > 0
-        assert pydantic_count >= len(non_pydantic), (
-            "most response models must be pydantic models; "
-            f"got {pydantic_count} pydantic vs {len(non_pydantic)} non-pydantic: "
-            f"{non_pydantic[:5]}"
-        )
+        assert pydantic_count >= len(non_pydantic), f"most response models must be pydantic models; got {pydantic_count} pydantic vs {len(non_pydantic)} non-pydantic: {non_pydantic[:5]}"
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +290,7 @@ class TestAuthEndpointSchemas:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         with (
             patch("redis.asyncio.Redis.from_url") as mock_redis_factory,
             patch(
@@ -669,11 +660,7 @@ def test_graph_write_route_verbs() -> None:
     halves are pinned because a regression that re-registers the old ``PATCH``
     alongside the ``PUT`` would break every API client that migrated.
     """
-    keys = {
-        (method, route.path)
-        for route in _get_all_apiroutes()
-        for method in (route.methods or set()) - {"HEAD", "OPTIONS"}
-    }
+    keys = {(method, route.path) for route in _get_all_apiroutes() for method in (route.methods or set()) - {"HEAD", "OPTIONS"}}
     assert ("PUT", "/api/v1/pipelines/{pipeline_id}/graph") in keys
     assert ("PATCH", "/api/v1/pipelines/{pipeline_id}/graph/nodes/{node_id}") in keys
     assert ("PATCH", "/api/v1/pipelines/{pipeline_id}/graph") not in keys

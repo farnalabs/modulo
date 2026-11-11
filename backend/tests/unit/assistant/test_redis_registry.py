@@ -40,9 +40,7 @@ async def test_close_closes_client(registry: AssistantRedisRegistry, redis_clien
     redis_client.aclose.assert_awaited_once()
 
 
-async def test_clear_session_deletes_legacy_session_keys(
-    registry: AssistantRedisRegistry, redis_client: MagicMock
-) -> None:
+async def test_clear_session_deletes_legacy_session_keys(registry: AssistantRedisRegistry, redis_client: MagicMock) -> None:
     await registry.clear_session("sess-1")
     redis_client.delete.assert_awaited_once_with(
         "assistant:ui_results:sess-1",

@@ -55,15 +55,7 @@ def _source() -> str:
 
 def _scaffold(conn: sa.Connection) -> None:
     """A pre-migration ``hitl_claims`` shape (no ``context_json`` column)."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE hitl_claims ("
-            "id INTEGER PRIMARY KEY, "
-            "run_id INTEGER NOT NULL, "
-            "review_id TEXT NOT NULL, "
-            "decision_payload TEXT)"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE hitl_claims (id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, review_id TEXT NOT NULL, decision_payload TEXT)"))
 
 
 def _run(engine: sa.Engine, module: ModuleType, fn: str) -> None:

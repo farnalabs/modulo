@@ -83,9 +83,7 @@ class TestChain:
 class TestUpgrade:
     def test_emits_add_then_validate_for_both_columns(self) -> None:
         executed = _executed()
-        assert len(executed) == 4, (
-            f"expected add-NOT-VALID + VALIDATE for EACH of the two columns, got {len(executed)} execute() calls"
-        )
+        assert len(executed) == 4, f"expected add-NOT-VALID + VALIDATE for EACH of the two columns, got {len(executed)} execute() calls"
         adds = executed[:2]
         validates = executed[2:]
 
@@ -153,9 +151,7 @@ class TestModelParity:
         assert f"{column} IN (" in sqltext, sqltext
 
     def test_migration_and_model_declare_the_same_pair(self) -> None:
-        declared = {
-            c.name for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None
-        }
+        declared = {c.name for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None}
         source = _source()
         for constraint in _CONSTRAINTS:
             assert constraint in declared, f"model missing {constraint}"

@@ -40,9 +40,7 @@ from farna.db.models.run import (
 )
 
 _MIGRATION_NAME = "0260_run_cancel_reason"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 
 
 def _load_migration() -> ModuleType:

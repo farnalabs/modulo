@@ -75,20 +75,12 @@ async def _setup_org(engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID, uuid.UU
         )
         acc_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
         )
         pipe_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
         )
     return org_id, acc_id, pipe_id
@@ -115,11 +107,7 @@ async def _seed_bound_guardrail(
     }
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, "
-                "name, eval_type, config_json, version) "
-                "VALUES (:id, :oid, :pid, :aid, :nid, :name, 'guardrail', CAST(:cfg AS jsonb), 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, name, eval_type, config_json, version) VALUES (:id, :oid, :pid, :aid, :nid, :name, 'guardrail', CAST(:cfg AS jsonb), 1)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -131,10 +119,7 @@ async def _seed_bound_guardrail(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                "action, version) VALUES (:id, :oid, :eid, :nid, :act, 1)"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:id, :oid, :eid, :nid, :act, 1)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -152,10 +137,7 @@ async def _load_dto_and_binding(engine: AsyncEngine, eval_id: uuid.UUID) -> tupl
         eval_row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                        "config_json, version FROM evals WHERE id = :eid"
-                    ),
+                    text("SELECT id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, version FROM evals WHERE id = :eid"),
                     {"eid": str(eval_id)},
                 )
             )
@@ -165,10 +147,7 @@ async def _load_dto_and_binding(engine: AsyncEngine, eval_id: uuid.UUID) -> tupl
         gate_row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT id, organisation_id, version, node_id, action FROM policy_gates "
-                        "WHERE eval_id = :eid AND deleted_at IS NULL"
-                    ),
+                    text("SELECT id, organisation_id, version, node_id, action FROM policy_gates WHERE eval_id = :eid AND deleted_at IS NULL"),
                     {"eid": str(eval_id)},
                 )
             )
@@ -274,9 +253,7 @@ class TestC12RaisingPathsShareExactType:
         assert raised.value.eval_name == definition.name
 
     @pytest.mark.asyncio
-    async def test_evaluate_guardrails_muted_bound_block_records_result_without_raising(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_evaluate_guardrails_muted_bound_block_records_result_without_raising(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         eval_id = await _seed_bound_guardrail(
             db_engine,

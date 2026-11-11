@@ -51,20 +51,11 @@ async def _seed_two_orgs_with_providers(
     provider_saml_b = f"int-rls-{org_b.hex[:10]}-saml"
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            sql_text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:aid, 'RLS Org A', :aslug, '{}'::json), "
-                "(:bid, 'RLS Org B', :bslug, '{}'::json)"
-            ),
+            sql_text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:aid, 'RLS Org A', :aslug, '{}'::json), (:bid, 'RLS Org B', :bslug, '{}'::json)"),
             {"aid": str(org_a), "aslug": slug_a, "bid": str(org_b), "bslug": slug_b},
         )
         await conn.execute(
-            sql_text(
-                "INSERT INTO sso_providers "
-                "(id, organisation_id, provider_type, name, provider_id, enabled) VALUES "
-                "(:pa, :a, 'oidc', 'Org A OIDC', :pid_a, true), "
-                "(:pb, :b, 'saml', 'Org B SAML', :pid_b, true)"
-            ),
+            sql_text("INSERT INTO sso_providers (id, organisation_id, provider_type, name, provider_id, enabled) VALUES (:pa, :a, 'oidc', 'Org A OIDC', :pid_a, true), (:pb, :b, 'saml', 'Org B SAML', :pid_b, true)"),
             {
                 "pa": str(uuid.uuid4()),
                 "a": str(org_a),
@@ -81,9 +72,7 @@ async def _org_id_by_slug(app_engine: AsyncEngine, slug: str) -> uuid.UUID:
     """Pre-auth org resolution: the app session can read organisations by slug."""
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
-        resolved = (
-            await session.execute(sql_text("SELECT id FROM organisations WHERE slug = :slug"), {"slug": slug})
-        ).scalar_one_or_none()
+        resolved = (await session.execute(sql_text("SELECT id FROM organisations WHERE slug = :slug"), {"slug": slug})).scalar_one_or_none()
         assert resolved is not None, "pre-auth org bootstrap lookup must work without RLS org context"
         return uuid.UUID(str(resolved))
 
@@ -98,9 +87,7 @@ async def test_sso_provider_reads_fail_closed_without_rls_org(app_engine: AsyncE
         assert not rows, "STRICT RLS must hide all providers when no org context is set"
 
 
-async def test_set_rls_org_bounds_visibility_and_cross_org_isolation_holds(
-    app_engine: AsyncEngine, db_engine: AsyncEngine
-) -> None:
+async def test_set_rls_org_bounds_visibility_and_cross_org_isolation_holds(app_engine: AsyncEngine, db_engine: AsyncEngine) -> None:
     """With RLS scoped per-org, exactly that org's providers are visible.
 
     This is the semantics ``set_rls_org(session, resolved_org_id)`` must buy the
@@ -120,9 +107,7 @@ async def test_set_rls_org_bounds_visibility_and_cross_org_isolation_holds(
         assert provider_saml_b not in visible, "sibling org's provider must remain invisible"
 
 
-async def test_org_bootstrap_works_then_binding_reveals_only_own_provider(
-    app_engine: AsyncEngine, db_engine: AsyncEngine
-) -> None:
+async def test_org_bootstrap_works_then_binding_reveals_only_own_provider(app_engine: AsyncEngine, db_engine: AsyncEngine) -> None:
     """The exact pre-auth org-login shape: org resolves, providers do not (yet).
 
     Pins the verified trap as an executable regression: any pre-auth SSO read
@@ -143,10 +128,7 @@ async def test_org_bootstrap_works_then_binding_reveals_only_own_provider(
         await set_rls_org(session, org_b)
         saml_row = (
             await session.execute(
-                sql_text(
-                    "SELECT provider_id FROM sso_providers "
-                    "WHERE provider_id = :pid AND provider_type = 'saml' AND enabled"
-                ),
+                sql_text("SELECT provider_id FROM sso_providers WHERE provider_id = :pid AND provider_type = 'saml' AND enabled"),
                 {"pid": provider_saml_b},
             )
         ).scalar_one_or_none()

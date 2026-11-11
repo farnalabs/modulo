@@ -183,9 +183,7 @@ async def _orgs(session: AsyncSession) -> list[Organisation]:
         pytest.param(True, _DEMO_EMAIL, "", id="password-empty"),
     ],
 )
-async def test_seed_disabled_is_a_noop(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, enabled: bool, user: str, password: str
-) -> None:
+async def test_seed_disabled_is_a_noop(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, enabled: bool, user: str, password: str) -> None:
     summary = await _run_seed(session, monkeypatch, _demo_settings(enabled=enabled, user=user, password=password))
     assert summary is None
     assert await _count(session, Organisation) == 0
@@ -245,9 +243,7 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert membership.account_id == account.id
     assert membership.organisation_id == org.id
 
-    published_versions = list(
-        (await session.execute(select(SchemaVersion).where(SchemaVersion.published.is_(True)))).scalars()
-    )
+    published_versions = list((await session.execute(select(SchemaVersion).where(SchemaVersion.published.is_(True)))).scalars())
     assert len(published_versions) == 5
 
     runs = list((await session.execute(select(Run))).scalars())
@@ -267,29 +263,19 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     # FAR-977: awaiting_human daily-fact parity — non-terminal runs must NOT
     # fabricate completed_at / duration_ms.  Deleting the is_terminal gating in
     # seed_demo.py must cause these assertions to fail.
-    awaiting_run = (
-        await session.execute(select(Run).where(Run.status == "awaiting_human", Run.run_number == 6))
-    ).scalar_one()
-    awaiting_fact = (
-        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == awaiting_run.id))
-    ).scalar_one()
+    awaiting_run = (await session.execute(select(Run).where(Run.status == "awaiting_human", Run.run_number == 6))).scalar_one()
+    awaiting_fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == awaiting_run.id))).scalar_one()
     assert awaiting_fact.completed_at is None, "non-terminal fact must not fabricate completed_at"
     assert awaiting_fact.duration_ms is None, "non-terminal fact must not fabricate duration_ms"
 
     # Discriminating check: a TERMINAL run's fact must carry non-null values
     # that match the Run row, so the assertion isn't vacuously all-None.
-    terminal_run = (
-        await session.execute(select(Run).where(Run.status == "complete", Run.run_number == 1))
-    ).scalar_one()
-    terminal_fact = (
-        await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == terminal_run.id))
-    ).scalar_one()
+    terminal_run = (await session.execute(select(Run).where(Run.status == "complete", Run.run_number == 1))).scalar_one()
+    terminal_fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == terminal_run.id))).scalar_one()
     assert terminal_fact.completed_at is not None, "terminal fact must have completed_at"
     assert terminal_fact.duration_ms is not None, "terminal fact must have duration_ms"
     assert terminal_fact.completed_at == terminal_run.completed_at
-    assert terminal_fact.duration_ms == int(
-        (terminal_run.completed_at - terminal_run.started_at).total_seconds() * 1000
-    )
+    assert terminal_fact.duration_ms == int((terminal_run.completed_at - terminal_run.started_at).total_seconds() * 1000)
 
 
 def test_demo_eval_result_cutoff_matches_dashboard_rolling_window() -> None:
@@ -300,9 +286,7 @@ def test_demo_eval_result_cutoff_matches_dashboard_rolling_window() -> None:
     assert _demo_eval_result_cutoff(now) > midnight_cutoff
 
 
-async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_demo_eval_results_anchor_to_most_recent_runs(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Synthetic eval results must land on each pipeline's most-recent runs.
 
     The dashboard eval rate is a rolling window on ``evaluated_at``, so results
@@ -314,12 +298,7 @@ async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
     await _run_seed(session, monkeypatch, _demo_settings())
 
     async def eval_run_numbers(eval_name: str) -> set[int]:
-        result = await session.execute(
-            select(Run.run_number)
-            .join(EvalResult, EvalResult.run_id == Run.id)
-            .join(Eval, Eval.id == EvalResult.eval_id)
-            .where(Eval.name == eval_name)
-        )
+        result = await session.execute(select(Run.run_number).join(EvalResult, EvalResult.run_id == Run.id).join(Eval, Eval.id == EvalResult.eval_id).where(Eval.name == eval_name))
         return set(result.scalars())
 
     # Results are selected by the current three-day fixture window, not by run
@@ -330,9 +309,7 @@ async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
     assert await eval_run_numbers("PR risk quality") == {1, 2}
 
 
-async def test_seed_converges_demo_eval_results_to_current_fixture_time(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_converges_demo_eval_results_to_current_fixture_time(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Refreshing an existing demo result keeps it inside the live rolling window."""
     await _run_seed(session, monkeypatch, _demo_settings())
     result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
@@ -349,9 +326,7 @@ async def test_seed_converges_demo_eval_results_to_current_fixture_time(
     assert refreshed.evaluated_at == expected
 
 
-async def test_seed_preserves_non_demo_eval_result_provenance(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_preserves_non_demo_eval_result_provenance(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Refreshing a non-seed result must not rewrite its timestamp or provenance."""
     await _run_seed(session, monkeypatch, _demo_settings())
     result = (await session.execute(select(EvalResult).order_by(EvalResult.id))).scalars().first()
@@ -424,9 +399,7 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
     assert counts_second["runs"] == 20
 
 
-async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_fixture_ids_are_deterministic_and_org_scoped(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Demo integration rows use stable ids derived from their org and fixture key."""
     await _run_seed(session, monkeypatch, _demo_settings())
     org = (await session.execute(select(Organisation))).scalar_one()
@@ -438,23 +411,13 @@ async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
     feedback = list((await session.execute(select(FeedbackRecord))).scalars())
     evidence = list((await session.execute(select(Evidence))).scalars())
 
-    assert [row.id for row in backends] == [
-        seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends
-    ]
-    assert [row.id for row in connectors] == [
-        seed_demo_module.demo_fixture_id(org.id, f"connector:{row.name}") for row in connectors
-    ]
-    assert [row.id for row in notifications] == [
-        seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications
-    ]
-    assert [row.id for row in variants] == [
-        seed_demo_module.demo_fixture_id(org.id, "variant-group:demo-review-strategies")
-    ]
+    assert [row.id for row in backends] == [seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends]
+    assert [row.id for row in connectors] == [seed_demo_module.demo_fixture_id(org.id, f"connector:{row.name}") for row in connectors]
+    assert [row.id for row in notifications] == [seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications]
+    assert [row.id for row in variants] == [seed_demo_module.demo_fixture_id(org.id, "variant-group:demo-review-strategies")]
     assert [row.id for row in feedback] == [seed_demo_module.demo_fixture_id(org.id, "feedback:demo-review-1")]
     assert [row.id for row in evidence] == [seed_demo_module.demo_fixture_id(org.id, "evidence:risk.demo_review_score")]
-    assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(
-        uuid.uuid4(), "model-backend:Demo Stub Fast"
-    )
+    assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(uuid.uuid4(), "model-backend:Demo Stub Fast")
 
 
 async def test_seed_readonly_surfaces_variant_group_exists_without_runs(session: AsyncSession) -> None:
@@ -528,9 +491,7 @@ async def test_seed_fixture_primary_key_conflict_adopts_existing_row(
     assert any(record.getMessage() == recovery_message for record in caplog.records)
 
 
-async def test_seed_hitl_claim_recovers_after_conflict(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_hitl_claim_recovers_after_conflict(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A concurrent HITL claim insert is adopted by its deterministic identity.
 
     The awaiting/deapproved/approved claims are inserted one by one; hiding the
@@ -556,9 +517,7 @@ async def test_seed_hitl_claim_recovers_after_conflict(
     assert any(record.getMessage() == "demo_seed.hitl_claim_recovered_after_conflict" for record in caplog.records)
 
 
-async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """A governance run absent from the seed is skipped, not fatal.
 
     The HITL seeder looks up each governance run by number; a refresh whose
@@ -567,12 +526,8 @@ async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(
     await _run_seed(session, monkeypatch, _demo_settings())
     org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
     account = (await session.execute(select(Account))).scalar_one()
-    pipeline = (
-        await session.execute(select(Pipeline).where(Pipeline.name == seed_demo_module.DEMO_PIPELINE_NAME))
-    ).scalar_one()
-    snapshot = (
-        await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline.id))
-    ).scalar_one()
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == seed_demo_module.DEMO_PIPELINE_NAME))).scalar_one()
+    snapshot = (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline.id))).scalar_one()
     claims_before = await _count(session, HitlClaim)
 
     async def _missing_run(*args: object, **kwargs: object) -> None:
@@ -590,9 +545,7 @@ async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(
     assert await _count(session, HitlClaim) == claims_before
 
 
-async def test_seed_trigger_event_recovers_after_conflict(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_trigger_event_recovers_after_conflict(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A lost trigger-event insert race is logged and swallowed."""
     await _run_seed(session, monkeypatch, _demo_settings())
     await session.execute(delete(TriggerEvent))
@@ -639,9 +592,7 @@ async def test_seed_resets_role_and_system_admin_drift(session: AsyncSession, mo
     assert refreshed_account.is_system_admin is False
 
 
-async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_scopes_entities_to_demo_org_with_second_org_present(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     other_account = Account(
         email="other@example.com",
         display_name="Other",
@@ -669,9 +620,7 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     demo_org = orgs_by_slug[DEMO_ORG_SLUG]
     other = orgs_by_slug["other"]
 
-    demo_pipeline = (
-        await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))
-    ).scalar_one()
+    demo_pipeline = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
     assert demo_pipeline.organisation_id == demo_org.id
     assert demo_pipeline.organisation_id != other.id
 
@@ -685,9 +634,7 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     assert other_pipeline.organisation_id == other.id
 
     demo_account = (await session.execute(select(Account).where(Account.email == _DEMO_EMAIL))).scalar_one()
-    demo_memberships = list(
-        (await session.execute(select(OrgMembership).where(OrgMembership.account_id == demo_account.id))).scalars()
-    )
+    demo_memberships = list((await session.execute(select(OrgMembership).where(OrgMembership.account_id == demo_account.id))).scalars())
     assert {membership.organisation_id for membership in demo_memberships} == {demo_org.id}
 
     # FAR-977: verify scoping for expanded entity types.
@@ -720,9 +667,7 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     assert {s.organisation_id for s in snapshots} == {demo_org.id}
 
 
-async def test_seed_logs_previous_role_on_drift_reset(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_logs_previous_role_on_drift_reset(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The role-drift warning must report the role captured BEFORE the overwrite."""
     await _run_seed(session, monkeypatch, _demo_settings())
     membership = (await session.execute(select(OrgMembership))).scalar_one()
@@ -943,9 +888,7 @@ class _ExplodingFlush:
         self._session.flush = self._real_flush  # type: ignore[method-assign]
 
 
-async def test_seed_adopts_winner_after_real_slug_conflict(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_adopts_winner_after_real_slug_conflict(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Org insert hitting the live slug unique index recovers by adoption."""
     await _run_seed(session, monkeypatch, _demo_settings())
     hide = _HideCheckOnce(session, Organisation)
@@ -962,9 +905,7 @@ async def test_seed_adopts_winner_after_real_slug_conflict(
     assert org.deleted_at is None
 
 
-async def test_seed_org_recovery_applies_undelete_repair(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_org_recovery_applies_undelete_repair(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """The IntegrityError recovery path undeletes a soft-deleted winner too."""
     await _run_seed(session, monkeypatch, _demo_settings())
     org = (await session.execute(select(Organisation))).scalar_one()
@@ -985,9 +926,7 @@ async def test_seed_org_recovery_applies_undelete_repair(
     assert recovered.deleted_at is None
 
 
-async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
-    session: AsyncSession, engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(session: AsyncSession, engine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two soft-deleted 'demo' orgs: deterministic pick, no MultipleResultsFound.
 
     On Postgres the slug uniqueness is a PARTIAL index (deleted_at IS NULL), so
@@ -1011,11 +950,7 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
     summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
-    demo_orgs = list(
-        (
-            await session.execute(include_soft_deleted(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG)))
-        ).scalars()
-    )
+    demo_orgs = list((await session.execute(include_soft_deleted(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG)))).scalars())
     assert len(demo_orgs) == 2
     live = [org for org in demo_orgs if org.deleted_at is None]
     assert len(live) == 1
@@ -1097,9 +1032,7 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
         pytest.param(Evidence, id="evidence"),
     ],
 )
-async def test_seed_reraises_when_recovery_finds_no_winner(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
-) -> None:
+async def test_seed_reraises_when_recovery_finds_no_winner(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type) -> None:
     """Recovery re-raises the IntegrityError when the winner vanished too.
 
     The savepoint rolls back the losing insert, then the recovery re-select
@@ -1119,9 +1052,7 @@ async def test_seed_reraises_when_recovery_finds_no_winner(
         hide.uninstall()
 
 
-async def test_seed_run_spec_unknown_pipeline_is_skipped(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_run_spec_unknown_pipeline_is_skipped(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A run spec naming a pipeline absent from the lookup warns and skips."""
     extra_spec = (999, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
     monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
@@ -1134,9 +1065,7 @@ async def test_seed_run_spec_unknown_pipeline_is_skipped(
     assert any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
 
 
-async def test_seed_run_spec_unknown_pipeline_with_existing_run_skips_silently(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_run_spec_unknown_pipeline_with_existing_run_skips_silently(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """An unknown pipeline whose run_number already has a Run row skips without warning.
 
     Complements :func:`test_seed_run_spec_unknown_pipeline_is_skipped`: there
@@ -1157,9 +1086,7 @@ async def test_seed_run_spec_unknown_pipeline_with_existing_run_skips_silently(
     assert not any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
 
 
-async def test_seed_run_node_output_failure_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_run_node_output_failure_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A best-effort node-output write failure must not abort the run insert."""
     calls: list[str] = []
 
@@ -1178,9 +1105,7 @@ async def test_seed_run_node_output_failure_is_swallowed(
     assert any(record.getMessage().startswith("demo_seed.run_outputs_write_failed") for record in caplog.records)
 
 
-async def test_seed_daily_fact_integrity_conflict_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_daily_fact_integrity_conflict_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A RunDailyFact unique conflict is swallowed; the Run rows still land."""
     flaky = _FlakyFlush(session, RunDailyFact)
     flaky.install()
@@ -1196,9 +1121,7 @@ async def test_seed_daily_fact_integrity_conflict_is_swallowed(
     assert any(record.getMessage() == "demo_seed.daily_fact_recovered_after_conflict" for record in caplog.records)
 
 
-async def test_seed_daily_fact_generic_failure_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_daily_fact_generic_failure_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A non-unique RunDailyFact write failure is swallowed, not fatal."""
     exploding = _ExplodingFlush(session, RunDailyFact)
     exploding.install()
@@ -1214,9 +1137,7 @@ async def test_seed_daily_fact_generic_failure_is_swallowed(
     assert any(record.getMessage().startswith("demo_seed.daily_fact_write_failed") for record in caplog.records)
 
 
-async def test_seed_cron_trigger_recovers_after_conflict(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_cron_trigger_recovers_after_conflict(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The cron trigger's savepoint recovery path is exercised on conflict."""
     await _run_seed(session, monkeypatch, _demo_settings())
     cron = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
@@ -1238,9 +1159,7 @@ async def test_seed_cron_trigger_recovers_after_conflict(
     assert any(record.getMessage() == "demo_seed.cron_trigger_recovered" for record in caplog.records)
 
 
-async def test_seed_ticket_ready_trigger_recovers_after_conflict(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_ticket_ready_trigger_recovers_after_conflict(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The "Ticket ready" webhook's savepoint recovery path is exercised on conflict.
 
     Mirrors :func:`test_seed_cron_trigger_recovers_after_conflict`, but for the
@@ -1268,9 +1187,7 @@ async def test_seed_ticket_ready_trigger_recovers_after_conflict(
     assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_recovered" for record in caplog.records)
 
 
-async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Soft-deleted other-org memberships must not inflate other_org_count."""
     other_account = Account(
         email="other@example.com",
@@ -1304,11 +1221,7 @@ async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(
     with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         await _run_seed(session, monkeypatch, _demo_settings())
 
-    warnings = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "demo_seed.account_has_memberships_outside_demo_org"
-    ]
+    warnings = [record for record in caplog.records if record.getMessage() == "demo_seed.account_has_memberships_outside_demo_org"]
     assert not warnings
 
 
@@ -1433,9 +1346,7 @@ def test_seed_failure_log_and_print_never_leak_bind_parameters(
 # ---------------------------------------------------------------------------
 
 
-async def test_seed_converges_pipeline_description_and_graph(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_converges_pipeline_description_and_graph(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pipeline description and graph_nodes_json are converged to the spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1447,9 +1358,7 @@ async def test_seed_converges_pipeline_description_and_graph(
 
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    converged = (
-        await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))
-    ).scalar_one()
+    converged = (await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))).scalar_one()
     assert converged.description == seed_demo_module._GOVERNANCE_PIPELINE.description
     # graph_nodes_json is the 4-node demo pipeline graph.
     assert len(converged.graph_nodes_json) == 4  # type: ignore[arg-type]
@@ -1485,9 +1394,7 @@ async def test_seed_converges_snapshot_graph_json(session: AsyncSession, monkeyp
     assert len(converged_snapshot.graph_json["nodes"]) == 4  # type: ignore[index]
 
 
-async def test_seed_converges_schema_description_and_definition(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_converges_schema_description_and_definition(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Schema description and SchemaVersion definition_json are converged."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1523,19 +1430,13 @@ async def test_seed_converges_schema_description_and_definition(
     }
 
 
-async def test_seed_preserves_governance_surface_provenance_on_refresh(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_preserves_governance_surface_provenance_on_refresh(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Refreshes converge fixture fields without overwriting provenance fields."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
     backend = (await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))).scalar_one()
-    connector = (
-        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
-    ).scalar_one()
-    notification = (
-        await session.execute(select(Notification).where(Notification.category == "run_completed"))
-    ).scalar_one()
+    connector = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))).scalar_one()
+    notification = (await session.execute(select(Notification).where(Notification.category == "run_completed"))).scalar_one()
     backend.credentials_ciphertext = b"operator-managed-backend-secret"
     connector.credentials_ciphertext = b"operator-managed-connector-secret"
     backend.display_name = "stale backend display"
@@ -1545,15 +1446,9 @@ async def test_seed_preserves_governance_surface_provenance_on_refresh(
 
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    refreshed_backend = (
-        await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))
-    ).scalar_one()
-    refreshed_connector = (
-        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
-    ).scalar_one()
-    refreshed_notification = (
-        await session.execute(select(Notification).where(Notification.category == "run_completed"))
-    ).scalar_one()
+    refreshed_backend = (await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))).scalar_one()
+    refreshed_connector = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))).scalar_one()
+    refreshed_notification = (await session.execute(select(Notification).where(Notification.category == "run_completed"))).scalar_one()
     assert refreshed_backend.credentials_ciphertext == b"operator-managed-backend-secret"
     assert refreshed_connector.credentials_ciphertext == b"operator-managed-connector-secret"
     assert refreshed_backend.display_name == "Demo Stub Fast"
@@ -1563,9 +1458,7 @@ async def test_seed_preserves_governance_surface_provenance_on_refresh(
     assert refreshed_notification.title == "Run completed"
 
 
-async def test_seed_converges_agent_description_and_prompt(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_converges_agent_description_and_prompt(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Agent description and prompt_template are converged to spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1613,9 +1506,7 @@ async def test_seed_converges_cron_trigger_config_json(session: AsyncSession, mo
     assert converged.config_json == {"description": "Weekly release notes generation"}
 
 
-async def test_seed_converges_ticket_ready_trigger(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_converges_ticket_ready_trigger(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A drifted "Ticket ready" trigger is restored to the spec on re-seed."""
     await _run_seed(session, monkeypatch, _demo_settings())
     trigger = (await session.execute(select(Trigger).where(Trigger.name == "Ticket ready"))).scalar_one()
@@ -1635,9 +1526,7 @@ async def test_seed_converges_ticket_ready_trigger(
     assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_converged" for record in caplog.records)
 
 
-async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Refresh rolls an awaiting claim's deadlines forward without touching its briefing.
 
     The awaiting claim is the live "review required" demo surface.  If the daily
@@ -1647,9 +1536,7 @@ async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(
     captured gate config stay exactly as they were.
     """
     await _run_seed(session, monkeypatch, _demo_settings())
-    claim = (
-        await session.execute(select(HitlClaim).join(Run, Run.id == HitlClaim.run_id).where(Run.run_number == 6))
-    ).scalar_one()
+    claim = (await session.execute(select(HitlClaim).join(Run, Run.id == HitlClaim.run_id).where(Run.run_number == 6))).scalar_one()
     claim.expires_at = claim.expires_at - timedelta(days=3)
     claim.terminalize_at = claim.terminalize_at - timedelta(days=3)
     claim.context_json = {"description": "historical briefing"}
@@ -1680,9 +1567,7 @@ async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(
     assert {attr: getattr(refreshed, attr) for attr in preserved} == preserved
 
 
-async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Approved/rejected claims remain immutable evidence across daily refresh."""
     await _run_seed(session, monkeypatch, _demo_settings())
     claims_before = {
@@ -1725,9 +1610,7 @@ async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(
     assert claims_after == claims_before
 
 
-async def test_seed_trigger_event_identity_and_history_are_stable(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_trigger_event_identity_and_history_are_stable(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Trigger events use durable trigger identity and retain historical fields."""
     await _run_seed(session, monkeypatch, _demo_settings())
     org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
@@ -1767,15 +1650,10 @@ async def test_seed_trigger_event_identity_and_history_are_stable(
         }
         for trigger_id, values in events_before.items()
     }
-    assert all(
-        values["id"] == seed_demo_module.demo_trigger_event_id(org.id, trigger_id)
-        for trigger_id, values in events_after.items()
-    )
+    assert all(values["id"] == seed_demo_module.demo_trigger_event_id(org.id, trigger_id) for trigger_id, values in events_after.items())
 
 
-async def test_seed_converges_daily_fact(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_converges_daily_fact(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A drifted RunDailyFact is converged back to its Run row on re-seed.
 
     The analytics surfaces sum the fact's cost/tokens/status, so a stale fact
@@ -1816,9 +1694,7 @@ async def test_seed_converges_daily_fact(
     assert any(record.getMessage() == "demo_seed.daily_fact_converged" for record in caplog.records)
 
 
-async def test_seed_backfills_missing_daily_fact_for_existing_run(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_backfills_missing_daily_fact_for_existing_run(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing RunDailyFact for an existing run is backfilled on re-seed."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1859,9 +1735,7 @@ async def test_seed_converges_run_display_fields(session: AsyncSession, monkeypa
     assert converged.total_cost_usd == Decimal("0.0900")
 
 
-async def test_seed_logs_convergence(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_logs_convergence(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Re-seeding with changed entities logs convergence events."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1908,9 +1782,7 @@ async def test_seed_does_not_touch_non_demo_org(session: AsyncSession, monkeypat
     assert other.description == "original"
 
 
-async def test_seed_converges_pipeline_idempotent_on_second_run(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_converges_pipeline_idempotent_on_second_run(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Second seed with no mutations only logs time-dependent run convergence, not entity convergence."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1918,9 +1790,7 @@ async def test_seed_converges_pipeline_idempotent_on_second_run(
         await _run_seed(session, monkeypatch, _demo_settings())
 
     # Only run_converged (timestamps drift) should appear — no pipeline/snapshot/schema/agent/trigger convergence.
-    entity_converged = [
-        r for r in caplog.records if "converged" in r.getMessage() and "run_converged" not in r.getMessage()
-    ]
+    entity_converged = [r for r in caplog.records if "converged" in r.getMessage() and "run_converged" not in r.getMessage()]
     assert not entity_converged
 
 
@@ -1929,9 +1799,7 @@ async def test_seed_converges_pipeline_idempotent_on_second_run(
 # ---------------------------------------------------------------------------
 
 
-async def test_seed_run_outputs_write_failure_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_run_outputs_write_failure_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When replace_run_node_outputs raises, the seed logs a warning and continues."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1957,9 +1825,7 @@ async def test_seed_run_outputs_write_failure_is_swallowed(
     assert warnings, "Expected run_outputs_write_failed warning"
 
 
-async def test_seed_daily_fact_integrity_error_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_daily_fact_integrity_error_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When RunDailyFact insert hits IntegrityError, the seed logs and continues."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1990,9 +1856,7 @@ async def test_seed_daily_fact_integrity_error_is_swallowed(
     assert recovered, "Expected daily_fact_recovered_after_conflict log"
 
 
-async def test_seed_daily_fact_generic_exception_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_daily_fact_generic_exception_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When RunDailyFact creation raises a non-IntegrityError, it's logged and swallowed."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -2025,9 +1889,7 @@ async def test_seed_daily_fact_generic_exception_is_swallowed(
 # ---------------------------------------------------------------------------
 
 
-async def test_seed_skips_run_for_unknown_pipeline(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_skips_run_for_unknown_pipeline(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A run spec referencing a pipeline not in the lookup is skipped with a warning."""
     await _run_seed(session, monkeypatch, _demo_settings())
     original_specs = seed_demo_module._DEMO_RUN_SPECS
@@ -2054,9 +1916,7 @@ async def test_seed_skips_run_for_unknown_pipeline(
 # ---------------------------------------------------------------------------
 
 
-async def test_seed_new_run_daily_fact_integrity_error_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_new_run_daily_fact_integrity_error_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When a newly created run's daily-fact insert hits IntegrityError, it's logged and swallowed."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -2085,9 +1945,7 @@ async def test_seed_new_run_daily_fact_integrity_error_is_swallowed(
     assert recovered, "Expected daily_fact_recovered_after_conflict log for new-run path"
 
 
-async def test_seed_new_run_daily_fact_generic_exception_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_new_run_daily_fact_generic_exception_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When a newly created run's daily-fact write raises a generic error, it's logged and swallowed."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -2119,9 +1977,7 @@ async def test_seed_new_run_daily_fact_generic_exception_is_swallowed(
 # ---------------------------------------------------------------------------
 
 
-async def test_seed_team_membership_integrity_error_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_team_membership_integrity_error_is_swallowed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When a team-membership insert hits IntegrityError, the seed logs and continues."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -2137,9 +1993,7 @@ async def test_seed_team_membership_integrity_error_is_swallowed(
     try:
         with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             # Delete the team membership so the seed tries to re-create it.
-            membership = (
-                (await session.execute(select(TeamMembership).order_by(TeamMembership.team_id))).scalars().first()
-            )
+            membership = (await session.execute(select(TeamMembership).order_by(TeamMembership.team_id))).scalars().first()
             assert membership is not None
             await session.delete(membership)
             await session.commit()
@@ -2180,9 +2034,7 @@ async def _snapshot_for(session: AsyncSession, pipeline: Pipeline) -> PipelineSn
 
 
 @pytest.mark.parametrize("spec", seed_demo_module._DEMO_PIPELINES, ids=lambda spec: spec.name)
-async def test_seeded_graph_passes_the_graph_read_validation(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec
-) -> None:
+async def test_seeded_graph_passes_the_graph_read_validation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec) -> None:
     """Regression guard: every seeded graph survives GET /pipelines/{id}/graph intact.
 
     Runs the stored live graph (graph_nodes_json + pipeline_edges rows)
@@ -2206,9 +2058,7 @@ async def test_seeded_graph_passes_the_graph_read_validation(
 
 
 @pytest.mark.parametrize("spec", seed_demo_module._DEMO_PIPELINES, ids=lambda spec: spec.name)
-async def test_seeded_snapshot_graph_passes_the_graph_validator(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec
-) -> None:
+async def test_seeded_snapshot_graph_passes_the_graph_validator(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec) -> None:
     """The v1 snapshot graph passes the save/run-time GraphValidator with no errors.
 
     Covers the checks the Pydantic models skip: HITL gate description minimum,
@@ -2226,9 +2076,7 @@ async def test_seeded_snapshot_graph_passes_the_graph_validator(
     assert result.is_valid
 
 
-async def test_governance_pipeline_mirrors_the_intro_video_flow(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_governance_pipeline_mirrors_the_intro_video_flow(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Implement -> PR risk level -> (risk > 0.50) Human review -> Open PR, plus the direct low-risk edge."""
     await _run_seed(session, monkeypatch, _demo_settings())
     pipeline = await _pipeline_by_name(session, "Demo Governance Pipeline")
@@ -2275,9 +2123,7 @@ def test_demo_node_ids_are_deterministic_uuids() -> None:
     assert str(uuid.UUID(first)) == first
 
 
-async def test_seed_converges_legacy_string_node_id_graph(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_converges_legacy_string_node_id_graph(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pre-FAR-1248 demo (string node ids, no edges, 'demo'-keyed run output) is repaired on re-seed."""
     await _run_seed(session, monkeypatch, _demo_settings())
     pipeline = await _pipeline_by_name(session, "Demo Governance Pipeline")
@@ -2318,10 +2164,7 @@ async def test_seed_converges_legacy_string_node_id_graph(
 
     converged = await _pipeline_by_name(session, "Demo Governance Pipeline")
     node_ids = {node["id"] for node in converged.graph_nodes_json}
-    assert node_ids == {
-        seed_demo_module.demo_node_id("Demo Governance Pipeline", key)
-        for key in ("implement", "risk", "review", "open_pr")
-    }
+    assert node_ids == {seed_demo_module.demo_node_id("Demo Governance Pipeline", key) for key in ("implement", "risk", "review", "open_pr")}
     assert len(await _live_edges(session, converged)) == 4
     converged_snapshot = await _snapshot_for(session, converged)
     assert {node["id"] for node in converged_snapshot.graph_json["nodes"]} == node_ids
@@ -2331,9 +2174,7 @@ async def test_seed_converges_legacy_string_node_id_graph(
     assert set(run.node_token_usage or {}) <= node_ids
 
 
-async def test_every_seeded_run_carries_a_node_level_trace(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_every_seeded_run_carries_a_node_level_trace(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run detail's Execution Trace + per-node cost render for every seeded run.
 
     Per-node usage/outputs/telemetry are keyed by the run's snapshot node ids
@@ -2431,9 +2272,7 @@ async def test_second_seed_rewrites_no_run_trace(session: AsyncSession, monkeypa
     assert edge_writes.await_count == 0
 
 
-async def test_seed_does_not_create_a_public_demo_lifecycle_map(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_does_not_create_a_public_demo_lifecycle_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """The public demo keeps lifecycle-map implementation support out of its seed data."""
     await _run_seed(session, monkeypatch, _demo_settings())
     await _run_seed(session, monkeypatch, _demo_settings())
@@ -2443,9 +2282,7 @@ async def test_seed_does_not_create_a_public_demo_lifecycle_map(
     assert await _count(session, Run) == 20
 
 
-async def test_seed_does_not_recreate_a_removed_demo_lifecycle_map(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_does_not_recreate_a_removed_demo_lifecycle_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated public-demo seeds do not recreate lifecycle-map rows."""
     await _run_seed(session, monkeypatch, _demo_settings())
     assert await _count(session, LifecycleMap) == 0
@@ -2519,9 +2356,7 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     await _run_seed(session, monkeypatch, _demo_settings())
 
     assert graph_spy.await_count == 1, graph_spy.await_count
-    assert graph_spy.await_args.kwargs["recording"].record_snapshot is True, (
-        "a convergence write against an existing pipeline must be versioned"
-    )
+    assert graph_spy.await_args.kwargs["recording"].record_snapshot is True, "a convergence write against an existing pipeline must be versioned"
     assert snap_spy.await_count == 1, f"the convergence write must mint a snapshot: {snap_spy.await_count}"
     kwargs = snap_spy.await_args.kwargs
     assert kwargs["pipeline_id"] == pipeline.id
@@ -2576,9 +2411,7 @@ async def test_seed_converges_existing_system_map(session: AsyncSession, monkeyp
 
     await session.refresh(system_map)
     assert system_map.default_map is True
-    revisions = list(
-        (await session.execute(select(SystemMapRevision).order_by(SystemMapRevision.revision_number))).scalars()
-    )
+    revisions = list((await session.execute(select(SystemMapRevision).order_by(SystemMapRevision.revision_number))).scalars())
     assert [rev.revision_number for rev in revisions] == [1, 2]
     assert system_map.published_revision_id == revisions[-1].id
     assert await _count(session, SystemMap) == 1
@@ -2599,9 +2432,7 @@ async def test_seed_converges_existing_system_map(session: AsyncSession, monkeyp
     assert system_map.published_revision_id == revisions[0].id
 
 
-async def test_seed_system_map_failure_is_best_effort(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_seed_system_map_failure_is_best_effort(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A System Map element write failure is swallowed so the rest of the seed survives."""
 
     async def _explode(*args: object, **kwargs: object) -> None:

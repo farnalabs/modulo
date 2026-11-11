@@ -76,9 +76,7 @@ class TestAlertEngineEvaluate:
             pytest.param([_make_rule()], "error", 1, 1, "in_app", id="level_match_triggers_alert"),
             pytest.param([_make_rule()], "warning", 1, 0, None, id="level_mismatch_skips"),
             pytest.param([_make_rule(condition_min_count=5)], "error", 3, 0, None, id="count_below_threshold_skips"),
-            pytest.param(
-                [_make_rule(condition_min_count=5)], "error", 5, 1, "in_app", id="count_meets_threshold_triggers"
-            ),
+            pytest.param([_make_rule(condition_min_count=5)], "error", 5, 1, "in_app", id="count_meets_threshold_triggers"),
             pytest.param(
                 [_make_rule(name="Rule A"), _make_rule(name="Rule B")],
                 "error",

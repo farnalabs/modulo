@@ -102,12 +102,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     finally:
         cleanup = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
         async with cleanup.connect() as conn:
-            await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :n AND pid <> pg_backend_pid()"
-                ).bindparams(n=db_name)
-            )
+            await conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()").bindparams(n=db_name))
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
         await cleanup.dispose()
 
@@ -118,10 +113,7 @@ async def _seed(db_url: str) -> dict[str, uuid.UUID]:
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                    "VALUES (:id, 'prov@example.com', 'prov', 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'prov@example.com', 'prov', 'hash', 'local', true)"),
                 {"id": str(uuid.uuid4())},
             )
             await conn.execute(
@@ -129,13 +121,7 @@ async def _seed(db_url: str) -> dict[str, uuid.UUID]:
                 {"id": str(oid)},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, (SELECT id FROM accounts LIMIT 1), 'prov pipeline', "
-                    "10, 30, 300, '{}', '[]')"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, (SELECT id FROM accounts LIMIT 1), 'prov pipeline', 10, 30, 300, '{}', '[]')"),
                 {"id": str(pid), "oid": str(oid)},
             )
             await conn.execute(
@@ -183,11 +169,7 @@ async def _seed(db_url: str) -> dict[str, uuid.UUID]:
                 jid = uuid.uuid4()
                 prov_rows[key] = jid
                 await conn.execute(
-                    text(
-                        "INSERT INTO public.journeys (id, organisation_id, kind, ref, "
-                        '"canonical_work_item_id", latest_provenance) '
-                        "VALUES (:id, :oid, 'github_issue', :refv, :cwi, NULLIF(:prov, '__NULL__'))"
-                    ),
+                    text("INSERT INTO public.journeys (id, organisation_id, kind, ref, \"canonical_work_item_id\", latest_provenance) VALUES (:id, :oid, 'github_issue', :refv, :cwi, NULLIF(:prov, '__NULL__'))"),
                     {
                         "id": str(jid),
                         "oid": str(oid),
@@ -222,9 +204,7 @@ async def _refs(db_url: str, rid: uuid.UUID) -> list | None:
     engine = create_async_engine(db_url, poolclass=NullPool)
     try:
         async with engine.connect() as conn:
-            val = (
-                await conn.execute(text("SELECT work_item_refs FROM public.runs WHERE id = :id"), {"id": str(rid)})
-            ).scalar()
+            val = (await conn.execute(text("SELECT work_item_refs FROM public.runs WHERE id = :id"), {"id": str(rid)})).scalar()
     finally:
         await engine.dispose()
     return val
@@ -237,10 +217,7 @@ async def _column_exists(db_url: str, name: str) -> bool:
             return bool(
                 (
                     await conn.execute(
-                        text(
-                            "SELECT count(*) FROM information_schema.columns "
-                            "WHERE table_schema='public' AND table_name='journeys' AND column_name = :c"
-                        ),
+                        text("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='journeys' AND column_name = :c"),
                         {"c": name},
                     )
                 ).scalar()
@@ -284,9 +261,7 @@ async def test_0221_upgrade_backfills_and_is_idempotent(isolated_db_url: str) ->
         {"source": "agent", "kind": "github_issue", "ref": "GH-1"},
         {"source": "derived"},
     ]
-    assert await _refs(isolated_db_url, seeded["run_reonly"]) == [
-        {"source": "agent", "kind": "linear_ticket", "ref": "LIN-7"}
-    ]
+    assert await _refs(isolated_db_url, seeded["run_reonly"]) == [{"source": "agent", "kind": "linear_ticket", "ref": "LIN-7"}]
     assert await _refs(isolated_db_url, seeded["run_derived"]) == [{"source": "derived"}]
     assert await _refs(isolated_db_url, seeded["run_null"]) is None
 

@@ -71,9 +71,7 @@ NODE_UUID = uuid.UUID("00000000-0000-0000-0000-0000000000d4")
 PASSING_SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
 
-def _make_executor(
-    session: _RecordingSession | None = None, monkeypatch: pytest.MonkeyPatch | None = None
-) -> tuple[PipelineExecutor, _RecordingSession | None]:
+def _make_executor(session: _RecordingSession | None = None, monkeypatch: pytest.MonkeyPatch | None = None) -> tuple[PipelineExecutor, _RecordingSession | None]:
     executor = PipelineExecutor(MagicMock())
     if session is not None and monkeypatch is not None:
 
@@ -175,9 +173,7 @@ async def test_blocking_json_schema_eval_failure_transitions_to_eval_failed(monk
     assert final_status == "eval_failed"
     assert error_code == "eval_blocked"
     assert error_detail is not None
-    assert ("run_failed", {"error": "eval_blocked", "detail": error_detail}) in [
-        c.args for c in broker.publish.call_args_list
-    ]
+    assert ("run_failed", {"error": "eval_blocked", "detail": error_detail}) in [c.args for c in broker.publish.call_args_list]
 
 
 async def test_no_eval_definitions_runs_no_evals_and_completes(monkeypatch: pytest.MonkeyPatch):

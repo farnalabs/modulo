@@ -95,6 +95,4 @@ def test_models_declare_the_four_lookup_indexes() -> None:
 
     for name, columns in _INDEX_COLUMNS.items():
         assert name in declared, f"model/migration drift: {name} missing from the ORM"
-        assert declared[name] == columns, (
-            f"model/migration drift: {name} model columns {declared[name]} != migration {columns}"
-        )
+        assert declared[name] == columns, f"model/migration drift: {name} model columns {declared[name]} != migration {columns}"

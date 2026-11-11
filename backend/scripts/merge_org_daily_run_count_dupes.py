@@ -40,11 +40,7 @@ _COST_COLUMN_CAP = Decimal("99999999.999999")
 
 
 def _preflight_query() -> str:
-    return (
-        "SELECT organisation_id, run_date, id, total_spend_usd, run_count, clamped "
-        "FROM org_daily_run_counts WHERE team_id IS NULL "
-        "ORDER BY organisation_id, run_date"
-    )
+    return "SELECT organisation_id, run_date, id, total_spend_usd, run_count, clamped FROM org_daily_run_counts WHERE team_id IS NULL ORDER BY organisation_id, run_date"
 
 
 async def _org_ids(session: AsyncSession) -> list[uuid.UUID]:
@@ -55,12 +51,7 @@ async def _org_ids(session: AsyncSession) -> list[uuid.UUID]:
 async def _merge_for_org(session: AsyncSession, org_id: uuid.UUID, dry_run: bool) -> int:
     """Merge duplicate org rows for one org under set_rls_org; returns count merged."""
     await set_rls_org(session, org_id)
-    rows = await session.execute(
-        text(
-            "SELECT run_date, id, total_spend_usd, run_count, clamped FROM org_daily_run_counts "
-            "WHERE team_id IS NULL ORDER BY run_date"
-        )
-    )
+    rows = await session.execute(text("SELECT run_date, id, total_spend_usd, run_count, clamped FROM org_daily_run_counts WHERE team_id IS NULL ORDER BY run_date"))
     by_date: dict[str, list[tuple]] = {}
     for r in rows.all():
         by_date.setdefault(str(r[0]), []).append(r)
@@ -81,8 +72,7 @@ async def _merge_for_org(session: AsyncSession, org_id: uuid.UUID, dry_run: bool
         total = min(total, _COST_COLUMN_CAP)
         if dry_run:
             print(
-                f"[dry-run] org={org_id} date={run_date}: {len(group)} rows -> "
-                f"total={total} run_count={run_count} clamped={clamped} (keep id={keep_id})",
+                f"[dry-run] org={org_id} date={run_date}: {len(group)} rows -> total={total} run_count={run_count} clamped={clamped} (keep id={keep_id})",
                 file=sys.stderr,
             )
             merged += 1
@@ -91,10 +81,7 @@ async def _merge_for_org(session: AsyncSession, org_id: uuid.UUID, dry_run: bool
         for _d, rid, _spend, _count, _clamped_flag in group[1:]:
             await session.execute(text("DELETE FROM org_daily_run_counts WHERE id = :rid").bindparams(rid=rid))
         await session.execute(
-            text(
-                "UPDATE org_daily_run_counts SET total_spend_usd = :total, "
-                "run_count = :count, clamped = :clamped WHERE id = :rid"
-            ).bindparams(
+            text("UPDATE org_daily_run_counts SET total_spend_usd = :total, run_count = :count, clamped = :clamped WHERE id = :rid").bindparams(
                 total=total,
                 count=run_count,
                 clamped=clamped,

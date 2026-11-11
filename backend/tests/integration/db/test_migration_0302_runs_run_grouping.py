@@ -148,23 +148,14 @@ async def _constraint_names(engine: AsyncEngine) -> set[str]:
 
 async def _column_names(engine: AsyncEngine) -> set[str]:
     async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'runs' "
-                "AND column_name IN ('run_group_id', 'run_group_kind')"
-            )
-        )
+        rows = await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs' AND column_name IN ('run_group_id', 'run_group_kind')"))
         return {str(r[0]) for r in rows.all()}
 
 
 async def _indexdefs(engine: AsyncEngine) -> dict[str, str]:
     async with engine.connect() as conn:
         rows = await conn.execute(
-            text(
-                "SELECT indexname, indexdef FROM pg_indexes "
-                "WHERE schemaname = 'public' AND tablename = 'runs' AND indexname = ANY(:names)"
-            ),
+            text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'runs' AND indexname = ANY(:names)"),
             {"names": list(_NEW_INDEXES)},
         )
         return {str(name): str(indexdef) for name, indexdef in rows.all()}
@@ -190,10 +181,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     }
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'f3m@example.com', 'f3m', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'f3m@example.com', 'f3m', 'hash', 'local', true)"),
             {"id": str(ids["account"])},
         )
         await conn.execute(
@@ -201,12 +189,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :aid, 'f3m pipeline', 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :aid, 'f3m pipeline', 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(ids["pipeline"]), "oid": str(ids["org"]), "aid": str(ids["account"])},
         )
         await conn.execute(
@@ -224,11 +207,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
         # that replaces the global one builds over them without conflict.
         for key, idx, parent in (("root", 1, None), ("child", 2, "root"), ("other", 3, None)):
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                    "status, run_number, input_hash, langgraph_thread_id, parent_run_id) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :n, 'ih', :thread, :parent)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, parent_run_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :n, 'ih', :thread, :parent)"),
                 {
                     "id": str(ids[key]),
                     "oid": str(ids["org"]),
@@ -256,13 +235,7 @@ async def _insert_run(
     """One behaviour INSERT on the migrated schema (run_group columns exist)."""
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "status, run_number, input_hash, langgraph_thread_id, "
-                "parent_run_id, run_group_id, run_group_kind) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :n, 'ih', :thread, "
-                ":parent, :group, :kind)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, parent_run_id, run_group_id, run_group_kind) VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :n, 'ih', :thread, :parent, :group, :kind)"),
             {
                 "id": str(run_id),
                 "oid": str(ids["org"]),
@@ -277,14 +250,10 @@ async def _insert_run(
         )
 
 
-async def _expect_unique_violation(
-    engine: AsyncEngine, run_id: uuid.UUID, ids: dict[str, uuid.UUID], run_number: int, **kwargs: object
-) -> None:
+async def _expect_unique_violation(engine: AsyncEngine, run_id: uuid.UUID, ids: dict[str, uuid.UUID], run_number: int, **kwargs: object) -> None:
     with pytest.raises(IntegrityError) as exc_info:
         await _insert_run(engine, run_id, ids, run_number, **kwargs)  # type: ignore[arg-type]
-    assert sqlstate_of(exc_info.value) == "23505", (
-        f"expected SQLSTATE 23505 (unique violation), got {sqlstate_of(exc_info.value)}"
-    )
+    assert sqlstate_of(exc_info.value) == "23505", f"expected SQLSTATE 23505 (unique violation), got {sqlstate_of(exc_info.value)}"
 
 
 # ---------------------------------------------------------------------------
@@ -318,13 +287,7 @@ async def test_upgrade_applies_over_existing_rows(pre_upgrade_db_url: str) -> No
         assert await _column_names(engine) == {"run_group_id", "run_group_kind"}
 
         async with engine.connect() as conn:
-            col_rows = await conn.execute(
-                text(
-                    "SELECT column_name, is_nullable, column_default FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'runs' "
-                    "AND column_name IN ('run_group_id', 'run_group_kind')"
-                )
-            )
+            col_rows = await conn.execute(text("SELECT column_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs' AND column_name IN ('run_group_id', 'run_group_kind')"))
             cols = {str(row[0]): (str(row[1]), row[2]) for row in col_rows.all()}
         assert cols["run_group_id"] == ("YES", None), cols
         assert cols["run_group_kind"] == ("YES", None), cols
@@ -342,10 +305,7 @@ async def test_upgrade_applies_over_existing_rows(pre_upgrade_db_url: str) -> No
 
         async with engine.connect() as conn:
             seeded_rows = await conn.execute(
-                text(
-                    "SELECT langgraph_thread_id, parent_run_id FROM runs "
-                    "WHERE id IN (:root, :child, :other) ORDER BY run_number"
-                ),
+                text("SELECT langgraph_thread_id, parent_run_id FROM runs WHERE id IN (:root, :child, :other) ORDER BY run_number"),
                 {"root": str(ids["root"]), "child": str(ids["child"]), "other": str(ids["other"])},
             )
             rows = seeded_rows.all()
@@ -371,28 +331,20 @@ async def test_partial_unique_enforcement_on_postgres(pre_upgrade_db_url: str) -
 
         # retry: child row on a FRESH thread — accepted.
         retry_id = uuid.uuid4()
-        await _insert_run(
-            engine, retry_id, ids, 10, f"retry-{retry_id.hex[:8]}", parent=ids["root"], group=ids["root"], kind="retry"
-        )
+        await _insert_run(engine, retry_id, ids, 10, f"retry-{retry_id.hex[:8]}", parent=ids["root"], group=ids["root"], kind="retry")
 
         # resume: child row INHERITING the parent's thread — accepted (this
         # is what the global unique used to make impossible).
         first_resume = uuid.uuid4()
-        await _insert_run(
-            engine, first_resume, ids, 11, root_thread, parent=ids["root"], group=ids["root"], kind="resume"
-        )
+        await _insert_run(engine, first_resume, ids, 11, root_thread, parent=ids["root"], group=ids["root"], kind="resume")
 
         # double-resume of the same parent -> unique violation (23505).
-        await _expect_unique_violation(
-            engine, uuid.uuid4(), ids, 12, thread=root_thread, parent=ids["root"], group=ids["root"], kind="resume"
-        )
+        await _expect_unique_violation(engine, uuid.uuid4(), ids, 12, thread=root_thread, parent=ids["root"], group=ids["root"], kind="resume")
 
         # resume-of-resume: its parent is a DIFFERENT row -> accepted, and
         # the whole chain keeps sharing the root's thread.
         second_resume = uuid.uuid4()
-        await _insert_run(
-            engine, second_resume, ids, 13, root_thread, parent=first_resume, group=ids["root"], kind="resume"
-        )
+        await _insert_run(engine, second_resume, ids, 13, root_thread, parent=first_resume, group=ids["root"], kind="resume")
 
         # a NON-resume row may never share an existing thread.
         await _expect_unique_violation(engine, uuid.uuid4(), ids, 14, thread=root_thread)
@@ -421,9 +373,7 @@ async def test_downgrade_refuses_over_shared_threads_then_round_trips(pre_upgrad
         ids = await _seed(engine)
         _migrate(pre_upgrade_db_url, MIGRATION_REV)
         root_thread = f"seed-root-{ids['root'].hex[:8]}"
-        await _insert_run(
-            engine, uuid.uuid4(), ids, 10, root_thread, parent=ids["root"], group=ids["root"], kind="resume"
-        )
+        await _insert_run(engine, uuid.uuid4(), ids, 10, root_thread, parent=ids["root"], group=ids["root"], kind="resume")
 
         # Refusal: a resume child still shares its parent's thread — the
         # downgrade must NOT emit a cryptic unique violation and must NOT
@@ -448,10 +398,7 @@ async def test_downgrade_refuses_over_shared_threads_then_round_trips(pre_upgrad
                 str(name)
                 for name in (
                     await conn.execute(
-                        text(
-                            "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'runs' "
-                            "AND indexname = ANY(:names)"
-                        ),
+                        text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'runs' AND indexname = ANY(:names)"),
                         {"names": list(_NEW_INDEXES)},
                     )
                 ).scalars()

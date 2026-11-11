@@ -201,9 +201,7 @@ async def sweep(tmp_path):
     with patch.object(health_sweep, "create_secrets_backend", _fake_backend_factory):
 
         async def _run() -> dict[str, Any]:
-            return await run_connector_health_checks(
-                async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
-            )
+            return await run_connector_health_checks(async_sessionmaker(engine, expire_on_commit=False, autobegin=False))
 
         async def _seeder(instances: list[ConnectorInstance]) -> None:
             maker = async_sessionmaker(engine, expire_on_commit=False)

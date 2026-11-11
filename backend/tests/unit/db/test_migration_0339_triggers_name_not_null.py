@@ -57,23 +57,8 @@ def _run(engine: sa.Engine, fn: str) -> None:
 
 def _scaffold(conn: sa.Connection) -> None:
     """The post-0203 ``triggers`` shape: nullable ``name`` + the identity index."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE triggers ("
-            "id CHAR(32) PRIMARY KEY, "
-            "organisation_id CHAR(32) NOT NULL, "
-            "pipeline_id CHAR(32) NOT NULL, "
-            "name VARCHAR(255) NULL, "
-            "trigger_type VARCHAR(20) NOT NULL, "
-            "deleted_at TIMESTAMP NULL)"
-        )
-    )
-    conn.execute(
-        sa.text(
-            "CREATE UNIQUE INDEX uq_triggers_org_pipeline_name ON triggers (organisation_id, pipeline_id, name) "
-            "WHERE deleted_at IS NULL AND name IS NOT NULL"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE triggers (id CHAR(32) PRIMARY KEY, organisation_id CHAR(32) NOT NULL, pipeline_id CHAR(32) NOT NULL, name VARCHAR(255) NULL, trigger_type VARCHAR(20) NOT NULL, deleted_at TIMESTAMP NULL)"))
+    conn.execute(sa.text("CREATE UNIQUE INDEX uq_triggers_org_pipeline_name ON triggers (organisation_id, pipeline_id, name) WHERE deleted_at IS NULL AND name IS NOT NULL"))
 
 
 def _insert(
@@ -86,10 +71,7 @@ def _insert(
     pipeline: str = "p1",
 ) -> None:
     conn.execute(
-        sa.text(
-            "INSERT INTO triggers (id, organisation_id, pipeline_id, name, trigger_type, deleted_at) "
-            "VALUES (:id, 'org1', :pipeline, :name, :trigger_type, :deleted_at)"
-        ),
+        sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, name, trigger_type, deleted_at) VALUES (:id, 'org1', :pipeline, :name, :trigger_type, :deleted_at)"),
         {
             "id": row_id,
             "pipeline": pipeline,

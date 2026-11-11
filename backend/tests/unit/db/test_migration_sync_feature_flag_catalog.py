@@ -39,15 +39,7 @@ _EXPECTED_FLAGS: set[str] = {
 
 # The reconciliation migration that adds the feature_flag_catalog columns.
 _CATALOG_MIGRATION_NAME = "0109_schema_teams_library"
-_CATALOG_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / (f"{_CATALOG_MIGRATION_NAME}.py")
-)
+_CATALOG_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / (f"{_CATALOG_MIGRATION_NAME}.py")
 
 
 def _load_migration(name: str, path: Path) -> ModuleType:

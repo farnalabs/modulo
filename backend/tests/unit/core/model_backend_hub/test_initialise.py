@@ -75,9 +75,7 @@ async def test_initialise_none_instances_raises(hub: ModelBackendHub) -> None:
 
 
 @pytest.mark.anyio
-async def test_initialise_no_instances_registers_nothing(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_no_instances_registers_nothing(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     await hub.initialise([], secrets_backend=_secrets(secret="{}"))
     assert not hub.backend_ids
     assert "No backends were registered" in caplog.text
@@ -97,9 +95,7 @@ async def test_initialise_skips_on_secret_timeout(hub: ModelBackendHub, caplog: 
 
 
 @pytest.mark.anyio
-async def test_initialise_skips_on_malformed_secret_json(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_skips_on_malformed_secret_json(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     row = _row()
     await hub.initialise([row], secrets_backend=_secrets(secret="not json at all"))
     assert row.id not in hub.backend_ids
@@ -179,10 +175,7 @@ async def test_initialise_registers_credential_free_local_backends_without_crede
     """
     assert set(_NO_CREDENTIALS_REQUIRED_PROVIDERS) == set(_EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS)
 
-    rows = [
-        _row(provider=provider, model_id="local-model", credentials_ciphertext=b"")
-        for provider in _EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS
-    ]
+    rows = [_row(provider=provider, model_id="local-model", credentials_ciphertext=b"") for provider in _EXPECTED_CREDENTIAL_FREE_LOCAL_BACKENDS]
     async_client = httpx.AsyncClient()
     missing = frozenset(str(row.id) for row in rows)
     with patch("farna.model_backends.module.pinned_async_client_sync", return_value=async_client) as pinned_client:
@@ -274,9 +267,7 @@ async def test_initialise_uses_credentials_ciphertext_when_secret_backend_misses
 
 
 @pytest.mark.anyio
-async def test_initialise_skips_when_ciphertext_fails_to_decrypt(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_skips_when_ciphertext_fails_to_decrypt(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     """An undecryptable credentials_ciphertext must surface as BackendDecryptError
     and the faulty row must be skipped, not crash initialise()."""
     row = _row(credentials_ciphertext=b"this is not a fernet token")
@@ -296,9 +287,7 @@ async def test_initialise_skips_when_ciphertext_fails_to_decrypt(
 
 
 @pytest.mark.anyio
-async def test_initialise_non_iterable_fallback_ids_is_skipped(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_non_iterable_fallback_ids_is_skipped(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     row = _row(fallback_backend_ids=123)
     await hub.initialise([row], secrets_backend=_secrets(secret="{}"))
     assert row.id in hub.backend_ids
@@ -324,9 +313,7 @@ async def test_initialise_accepts_uuid_object_fallback_ids(hub: ModelBackendHub)
 
 
 @pytest.mark.anyio
-async def test_initialise_skips_unexpected_fallback_id_types(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_skips_unexpected_fallback_id_types(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     fallback_id = uuid.uuid4()
     row = _row(fallback_backend_ids=[fallback_id, 42])
     await hub.initialise([row], secrets_backend=_secrets(secret="{}"))
@@ -356,9 +343,7 @@ def _secrets_per_backend(
 
 
 @pytest.mark.anyio
-async def test_initialise_bad_backends_skipped_while_good_ones_register(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_bad_backends_skipped_while_good_ones_register(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     """One broken backend row must not prevent the good ones from registering.
 
     Covers three failure classes: an unknown provider (dispatch ValueError),
@@ -441,9 +426,7 @@ async def test_initialise_never_logs_credential_values(hub: ModelBackendHub, cap
 
 
 @pytest.mark.anyio
-async def test_initialise_decrypt_failure_fails_closed_for_that_backend_only(
-    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_initialise_decrypt_failure_fails_closed_for_that_backend_only(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
     """A ciphertext that will not decrypt fails CLOSED for that backend only:
     it is skipped with a logged failure (no value), while a healthy sibling
     row still registers."""

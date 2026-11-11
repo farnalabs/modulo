@@ -55,15 +55,7 @@ def _source() -> str:
 
 def _scaffold(conn: sa.Connection) -> None:
     """A pre-migration ``org_api_keys`` shape (no ``scope`` column)."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE org_api_keys ("
-            "id INTEGER PRIMARY KEY, "
-            "name TEXT NOT NULL, "
-            "role TEXT NOT NULL, "
-            "account_id INTEGER NOT NULL)"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE org_api_keys (id INTEGER PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, account_id INTEGER NOT NULL)"))
 
 
 def _run(engine: sa.Engine, module: ModuleType, fn: str) -> None:
@@ -88,9 +80,7 @@ def _insert_key(conn: sa.Connection, *, name: str, scope: str | None = None) -> 
         )
     else:
         conn.execute(
-            sa.text(
-                "INSERT INTO org_api_keys (id, name, role, account_id, scope) VALUES (1, :name, 'operator', 2, :scope)"
-            ),
+            sa.text("INSERT INTO org_api_keys (id, name, role, account_id, scope) VALUES (1, :name, 'operator', 2, :scope)"),
             {"name": name, "scope": scope},
         )
 

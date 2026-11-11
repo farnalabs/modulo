@@ -175,10 +175,7 @@ class SharePointConnector(ConnectorBase):
         if not site_id or not drive_id:
             raise ValueError("SharePoint drive query requires 'site_id' and 'drive_id' filters")
         path = q.filters.get("path", "/")
-        if path == "/" or not path:
-            url = f"/sites/{site_id}/drives/{drive_id}/root/children"
-        else:
-            url = f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
+        url = f"/sites/{site_id}/drives/{drive_id}/root/children" if path == "/" or not path else f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
         return await self._query_collection(client, url, self._page_params(q), q.limit)
 
     async def _query_file(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:

@@ -219,9 +219,7 @@ def _inspect_agents(ctx: dict[str, Any]) -> None:
 
 @then("the response status is 200")
 def _response_status_200(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 200, (
-        f"Expected 200, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
-    )
+    assert ctx["response"].status_code == 200, f"Expected 200, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
 
 
 @then('the response has content-type "application/zip"')
@@ -511,9 +509,7 @@ def _requires_fields_yaml(ctx: dict[str, Any]) -> None:
 
 @then("the response status is 404")
 def _response_status_404(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 404, (
-        f"Expected 404, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
-    )
+    assert ctx["response"].status_code == 404, f"Expected 404, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
 
 
 # ============================================================================
@@ -561,9 +557,7 @@ def _upload_valid_zip(client, ctx: dict[str, Any]) -> None:
 def _response_has_resolved_schemas(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     assert "resolved_schemas" in data, "Missing resolved_schemas"
-    assert len(data["resolved_schemas"]) >= 2, (
-        f"Expected at least 2 resolved_schemas, got {len(data['resolved_schemas'])}"
-    )
+    assert len(data["resolved_schemas"]) >= 2, f"Expected at least 2 resolved_schemas, got {len(data['resolved_schemas'])}"
 
 
 @then("the response contains available_teams")
@@ -636,9 +630,7 @@ def _suggested_name_is(ctx: dict[str, Any], suggestion: str) -> None:
     conflicts = data.get("name_conflicts", [])
     pipeline_conflicts = [c for c in conflicts if c.get("type") == "pipeline"]
     assert pipeline_conflicts, f"Expected suggested name '{suggestion}', got {conflicts}"
-    assert pipeline_conflicts[0].get("suggested") == suggestion, (
-        f"Expected suggested name '{suggestion}', got {conflicts}"
-    )
+    assert pipeline_conflicts[0].get("suggested") == suggestion, f"Expected suggested name '{suggestion}', got {conflicts}"
 
 
 @when("the user sends POST /api/v1/libraries/import/confirm with bundle_json")
@@ -723,9 +715,7 @@ def _import_analysis_runs(client, ctx: dict[str, Any]) -> None:
 def _schema_resolved_to_local(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     schemas = data.get("resolved_schemas", [])
-    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), (
-        "PRD Input Schema not resolved by abstract_name"
-    )
+    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), "PRD Input Schema not resolved by abstract_name"
 
 
 @then("no schema creation warning is emitted")
@@ -831,9 +821,7 @@ def _upload_txt_file(client, ctx: dict[str, Any]) -> None:
 
 @then("the response status is 400")
 def _response_status_400(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 400, (
-        f"Expected 400, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
-    )
+    assert ctx["response"].status_code == 400, f"Expected 400, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
 
 
 # ---------------------------------------------------------------------------
@@ -864,27 +852,21 @@ def _analyse_valid_bundle(client, ctx: dict[str, Any]) -> None:
 def _connector_resolved_to_instance(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     connectors = data.get("resolved_connectors", [])
-    assert any(c.get("instance_id") == str(FILESYSTEM_CONNECTOR_ID) and c.get("instance_name") for c in connectors), (
-        f"Expected resolved filesystem instance, got {connectors}"
-    )
+    assert any(c.get("instance_id") == str(FILESYSTEM_CONNECTOR_ID) and c.get("instance_name") for c in connectors), f"Expected resolved filesystem instance, got {connectors}"
 
 
 @then('the schema reference is resolved to the local "PRD Input Schema" by abstract_name')
 def _schema_resolved_by_abstract_name(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     schemas = data.get("resolved_schemas", [])
-    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), (
-        f"Expected PRD Input Schema resolved by abstract_name, got {schemas}"
-    )
+    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), f"Expected PRD Input Schema resolved by abstract_name, got {schemas}"
 
 
 @then('the model backend is resolved to the local "claude-sonnet-4" model backend')
 def _mb_resolved_to_local(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     backends = data.get("resolved_model_backends", [])
-    assert any(mb.get("model_backend_id") == str(CLAUDE_SONNET_BACKEND_ID) for mb in backends), (
-        f"Expected claude-sonnet-4 model backend resolved, got {backends}"
-    )
+    assert any(mb.get("model_backend_id") == str(CLAUDE_SONNET_BACKEND_ID) for mb in backends), f"Expected claude-sonnet-4 model backend resolved, got {backends}"
 
 
 @when("the user confirms the import with the analysed bundle")
@@ -1001,9 +983,7 @@ def _analyse_seam_mocks(*, existing_pipeline_names: set[str] | None = None) -> d
                 "warning": None,
             }
         ),
-        "resolve_model_backend": AsyncMock(
-            return_value={"model_backend_id": str(CLAUDE_SONNET_BACKEND_ID), "warning": None}
-        ),
+        "resolve_model_backend": AsyncMock(return_value={"model_backend_id": str(CLAUDE_SONNET_BACKEND_ID), "warning": None}),
         "get_existing_pipeline_names": AsyncMock(return_value=set(existing_pipeline_names or set())),
         "get_existing_agent_names": AsyncMock(return_value=set()),
     }
@@ -1102,9 +1082,7 @@ def _analysis_resolves_connectors(client, ctx: dict[str, Any]) -> None:
 def _resolved_connectors_has_match(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     connectors = data.get("resolved_connectors", [])
-    assert any(c.get("instance_id") is not None and c.get("instance_name") is not None for c in connectors), (
-        "No resolved connector with instance_id and instance_name"
-    )
+    assert any(c.get("instance_id") is not None and c.get("instance_name") is not None for c in connectors), "No resolved connector with instance_id and instance_name"
 
 
 @then("no warning is emitted for this connector type")

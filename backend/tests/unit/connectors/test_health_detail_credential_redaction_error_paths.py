@@ -163,9 +163,7 @@ async def test_gh_health_check_transport_error_redacts_detail() -> None:
 @respx.mock
 async def test_gh_trigger_run_http_status_error_redacts() -> None:
     connector = GitHubActionsCIRunner(token=_PLANTED)
-    respx.post(f"{_GH_API}/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
-        return_value=httpx.Response(500, text=f"dispatch boom {_PLANTED}")
-    )
+    respx.post(f"{_GH_API}/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(return_value=httpx.Response(500, text=f"dispatch boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.trigger_run("owner/repo/ci.yml")
     _assert_redacted(str(exinfo.value))
@@ -174,9 +172,7 @@ async def test_gh_trigger_run_http_status_error_redacts() -> None:
 @respx.mock
 async def test_gh_get_run_status_http_status_error_redacts() -> None:
     connector = GitHubActionsCIRunner(token=_PLANTED)
-    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs/12345").mock(
-        return_value=httpx.Response(500, text=f"status boom {_PLANTED}")
-    )
+    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs/12345").mock(return_value=httpx.Response(500, text=f"status boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.get_run_status("owner/repo/12345")
     _assert_redacted(str(exinfo.value))
@@ -185,9 +181,7 @@ async def test_gh_get_run_status_http_status_error_redacts() -> None:
 @respx.mock
 async def test_gh_get_run_logs_http_status_error_redacts() -> None:
     connector = GitHubActionsCIRunner(token=_PLANTED)
-    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs/12345/logs").mock(
-        return_value=httpx.Response(500, text=f"logs boom {_PLANTED}")
-    )
+    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs/12345/logs").mock(return_value=httpx.Response(500, text=f"logs boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.get_run_logs("owner/repo/12345")
     _assert_redacted(str(exinfo.value))
@@ -196,9 +190,7 @@ async def test_gh_get_run_logs_http_status_error_redacts() -> None:
 @respx.mock
 async def test_gh_list_runs_http_status_error_redacts() -> None:
     connector = GitHubActionsCIRunner(token=_PLANTED)
-    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs").mock(
-        return_value=httpx.Response(500, text=f"list boom {_PLANTED}")
-    )
+    respx.get(f"{_GH_API}/repos/owner/repo/actions/runs").mock(return_value=httpx.Response(500, text=f"list boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.list_runs("owner/repo")
     _assert_redacted(str(exinfo.value))
@@ -230,9 +222,7 @@ async def test_gl_health_check_transport_error_redacts_detail() -> None:
 @respx.mock
 async def test_gl_trigger_run_http_status_error_redacts() -> None:
     connector = GitLabCIRunner(token=_PLANTED)
-    respx.post(f"{_GL_API}/projects/123/pipeline").mock(
-        return_value=httpx.Response(500, text=f"dispatch boom {_PLANTED}")
-    )
+    respx.post(f"{_GL_API}/projects/123/pipeline").mock(return_value=httpx.Response(500, text=f"dispatch boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.trigger_run("123")
     _assert_redacted(str(exinfo.value))
@@ -241,9 +231,7 @@ async def test_gl_trigger_run_http_status_error_redacts() -> None:
 @respx.mock
 async def test_gl_get_run_status_http_status_error_redacts() -> None:
     connector = GitLabCIRunner(token=_PLANTED)
-    respx.get(f"{_GL_API}/projects/123/pipelines/456").mock(
-        return_value=httpx.Response(500, text=f"status boom {_PLANTED}")
-    )
+    respx.get(f"{_GL_API}/projects/123/pipelines/456").mock(return_value=httpx.Response(500, text=f"status boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.get_run_status("123/456")
     _assert_redacted(str(exinfo.value))
@@ -252,9 +240,7 @@ async def test_gl_get_run_status_http_status_error_redacts() -> None:
 @respx.mock
 async def test_gl_get_run_logs_http_status_error_redacts() -> None:
     connector = GitLabCIRunner(token=_PLANTED)
-    respx.get(f"{_GL_API}/projects/123/pipelines/456/jobs").mock(
-        return_value=httpx.Response(500, text=f"logs boom {_PLANTED}")
-    )
+    respx.get(f"{_GL_API}/projects/123/pipelines/456/jobs").mock(return_value=httpx.Response(500, text=f"logs boom {_PLANTED}"))
     with pytest.raises(ValueError, match="API error") as exinfo:
         await connector.get_run_logs("123/456")
     _assert_redacted(str(exinfo.value))

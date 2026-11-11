@@ -218,11 +218,7 @@ def test_every_connector_class_declares_credential_recipe() -> None:
         origin = _credential_recipe_origin(cls)
         if origin == "ConnectorBase._credential_values":
             offenders.append(cls.__qualname__)
-    assert not offenders, (
-        "Connector subclasses missing the _credential_values recipe (FAR-1651): "
-        f"{offenders}. Give each an override returning its credential values, or "
-        "add it to NO_CREDENTIAL_CLASSES with a reason if it genuinely has none."
-    )
+    assert not offenders, f"Connector subclasses missing the _credential_values recipe (FAR-1651): {offenders}. Give each an override returning its credential values, or add it to NO_CREDENTIAL_CLASSES with a reason if it genuinely has none."
 
 
 class _PlantedSecret(str):
@@ -281,10 +277,7 @@ def test_every_recipe_binds_redactable_values() -> None:
         items = tuple(values)
         if not items or _PLANTED_TOKEN not in items:
             offenders.append(f"{cls.__qualname__}: bound {items!r}")
-    assert not offenders, (
-        "Connector recipes that do not bind redactable credential values (FAR-1651): "
-        f"{offenders}. The recipe must include the real credential so redaction is effective."
-    )
+    assert not offenders, f"Connector recipes that do not bind redactable credential values (FAR-1651): {offenders}. The recipe must include the real credential so redaction is effective."
 
 
 def test_scanner_detects_planted_violations() -> None:
@@ -300,9 +293,7 @@ def test_scanner_detects_planted_violations() -> None:
 
     # Redacted-at-source patterns must stay clean — the scanner is not a
     # redaction-mandatory hammer on every detail site, only on raw echoes.
-    assert not scan_detail_regions(
-        'return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {request.url}"))'
-    )
+    assert not scan_detail_regions('return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {request.url}"))')
     assert not scan_detail_regions("return health_check_failure(exc, self._redacted_detail)")
 
 
@@ -315,11 +306,7 @@ def test_connector_source_contains_no_raw_echo_details() -> None:
     for path, source in iter_source_text(root):
         for finding in scan_detail_regions(source):
             offenders.append(f"{path.relative_to(root)} {finding}")
-    assert not offenders, (
-        "Raw (unredacted) error-echo detail constructions in farna/connectors (FAR-1651): "
-        f"{offenders}. Route the detail through the connector's redactor "
-        "(`self._redacted_detail` / `self._redactor.redact`) before it is persisted."
-    )
+    assert not offenders, f"Raw (unredacted) error-echo detail constructions in farna/connectors (FAR-1651): {offenders}. Route the detail through the connector's redactor (`self._redacted_detail` / `self._redactor.redact`) before it is persisted."
 
 
 @respx.mock

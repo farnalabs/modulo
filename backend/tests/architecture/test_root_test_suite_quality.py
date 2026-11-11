@@ -45,13 +45,7 @@ ROOT_TESTS = _shared.TESTS.parent.parent / "tests"
 #: Enforcement lenses (``test_no_*``), excluding their ``*_lens_flags_*``
 #: self-tests. Reuse the exact set the main suite enforces, so the root package
 #: and ``backend/tests`` are held to the same standard.
-_ENFORCEMENT_LENSES = sorted(
-    name
-    for name in dir(_shared)
-    if name.startswith("test_no_")
-    and callable(getattr(_shared, name))
-    and getattr(getattr(_shared, name), "__module__", None) == _shared.__name__
-)
+_ENFORCEMENT_LENSES = sorted(name for name in dir(_shared) if name.startswith("test_no_") and callable(getattr(_shared, name)) and getattr(getattr(_shared, name), "__module__", None) == _shared.__name__)
 
 
 def _clear_shared_caches() -> None:
@@ -83,9 +77,4 @@ def test_root_test_package_passes_all_lenses():
         _shared.TESTS = original_tests
         _clear_shared_caches()
 
-    assert not failures, (
-        f"{len(failures)} QA lens(es) flag the repo-root tests/ package;\n"
-        "fix the violations listed (or the lens needs a documenting exception "
-        "before it belongs in the shared module).\n\n"
-        + "\n".join(f"===== {name} =====\n{message}" for name, message in failures.items())
-    )
+    assert not failures, f"{len(failures)} QA lens(es) flag the repo-root tests/ package;\nfix the violations listed (or the lens needs a documenting exception before it belongs in the shared module).\n\n" + "\n".join(f"===== {name} =====\n{message}" for name, message in failures.items())

@@ -189,9 +189,7 @@ async def test_broken_adapter_fails_the_suite(k8s_cluster: K8sConformanceCluster
     provider = k8s_cluster.provider
 
     conforming_failures = await run_conformance_checks(provider)
-    assert not conforming_failures, (
-        f"a conforming provider must pass every registered check, got: {conforming_failures}"
-    )
+    assert not conforming_failures, f"a conforming provider must pass every registered check, got: {conforming_failures}"
 
     broken = _FabricatesExitZeroAdapter(namespace=k8s_cluster.namespace)
     try:
@@ -199,14 +197,8 @@ async def test_broken_adapter_fails_the_suite(k8s_cluster: K8sConformanceCluster
     finally:
         await broken.close()
     failed_names = {entry.partition(":")[0] for entry in broken_failures}
-    assert "exec_nonzero_exit_mapping" in failed_names, (
-        "the suite must FAIL an adapter that fabricates exit-code 0 for every command "
-        f"(that is what proves the gate is not vacuous); failures were: {broken_failures}"
-    )
-    assert "stream_ordered_clean_exit" not in failed_names, (
-        "the runner must collect, not blanket-fail: the stream checks are untouched by the "
-        f"broken exec_command and must pass on this adapter; failures were: {broken_failures}"
-    )
+    assert "exec_nonzero_exit_mapping" in failed_names, f"the suite must FAIL an adapter that fabricates exit-code 0 for every command (that is what proves the gate is not vacuous); failures were: {broken_failures}"
+    assert "stream_ordered_clean_exit" not in failed_names, f"the runner must collect, not blanket-fail: the stream checks are untouched by the broken exec_command and must pass on this adapter; failures were: {broken_failures}"
 
 
 def test_kubernetes_checks_are_registered() -> None:

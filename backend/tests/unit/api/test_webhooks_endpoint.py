@@ -163,9 +163,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -358,9 +356,7 @@ def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClie
     assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
-def test_receive_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_legacy_plaintext_secret_accepted_with_dated_warning(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1735 bounded shim: a NON-token stored hmac_secret is legacy pre-0306
     plaintext — accepted so a delivery signed against it still verifies (the
     pre-migration read path keeps working), but ONLY with a loud dated
@@ -411,9 +407,7 @@ def test_receive_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     assert "hmac_secret" in caplog.text
 
 
-def test_receive_webhook_gaaaa_prefixed_plaintext_secret_accepted_with_dated_warning(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_gaaaa_prefixed_plaintext_secret_accepted_with_dated_warning(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1735 consistency: the route reader's shared resolver classifies
     with the DECRYPTABILITY probe, not the ``gAAAA`` prefix. A legacy
     plaintext hmac_secret that merely BEGINS with ``gAAAA`` is accepted with
@@ -464,9 +458,7 @@ def test_receive_webhook_gaaaa_prefixed_plaintext_secret_accepted_with_dated_war
     assert "hmac_secret" in caplog.text
 
 
-def test_receive_webhook_undecryptable_token_secret_fails_closed(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_undecryptable_token_secret_fails_closed(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1735 fail-closed: a token-shaped hmac_secret that CANNOT be decrypted
     under the configured key is a server-side misconfiguration — the delivery
     is refused (500), and the ciphertext is NEVER used as the HMAC key (no
@@ -1199,9 +1191,7 @@ def _cleanup_client(role: str) -> TestClient:
     from farna.auth.dependencies import get_current_tenant_user
     from farna.auth.jwt import TenantPrincipal
 
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role)
     return TestClient(app)
 
 
@@ -1216,9 +1206,7 @@ def test_cleanup_expired_runner_returns_200(client: TestClient) -> None:
     ):
         d.return_value = 3
         p.return_value = 2
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
-        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner")
         resp = client.post("/api/v1/triggers/cleanup-expired")
         app.dependency_overrides.pop(get_current_tenant_user, None)
 
@@ -1230,9 +1218,7 @@ def test_cleanup_expired_viewer_denied(client: TestClient) -> None:
     from farna.auth.dependencies import get_current_tenant_user
     from farna.auth.jwt import TenantPrincipal
 
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     try:
         resp = client.post("/api/v1/triggers/cleanup-expired")
     finally:
@@ -1250,9 +1236,7 @@ def test_cleanup_expired_unauthenticated_returns_401(client: TestClient) -> None
     try:
         resp = client.post("/api/v1/triggers/cleanup-expired")
     finally:
-        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
 
     assert resp.status_code in (401, 403)
 
@@ -1386,9 +1370,7 @@ def test_receive_webhook_other_org_trigger_returns_404_no_writes(client: TestCli
 
     app.dependency_overrides[get_system_db_session] = override_system
     app.dependency_overrides[get_db_session] = override_app
-    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
-        username="tester", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(username="tester", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     try:
         with (
             patch("farna.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
@@ -1721,9 +1703,7 @@ def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> N
                 )
                 raise EventNotAcceptedError(
                     trigger_id,
-                    reason=(
-                        "none of the accepted event types ['pull_request'] found in webhook payload (keys: ['action'])"
-                    ),
+                    reason=("none of the accepted event types ['pull_request'] found in webhook payload (keys: ['action'])"),
                 )
 
             m.side_effect = _engine_side_effect
@@ -1745,11 +1725,7 @@ def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> N
     # At least one aexit was a clean commit (no exception propagating).
     assert any(call.args == (None, None, None) for call in aexit.await_args_list)
     # The audit event with event_type_not_accepted was added to the session.
-    assert any(
-        isinstance(c.args[0], TriggerEvent)
-        and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
-        for c in session.add.call_args_list
-    )
+    assert any(isinstance(c.args[0], TriggerEvent) and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_record_rejected_delivery_without_org_returns_false() -> None:
@@ -1831,9 +1807,7 @@ def test_receive_webhook_inactive_trigger_skips_pause_precheck() -> None:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -1877,9 +1851,7 @@ def _modulo_signature(body: bytes, ts: int, secret: str = _GH_SECRET) -> str:
     return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
 
 
-def _post_with_secret_trigger(
-    client: TestClient, headers: dict[str, str], body: bytes = _GH_BODY
-) -> tuple[Any, AsyncMock]:
+def _post_with_secret_trigger(client: TestClient, headers: dict[str, str], body: bytes = _GH_BODY) -> tuple[Any, AsyncMock]:
     """POST to a trigger holding ``_GH_SECRET``; returns (response, handle_webhook mock)."""
     system_session = make_system_session_mock(trigger_config={"hmac_secret": _GH_SECRET})
     app_session = _make_mock_session()
@@ -1918,9 +1890,7 @@ def test_github_signature_valid_returns_202_and_marks_engine(client: TestClient)
 
 
 def test_github_signature_wrong_secret_returns_401(client: TestClient) -> None:
-    resp, engine = _post_with_secret_trigger(
-        client, {"X-Hub-Signature-256": _gh_signature(_GH_BODY, secret="other-secret")}
-    )
+    resp, engine = _post_with_secret_trigger(client, {"X-Hub-Signature-256": _gh_signature(_GH_BODY, secret="other-secret")})
 
     assert resp.status_code == 401
     engine.assert_not_called()

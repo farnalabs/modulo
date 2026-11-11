@@ -27,10 +27,7 @@ class TestAuditAppendOnlyDbTrigger:
         org_id = uuid.uuid4()
 
         await db_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "Audit Test Org", "slug": f"audit-{org_id.hex[:8]}"},
         )
         await db_session.commit()
@@ -124,10 +121,7 @@ class TestAuditAppendOnlyOrmGuard:
         org_id = uuid.uuid4()
 
         await fresh_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "ORM Update Org", "slug": f"orm-upd-{org_id.hex[:8]}"},
         )
         await fresh_session.commit()
@@ -164,10 +158,7 @@ class TestAuditAppendOnlyOrmGuard:
         event_id = uuid.uuid4()
 
         await fresh_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "ORM Delete Org", "slug": f"orm-del-{org_id.hex[:8]}"},
         )
         await fresh_session.commit()
@@ -205,10 +196,7 @@ class TestAuditReadOperations:
         """INSERT on audit_events should still work."""
         org_id = uuid.uuid4()
         await db_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "Insert Test Org", "slug": f"ins-{org_id.hex[:8]}"},
         )
         await db_session.commit()

@@ -62,9 +62,7 @@ _DROPPED: tuple[str, ...] = (
 _EXPECTED_INDEXDEF: dict[str, str] = {
     "ix_runs_account_id": "CREATE INDEX ix_runs_account_id ON public.runs USING btree (account_id)",
     "ix_runs_dispatcher": "CREATE INDEX ix_runs_dispatcher ON public.runs USING btree (dispatcher)",
-    "ix_runs_org_status_completed": (
-        "CREATE INDEX ix_runs_org_status_completed ON public.runs USING btree (organisation_id, status, completed_at)"
-    ),
+    "ix_runs_org_status_completed": ("CREATE INDEX ix_runs_org_status_completed ON public.runs USING btree (organisation_id, status, completed_at)"),
 }
 
 #: Every index the migration must NOT touch: the constraints (never droppable
@@ -152,9 +150,7 @@ async def _new_private_db(db_url: str, prefix: str) -> tuple[str, str]:
     db_name, iso_url = await _fresh_db(db_url, prefix)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
     return db_name, iso_url
 
@@ -174,9 +170,7 @@ async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
 async def _runs_indexdefs(engine: AsyncEngine) -> dict[str, str]:
     """``{indexname: indexdef}`` for every index on ``public.runs``."""
     async with engine.connect() as conn:
-        rows = await conn.execute(
-            text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'runs'")
-        )
+        rows = await conn.execute(text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'runs'"))
         return {str(name): str(indexdef) for name, indexdef in rows.all()}
 
 
@@ -251,9 +245,7 @@ class TestDowngrade:
             restored = await _runs_indexdefs(engine)
             for name, expected_def in _EXPECTED_INDEXDEF.items():
                 assert name in restored, f"downgrade must restore {name}"
-                assert restored[name] == expected_def, (
-                    f"{name} restored with a DIFFERENT definition:\n  want: {expected_def}\n  got:  {restored[name]}"
-                )
+                assert restored[name] == expected_def, f"{name} restored with a DIFFERENT definition:\n  want: {expected_def}\n  got:  {restored[name]}"
             _assert_survivors_present(restored)
 
             # The round trip is repeatable: upgrade drops them again.

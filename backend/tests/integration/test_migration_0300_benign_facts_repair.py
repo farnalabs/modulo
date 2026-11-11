@@ -96,9 +96,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     iso_url = _swap_db_name(db_url, db_name)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     monkeypatch.setenv("DATABASE_URL", iso_url)
@@ -148,11 +146,7 @@ async def _seed_fact(engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UUID, 
     """A historical-shaped fact row (raw SQL so ``benign`` can be NULL)."""
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO run_daily_facts "
-                "(id, organisation_id, run_id, run_date, trigger_type, status, benign) "
-                "VALUES (:id, :oid, :rid, CURRENT_DATE, 'manual', 'failed', :benign)"
-            ),
+            text("INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, trigger_type, status, benign) VALUES (:id, :oid, :rid, CURRENT_DATE, 'manual', 'failed', :benign)"),
             {"id": str(uuid.uuid4()), "oid": str(org_id), "rid": str(run_id), "benign": benign},
         )
 

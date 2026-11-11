@@ -59,11 +59,7 @@ _RLS_ENABLE_RE = re.compile(
 
 def _org_scoped_orm_tables() -> set[str]:
     """Every ORM table with an ``organisation_id`` column, minus exclusions."""
-    return {
-        name
-        for name, table in Base.metadata.tables.items()
-        if "organisation_id" in table.columns and name not in _EXCLUDED_TABLES
-    }
+    return {name for name, table in Base.metadata.tables.items() if "organisation_id" in table.columns and name not in _EXCLUDED_TABLES}
 
 
 def _load_migration_module(path: Path) -> object:
@@ -101,11 +97,7 @@ def test_every_org_scoped_table_has_rls_policy() -> None:
     covered = _tables_with_rls_migration()
 
     missing = org_scoped - covered
-    assert not missing, (
-        "Org-scoped tables missing an RLS `ENABLE ROW LEVEL SECURITY` migration: "
-        f"{sorted(missing)}. Add ENABLE + `CREATE POLICY rls_org_isolation` for each "
-        "in a new Alembic migration (see 0002_rls_policies.py / 0088_rls_missing_policies.py)."
-    )
+    assert not missing, f"Org-scoped tables missing an RLS `ENABLE ROW LEVEL SECURITY` migration: {sorted(missing)}. Add ENABLE + `CREATE POLICY rls_org_isolation` for each in a new Alembic migration (see 0002_rls_policies.py / 0088_rls_missing_policies.py)."
 
 
 def test_organisations_table_is_the_only_exclusion() -> None:
@@ -208,16 +200,11 @@ def test_strict_rls_migrations_close_fail_open_branch() -> None:
             return _STRICT_SCOPE_MARKER in block and not any(m in block for m in _FAIL_OPEN_MARKERS)
 
         strict_scopes = {v for v in policy_scopes if _is_strict(text, v)}
-        assert strict_scopes, (
-            f"{filename}: no strict (fail-closed) rls_org_isolation scope found — "
-            "the fail-open OR-branch may have been reintroduced"
-        )
+        assert strict_scopes, f"{filename}: no strict (fail-closed) rls_org_isolation scope found — the fail-open OR-branch may have been reintroduced"
 
         # Isolate the upgrade() body from the module-level constants/helpers
         # (the downgrade's fail-open scope is reused only there).
         upgrade_src = text.split("def upgrade(", 1)[1].split("def downgrade", 1)[0]
-        assert "rls_org_isolation_null_context" not in upgrade_src, (
-            f"{filename}: upgrade must not create the fail-open rls_org_isolation_null_context policy"
-        )
+        assert "rls_org_isolation_null_context" not in upgrade_src, f"{filename}: upgrade must not create the fail-open rls_org_isolation_null_context policy"
         for marker in _FAIL_OPEN_MARKERS:
             assert marker not in upgrade_src, f"{filename}: upgrade still contains a fail-open OR branch ({marker!r})"

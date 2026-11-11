@@ -647,17 +647,13 @@ def test_raise_decision_conflict_maps_each_zero_row_state() -> None:
         HITLManager._raise_decision_conflict(None, run_id=_RUN, review_id=_GATE, claim_token=token)
 
     with pytest.raises(GateAlreadyDecidedError):
-        HITLManager._raise_decision_conflict(
-            _gate(decision="approved"), run_id=_RUN, review_id=_GATE, claim_token=token
-        )
+        HITLManager._raise_decision_conflict(_gate(decision="approved"), run_id=_RUN, review_id=_GATE, claim_token=token)
 
     with pytest.raises(ClaimTokenExpiredError):
         HITLManager._raise_decision_conflict(_gate(claim_token=None), run_id=_RUN, review_id=_GATE, claim_token=token)
 
     with pytest.raises(ClaimTokenInvalidError):
-        HITLManager._raise_decision_conflict(
-            _gate(claim_token="different-token"), run_id=_RUN, review_id=_GATE, claim_token=token
-        )
+        HITLManager._raise_decision_conflict(_gate(claim_token="different-token"), run_id=_RUN, review_id=_GATE, claim_token=token)
 
     # Token matches but the row is undecided and expiry-filtered: expired.
     with pytest.raises(ClaimTokenExpiredError):

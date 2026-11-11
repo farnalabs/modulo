@@ -142,11 +142,7 @@ class TestSetup:
 
 def _tuning_failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     """WARNING records from the saver's logger carrying the ``table`` extra."""
-    return [
-        record
-        for record in caplog.records
-        if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")
-    ]
+    return [record for record in caplog.records if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")]
 
 
 def _saver_with_failing_cursor(mock_conn, *, fail_on) -> ModuloPostgresSaver:
@@ -347,15 +343,7 @@ class TestSQLConstants:
             assert f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS created_at" in migration_sql
 
 
-_MIGRATION_0279_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0279_table_autovacuum_tuning.py"
-)
+_MIGRATION_0279_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0279_table_autovacuum_tuning.py"
 
 #: ``autovacuum_<option> = <literal>`` pairs, as they appear inside an
 #: ``ALTER TABLE ... SET (...)`` clause.
@@ -409,19 +397,12 @@ class TestCheckpointAutovacuumTwin:
         migration = _load_migration_0279()
         assert migration._CHECKPOINT_TABLES == CHECKPOINT_AUTOVACUUM_TABLES
         for table in CHECKPOINT_AUTOVACUUM_TABLES:
-            assert _reloptions_of(migration._checkpoint_set(table)) == CHECKPOINT_AUTOVACUUM_TUNING, (
-                f"migration 0279's tuning for {table} drifted from "
-                f"modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING: {_reloptions_of(migration._checkpoint_set(table))!r}"
-            )
-            assert set(_RELOPT_BARE_NAME_RE.findall(migration._checkpoint_reset(table))) == set(
-                CHECKPOINT_AUTOVACUUM_TUNING
-            ), f"migration 0279's downgrade must RESET exactly the options it adds on {table}"
+            assert _reloptions_of(migration._checkpoint_set(table)) == CHECKPOINT_AUTOVACUUM_TUNING, f"migration 0279's tuning for {table} drifted from modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING: {_reloptions_of(migration._checkpoint_set(table))!r}"
+            assert set(_RELOPT_BARE_NAME_RE.findall(migration._checkpoint_reset(table))) == set(CHECKPOINT_AUTOVACUUM_TUNING), f"migration 0279's downgrade must RESET exactly the options it adds on {table}"
 
     def test_setup_statements_are_rendered_from_the_shared_constant(self):
         for statement, table in zip(_AUTOVACUUM_TUNING_SQL, CHECKPOINT_AUTOVACUUM_TABLES, strict=True):
-            assert _reloptions_of(statement) == CHECKPOINT_AUTOVACUUM_TUNING, (
-                f"setup() tuning for {table} is not derived from CHECKPOINT_AUTOVACUUM_TUNING"
-            )
+            assert _reloptions_of(statement) == CHECKPOINT_AUTOVACUUM_TUNING, f"setup() tuning for {table} is not derived from CHECKPOINT_AUTOVACUUM_TUNING"
             assert f'ALTER TABLE public."{table}" SET' in statement
 
     def test_tuning_runs_after_the_create_statements(self):
@@ -434,11 +415,7 @@ class TestCheckpointAutovacuumTwin:
         first_tuning_index = migrations.index(_AUTOVACUUM_TUNING_SQL[0])
         assert migrations[first_tuning_index:] == _AUTOVACUUM_TUNING_SQL
         for table in CHECKPOINT_AUTOVACUUM_TABLES:
-            create_index = next(
-                index
-                for index, statement in enumerate(migrations)
-                if f"CREATE TABLE IF NOT EXISTS {table} (" in statement
-            )
+            create_index = next(index for index, statement in enumerate(migrations) if f"CREATE TABLE IF NOT EXISTS {table} (" in statement)
             assert create_index < first_tuning_index, f"{table}'s CREATE must run before its autovacuum tuning"
 
 
@@ -707,9 +684,7 @@ class TestAlist:
         saver._cursor = MagicMock(return_value=cursor)
 
         config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
-        items = [
-            item async for item in saver.alist(config, before={"configurable": {"checkpoint_id": "ckp-5"}}, limit=3)
-        ]
+        items = [item async for item in saver.alist(config, before={"configurable": {"checkpoint_id": "ckp-5"}}, limit=3)]
         assert items == []
         sql = cursor.execute.call_args[0][0]
         assert "checkpoint_id <" in sql
@@ -738,9 +713,7 @@ class TestAputExtraPaths:
         assert executed_args[4] == "parent-ckp"
 
     async def test_aput_retries_on_conn_drop(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         cursor = AsyncMock()
         cursor.__aenter__ = AsyncMock(return_value=cursor)
         cursor.__aexit__ = AsyncMock(return_value=False)
@@ -765,9 +738,7 @@ class TestAputExtraPaths:
             await saver.aput(config, {"channel_values": {}}, {})
 
     async def test_aput_retry_reconnect_timeout_reraises_original(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         saver._cursor = MagicMock(side_effect=OperationalError("connection is closed"))
 
         async def _reconnect_timeout():
@@ -789,18 +760,14 @@ class TestReconnect:
         assert saver._conn_string is None
 
     async def test_reconnect_skips_when_not_stale(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         saver._connection_is_stale = MagicMock(return_value=False)
         await saver._reconnect()  # no close, no reconnect
         assert saver.conn is mock_conn
         saver._connection_is_stale.assert_called_once()
 
     async def test_reconnect_success(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         old_conn = MagicMock()
         old_conn.closed = True
         new_conn = MagicMock()
@@ -824,9 +791,7 @@ class TestReconnect:
         assert saver.conn is new_conn
 
     async def test_reconnect_timeout_closes_and_raises(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         old_conn = MagicMock()
         old_conn.close = AsyncMock()
         saver.conn = old_conn
@@ -849,9 +814,7 @@ class TestReconnect:
         assert saver._connection_is_stale() is False
 
     async def test_cursor_reconnects_stale(self, mock_conn):
-        saver = ModuloPostgresSaver(
-            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
-        )
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x")
         saver._connection_is_stale = MagicMock(return_value=True)
         saver._reconnect = AsyncMock()
 

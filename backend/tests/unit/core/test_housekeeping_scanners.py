@@ -422,9 +422,7 @@ class TestStaleApiKeys:
 
 class TestEmptyLifecycleMaps:
     async def test_flags_empty_content_maps(self, session: AsyncSession) -> None:
-        session.add(
-            LifecycleMap(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=_ACCOUNT, name="empty", content_json={})
-        )
+        session.add(LifecycleMap(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=_ACCOUNT, name="empty", content_json={}))
         # ``{}`` is a REAL shape, not a seed/test artefact: the API persists it
         # for a map created with no content (``LifecycleMapCreate.content_json``
         # defaults to ``{}`` and ``normalize_content`` leaves an empty payload
@@ -1183,9 +1181,7 @@ class TestUnusedSsoProviders:
         assert not await _scan_unused_sso_providers(session, _ORG_A)
 
     async def test_local_auth_does_not_count_as_sso(self, session: AsyncSession) -> None:
-        local_account = Account(
-            id=uuid.uuid4(), email="local@example.com", display_name="Local User", auth_provider="local"
-        )
+        local_account = Account(id=uuid.uuid4(), email="local@example.com", display_name="Local User", auth_provider="local")
         provider = SsoProvider(id=uuid.uuid4(), organisation_id=_ORG_A, provider_type="oidc", name="used")
         session.add_all([local_account, provider])
         session.add(OrgMembership(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=local_account.id, role="runner"))
@@ -1211,13 +1207,9 @@ class TestUnusedParameterSchemas:
             account_id=_ACCOUNT,
             deleted_at=now,
         )
-        other_org = ParameterSchema(
-            id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", version=1, account_id=_ACCOUNT
-        )
+        other_org = ParameterSchema(id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", version=1, account_id=_ACCOUNT)
         session.add_all([used, unused, deleted, other_org])
-        session.add(
-            _agent(organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), parameter_schema_id=used.id)
-        )
+        session.add(_agent(organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), parameter_schema_id=used.id))
         await session.commit()
 
         candidates = await _scan_unused_parameter_schemas(session, _ORG_A)
@@ -1235,11 +1227,7 @@ class TestUnusedSchemas:
         used_by_pin = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="pinned", account_id=_ACCOUNT)
         other_org = Schema(id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", account_id=_ACCOUNT)
         session.add_all([unused, system, used_by_agent, used_by_pin, other_org])
-        session.add(
-            _agent(
-                organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), input_schema_id=used_by_agent.id
-            )
-        )
+        session.add(_agent(organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), input_schema_id=used_by_agent.id))
         session.add(
             SnapshotSchemaPin(
                 snapshot_id=uuid.uuid4(),
@@ -1268,9 +1256,7 @@ class TestUnusedSchemasNullHandling:
         # An agent with a NULL input_schema_id must not poison the NOT IN
         # subquery: previously the NULL made it evaluate to UNKNOWN for every
         # schema, suppressing all usage detection.
-        session.add(
-            _agent(organisation_id=_ORG_A, name="null-input", model_backend_id=uuid.uuid4(), input_schema_id=None)
-        )
+        session.add(_agent(organisation_id=_ORG_A, name="null-input", model_backend_id=uuid.uuid4(), input_schema_id=None))
         # A separate agent genuinely references "used" via a non-null input pin.
         session.add(
             _agent(

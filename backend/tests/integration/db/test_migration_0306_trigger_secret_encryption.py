@@ -155,25 +155,15 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     enc_token = Fernet(get_settings().fernet_key.encode()).encrypt(_ENC_SECRET).decode()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'f0305@example.com', 'f0305', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'f0305@example.com', 'f0305', 'hash', 'local', true)"),
             {"id": str(ids["account"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'f0305', 'f0305', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'f0305', 'f0305', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :aid, 'f0305 pipeline', 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :aid, 'f0305 pipeline', 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(ids["pipeline"]), "oid": str(ids["org"]), "aid": str(ids["account"])},
         )
         seeds: list[tuple[str, dict[str, object]]] = [
@@ -204,11 +194,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
         ]
         for key, config in seeds:
             await conn.execute(
-                text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, "
-                    "trigger_type, config_json) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'webhook', CAST(:cfg AS jsonb))"
-                ),
+                text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, trigger_type, config_json) VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'webhook', CAST(:cfg AS jsonb))"),
                 {
                     "id": str(ids[key]),
                     "oid": str(ids["org"]),

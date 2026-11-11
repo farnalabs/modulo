@@ -70,9 +70,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_UUID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -96,9 +94,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
         account_id=_USER_UUID,
         org_role="viewer",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -145,9 +141,7 @@ def gated_client() -> Generator[TestClient, None, None]:
         account_id=_USER_UUID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = False
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -203,9 +197,7 @@ class TestValidateForwarderConfig:
         assert validate_forwarder_config("datadog", {}) == ["missing or empty required config key 'api_key'"]
 
     def test_whitespace_only_required_key_rejected(self) -> None:
-        assert validate_forwarder_config("loki", {"push_url": "   "}) == [
-            "missing or empty required config key 'push_url'"
-        ]
+        assert validate_forwarder_config("loki", {"push_url": "   "}) == ["missing or empty required config key 'push_url'"]
 
     def test_non_string_required_key_rejected(self) -> None:
         errors = validate_forwarder_config("sentry", {"dsn": 123})

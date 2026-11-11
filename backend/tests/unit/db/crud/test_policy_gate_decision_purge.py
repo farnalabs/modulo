@@ -81,10 +81,7 @@ class TestIsPolicyGateDecisionFkError:
         """asyncpg surfaces the name only in the error message text."""
         from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
-        orig = Exception(
-            'insert or update on table "policy_gate_decisions" violates '
-            'foreign key constraint "fk_policy_gate_decisions_gate_org"'
-        )
+        orig = Exception('insert or update on table "policy_gate_decisions" violates foreign key constraint "fk_policy_gate_decisions_gate_org"')
         exc = IntegrityError("stmt", {}, orig)
 
         assert is_policy_gate_decision_fk_error(exc) is True

@@ -88,11 +88,7 @@ def _valid_license_key(tier: str = "team", expires_at: str | None = None) -> str
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -168,9 +164,7 @@ class TestFar696ToolRegistration:
         from farna.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
 
         for name in _EXPECTED_FAR696_TOOLS:
-            assert name in TOOL_SCOPE_REQUIREMENTS or name in READ_ONLY_TOOLS, (
-                f"tool '{name}' is neither permission-mapped nor read-only pinned — deny-by-default"
-            )
+            assert name in TOOL_SCOPE_REQUIREMENTS or name in READ_ONLY_TOOLS, f"tool '{name}' is neither permission-mapped nor read-only pinned — deny-by-default"
 
 
 class TestListTeams(AuthContext):
@@ -1225,9 +1219,7 @@ def _none_uuid_for(field: str):
 class TestListTeamsErrorArms(AuthContext):
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -1272,9 +1264,7 @@ class TestListUsersEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.api.routes.admin._list_org_accounts", new=_boom(_programming_error())):
             result = await list_users()
@@ -1282,9 +1272,7 @@ class TestListUsersEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.api.routes.admin._list_org_accounts", new=_boom(RuntimeError("boom"))):
             result = await list_users()
@@ -1294,9 +1282,7 @@ class TestListUsersEdgeCases(AuthContext):
 class TestListFeatureFlagsErrorArms(AuthContext):
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -1753,9 +1739,7 @@ class TestGetAuditLogErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -1768,9 +1752,7 @@ class TestGetAuditLogErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -1784,9 +1766,7 @@ class TestGetAuditLogErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -1822,9 +1802,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_bare_date_to_is_exclusive_next_day_bound(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_bare_date_to_is_exclusive_next_day_bound(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         rows_result = MagicMock()
         rows_result.all.return_value = []
         count_result = MagicMock()
@@ -1843,9 +1821,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_offsetless_date_to_is_normalized_to_utc(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_offsetless_date_to_is_normalized_to_utc(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         rows_result = MagicMock()
         rows_result.all.return_value = []
         count_result = MagicMock()
@@ -1895,9 +1871,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_all_filters_and_has_more_sets_cursor(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_all_filters_and_has_more_sets_cursor(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         rows_result = MagicMock()
         rows_result.all.return_value = [self._delivery() for _ in range(26)]
         count_result = MagicMock()
@@ -1921,9 +1895,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -1936,9 +1908,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=_programming_error())
         mock_session.return_value = make_session_context(session)
@@ -1947,9 +1917,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=RuntimeError("boom"))
         mock_session.return_value = make_session_context(session)
@@ -1984,9 +1952,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -1999,9 +1965,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.core.lifecycle_map.service.list_lifecycle_maps", new=_boom(_programming_error())):
             result = await list_lifecycle_maps()
@@ -2009,9 +1973,7 @@ class TestListLifecycleMapsEdgeCases(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.core.lifecycle_map.service.list_lifecycle_maps", new=_boom(RuntimeError("boom"))):
             result = await list_lifecycle_maps()
@@ -2043,9 +2005,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2058,9 +2018,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.core.lifecycle_map.service.get_lifecycle_map", new=_boom(_programming_error())):
             result = await get_lifecycle_map(str(uuid.uuid4()))
@@ -2068,9 +2026,7 @@ class TestGetLifecycleMapErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         with patch("farna.core.lifecycle_map.service.get_lifecycle_map", new=_boom(RuntimeError("boom"))):
             result = await get_lifecycle_map(str(uuid.uuid4()))
@@ -2091,9 +2047,7 @@ class TestListPluginsErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         # ``get_plugin_registry`` is synchronous — a MagicMock (not an
         # AsyncMock) so the stubbed failure does not leave a coroutine unawaited.
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2120,9 +2074,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2135,9 +2087,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -2151,9 +2101,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -2169,9 +2117,7 @@ class TestListSsoProvidersErrorArms(AuthContext):
 class TestListEvalSuitesErrorArms(AuthContext):
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2184,9 +2130,7 @@ class TestListEvalSuitesErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=_programming_error())
         mock_session.return_value = make_session_context(session)
@@ -2195,9 +2139,7 @@ class TestListEvalSuitesErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=RuntimeError("boom"))
         mock_session.return_value = make_session_context(session)
@@ -2251,9 +2193,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2266,9 +2206,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=_programming_error())
         mock_session.return_value = make_session_context(session)
@@ -2277,9 +2215,7 @@ class TestGetEvalSuiteErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=RuntimeError("boom"))
         mock_session.return_value = make_session_context(session)
@@ -2315,9 +2251,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
@@ -2330,9 +2264,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_programming_error_maps_to_migration_required(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_programming_error_maps_to_migration_required(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -2346,9 +2278,7 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_generic_exception_maps_to_server_error(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_generic_exception_maps_to_server_error(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
         org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
         with (
@@ -2482,9 +2412,7 @@ class TestGetPipelineDiffErrorArms(AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_scope_denied_maps_to_insufficient_scope(
-        self, mock_session: AsyncMock, mock_validate: AsyncMock
-    ) -> None:
+    async def test_scope_denied_maps_to_insufficient_scope(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())

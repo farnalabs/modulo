@@ -30,9 +30,7 @@ from types import ModuleType
 from farna.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES
 
 _MIGRATION_NAME = "0180_hitl_parked_status"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 _CHECK_CONSTRAINT_NAME = "ck_runs_status"
 _EXPECTED_STATUSES = frozenset(
     {

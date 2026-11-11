@@ -130,9 +130,7 @@ class TestUpgrade:
         executed = _executed("upgrade")
         assert len(executed) == len(_INDEXES), f"expected {len(_INDEXES)} statements, got {executed}"
         for name in _INDEXES:
-            assert _expected_create_statement(name) in executed, (
-                f"upgrade missing the exact statement for {name}: {_expected_create_statement(name)}"
-            )
+            assert _expected_create_statement(name) in executed, f"upgrade missing the exact statement for {name}: {_expected_create_statement(name)}"
 
     def test_uses_the_idempotent_create_index_if_not_exists_convention(self) -> None:
         code = _source_code()
@@ -174,6 +172,4 @@ class TestModelParity:
             declared = _model_indexes(_MODEL_BY_INDEX[name])
             assert name in declared, f"model/migration drift: {name} missing from the ORM"
             model_columns = tuple(col.name for col in declared[name].columns)
-            assert model_columns == columns, (
-                f"model/migration drift: {name} model columns {model_columns} != migration {columns}"
-            )
+            assert model_columns == columns, f"model/migration drift: {name} model columns {model_columns} != migration {columns}"

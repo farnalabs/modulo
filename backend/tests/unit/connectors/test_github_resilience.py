@@ -50,9 +50,7 @@ async def test_query_repos_invalid_json(connector):
 @respx.mock
 async def test_write_file_429_rate_limit(connector):
     """Write file with 429 raises ValueError with status code."""
-    respx.put("https://api.github.com/repos/owner/repo/contents/test.txt").mock(
-        return_value=httpx.Response(429, text="Rate limit exceeded")
-    )
+    respx.put("https://api.github.com/repos/owner/repo/contents/test.txt").mock(return_value=httpx.Response(429, text="Rate limit exceeded"))
     with pytest.raises(ValueError, match="429"):
         await connector.write(
             ConnectorPayload(

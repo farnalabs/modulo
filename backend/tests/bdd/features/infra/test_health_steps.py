@@ -124,9 +124,7 @@ def _bdd_readiness_overall(request: Any, status: str) -> None:
 @then(parsers.parse('the check "{name}" has status "{status}"'))
 def _bdd_check_status(request: Any, name: str, status: str) -> None:
     body = request.node._resp.json()
-    assert body["checks"][name]["status"] == status, (
-        f"check {name!r} status is {body['checks'][name]['status']!r}, expected {status!r}"
-    )
+    assert body["checks"][name]["status"] == status, f"check {name!r} status is {body['checks'][name]['status']!r}, expected {status!r}"
 
 
 @then("every check has status, latency_ms and detail fields")

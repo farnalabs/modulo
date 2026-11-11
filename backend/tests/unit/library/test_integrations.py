@@ -100,12 +100,7 @@ def test_connector_types_are_known() -> None:
     from farna.core.library.workflows import __all__ as workflow_exports
     from farna.core.library.workflows import definitions as workflow_defs
 
-    binding_types = {
-        step["connector_binding"]["type"]
-        for name in workflow_exports
-        for step in getattr(workflow_defs, name)["pipeline_steps"]
-        if step.get("connector_binding")
-    }
+    binding_types = {step["connector_binding"]["type"] for name in workflow_exports for step in getattr(workflow_defs, name)["pipeline_steps"] if step.get("connector_binding")}
     known = {t.value for t in ConnectorType} | binding_types | {"custom"}
     for name in integration_exports:
         connector_type = _integration(name)["connector_type"]

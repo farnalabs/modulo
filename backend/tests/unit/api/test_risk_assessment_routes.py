@@ -655,9 +655,7 @@ class TestRiskAssessmentScopeClause:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_scalar_result(7))
 
-        total = await mod._count_risk_assessment_rows(
-            session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3
-        )
+        total = await mod._count_risk_assessment_rows(session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3)
 
         assert total == 7
         sql = str(session.execute.await_args.args[0])
@@ -670,9 +668,7 @@ class TestRiskAssessmentScopeClause:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_scalar_result(0))
 
-        await mod._count_risk_assessment_by_action(
-            session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3
-        )
+        await mod._count_risk_assessment_by_action(session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3)
 
         sql = str(session.execute.await_args.args[0])
         assert "split_part" in sql
@@ -777,9 +773,7 @@ class TestRiskAssessmentRowActions:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_decisions_result([(_RUN_ID, None, "warn")]))
 
-        resolved, degraded = await mod._load_risk_assessment_row_actions(
-            session, _ORG_ID, [valid, unmatched, malformed]
-        )
+        resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, [valid, unmatched, malformed])
 
         assert degraded is False
         # A run with no decision is absent (renders as unknown), never fabricated.

@@ -204,10 +204,7 @@ class TestUpgradePostgres:
         ) == module._ENABLE_RLS_STATEMENTS
         assert len(module._CREATE_POLICY_STATEMENTS) == 2
         for table in (_EXTERNAL_AGENTS, _MCP_SERVERS):
-            assert any(
-                statement.startswith(f'CREATE POLICY rls_team_isolation ON "{table}" USING (')
-                for statement in module._CREATE_POLICY_STATEMENTS
-            ), f"no rls_team_isolation policy for {table}"
+            assert any(statement.startswith(f'CREATE POLICY rls_team_isolation ON "{table}" USING (') for statement in module._CREATE_POLICY_STATEMENTS), f"no rls_team_isolation policy for {table}"
 
         rec = _run("upgrade", "postgresql", roles_exist=True)
         for statement in (*module._ENABLE_RLS_STATEMENTS, *module._CREATE_POLICY_STATEMENTS):
@@ -264,25 +261,14 @@ class TestUpgradeChecks:
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert set(rec.checks[_EXTERNAL_AGENTS]) == _EXTERNAL_AGENT_CHECKS
         assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_visibility"] == "visibility IN ('org', 'team')"
-        assert (
-            rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_runtime_kind"]
-            == "runtime_kind IN ('claude-code', 'cursor', 'opencode', 'other')"
-        )
-        assert (
-            rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_discovery_provenance"]
-            == "discovery_provenance IN ('manual', 'mcp', 'webhook', 'forge')"
-        )
+        assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_runtime_kind"] == "runtime_kind IN ('claude-code', 'cursor', 'opencode', 'other')"
+        assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_discovery_provenance"] == "discovery_provenance IN ('manual', 'mcp', 'webhook', 'forge')"
 
     def test_mcp_servers_check_constraints(self) -> None:
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert set(rec.checks[_MCP_SERVERS]) == _MCP_SERVER_CHECKS
-        assert (
-            rec.checks[_MCP_SERVERS]["ck_mcp_servers_transport"] == "transport IN ('stdio', 'sse', 'http', 'websocket')"
-        )
-        assert (
-            rec.checks[_MCP_SERVERS]["ck_mcp_servers_approval_status"]
-            == "approval_status IN ('unapproved', 'approved', 'approved-stale', 'blocked')"
-        )
+        assert rec.checks[_MCP_SERVERS]["ck_mcp_servers_transport"] == "transport IN ('stdio', 'sse', 'http', 'websocket')"
+        assert rec.checks[_MCP_SERVERS]["ck_mcp_servers_approval_status"] == "approval_status IN ('unapproved', 'approved', 'approved-stale', 'blocked')"
 
     def test_team_owner_check_on_both_tables(self) -> None:
         rec = _run("upgrade", "sqlite", roles_exist=False)
@@ -305,16 +291,12 @@ class TestDowngrade:
 
 class TestModelParity:
     def test_external_agent_carries_the_migration_checks(self) -> None:
-        model_checks = {
-            c.name: str(c.sqltext) for c in ExternalAgent.__table__.constraints if isinstance(c, sa.CheckConstraint)
-        }
+        model_checks = {c.name: str(c.sqltext) for c in ExternalAgent.__table__.constraints if isinstance(c, sa.CheckConstraint)}
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert model_checks == rec.checks[_EXTERNAL_AGENTS]
 
     def test_mcp_server_carries_the_migration_checks(self) -> None:
-        model_checks = {
-            c.name: str(c.sqltext) for c in McpServer.__table__.constraints if isinstance(c, sa.CheckConstraint)
-        }
+        model_checks = {c.name: str(c.sqltext) for c in McpServer.__table__.constraints if isinstance(c, sa.CheckConstraint)}
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert model_checks == rec.checks[_MCP_SERVERS]
 

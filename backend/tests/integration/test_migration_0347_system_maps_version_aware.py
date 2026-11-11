@@ -97,9 +97,7 @@ async def _drop_db(db_url: str, db_name: str) -> None:
 async def _ensure_alembic_table(iso_url: str) -> None:
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
 
@@ -147,13 +145,7 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
         await conn.execute(text("SET session_replication_role = replica"))
         for rev_id, map_id, number, status, published_at, created_at, updated_at in rows:
             await conn.execute(
-                text(
-                    "INSERT INTO system_map_revisions "
-                    "(id, organisation_id, system_map_id, revision_number, status, content_json, "
-                    " published_at, created_at, updated_at) "
-                    "VALUES (:id, :org, :map, :number, :status, '{}'::jsonb, "
-                    " :published_at, :created_at, :updated_at)"
-                ),
+                text("INSERT INTO system_map_revisions (id, organisation_id, system_map_id, revision_number, status, content_json,  published_at, created_at, updated_at) VALUES (:id, :org, :map, :number, :status, '{}'::jsonb,  :published_at, :created_at, :updated_at)"),
                 {
                     "id": rev_id,
                     "org": _ORG,
@@ -170,13 +162,7 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
 
 async def _effective_columns_present(engine: AsyncEngine) -> bool:
     async with engine.connect() as conn:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'system_map_revisions' "
-                "AND column_name IN ('effective_from', 'effective_to')"
-            )
-        )
+        result = await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'system_map_revisions' AND column_name IN ('effective_from', 'effective_to')"))
         return len(result.all()) == 2
 
 
@@ -199,9 +185,7 @@ async def _rls_state(engine: AsyncEngine) -> tuple[bool, bool, bool]:
 
 async def _windows(engine: AsyncEngine) -> dict[str, dict[str, object]]:
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(text("SELECT id, status, effective_from, effective_to FROM system_map_revisions"))
-        ).all()
+        rows = (await conn.execute(text("SELECT id, status, effective_from, effective_to FROM system_map_revisions"))).all()
     return {
         str(row.id): {
             "status": row.status,
@@ -216,12 +200,7 @@ async def _by_time(engine: AsyncEngine, map_id: str, at: datetime) -> str | None
     """The migration's by-time predicate, mirroring ``get_revision_by_time``."""
     async with engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT id FROM system_map_revisions "
-                "WHERE system_map_id = :map AND effective_from <= :at "
-                "AND (effective_to IS NULL OR :at < effective_to) "
-                "ORDER BY effective_from DESC LIMIT 1"
-            ),
+            text("SELECT id FROM system_map_revisions WHERE system_map_id = :map AND effective_from <= :at AND (effective_to IS NULL OR :at < effective_to) ORDER BY effective_from DESC LIMIT 1"),
             {"map": map_id, "at": at},
         )
         found = result.scalar_one_or_none()
@@ -260,9 +239,7 @@ async def test_newest_archived_revision_gets_a_closed_window(pre_upgrade_db_url:
         archived = windows[_A_REV2]
         assert archived["status"] == "archived"
         assert archived["effective_from"] == _T2
-        assert archived["effective_to"] is not None, (
-            "an archived revision with no successor must be closed, not left open-ended"
-        )
+        assert archived["effective_to"] is not None, "an archived revision with no successor must be closed, not left open-ended"
         assert archived["effective_to"] == _T3, "the archive time (updated_at) closes the window"
 
         # After the archive instant the map has no active revision.
@@ -330,9 +307,7 @@ async def test_never_published_archived_revision_gets_no_window(pre_upgrade_db_u
         current = windows[_C_REV2]
         assert current["status"] == "published"
         assert current["effective_from"] == _T2
-        assert current["effective_to"] is None, (
-            "a never-published archived revision must not close the current published revision's window"
-        )
+        assert current["effective_to"] is None, "a never-published archived revision must not close the current published revision's window"
 
         never_published = windows[_C_REV3]
         assert never_published["status"] == "archived"
@@ -364,9 +339,7 @@ async def test_downgrade_restores_rls_and_backfill_is_idempotent(pre_upgrade_db_
 
         _downgrade(pre_upgrade_db_url, PREV_REV)
         assert not await _effective_columns_present(engine)
-        assert await _rls_state(engine) == (True, True, True), (
-            "downgrade must restore 0341's policy, not leave the table without RLS"
-        )
+        assert await _rls_state(engine) == (True, True, True), "downgrade must restore 0341's policy, not leave the table without RLS"
 
         _migrate(pre_upgrade_db_url, MIGRATION_REV)
         assert await _windows(engine) == first_pass, "the backfill must be deterministic on re-run"

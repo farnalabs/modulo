@@ -68,8 +68,7 @@ async def _create_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUI
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :pw, 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :pw, 'local', true)",
             ),
             {
                 "id": str(account_id),
@@ -80,8 +79,7 @@ async def _create_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUI
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -93,8 +91,7 @@ async def _create_family(db_engine: AsyncEngine, account_id: uuid.UUID, org_id: 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) "
-                "VALUES (:fid, :aid, :oid, 0, false)",
+                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) VALUES (:fid, :aid, :oid, 0, false)",
             ),
             {
                 "fid": str(family_id),

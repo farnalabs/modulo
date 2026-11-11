@@ -292,10 +292,7 @@ async def test_existing_edge_and_missing_versions_are_rejected() -> None:
     )
 
     assert await enhance_discovery(draft, _callable(response, [])) == draft
-    assert (
-        await enhance_discovery(draft, _callable(response, []), prompt_version="", rubric_version=RUBRIC_VERSION)
-        == draft
-    )
+    assert await enhance_discovery(draft, _callable(response, []), prompt_version="", rubric_version=RUBRIC_VERSION) == draft
 
 
 @pytest.mark.asyncio

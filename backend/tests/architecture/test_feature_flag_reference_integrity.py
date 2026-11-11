@@ -131,10 +131,7 @@ def test_no_phantom_flags() -> None:
     known = _known_flag_names()
     refs = _collect_backend_refs() | _collect_frontend_refs() | _collect_manifest_refs()
     phantoms = sorted(refs - known)
-    assert not phantoms, (
-        f"Flag names referenced in production code but NOT in _KNOWN_FLAGS (phantom flags): {phantoms}. "
-        "These fail-closed silently. Add them to _KNOWN_FLAGS or remove the reference."
-    )
+    assert not phantoms, f"Flag names referenced in production code but NOT in _KNOWN_FLAGS (phantom flags): {phantoms}. These fail-closed silently. Add them to _KNOWN_FLAGS or remove the reference."
 
 
 def test_no_orphan_flags() -> None:
@@ -156,11 +153,7 @@ def test_no_orphan_flags() -> None:
         # manifest).
         if f'"{name}"' not in non_registry and f"'{name}'" not in non_registry:
             orphans.append(name)
-    assert not orphans, (
-        f"Flags in _KNOWN_FLAGS with zero external references (orphans): {orphans}. "
-        "These are registered but never gated. Delete them or add a gate "
-        "or add them to KNOWN_DEFERRED_FLAGS."
-    )
+    assert not orphans, f"Flags in _KNOWN_FLAGS with zero external references (orphans): {orphans}. These are registered but never gated. Delete them or add a gate or add them to KNOWN_DEFERRED_FLAGS."
 
 
 def test_deferred_set_matches_known_gaps() -> None:
@@ -175,20 +168,11 @@ def test_deferred_set_matches_known_gaps() -> None:
     for name in sorted(known):
         if f'"{name}"' not in non_registry and f"'{name}'" not in non_registry:
             actually_deferred.append(name)
-    assert set(actually_deferred) == KNOWN_DEFERRED_FLAGS, (
-        f"Deferred-flag gap mismatch: expected {sorted(KNOWN_DEFERRED_FLAGS)} "
-        f"but found {actually_deferred}. If a flag gained a gate, remove it "
-        "from KNOWN_DEFERRED_FLAGS. If a new flag is ungated, add it."
-    )
+    assert set(actually_deferred) == KNOWN_DEFERRED_FLAGS, f"Deferred-flag gap mismatch: expected {sorted(KNOWN_DEFERRED_FLAGS)} but found {actually_deferred}. If a flag gained a gate, remove it from KNOWN_DEFERRED_FLAGS. If a new flag is ungated, add it."
 
 
 def test_catalog_derives_from_known_flags() -> None:
     """catalog.FLAGS must be derived from _KNOWN_FLAGS — same names, same tiers."""
     known = {flag.name: flag.tier for flag in _KNOWN_FLAGS}
     seeded = {entry["name"]: entry["tier_id"] for entry in FLAGS}
-    assert known == seeded, (
-        f"catalog.FLAGS is out of sync with _KNOWN_FLAGS. "
-        f"Missing from catalog: {sorted(set(known) - set(seeded))}. "
-        f"Extra in catalog: {sorted(set(seeded) - set(known))}. "
-        "catalog.FLAGS must be derived from _KNOWN_FLAGS."
-    )
+    assert known == seeded, f"catalog.FLAGS is out of sync with _KNOWN_FLAGS. Missing from catalog: {sorted(set(known) - set(seeded))}. Extra in catalog: {sorted(set(seeded) - set(known))}. catalog.FLAGS must be derived from _KNOWN_FLAGS."

@@ -28,15 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from farna.db.models import Account, Base
 from farna.db.models.account import KIND_HUMAN, KIND_SERVICE
 
-_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0299_accounts_service_identity.py"
-)
+_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0299_accounts_service_identity.py"
 _CHECK = "ck_accounts_service_identity"
 
 

@@ -61,19 +61,13 @@ def _schema_item(name: str, description: str | None, schema_id: str | None = Non
 def _mock_current(schemas: list[dict], backends: list[dict]) -> dict:
     """Mock the list/create endpoints for a schema/backend config (unit-suite shape)."""
     routes: dict[str, Any] = {}
-    routes["schemas_get"] = respx.get(
-        f"{_API_BASE}/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}
-    ).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": PAGE_SIZE})
-    routes["backends_get"] = respx.get(f"{_API_BASE}/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-        json={"items": backends, "total": len(backends), "page": 1, "page_size": PAGE_SIZE}
-    )
+    routes["schemas_get"] = respx.get(f"{_API_BASE}/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": PAGE_SIZE})
+    routes["backends_get"] = respx.get(f"{_API_BASE}/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": backends, "total": len(backends), "page": 1, "page_size": PAGE_SIZE})
     routes["versions_get"] = respx.get(
         re.compile(rf"{re.escape(_API_BASE)}/api/v1/schemas/[^/]+/versions"),
         params={"page": "1", "page_size": str(PAGE_SIZE)},
     ).respond(json={"items": [], "total": 0})
-    routes["schemas_post"] = respx.post(f"{_API_BASE}/api/v1/schemas").mock(
-        return_value=httpx.Response(201, json=_schema_item("applied", None))
-    )
+    routes["schemas_post"] = respx.post(f"{_API_BASE}/api/v1/schemas").mock(return_value=httpx.Response(201, json=_schema_item("applied", None)))
     routes["backends_post"] = respx.post(f"{_API_BASE}/api/v1/model-backends").mock(
         return_value=httpx.Response(
             201,
@@ -93,11 +87,7 @@ def _mock_current(schemas: list[dict], backends: list[dict]) -> dict:
             },
         )
     )
-    routes["health_post"] = respx.post(
-        re.compile(rf"{re.escape(_API_BASE)}/api/v1/model-backends/[^/]+/health-check")
-    ).mock(
-        return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"})
-    )
+    routes["health_post"] = respx.post(re.compile(rf"{re.escape(_API_BASE)}/api/v1/model-backends/[^/]+/health-check")).mock(return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}))
     return routes
 
 
@@ -112,28 +102,11 @@ def _config_text(state: dict[str, Any]) -> str:
 
 
 def _schema_doc(name: str, description: str = "Alpha schema") -> str:
-    return (
-        _DOC_SEP
-        + "api_version: modulo.dev/v1\n"
-        + "entities:\n"
-        + "  schemas:\n"
-        + f"    - name: {name}\n"
-        + f"      description: {description}\n"
-    )
+    return _DOC_SEP + "api_version: modulo.dev/v1\n" + "entities:\n" + "  schemas:\n" + f"    - name: {name}\n" + f"      description: {description}\n"
 
 
 def _backend_doc(name: str, *, api_key: str) -> str:
-    return (
-        _DOC_SEP
-        + "api_version: modulo.dev/v1\n"
-        + "entities:\n"
-        + "  model_backends:\n"
-        + f"    - name: {name}\n"
-        + f"      display_name: {name}\n"
-        + "      provider: openai\n"
-        + "      model_id: gpt-x\n"
-        + f"      api_key: {api_key}\n"
-    )
+    return _DOC_SEP + "api_version: modulo.dev/v1\n" + "entities:\n" + "  model_backends:\n" + f"    - name: {name}\n" + f"      display_name: {name}\n" + "      provider: openai\n" + "      model_id: gpt-x\n" + f"      api_key: {api_key}\n"
 
 
 def _desired_view(entity: SchemaEntity | ModelBackendEntity) -> dict[str, Any]:
@@ -181,14 +154,7 @@ def step_config_declares_schema(request, name: str) -> None:
 
 @given(parsers.parse('an apply config declaring the schema "{name}" twice'))
 def step_config_schema_twice(request, name: str) -> None:
-    text = (
-        _DOC_SEP
-        + "api_version: modulo.dev/v1\n"
-        + "entities:\n"
-        + "  schemas:\n"
-        + f"    - name: {name}\n"
-        + f"    - name: {name}\n"
-    )
+    text = _DOC_SEP + "api_version: modulo.dev/v1\n" + "entities:\n" + "  schemas:\n" + f"    - name: {name}\n" + f"    - name: {name}\n"
     _state(request)["docs"] = [text]
 
 
@@ -209,16 +175,7 @@ def step_second_doc_backend(request, name: str) -> None:
 
 @given(parsers.parse('an apply config whose first document declares only a trigger for pipeline "{pipeline}"'))
 def step_first_doc_trigger(request, pipeline: str) -> None:
-    text = (
-        _DOC_SEP
-        + "api_version: modulo.dev/v1\n"
-        + "entities:\n"
-        + "  triggers:\n"
-        + f"    - pipeline: {pipeline}\n"
-        + "      name: nightly\n"
-        + "      trigger_type: cron\n"
-        + "      cron_expression: '0 3 * * *'\n"
-    )
+    text = _DOC_SEP + "api_version: modulo.dev/v1\n" + "entities:\n" + "  triggers:\n" + f"    - pipeline: {pipeline}\n" + "      name: nightly\n" + "      trigger_type: cron\n" + "      cron_expression: '0 3 * * *'\n"
     _state(request)["docs"] = [text]
 
 
@@ -358,9 +315,7 @@ def step_desired_schema_version(request, name: str, version: str, content) -> No
         {
             "name": name,
             "description": "Schema with versions",
-            "versions": [
-                {"version": version, "version_number": 1, "definition_json": json.loads(content), "published": False}
-            ],
+            "versions": [{"version": version, "version_number": 1, "definition_json": json.loads(content), "published": False}],
         }
     )
     state["live"] = None
@@ -388,9 +343,7 @@ def step_live_schema_version(request, name: str, version: str, content) -> None:
     _state(request)["live"] = {
         "description": "Schema with versions",
         "abstract_name": None,
-        "versions": [
-            {"version": version, "version_number": 1, "definition_json": json.loads(content), "published": False}
-        ],
+        "versions": [{"version": version, "version_number": 1, "definition_json": json.loads(content), "published": False}],
     }
 
 
@@ -432,9 +385,7 @@ def step_live_matches(request, name: str) -> None:
     _state(request)["live_state"] = ([_schema_item(name, "Alpha schema")], [])
 
 
-@given(
-    parsers.parse('the API accepts the backend create but its health check reports "{status}" with detail "{detail}"')
-)
+@given(parsers.parse('the API accepts the backend create but its health check reports "{status}" with detail "{detail}"'))
 def step_api_broken_backend(request, status: str, detail: str) -> None:
     _state(request)["health"] = {"status": status, "detail": detail}
 

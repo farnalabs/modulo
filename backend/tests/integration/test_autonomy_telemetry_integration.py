@@ -47,11 +47,7 @@ async def test_emit_autonomy_telemetry_persists_row(app_engine: object, test_org
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         result = await session.execute(
-            text(
-                "SELECT event_type, resource_id, payload_json "
-                "FROM audit_events "
-                "WHERE event_type = :et AND organisation_id = :oid"
-            ),
+            text("SELECT event_type, resource_id, payload_json FROM audit_events WHERE event_type = :et AND organisation_id = :oid"),
             {"et": at.AUTONOMY_LEVEL_APPLIED, "oid": str(org_id)},
         )
         rows = result.all()

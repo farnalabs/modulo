@@ -56,16 +56,13 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": email, "name": name},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -85,8 +82,7 @@ async def _create_error_event(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO error_events (id, organisation_id, fingerprint, level, message, source) "
-                "VALUES (:id, :oid, :fp, 'error', 'probe', 'backend')",
+                "INSERT INTO error_events (id, organisation_id, fingerprint, level, message, source) VALUES (:id, :oid, :fp, 'error', 'probe', 'backend')",
             ),
             {"id": str(error_id), "oid": str(org_id), "fp": f"fp-{error_id.hex[:16]}"},
         )
@@ -330,9 +326,7 @@ class TestLifecycleRecordsSurviveHardDelete:
             await session.commit()
         assert result["status"] == "active"
 
-        status = await _count(
-            db_engine, "SELECT COUNT(*) FROM organisations WHERE id = :id AND status = 'active'", id=str(org_id)
-        )
+        status = await _count(db_engine, "SELECT COUNT(*) FROM organisations WHERE id = :id AND status = 'active'", id=str(org_id))
         assert status == 1
 
         rows = await _durable_rows(db_engine, org_id)
@@ -349,20 +343,14 @@ class TestDurableLedgerStructure:
         scopes it out — both are the mechanism, not an accident."""
         async with db_engine.connect() as conn:
             cols = await conn.execute(
-                text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'system_audit_events'"
-                ),
+                text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'system_audit_events'"),
             )
             names = {row[0] for row in cols.all()}
             assert "organisation_id" not in names
             assert "org_id" in names
 
             fks = await conn.execute(
-                text(
-                    "SELECT conname FROM pg_constraint "
-                    "WHERE contype = 'f' AND conrelid = 'public.system_audit_events'::regclass"
-                ),
+                text("SELECT conname FROM pg_constraint WHERE contype = 'f' AND conrelid = 'public.system_audit_events'::regclass"),
             )
             assert not fks.all()
 
@@ -388,12 +376,7 @@ class TestDurableLedgerStructure:
         async with db_engine.connect() as conn:
             with pytest.raises(SQLAlchemyError):
                 async with conn.begin():
-                    await conn.execute(
-                        text(
-                            "UPDATE system_audit_events SET event_type = 'tampered' "
-                            "WHERE event_type = 'append_only_probe'"
-                        )
-                    )
+                    await conn.execute(text("UPDATE system_audit_events SET event_type = 'tampered' WHERE event_type = 'append_only_probe'"))
 
         async with db_engine.connect() as conn:
             with pytest.raises(SQLAlchemyError):
@@ -420,10 +403,7 @@ class TestDurableLedgerStructure:
         """
         async with db_engine.connect() as conn:
             rows = await conn.execute(
-                text(
-                    "SELECT proname, prosrc FROM pg_proc "
-                    "WHERE proname IN ('audit_events_append_only', 'error_events_append_only')"
-                ),
+                text("SELECT proname, prosrc FROM pg_proc WHERE proname IN ('audit_events_append_only', 'error_events_append_only')"),
             )
             sources = {row[0]: row[1] for row in rows.all()}
 

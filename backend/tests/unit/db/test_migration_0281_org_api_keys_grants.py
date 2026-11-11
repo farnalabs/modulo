@@ -13,15 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0281_org_api_keys_grants.py"
-)
+_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0281_org_api_keys_grants.py"
 
 
 def _load() -> ModuleType:

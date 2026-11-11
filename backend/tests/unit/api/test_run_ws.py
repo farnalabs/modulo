@@ -100,9 +100,7 @@ def _ws_payload() -> dict:
 
 
 def test_sanitize_event_redacts_db_url_from_detail():
-    data = _sanitize_event(
-        _event({"error": "RuntimeError", "detail": "postgresql://user:supersecret@db.example/modulo"})
-    )
+    data = _sanitize_event(_event({"error": "RuntimeError", "detail": "postgresql://user:supersecret@db.example/modulo"}))
     assert "supersecret" not in data["payload"]["detail"]
     assert "<redacted>" in data["payload"]["detail"]
 

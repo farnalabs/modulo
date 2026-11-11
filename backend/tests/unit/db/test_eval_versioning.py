@@ -31,16 +31,7 @@ from farna.core.eval_engine.suite_run import (
 from farna.db.models import Base, Eval, EvalResult, EvalSuite
 from farna.db.models.eval_suite_run import SuiteRun
 
-_MIGRATION_PATH = (
-    Path(__file__).parents[4]
-    / "backend"
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0138_eval_versioning.py"
-)
+_MIGRATION_PATH = Path(__file__).parents[4] / "backend" / "src" / "farna" / "db" / "migrations" / "versions" / "0138_eval_versioning.py"
 
 
 def _make_session() -> Session:

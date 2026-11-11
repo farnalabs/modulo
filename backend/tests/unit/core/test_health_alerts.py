@@ -90,9 +90,7 @@ class _FakeSender:
         body_html: str,
         body_text: str,
     ) -> bool:
-        self.sent.append(
-            {"settings": settings, "to": list(to), "subject": subject, "html": body_html, "text": body_text}
-        )
+        self.sent.append({"settings": settings, "to": list(to), "subject": subject, "html": body_html, "text": body_text})
         return self.result
 
 
@@ -276,9 +274,7 @@ async def test_quiet_path_when_email_not_configured(caplog: pytest.LogCaptureFix
     assert third["status"] == "unhealthy"
     assert third["action"] == "disabled"
 
-    disabled_logs = [
-        record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()
-    ]
+    disabled_logs = [record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()]
     # Logged once (first tick), NOT once per tick inside the hourly window.
     assert len(disabled_logs) == 1
     # The notice says why and what would enable it.
@@ -401,10 +397,7 @@ async def test_observe_readiness_reuses_the_route_evaluation() -> None:
 
 #: The detail the db_hygiene check reports when its probe did NOT complete
 #: (FAR-1510) — a stalled event loop, not a hygiene finding.
-_HYGIENE_NOT_MEASURED_DETAIL = (
-    "database-hygiene probe did not complete within 1s (likely an event-loop stall; "
-    "see event_loop_lag) — hygiene not measured"
-)
+_HYGIENE_NOT_MEASURED_DETAIL = "database-hygiene probe did not complete within 1s (likely an event-loop stall; see event_loop_lag) — hygiene not measured"
 
 
 async def test_non_ok_advisory_sub_check_with_ok_aggregate_never_emails() -> None:
@@ -840,12 +833,7 @@ def test_stall_attribution_names_the_blocking_callback_when_enabled(caplog: pyte
     # line, emitted before the report and captured whenever the ambient root
     # level is INFO/DEBUG — e.g. after configure_logging()) is not mistaken for
     # the duplicate stall warning this test exists to forbid.
-    attribution_logs = [
-        record
-        for record in caplog.records
-        if record.levelno >= logging.WARNING
-        and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())
-    ]
+    attribution_logs = [record for record in caplog.records if record.levelno >= logging.WARNING and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())]
     assert not attribution_logs, [record.getMessage() for record in attribution_logs]
 
 
@@ -1000,9 +988,7 @@ def test_stall_attribution_is_none_for_an_idle_parked_loop(caplog: pytest.LogCap
         sampler = ha._stall_sampler
         assert sampler is not None, "the sampler was uninstalled before the report"
         with sampler._samples_lock:
-            window_samples = [
-                sampled_at for sampled_at, _frame in sampler._samples if window_start <= sampled_at <= window_end
-            ]
+            window_samples = [sampled_at for sampled_at, _frame in sampler._samples if window_start <= sampled_at <= window_end]
         assert len(window_samples) >= 1, "no samples landed inside the parked window"
 
         assert attributed is None
@@ -1010,12 +996,7 @@ def test_stall_attribution_is_none_for_an_idle_parked_loop(caplog: pytest.LogCap
         # ``event_loop_stall.attribution_installed`` record, which caplog keeps
         # whenever the ambient root level is INFO/DEBUG. A parked loop must
         # produce no stall WARNING — the INFO install notice is not one.
-        stall_logs = [
-            record
-            for record in caplog.records
-            if record.levelno >= logging.WARNING
-            and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())
-        ]
+        stall_logs = [record for record in caplog.records if record.levelno >= logging.WARNING and ("event_loop_stall" in record.getMessage() or "event-loop stall" in record.getMessage())]
         assert not stall_logs, [record.getMessage() for record in stall_logs]
     finally:
         loop = loop_box.get("loop")
@@ -1408,20 +1389,12 @@ def test_environment_allowlist_matches_case_insensitively_and_trims() -> None:
     """Entries are comma-split, trimmed and case-folded on BOTH sides."""
     allowed = _make_settings(ALERT_ENVIRONMENTS=" Production , staging ", MODULO_ENV="staging")
     assert ha.alerting_enabled_for_environment(allowed) is True
-    assert (
-        ha.alerting_enabled_for_environment(
-            _make_settings(ALERT_ENVIRONMENTS="production,staging", MODULO_ENV="Production")
-        )
-        is True
-    )
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="production,staging", MODULO_ENV="Production")) is True
     excluded = _make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="staging")
     assert ha.alerting_enabled_for_environment(excluded) is False
     # An environment that is not in a non-empty allowlist never alerts, even
     # the self-hosted default one.
-    assert (
-        ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="development"))
-        is False
-    )
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="development")) is False
 
 
 async def test_excluded_environment_never_sends_but_state_machine_advances(
@@ -1458,9 +1431,7 @@ async def test_excluded_environment_never_sends_but_state_machine_advances(
     assert not sender.sent
     # The quiet path stays QUIET-but-visible: one notice in the window, and
     # it names the setting that would re-enable alerting here.
-    disabled_logs = [
-        record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()
-    ]
+    disabled_logs = [record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()]
     assert len(disabled_logs) == 1
     assert "ALERT_ENVIRONMENTS" in disabled_logs[0]
 

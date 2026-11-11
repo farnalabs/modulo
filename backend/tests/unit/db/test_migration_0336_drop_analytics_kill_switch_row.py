@@ -29,9 +29,7 @@ from alembic.operations import Operations
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_NAME = "0336_drop_analytics_kill_switch_row"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0335_eval_verdict_contract_stage2"
 _RETIRED_KEY = "product_analytics_license_enforcement_kill_switch"
 _OTHER_KEY = "product_analytics_enabled"
@@ -50,9 +48,7 @@ def _load_migration() -> ModuleType:
 
 def _scaffold(conn: sa.Connection, *, kill_switch_value: str = "true") -> None:
     """The pre-migration table shape plus one retired row and one unrelated row."""
-    conn.execute(
-        sa.text("CREATE TABLE system_config (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL)")
-    )
+    conn.execute(sa.text("CREATE TABLE system_config (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL)"))
     conn.execute(
         sa.text("INSERT INTO system_config (id, key, value) VALUES (1, :key, :value)"),
         {"key": _RETIRED_KEY, "value": kill_switch_value},
@@ -130,11 +126,7 @@ class TestUpgrade:
 
     def test_absent_row_is_a_no_op(self, sqlite_engine: sa.Engine) -> None:
         with sqlite_engine.begin() as conn:
-            conn.execute(
-                sa.text(
-                    "CREATE TABLE system_config (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL)"
-                )
-            )
+            conn.execute(sa.text("CREATE TABLE system_config (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL)"))
             conn.execute(
                 sa.text("INSERT INTO system_config (id, key, value) VALUES (1, :key, :value)"),
                 {"key": _OTHER_KEY, "value": _OTHER_VALUE},

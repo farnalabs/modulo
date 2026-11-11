@@ -18,10 +18,7 @@ pytestmark = pytest.mark.integration
 async def _column_info(db_engine: AsyncEngine, table: str) -> dict[str, dict[str, object]]:
     async with db_engine.connect() as connection:
         return await connection.run_sync(
-            lambda sync_connection: {
-                col["name"]: {"type": col["type"], "nullable": col["nullable"]}
-                for col in inspect(sync_connection).get_columns(table)
-            },
+            lambda sync_connection: {col["name"]: {"type": col["type"], "nullable": col["nullable"]} for col in inspect(sync_connection).get_columns(table)},
         )
 
 
@@ -36,14 +33,7 @@ async def test_owner_columns_have_set_null_foreign_keys_to_accounts(db_engine: A
     async with db_engine.connect() as connection:
         rows = (
             await connection.execute(
-                text(
-                    "SELECT a.attname, con.confdeltype "
-                    "FROM pg_constraint con "
-                    "JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) "
-                    "WHERE con.conrelid = 'public.pipelines'::regclass "
-                    "AND con.contype = 'f' "
-                    "AND con.confrelid = 'public.accounts'::regclass"
-                )
+                text("SELECT a.attname, con.confdeltype FROM pg_constraint con JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) WHERE con.conrelid = 'public.pipelines'::regclass AND con.contype = 'f' AND con.confrelid = 'public.accounts'::regclass")
             )
         ).all()
     fk_by_column = {row[0]: row[1] for row in rows}
@@ -59,13 +49,6 @@ async def test_owner_columns_have_set_null_foreign_keys_to_accounts(db_engine: A
 
 async def test_owner_column_indexes_exist(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        indexes = await connection.run_sync(
-            lambda sync_connection: {
-                row[0]
-                for row in sync_connection.execute(
-                    text("SELECT indexname FROM pg_indexes WHERE tablename = 'pipelines'")
-                )
-            }
-        )
+        indexes = await connection.run_sync(lambda sync_connection: {row[0] for row in sync_connection.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'pipelines'"))})
     assert "ix_pipelines_business_owner_id" in indexes
     assert "ix_pipelines_reliability_owner_id" in indexes

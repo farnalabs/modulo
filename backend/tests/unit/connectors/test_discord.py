@@ -66,9 +66,7 @@ async def test_query_messages(connector: DiscordConnector) -> None:
         {"id": "666", "content": "World", "author": {"id": "U2"}},
     ]
     channel_id = "ch-789"
-    respx.get(f"{_BASE}/channels/{channel_id}/messages", params={"limit": 100}).mock(
-        return_value=httpx.Response(200, json=messages)
-    )
+    respx.get(f"{_BASE}/channels/{channel_id}/messages", params={"limit": 100}).mock(return_value=httpx.Response(200, json=messages))
     result = await connector.query(ConnectorQuery(resource="messages", filters={"channel_id": channel_id}))
     assert len(result.records) == 2
     assert result.records[0]["content"] == "Hello"
@@ -139,9 +137,7 @@ async def test_query_guild_members(connector: DiscordConnector) -> None:
         {"user": {"id": "U2", "username": "Bob"}, "roles": ["R1"]},
     ]
     guild_id = "guild-123"
-    respx.get(f"{_BASE}/guilds/{guild_id}/members", params={"limit": 100}).mock(
-        return_value=httpx.Response(200, json=members)
-    )
+    respx.get(f"{_BASE}/guilds/{guild_id}/members", params={"limit": 100}).mock(return_value=httpx.Response(200, json=members))
     result = await connector.query(ConnectorQuery(resource="guild_members", filters={"guild_id": guild_id}))
     assert len(result.records) == 2
     assert result.records[0]["user"]["username"] == "Alice"
@@ -276,9 +272,7 @@ async def test_write_reaction(connector: DiscordConnector) -> None:
     channel_id = "ch-456"
     message_id = "msg-789"
     emoji = "👍"
-    respx.put(f"{_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me").mock(
-        return_value=httpx.Response(204)
-    )
+    respx.put(f"{_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me").mock(return_value=httpx.Response(204))
     result = await connector.write(
         ConnectorPayload(
             resource="reaction",
@@ -430,9 +424,7 @@ async def test_write_http_401(connector: DiscordConnector) -> None:
 @respx.mock
 async def test_write_http_429(connector: DiscordConnector) -> None:
     channel_id = "ch-456"
-    respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(
-        return_value=httpx.Response(429, text="Too Many Requests")
-    )
+    respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(return_value=httpx.Response(429, text="Too Many Requests"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(
             ConnectorPayload(
@@ -445,9 +437,7 @@ async def test_write_http_429(connector: DiscordConnector) -> None:
 @respx.mock
 async def test_write_http_500(connector: DiscordConnector) -> None:
     channel_id = "ch-456"
-    respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(
             ConnectorPayload(
@@ -479,9 +469,7 @@ async def test_query_channels_non_list_body_no_crash(connector: DiscordConnector
 @respx.mock
 async def test_query_guilds_list_with_non_dict_entries(connector: DiscordConnector) -> None:
     """Non-dict entries within a list must be dropped rather than crash the query."""
-    respx.get(f"{_BASE}/users/@me/guilds").mock(
-        return_value=httpx.Response(200, json=[{"id": "111", "name": "Modulo Dev"}, "corrupt", 42])
-    )
+    respx.get(f"{_BASE}/users/@me/guilds").mock(return_value=httpx.Response(200, json=[{"id": "111", "name": "Modulo Dev"}, "corrupt", 42]))
     result = await connector.query(ConnectorQuery(resource="guilds"))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Modulo Dev"

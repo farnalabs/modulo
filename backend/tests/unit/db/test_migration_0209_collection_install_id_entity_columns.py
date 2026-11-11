@@ -140,9 +140,7 @@ class TestNoAddColumnRegression:
                 low = sql.lower()
                 # The migration ran 0207 first, so the column already exists on
                 # the tables it targets. Re-adding it aborts the whole chain.
-                assert "add column" not in low or _COLUMN not in low or "if not exists" in low, (
-                    f"0209 must not add column {_COLUMN}: {sql}"
-                )
+                assert "add column" not in low or _COLUMN not in low or "if not exists" in low, f"0209 must not add column {_COLUMN}: {sql}"
                 assert f"add column {_COLUMN}" not in low, f"0209 must not add column {_COLUMN}: {sql}"
                 assert f"add column if not exists {_COLUMN}" not in low, f"0209 must not add column {_COLUMN}: {sql}"
             # 0207 already owns the column, so 0209 must not request op.add_column
@@ -169,9 +167,7 @@ class TestIndexNamesMatchOrm:
             indexes = {ix.name for ix in model.__table__.indexes}
             matching = {name for name in indexes if name.endswith(f"_{_COLUMN}")}
             assert matching, f"{model.__tablename__} declares no index ending in _{_COLUMN}: {indexes}"
-            assert any(name == f"ix_{model.__tablename__}_{_COLUMN}" for name in matching), (
-                f"{model.__tablename__} index name mismatch: {matching}"
-            )
+            assert any(name == f"ix_{model.__tablename__}_{_COLUMN}" for name in matching), f"{model.__tablename__} index name mismatch: {matching}"
 
 
 class TestSqliteParityPath:

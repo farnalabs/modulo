@@ -72,16 +72,11 @@ async def _create_inviter(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(acc_id), "email": f"owner-{acc_id.hex[:8]}@example.com", "name": "Owner"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -152,10 +147,7 @@ async def _get_membership_role(
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT role FROM org_memberships WHERE account_id = :aid "
-                        "AND organisation_id = :oid AND deactivated_at IS NULL"
-                    ),
+                    text("SELECT role FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid AND deactivated_at IS NULL"),
                     {"aid": str(account_id), "oid": str(org_id)},
                 )
             )
@@ -348,15 +340,11 @@ class TestRealKeycloakSamlHttpFlow:
             )
             assert acs_resp.status_code == 307, acs_resp.text
             location = acs_resp.headers["location"]
-            assert location.startswith(_FRONTEND_BASE + "/auth/callback#"), (
-                f"redirect must target the SPA callback fragment, got {location}"
-            )
+            assert location.startswith(_FRONTEND_BASE + "/auth/callback#"), f"redirect must target the SPA callback fragment, got {location}"
             assert "access_token=" in location, location
             assert "refresh_token=" not in location, "FAR-1197: the refresh token must never leak into the redirect URL"
             cookie_names = {c.name for c in acs_resp.cookies.jar}
-            assert "modulo_refresh" in cookie_names, (
-                f"the refresh token is delivered via the httpOnly modulo_refresh cookie; got {cookie_names}"
-            )
+            assert "modulo_refresh" in cookie_names, f"the refresh token is delivered via the httpOnly modulo_refresh cookie; got {cookie_names}"
         finally:
             await client.aclose()
 
@@ -372,6 +360,4 @@ class TestRealKeycloakSamlHttpFlow:
         assert subject_row is not None, "the provisioned account must carry an SSO identity subject"
         subject = subject_row.get("sso_subject")
         assert subject, f"accounts.sso_subject must be set, got {subject_row}"
-        assert tenant.idp_entity_id in subject or tenant.realm in subject, (
-            f"the SSO subject must reference the realm's IdP entity, got {subject}"
-        )
+        assert tenant.idp_entity_id in subject or tenant.realm in subject, f"the SSO subject must reference the realm's IdP entity, got {subject}"

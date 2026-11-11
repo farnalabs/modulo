@@ -410,9 +410,7 @@ class TestAdminPublishContribution:
             patch(
                 "farna.api.routes.library.publish_contribution",
                 new_callable=AsyncMock,
-                side_effect=ContributionInvalidTransitionError(
-                    f"Cannot publish contribution {prim_id}: expected status 'draft' or 'review_queue', got 'published'"
-                ),
+                side_effect=ContributionInvalidTransitionError(f"Cannot publish contribution {prim_id}: expected status 'draft' or 'review_queue', got 'published'"),
             ),
         ):
             resp = client.post(self._publish_path(prim_id))

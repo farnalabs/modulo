@@ -148,9 +148,7 @@ class TestDeletePipelineAuditEvent(_AuthContext):
         assert append.await_count == 1
         assert append.await_args.kwargs["payload_json"]["outcome"] == "error"
 
-    async def test_fail_closed_raises_when_the_chain_refuses_the_event(
-        self, audit_env, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fail_closed_raises_when_the_chain_refuses_the_event(self, audit_env, monkeypatch: pytest.MonkeyPatch) -> None:
         """delete_pipeline is fail-closed: an unauditable deletion is an error."""
         monkeypatch.setattr(mcp_audit, "append_audit_event", AsyncMock(side_effect=RuntimeError("chain down")))
         p1, p2, p3 = _delete_pipeline_patches()
@@ -163,9 +161,7 @@ class TestDeletePipelineAuditEvent(_AuthContext):
 
 
 class TestFailurePolicy(_AuthContext):
-    async def test_fail_open_logs_and_returns_the_result(
-        self, audit_env, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_fail_open_logs_and_returns_the_result(self, audit_env, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         monkeypatch.setattr(mcp_audit, "append_audit_event", AsyncMock(side_effect=RuntimeError("chain down")))
         with caplog.at_level("WARNING", logger=mcp_audit.__name__):
             result = await _fail_open_tool()
@@ -179,9 +175,7 @@ class TestFailurePolicy(_AuthContext):
         with pytest.raises(RuntimeError, match="chain down"):
             await _fail_closed_tool()
 
-    async def test_the_tools_own_error_is_never_replaced_by_the_audit(
-        self, audit_env, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_the_tools_own_error_is_never_replaced_by_the_audit(self, audit_env, monkeypatch: pytest.MonkeyPatch) -> None:
         """The attempt is recorded best-effort, then the original error wins."""
         append = AsyncMock(side_effect=RuntimeError("audit down"))
         monkeypatch.setattr(mcp_audit, "append_audit_event", append)
@@ -239,9 +233,7 @@ class TestCommitOutcome(_AuthContext):
         with pytest.raises(RuntimeError, match="commit down"):
             await _fail_closed_tool()
 
-    async def test_fail_open_returns_the_result_when_the_commit_fails(
-        self, failing_commit_env, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_fail_open_returns_the_result_when_the_commit_fails(self, failing_commit_env, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING", logger=mcp_audit.__name__):
             result = await _fail_open_tool()
 
@@ -253,9 +245,7 @@ class TestCommitOutcome(_AuthContext):
 class TestSessionSetupFailures(_AuthContext):
     """Establishing the audit transaction never replaces the tool's result."""
 
-    async def test_setup_failure_is_logged_and_the_event_skipped(
-        self, audit_env, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_setup_failure_is_logged_and_the_event_skipped(self, audit_env, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         _session, append = audit_env
         monkeypatch.setattr(mcp_audit, "set_rls_org", AsyncMock(side_effect=RuntimeError("rls down")))
         with caplog.at_level("WARNING", logger=mcp_audit.__name__):

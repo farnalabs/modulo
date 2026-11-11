@@ -121,22 +121,10 @@ class TestDowngrade:
 class TestModelParity:
     def test_model_declares_the_same_index(self) -> None:
         """Model and migration ship the same index in the SAME change."""
-        matches = [
-            index
-            for index in MetricsStaging.__table__.indexes
-            if index.name == _INDEX_NAME and tuple(c.name for c in index.columns) == ("recorded_at",)
-        ]
-        assert matches, (
-            f"MetricsStaging must declare {_INDEX_NAME}(recorded_at) to stay in parity with "
-            "migration 0304 — a migration/model index drift is a review block"
-        )
+        matches = [index for index in MetricsStaging.__table__.indexes if index.name == _INDEX_NAME and tuple(c.name for c in index.columns) == ("recorded_at",)]
+        assert matches, f"MetricsStaging must declare {_INDEX_NAME}(recorded_at) to stay in parity with migration 0304 — a migration/model index drift is a review block"
 
     def test_model_keeps_the_org_scoped_dump_index(self) -> None:
         """The pre-existing (organisation_id, recorded_at) index must survive."""
-        matches = [
-            index
-            for index in MetricsStaging.__table__.indexes
-            if index.name == "ix_metrics_staging_org_recorded_at"
-            and tuple(c.name for c in index.columns) == ("organisation_id", "recorded_at")
-        ]
+        matches = [index for index in MetricsStaging.__table__.indexes if index.name == "ix_metrics_staging_org_recorded_at" and tuple(c.name for c in index.columns) == ("organisation_id", "recorded_at")]
         assert matches, "ix_metrics_staging_org_recorded_at must remain declared on the model"

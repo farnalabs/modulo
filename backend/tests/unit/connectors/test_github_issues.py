@@ -37,9 +37,7 @@ async def test_query_issues_basic(connector):
 @respx.mock
 async def test_query_issues_with_filters(connector):
     issues = [{"number": 3, "title": "Critical bug", "state": "open"}]
-    route = respx.get("https://api.github.com/repos/owner/repo/issues").mock(
-        return_value=httpx.Response(200, json=issues)
-    )
+    route = respx.get("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(200, json=issues))
     result = await connector.query(
         ConnectorQuery(
             resource="issues",
@@ -62,9 +60,7 @@ async def test_query_issues_empty(connector):
 @respx.mock
 async def test_query_issues_with_pagination(connector):
     issues = [{"number": i, "title": f"Issue {i}"} for i in range(5)]
-    respx.get("https://api.github.com/repos/owner/repo/issues?per_page=5").mock(
-        return_value=httpx.Response(200, json=issues)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues?per_page=5").mock(return_value=httpx.Response(200, json=issues))
     result = await connector.query(ConnectorQuery(resource="issues", filters={"repo": "owner/repo"}, limit=5))
     assert len(result.records) == 5
 
@@ -91,17 +87,13 @@ async def test_query_issues_http_error(connector):
 async def test_query_single_issue(connector):
     issue = {"number": 42, "title": "The answer", "state": "open", "body": "Details"}
     respx.get("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=issue))
-    result = await connector.query(
-        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"}))
     assert result.records[0]["number"] == 42
 
 
 @respx.mock
 async def test_query_single_issue_not_found(connector):
-    respx.get("https://api.github.com/repos/owner/repo/issues/999").mock(
-        return_value=httpx.Response(404, text="Not Found")
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues/999").mock(return_value=httpx.Response(404, text="Not Found"))
     with pytest.raises(ValueError, match="404"):
         await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "999"}))
 
@@ -141,9 +133,7 @@ async def test_query_milestones(connector):
         {"number": 1, "title": "v1.0", "state": "open"},
         {"number": 2, "title": "v2.0", "state": "closed"},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/milestones").mock(
-        return_value=httpx.Response(200, json=milestones)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/milestones").mock(return_value=httpx.Response(200, json=milestones))
     result = await connector.query(ConnectorQuery(resource="milestones", filters={"repo": "owner/repo"}))
     assert len(result.records) == 2
 
@@ -151,9 +141,7 @@ async def test_query_milestones(connector):
 @respx.mock
 async def test_query_milestones_with_state_filter(connector):
     milestones = [{"number": 1, "title": "v1.0", "state": "open"}]
-    route = respx.get("https://api.github.com/repos/owner/repo/milestones").mock(
-        return_value=httpx.Response(200, json=milestones)
-    )
+    route = respx.get("https://api.github.com/repos/owner/repo/milestones").mock(return_value=httpx.Response(200, json=milestones))
     await connector.query(
         ConnectorQuery(
             resource="milestones",
@@ -175,9 +163,7 @@ async def test_query_issue_comments(connector):
         {"id": 1, "body": "First comment", "user": {"login": "user1"}},
         {"id": 2, "body": "Second comment", "user": {"login": "user2"}},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
-        return_value=httpx.Response(200, json=comments)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues/42/comments").mock(return_value=httpx.Response(200, json=comments))
     result = await connector.query(
         ConnectorQuery(
             resource="issue_comments",
@@ -198,9 +184,7 @@ async def test_query_issue_events(connector):
     events = [
         {"id": 1, "event": "labeled", "actor": {"login": "user1"}},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/issues/42/events").mock(
-        return_value=httpx.Response(200, json=events)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues/42/events").mock(return_value=httpx.Response(200, json=events))
     result = await connector.query(
         ConnectorQuery(
             resource="issue_events",
@@ -222,9 +206,7 @@ async def test_query_assignees(connector):
         {"login": "user1", "id": 101},
         {"login": "user2", "id": 102},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/assignees").mock(
-        return_value=httpx.Response(200, json=assignees)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/assignees").mock(return_value=httpx.Response(200, json=assignees))
     result = await connector.query(ConnectorQuery(resource="assignees", filters={"repo": "owner/repo"}))
     assert len(result.records) == 2
     assert result.records[0]["login"] == "user1"
@@ -240,9 +222,7 @@ async def test_query_timeline(connector):
     events = [
         {"id": 1, "event": "commented", "created_at": "2024-01-01T00:00:00Z"},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/issues/42/timeline").mock(
-        return_value=httpx.Response(200, json=events)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues/42/timeline").mock(return_value=httpx.Response(200, json=events))
     result = await connector.query(
         ConnectorQuery(
             resource="timeline",
@@ -281,9 +261,7 @@ async def test_write_create_issue(connector):
 @respx.mock
 async def test_write_create_issue_minimal(connector):
     created = {"number": 101, "title": "Minimal", "state": "open"}
-    route = respx.post("https://api.github.com/repos/owner/repo/issues").mock(
-        return_value=httpx.Response(201, json=created)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(201, json=created))
     await connector.write(
         ConnectorPayload(
             resource="issue",
@@ -297,9 +275,7 @@ async def test_write_create_issue_minimal(connector):
 
 @respx.mock
 async def test_write_create_issue_http_error(connector):
-    respx.post("https://api.github.com/repos/owner/repo/issues").mock(
-        return_value=httpx.Response(422, text="Unprocessable")
-    )
+    respx.post("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(422, text="Unprocessable"))
     with pytest.raises(ValueError, match="422"):
         await connector.write(
             ConnectorPayload(
@@ -317,9 +293,7 @@ async def test_write_create_issue_http_error(connector):
 @respx.mock
 async def test_write_update_issue(connector):
     updated = {"number": 42, "title": "Updated", "state": "closed"}
-    route = respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(
-        return_value=httpx.Response(200, json=updated)
-    )
+    route = respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=updated))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_update",
@@ -334,9 +308,7 @@ async def test_write_update_issue(connector):
 
 @respx.mock
 async def test_write_update_issue_partial(connector):
-    route = respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(
-        return_value=httpx.Response(200, json={"number": 42})
-    )
+    route = respx.patch("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json={"number": 42}))
     await connector.write(
         ConnectorPayload(
             resource="issue_update",
@@ -356,9 +328,7 @@ async def test_write_update_issue_partial(connector):
 @respx.mock
 async def test_write_issue_comment(connector):
     comment = {"id": 999, "body": "Nice work"}
-    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/comments").mock(
-        return_value=httpx.Response(201, json=comment)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/comments").mock(return_value=httpx.Response(201, json=comment))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_comment",
@@ -377,9 +347,7 @@ async def test_write_issue_comment(connector):
 @respx.mock
 async def test_write_issue_label(connector):
     result_data = {"labels": [{"name": "bug"}, {"name": "urgent"}]}
-    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(
-        return_value=httpx.Response(200, json=result_data)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(return_value=httpx.Response(200, json=result_data))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_label",
@@ -423,9 +391,7 @@ async def test_write_issue_label_requires_labels(connector):
 @respx.mock
 async def test_write_issue_reaction(connector):
     reaction = {"id": 1, "content": "+1", "user": {"login": "user1"}}
-    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/reactions").mock(
-        return_value=httpx.Response(201, json=reaction)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/reactions").mock(return_value=httpx.Response(201, json=reaction))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_reaction",
@@ -444,9 +410,7 @@ async def test_write_issue_reaction(connector):
 @respx.mock
 async def test_write_create_label(connector):
     label = {"name": "bug", "color": "d73a4a", "description": "Bug report"}
-    route = respx.post("https://api.github.com/repos/owner/repo/labels").mock(
-        return_value=httpx.Response(201, json=label)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/labels").mock(return_value=httpx.Response(201, json=label))
     result = await connector.write(
         ConnectorPayload(
             resource="label",
@@ -461,9 +425,7 @@ async def test_write_create_label(connector):
 
 @respx.mock
 async def test_write_create_label_minimal(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/labels").mock(
-        return_value=httpx.Response(201, json={"name": "urgent", "color": "ff0000"})
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/labels").mock(return_value=httpx.Response(201, json={"name": "urgent", "color": "ff0000"}))
     await connector.write(
         ConnectorPayload(
             resource="label",
@@ -482,9 +444,7 @@ async def test_write_create_label_minimal(connector):
 @respx.mock
 async def test_write_create_milestone(connector):
     milestone = {"number": 1, "title": "v1.0", "description": "First release"}
-    route = respx.post("https://api.github.com/repos/owner/repo/milestones").mock(
-        return_value=httpx.Response(201, json=milestone)
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/milestones").mock(return_value=httpx.Response(201, json=milestone))
     result = await connector.write(
         ConnectorPayload(
             resource="milestone",

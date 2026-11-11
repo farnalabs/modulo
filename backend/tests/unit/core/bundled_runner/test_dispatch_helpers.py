@@ -213,16 +213,14 @@ def test_runner_retention_artifacts_persists_over_cap_stderr(monkeypatch: pytest
     monkeypatch.setattr(nrm, "_persist_full_stderr_artifact", _persist_stderr)
     monkeypatch.setattr(nrm, "_redact_raw_output", lambda text: text)
 
-    stdout, stderr, _stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact = (
-        rd._runner_retention_artifacts(
-            node_id="node-1",
-            run_id="run-1",
-            org_id="org-1",
-            attempt_key="attempt-1",
-            agent_stdout_raw="short",
-            agent_stderr_raw="e" * 64,
-            stdout_cap=16,
-        )
+    stdout, stderr, _stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact = rd._runner_retention_artifacts(
+        node_id="node-1",
+        run_id="run-1",
+        org_id="org-1",
+        attempt_key="attempt-1",
+        agent_stdout_raw="short",
+        agent_stderr_raw="e" * 64,
+        stdout_cap=16,
     )
 
     assert stdout == "short"

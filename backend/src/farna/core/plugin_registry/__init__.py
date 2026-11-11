@@ -236,15 +236,7 @@ class PluginRegistry:
         with self._lock:
             self._entry_point_errors.pop(plugin_id, None)
             existing = self._plugins.get(plugin_id)
-            if existing is not None:
-                manifest = existing
-            else:
-                manifest = PluginManifest(
-                    PLUGIN_ID=plugin_id,
-                    display_name=display_name,
-                    description=description,
-                    version=version,
-                )
+            manifest = existing if existing is not None else PluginManifest(PLUGIN_ID=plugin_id, display_name=display_name, description=description, version=version)
 
             if group == _ENTRY_POINT_CONNECTORS:
                 self._connector_builders[entry_point_name] = builder
