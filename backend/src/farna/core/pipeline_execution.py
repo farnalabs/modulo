@@ -3595,8 +3595,12 @@ async def _await_executor_task(
         # the node-deadline watchdog to stand down (never fail a finished run).
         tasks.run_done_event.set()
         return None, result
-    except asyncio.CancelledError:
-        # Heartbeat-loss, watchdog stall, or supersession. Await the watchdogs
+    except asyncio.CancelledError:  # NOSONAR python:S7497 — see comment below
+        # Heartbeat-loss, watchdog stall, or supersession. The cancelled
+        # awaitable is ``tasks.exec_task`` (not this coroutine), so the caller
+        # MUST fall back to the run row — re-raising here would skip that
+        # classification; a genuine worker-shutdown cancellation is re-raised
+        # inside :func:`_resolve_cancel_outcome`. Await the watchdogs
         # to completion first so their ``fail_run_terminal`` transactions commit
         # before the ``finally`` below cancels them — cancelling a watchdog
         # mid-write would abort its terminal-fail transaction and leave the run
