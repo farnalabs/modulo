@@ -53,15 +53,7 @@ _SYSTEM_ROLE = "modulo_system"
 _ORG_POLICY = "((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid))"
 _RESTORE_RLS_STATEMENTS: tuple[str, ...] = (
     'DROP POLICY IF EXISTS rls_org_isolation ON "' + _TABLE_REVISIONS + '"',
-    (
-        'CREATE POLICY rls_org_isolation ON "'
-        + _TABLE_REVISIONS
-        + '" USING ('
-        + _ORG_POLICY
-        + ") WITH CHECK ("
-        + _ORG_POLICY
-        + ")"
-    ),
+    ('CREATE POLICY rls_org_isolation ON "' + _TABLE_REVISIONS + '" USING (' + _ORG_POLICY + ") WITH CHECK (" + _ORG_POLICY + ")"),
     'ALTER TABLE "' + _TABLE_REVISIONS + '" ENABLE ROW LEVEL SECURITY',
     'ALTER TABLE "' + _TABLE_REVISIONS + '" FORCE ROW LEVEL SECURITY',
 )
@@ -72,10 +64,7 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _grant_dml(role: str) -> None:
@@ -157,16 +146,9 @@ def upgrade() -> None:
 
 
 def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(
-            tbl="public." + table
-        )
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(tbl="public." + table)).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            table + " owner is " + repr(owner) + ", expected '" + _MIGRATE_ROLE + "' "
-            "(the app role must NOT own it — owner bypasses RLS)"
-        )
+        raise RuntimeError(table + " owner is " + repr(owner) + ", expected '" + _MIGRATE_ROLE + "' (the app role must NOT own it — owner bypasses RLS)")
 
 
 def _backfill_effective_dates(bind: sa.Connection, pg: bool) -> None:

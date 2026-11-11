@@ -390,16 +390,12 @@ async def _snapshot_dimensions(
     if run.owner_team_id is not None:
         # Entity select (not select(Team.name)): keeps the statement in the
         # single-type-parameter form include_soft_deleted's bound accepts.
-        team = (
-            await session.execute(include_soft_deleted(select(Team).where(Team.id == run.owner_team_id)))
-        ).scalar_one_or_none()
+        team = (await session.execute(include_soft_deleted(select(Team).where(Team.id == run.owner_team_id)))).scalar_one_or_none()
         team_name = team.name if team is not None else None
     pipeline_name: str | None = None
     folder_id: uuid.UUID | None = None
     if run.pipeline_id is not None:
-        pipeline = (
-            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
-        ).scalar_one_or_none()
+        pipeline = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))).scalar_one_or_none()
         if pipeline is not None:
             pipeline_name, folder_id = pipeline.name, pipeline.folder_id
     return team_name, pipeline_name, folder_id
@@ -420,9 +416,7 @@ async def _snapshot_graph_dimensions(
     snapshot_id = getattr(run, "snapshot_id", None)
     if snapshot_id is None:
         return _derive_graph_dimensions(None)
-    graph_json = (
-        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-    ).scalar_one_or_none()
+    graph_json = (await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))).scalar_one_or_none()
     return _derive_graph_dimensions(graph_json)
 
 

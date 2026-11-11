@@ -35,17 +35,11 @@ class LifecycleMapStage(OrgScoped):
         ),
     )
 
-    map_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("lifecycle_maps.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    map_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("lifecycle_maps.id", ondelete="CASCADE"), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     stage_id: Mapped[str] = mapped_column(String(255), nullable=False)
     stage_name: Mapped[str] = mapped_column(String(255), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     stage_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete="RESTRICT"), nullable=True, index=True
-    )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipelines.id", ondelete="RESTRICT"), nullable=True, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)

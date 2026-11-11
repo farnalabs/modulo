@@ -86,9 +86,7 @@ DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({STATEMENT_TIMEOUT_SQLSTATE})
 # with one of these has ALSO lost the legacy marker write (the outer
 # transaction rolls back), so the "legacy survives, repair migrates" claim is
 # false and the failure must be claimed loudly.
-MARKER_TXN_ABORTING_SQLSTATES = frozenset(
-    {"40P01", "57P01", "57P02", "08000", "08001", "08003", "08004", "08006", "08007"}
-)
+MARKER_TXN_ABORTING_SQLSTATES = frozenset({"40P01", "57P01", "57P02", "08000", "08001", "08003", "08004", "08006", "08007"})
 
 # The savepoint-rollback wrapper states: 25P02 ("in_failed_sql_transaction")
 # is raised by ROLLBACK-TO-SAVEPOINT on an already-aborted transaction — it is

@@ -97,10 +97,7 @@ _SPECS: list[_TableSpec] = [
         checks=[
             (
                 "ck_remy_skills_owner",
-                (
-                    "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-                    "(organisation_id IS NULL AND account_id IS NOT NULL)"
-                ),
+                ("(organisation_id IS NOT NULL AND account_id IS NULL) OR (organisation_id IS NULL AND account_id IS NOT NULL)"),
             )
         ],
         trigger_old="trg_remy_skills_user_id_tenant",
@@ -119,10 +116,7 @@ _SPECS: list[_TableSpec] = [
         checks=[
             (
                 "ck_remy_context_sources_owner",
-                (
-                    "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-                    "(organisation_id IS NULL AND account_id IS NOT NULL)"
-                ),
+                ("(organisation_id IS NOT NULL AND account_id IS NULL) OR (organisation_id IS NULL AND account_id IS NOT NULL)"),
             )
         ],
         trigger_old="trg_remy_context_sources_user_id_tenant",
@@ -150,17 +144,12 @@ def _upgrade_postgres() -> None:
 
         # 3. Recreate the FK (new name, references account_id).
         cols = ", ".join(f'"{c}"' for c in spec.fk_cols)
-        op.execute(
-            f'ALTER TABLE public."{spec.table}" ADD CONSTRAINT "{spec.fk_new}" '
-            f"FOREIGN KEY ({cols}) REFERENCES public.accounts (id) ON DELETE CASCADE;"
-        )
+        op.execute(f'ALTER TABLE public."{spec.table}" ADD CONSTRAINT "{spec.fk_new}" FOREIGN KEY ({cols}) REFERENCES public.accounts (id) ON DELETE CASCADE;')
 
         # 4. Recreate the lookup index.
         if spec.index_new and spec.index_cols:
             index_cols = ", ".join(f'"{c}"' for c in spec.index_cols)
-            op.execute(
-                f'CREATE INDEX IF NOT EXISTS "{spec.index_new}" ON public."{spec.table}" USING btree ({index_cols});'
-            )
+            op.execute(f'CREATE INDEX IF NOT EXISTS "{spec.index_new}" ON public."{spec.table}" USING btree ({index_cols});')
 
         # 5. Recreate unique + check constraints against account_id.
         for name, cols_list in spec.uniques:
@@ -170,12 +159,7 @@ def _upgrade_postgres() -> None:
             op.execute(f'ALTER TABLE public."{spec.table}" ADD CONSTRAINT "{name}" CHECK ({expr});')
 
         # 6. Recreate the tenant trigger (column reference + function arg updated).
-        op.execute(
-            f'CREATE TRIGGER "{spec.trigger_new}" '
-            f"BEFORE INSERT OR UPDATE OF account_id, organisation_id "
-            f'ON public."{spec.table}" FOR EACH ROW '
-            f"EXECUTE FUNCTION public.enforce_same_organisation('{spec.owner_table}', 'account_id');"
-        )
+        op.execute(f"CREATE TRIGGER \"{spec.trigger_new}\" BEFORE INSERT OR UPDATE OF account_id, organisation_id ON public.\"{spec.table}\" FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('{spec.owner_table}', 'account_id');")
 
 
 def _upgrade_other() -> None:

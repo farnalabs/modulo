@@ -43,13 +43,7 @@ def upgrade() -> None:
         ["organisation_id", "created_at", "id"],
         postgresql_using="btree",
     )
-    op.execute(
-        sa.text(
-            "ALTER TABLE trigger_events ADD CONSTRAINT ck_trigger_events_trigger_type "
-            "CHECK (trigger_type IN "
-            "('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'slack_app_mention'))"
-        )
-    )
+    op.execute(sa.text("ALTER TABLE trigger_events ADD CONSTRAINT ck_trigger_events_trigger_type CHECK (trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'slack_app_mention'))"))
 
 
 def downgrade() -> None:

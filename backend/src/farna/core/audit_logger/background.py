@@ -78,15 +78,11 @@ SUITE_RUN_PENDING_STATES: frozenset[str] = frozenset({SuiteRunState.PENDING.valu
 #: every state except ``pending``. A run still ``pending`` when the execution
 #: job's audit runs means that job's transaction rolled back, so the start did
 #: NOT land: the phantom-event guard for ``suite_run_started``.
-SUITE_RUN_NON_PENDING_STATES: frozenset[str] = frozenset(
-    state.value for state in SuiteRunState if state is not SuiteRunState.PENDING
-)
+SUITE_RUN_NON_PENDING_STATES: frozenset[str] = frozenset(state.value for state in SuiteRunState if state is not SuiteRunState.PENDING)
 
 #: Terminal SuiteRun states (``completed``/``partial``/``failed``/``cancelled``)
 #: — the guard for the terminal event.
-SUITE_RUN_TERMINAL_STATES: frozenset[str] = frozenset(
-    state.value for state in SuiteRunState if state not in (SuiteRunState.PENDING, SuiteRunState.RUNNING)
-)
+SUITE_RUN_TERMINAL_STATES: frozenset[str] = frozenset(state.value for state in SuiteRunState if state not in (SuiteRunState.PENDING, SuiteRunState.RUNNING))
 
 
 def _system_payload(

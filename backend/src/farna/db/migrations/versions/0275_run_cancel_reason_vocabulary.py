@@ -66,12 +66,8 @@ _DROP_STALE_CHECK = (
 #    rejected by the stale CHECK (the new value is exactly what it forbids),
 #    and a re-added new-vocabulary CHECK would reject the old values — hence
 #    sandwiched between steps 1 and 3.
-_RECONCILE_EXPIRED = (
-    "UPDATE public.runs SET cancel_reason='hitl_review_expired' WHERE cancel_reason='hitl_gate_expired';"
-)
-_RECONCILE_MISSING = (
-    "UPDATE public.runs SET cancel_reason='hitl_review_missing' WHERE cancel_reason='hitl_gate_missing';"
-)
+_RECONCILE_EXPIRED = "UPDATE public.runs SET cancel_reason='hitl_review_expired' WHERE cancel_reason='hitl_gate_expired';"
+_RECONCILE_MISSING = "UPDATE public.runs SET cancel_reason='hitl_review_missing' WHERE cancel_reason='hitl_gate_missing';"
 
 # 3. Existence-gated CHECK over the current vocabulary (NULL allowed), added
 #    NOT VALID (instant) then VALIDATEd in a separate guarded step — the same
@@ -85,12 +81,7 @@ _ADD_CHECK_NOT_VALID = (
     "cancel_reason IN ('user_requested', 'agent_requested', 'hitl_review_expired', 'hitl_review_missing')"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_cancel_reason' "
-    "AND conrelid='public.runs'::regclass AND NOT convalidated) "
-    "THEN ALTER TABLE public.runs VALIDATE CONSTRAINT "
-    "ck_runs_cancel_reason; END IF; END $$;"
-)
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_cancel_reason' AND conrelid='public.runs'::regclass AND NOT convalidated) THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_cancel_reason; END IF; END $$;"
 
 
 def upgrade() -> None:

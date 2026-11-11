@@ -25,9 +25,7 @@ class WebhookDedupHash(OrgScoped):
 class WebhookPayload(OrgScoped):
     __tablename__ = "webhook_payloads"
 
-    trigger_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=True, index=True
-    )
+    trigger_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=True, index=True)
     raw_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

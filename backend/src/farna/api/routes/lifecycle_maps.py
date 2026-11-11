@@ -952,11 +952,7 @@ async def update_lifecycle_map_endpoint(
 @router.delete(
     "/{lifecycle_map_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            audited("lifecycle_map_deleted", "lifecycle_map", principal_dep=get_current_tenant_user, fail_closed=True)
-        )
-    ],
+    dependencies=[Depends(audited("lifecycle_map_deleted", "lifecycle_map", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT)
 async def delete_lifecycle_map_endpoint(
@@ -1165,9 +1161,7 @@ async def list_lifecycle_map_versions_endpoint(
 @router.post(
     "/{lifecycle_map_id}/versions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("lifecycle_map_version_saved", "lifecycle_map_version", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("lifecycle_map_version_saved", "lifecycle_map_version", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
 async def save_lifecycle_map_version_endpoint(
@@ -1245,11 +1239,7 @@ async def save_lifecycle_map_version_endpoint(
 
 @router.put(
     "/{lifecycle_map_id}/versions/{version_id}",
-    dependencies=[
-        Depends(
-            audited("lifecycle_map_version_updated", "lifecycle_map_version", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("lifecycle_map_version_updated", "lifecycle_map_version", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
 async def update_lifecycle_map_version_endpoint(
@@ -1372,9 +1362,7 @@ async def get_lifecycle_map_version_endpoint(
 
 @router.patch(
     "/{lifecycle_map_id}/versions/{version_id}/stages/{stage_id}/graduate",
-    dependencies=[
-        Depends(audited("lifecycle_map_stage_graduated", "lifecycle_map_stage", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("lifecycle_map_stage_graduated", "lifecycle_map_stage", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
 async def graduate_lifecycle_map_stage_endpoint(

@@ -38,15 +38,11 @@ class OrgDailyRunCount(OrgScoped):
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    total_spend_usd: Mapped[Decimal] = mapped_column(
-        Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
-    )
+    total_spend_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0")
     # Daily-ledger clamp marker — set by check_and_record_spend when the
     # started-at-day row is stored at the column ceiling. Migration 0066.
     clamped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # Refused amount for the key, set at refusal; survives the run purge.
     # Migration 0066.
-    refused_spend_usd: Mapped[Decimal] = mapped_column(
-        Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
-    )
+    refused_spend_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0")
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])

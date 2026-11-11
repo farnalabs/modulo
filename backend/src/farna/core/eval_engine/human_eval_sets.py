@@ -83,11 +83,7 @@ def register_human_eval_set(eval_set: HumanEvalSet) -> None:
     """Register a human-authored eval set so it can be selected by name."""
     if eval_set.name in HUMAN_EVAL_SETS:
         existing = HUMAN_EVAL_SETS[eval_set.name]
-        raise ValueError(
-            f"Human eval set {eval_set.name!r} already registered "
-            f"(existing version {existing.version!r}); register a distinct name "
-            f"or a new version under a new name to avoid clobbering."
-        )
+        raise ValueError(f"Human eval set {eval_set.name!r} already registered (existing version {existing.version!r}); register a distinct name or a new version under a new name to avoid clobbering.")
     HUMAN_EVAL_SETS[eval_set.name] = eval_set
 
 
@@ -222,12 +218,7 @@ def _demo_no_hallucinated_keys(output: dict[str, Any], config: dict[str, Any]) -
 DEMO_CLASSIFICATION_V1 = HumanEvalSet(
     name="demo_classification",
     version="v1",
-    description=(
-        "Human-authored correctness checks for a support-message classification "
-        "agent that emits JSON with category/priority. Encodes semantic "
-        "invariants (enum membership + business consistency) that shape-only "
-        "checks (regex/json_schema) and injection-prone model_judge cannot verify."
-    ),
+    description=("Human-authored correctness checks for a support-message classification agent that emits JSON with category/priority. Encodes semantic invariants (enum membership + business consistency) that shape-only checks (regex/json_schema) and injection-prone model_judge cannot verify."),
     assertions=[
         HumanAssertion("valid_json", _demo_parse_json, "Output field parses as a JSON object."),
         HumanAssertion("required_keys", _demo_required_keys, "Output has category + priority keys."),

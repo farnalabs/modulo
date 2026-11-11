@@ -96,11 +96,7 @@ _ADD_NEW = (
 # list under SHARE UPDATE EXCLUSIVE. The new list is a strict superset of
 # any prior list, so pre-existing rows can never violate it. Guarded on the
 # NOT VALID marker so an already-validated constraint is not re-scanned.
-_VALIDATE_NEW = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_status' "
-    "AND pg_get_constraintdef(oid) LIKE '%NOT VALID') "
-    "THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_status; END IF; END $$;"
-)
+_VALIDATE_NEW = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_status' AND pg_get_constraintdef(oid) LIKE '%NOT VALID') THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_status; END IF; END $$;"
 # The pre-0177 list (the live 14-status set) for the downgrade path. The same
 # NOT-VALID-tolerant normalisation (qa F8): the live constraint at downgrade
 # time may still carry ``NOT VALID`` (upgrade validated but a residual marker

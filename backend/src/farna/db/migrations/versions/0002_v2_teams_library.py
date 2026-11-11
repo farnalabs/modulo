@@ -71,12 +71,8 @@ def _create_tables() -> None:
         sa.Column("daily_spend_limit", sa.Numeric(precision=14, scale=6), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -90,12 +86,8 @@ def _create_tables() -> None:
         sa.Column("role", sa.String(length=20), nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.CheckConstraint("role IN ('viewer', 'runner', 'operator')", name="ck_team_memberships_role"),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
@@ -136,31 +128,21 @@ def _create_tables() -> None:
         sa.Column("tier", sa.String(length=20), server_default="native", nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.CheckConstraint(
-            "source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
         sa.CheckConstraint(
             "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",
             name="ck_library_primitives_type",
         ),
         sa.CheckConstraint("visibility IN ('org', 'team', 'community')", name="ck_library_primitives_visibility"),
-        sa.CheckConstraint(
-            "visibility IN ('org', 'community') OR owner_team_id IS NOT NULL", name="ck_library_primitives_team_owner"
-        ),
+        sa.CheckConstraint("visibility IN ('org', 'community') OR owner_team_id IS NOT NULL", name="ck_library_primitives_team_owner"),
         sa.CheckConstraint("tier IN ('native', 'preview', 'in_dev')", name="ck_library_primitives_tier"),
         sa.CheckConstraint(
             "contribution_status IN ('draft', 'review_queue', 'published')",
             name="ck_library_primitives_contribution_status",
         ),
-        sa.CheckConstraint(
-            "average_rating IS NULL OR average_rating BETWEEN 1 AND 5", name="ck_library_primitives_rating"
-        ),
+        sa.CheckConstraint("average_rating IS NULL OR average_rating BETWEEN 1 AND 5", name="ck_library_primitives_rating"),
         sa.CheckConstraint(
             "(source = 'local' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'modulo' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'community' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'registry' AND owner_team_id IS NULL AND visibility = 'org' AND forked_from IS NULL AND source_url IS NOT NULL AND checksum IS NOT NULL AND ed25519_signature IS NOT NULL AND verified IS NOT NULL AND download_count IS NOT NULL AND average_rating IS NOT NULL AND review_count IS NOT NULL)",
             name="ck_library_primitives_source_fields",
@@ -173,9 +155,7 @@ def _create_tables() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organisation_id", "source", "slug", "version", name="uq_library_primitive_version"),
     )
-    op.create_index(
-        op.f("ix_library_primitives_organisation_id"), "library_primitives", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_library_primitives_organisation_id"), "library_primitives", ["organisation_id"], unique=False)
     op.create_table(
         "primitive_ratings",
         sa.Column("primitive_id", sa.Uuid(), nullable=False),
@@ -184,21 +164,15 @@ def _create_tables() -> None:
         sa.Column("comment", sa.Text(), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["primitive_id"], ["library_primitives.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organisation_id", "primitive_id", "account_id", name="uq_ratings_per_user"),
     )
-    op.create_index(
-        op.f("ix_primitive_ratings_organisation_id"), "primitive_ratings", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_primitive_ratings_organisation_id"), "primitive_ratings", ["organisation_id"], unique=False)
     op.create_index(op.f("ix_primitive_ratings_primitive_id"), "primitive_ratings", ["primitive_id"], unique=False)
     op.create_table(
         "primitive_abuse_reports",
@@ -211,12 +185,8 @@ def _create_tables() -> None:
         sa.Column("reviewer_account_id", sa.Uuid(), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.CheckConstraint("status IN ('pending', 'reviewed', 'dismissed')", name="ck_abuse_reports_status"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["primitive_id"], ["library_primitives.id"], ondelete="CASCADE"),
@@ -225,12 +195,8 @@ def _create_tables() -> None:
         sa.ForeignKeyConstraint(["reviewer_account_id"], ["accounts.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_primitive_abuse_reports_organisation_id"), "primitive_abuse_reports", ["organisation_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_primitive_abuse_reports_primitive_id"), "primitive_abuse_reports", ["primitive_id"], unique=False
-    )
+    op.create_index(op.f("ix_primitive_abuse_reports_organisation_id"), "primitive_abuse_reports", ["organisation_id"], unique=False)
+    op.create_index(op.f("ix_primitive_abuse_reports_primitive_id"), "primitive_abuse_reports", ["primitive_id"], unique=False)
     op.create_table(
         "schemas",
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -241,12 +207,8 @@ def _create_tables() -> None:
         sa.Column("deprecated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -264,19 +226,13 @@ def _create_tables() -> None:
         sa.Column("account_id", sa.Uuid(), nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["schema_id"], ["schemas.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "schema_id", "version", "organisation_id", name="uq_schema_versions_schema_version_organisation"
-        ),
+        sa.UniqueConstraint("schema_id", "version", "organisation_id", name="uq_schema_versions_schema_version_organisation"),
     )
     op.create_index(op.f("ix_schema_versions_organisation_id"), "schema_versions", ["organisation_id"], unique=False)
     op.create_index(op.f("ix_schema_versions_schema_id"), "schema_versions", ["schema_id"], unique=False)
@@ -347,40 +303,14 @@ def _create_trigger_functions() -> None:
 
 def _create_triggers() -> None:
     for child_table, child_column, parent_table in _TENANT_REFS:
-        op.execute(
-            sa.text(
-                f'CREATE TRIGGER "trg_{child_table}_{child_column}_tenant" '
-                f'BEFORE INSERT OR UPDATE OF "{child_column}", "organisation_id" ON "{child_table}" '
-                f"FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation('{parent_table}', '{child_column}')"
-            )
-        )
-    op.execute(
-        sa.text(
-            "CREATE TRIGGER trg_library_primitives_fork_provenance "
-            "BEFORE INSERT OR UPDATE OF forked_from ON library_primitives "
-            "FOR EACH ROW EXECUTE FUNCTION enforce_library_fork_provenance()"
-        )
-    )
-    op.execute(
-        sa.text(
-            "CREATE TRIGGER trg_team_privilege_cap "
-            "BEFORE INSERT OR UPDATE ON team_memberships "
-            "FOR EACH ROW EXECUTE FUNCTION check_team_privilege_cap()"
-        )
-    )
+        op.execute(sa.text(f'CREATE TRIGGER "trg_{child_table}_{child_column}_tenant" BEFORE INSERT OR UPDATE OF "{child_column}", "organisation_id" ON "{child_table}" FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation(\'{parent_table}\', \'{child_column}\')'))
+    op.execute(sa.text("CREATE TRIGGER trg_library_primitives_fork_provenance BEFORE INSERT OR UPDATE OF forked_from ON library_primitives FOR EACH ROW EXECUTE FUNCTION enforce_library_fork_provenance()"))
+    op.execute(sa.text("CREATE TRIGGER trg_team_privilege_cap BEFORE INSERT OR UPDATE ON team_memberships FOR EACH ROW EXECUTE FUNCTION check_team_privilege_cap()"))
 
 
 def _enable_rls() -> None:
     strict = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
-    team = (
-        "(visibility = 'org' OR visibility IS NULL) "
-        "OR (owner_team_id IS NULL) "
-        "OR (owner_team_id IN ("
-        "SELECT team_id FROM team_memberships "
-        "WHERE account_id = nullif(current_setting('app.user_id', true), '')::uuid"
-        ")) "
-        "OR (nullif(current_setting('app.org_role', true), '') = 'admin')"
-    )
+    team = "(visibility = 'org' OR visibility IS NULL) OR (owner_team_id IS NULL) OR (owner_team_id IN (SELECT team_id FROM team_memberships WHERE account_id = nullif(current_setting('app.user_id', true), '')::uuid)) OR (nullif(current_setting('app.org_role', true), '') = 'admin')"
     for table in _STRICT_RLS:
         op.execute(sa.text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
         op.execute(sa.text(f'CREATE POLICY rls_org_isolation ON "{table}" USING ({strict})'))

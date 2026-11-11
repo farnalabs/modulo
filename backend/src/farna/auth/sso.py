@@ -346,9 +346,7 @@ async def jit_provision_user(
         # configure allowed_domains/auto_provision against. Kept as-is with a
         # loud log until env-var providers are migrated to DB rows.
         _log.warning("sso.jit_policy_not_applicable", extra={"auth_provider": auth_provider})
-        account, org_role, _invitation_used = await _provision_membership(
-            session, settings, email, display_name, auth_provider, sso_subject, org_id
-        )
+        account, org_role, _invitation_used = await _provision_membership(session, settings, email, display_name, auth_provider, sso_subject, org_id)
         return account, org_id, org_role
 
     # Pre-provision eligibility check: NOTHING is written below unless the
@@ -648,9 +646,7 @@ async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str, o
     return result.scalar_one_or_none()
 
 
-async def issue_sso_tokens(
-    account: Account, org_id: uuid.UUID, org_role: str, session: AsyncSession, settings: Settings
-) -> dict[str, str]:
+async def issue_sso_tokens(account: Account, org_id: uuid.UUID, org_role: str, session: AsyncSession, settings: Settings) -> dict[str, str]:
     """Issue access + refresh tokens for an SSO-authenticated account."""
     await update_last_login(session, account.id)
     family = await create_family(session, account.id, org_id)
@@ -835,9 +831,7 @@ async def oidc_get_authorize_url(
     the returned ID token) and a PKCE ``code_verifier`` (whose S256 challenge is
     sent to the IdP and whose verifier is presented at the token exchange).
     """
-    client_id, _client_secret, discovery_url, scopes, _db_provider = await _resolve_oidc_provider(
-        provider_id, system_session, app_session, settings
-    )
+    client_id, _client_secret, discovery_url, scopes, _db_provider = await _resolve_oidc_provider(provider_id, system_session, app_session, settings)
 
     if client_id is None:
         raise ValueError(f"OIDC provider '{provider_id}' not configured")
@@ -891,9 +885,7 @@ def _oidc_provider_id_from_state(state: str, settings: Settings) -> str:
     """Verify the signed state and return the provider id embedded in it."""
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
-        _log.warning(
-            "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
-        )
+        _log.warning("sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state})
         raise ValueError("Invalid state parameter — possible CSRF")
     return state_data.split(":", 1)[0] if ":" in state_data else state_data
 
@@ -905,9 +897,7 @@ async def _resolve_oidc_client_config(
     settings: Settings,
 ) -> tuple[str, str, str, SsoProvider | None]:
     """Resolve and validate the provider's client config for the callback leg."""
-    client_id, client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider(
-        provider_id, system_session, app_session, settings
-    )
+    client_id, client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider(provider_id, system_session, app_session, settings)
     if client_id is None:
         raise ValueError(f"OIDC provider '{provider_id}' not found")
     if not client_id or not client_secret or not discovery_url:
@@ -976,10 +966,7 @@ async def _verify_oidc_id_token(
     jwks_uri = disc.get("jwks_uri")
     issuer = disc.get("issuer")
     if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
-        raise ValueError(
-            "OIDC provider discovery document is missing jwks_uri or issuer — "
-            "cannot verify ID token signature. Check provider configuration."
-        )
+        raise ValueError("OIDC provider discovery document is missing jwks_uri or issuer — cannot verify ID token signature. Check provider configuration.")
     _enforce_oidc_endpoint_host(jwks_uri, discovery_url, issuer, "jwks")
 
     try:
@@ -1070,9 +1057,7 @@ async def oidc_process_callback(
     Both are REQUIRED — a callback that cannot present them must not exchange.
     """
     provider_id = _oidc_provider_id_from_state(state, settings)
-    client_id, client_secret, discovery_url, db_provider = await _resolve_oidc_client_config(
-        provider_id, system_session, app_session, settings
-    )
+    client_id, client_secret, discovery_url, db_provider = await _resolve_oidc_client_config(provider_id, system_session, app_session, settings)
     disc = await _fetch_oidc_discovery_document(discovery_url, db_provider)
     token_endpoint = _oidc_token_endpoint(disc, discovery_url)
     token_data = await _exchange_oidc_code(
@@ -1090,9 +1075,7 @@ async def oidc_process_callback(
         raise RuntimeError("No app session available for OIDC JIT provisioning")
 
     default_org_id = await _scope_app_session_org(app_session, db_provider)
-    account, org_id, org_role = await _oidc_jit_provision(
-        app_session, settings, email, name, sso_subject, default_org_id, db_provider, claims
-    )
+    account, org_id, org_role = await _oidc_jit_provision(app_session, settings, email, name, sso_subject, default_org_id, db_provider, claims)
     await _apply_oidc_group_mappings(app_session, claims, account, org_id, client_id)
 
     return await issue_sso_tokens(account, org_id, org_role, app_session, settings)
@@ -1115,11 +1098,7 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         if isinstance(entry, dict) and not any(key not in entry for key in required_fields):
             valid.append(entry)
         else:
-            safe_entry = (
-                {key: value for key, value in entry.items() if key != "client_secret"}
-                if isinstance(entry, dict)
-                else {"invalid_type": type(entry).__name__}
-            )
+            safe_entry = {key: value for key, value in entry.items() if key != "client_secret"} if isinstance(entry, dict) else {"invalid_type": type(entry).__name__}
             _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(safe_entry)})
     return valid
 
@@ -1456,9 +1435,7 @@ async def saml_get_auth_url(
     compatibility. Provider resolution uses the system session (``modulo_system``
     role, instance-global) so multi-org deployments resolve the correct IdP.
     """
-    idp_metadata, entity_id, sp_key, sp_cert, _db_saml = await _resolve_saml_config(
-        system_session, app_session, settings, provider_id=provider_id
-    )
+    idp_metadata, entity_id, sp_key, sp_cert, _db_saml = await _resolve_saml_config(system_session, app_session, settings, provider_id=provider_id)
     handler = ModuloSamlAuth(
         entity_id=entity_id,
         acs_url=acs_url,
@@ -1559,12 +1536,7 @@ def _saml_identity(name_id: str, attrs: dict[str, str], idp_entity_id: str) -> t
     email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
     if not email:
         raise ValueError("SAML provider did not return an email attribute — cannot provision account")
-    display_name = (
-        attrs.get("displayName", "")
-        or attrs.get("cn", "")
-        or attrs.get("firstName", "")
-        or (email.split("@")[0] if "@" in email else email)
-    )
+    display_name = attrs.get("displayName", "") or attrs.get("cn", "") or attrs.get("firstName", "") or (email.split("@")[0] if "@" in email else email)
     sso_subject = f"saml:{idp_entity_id}:{name_id}"
     return email, display_name, sso_subject
 
@@ -1667,9 +1639,7 @@ async def saml_process_response(
     (per-runtime AuthnRequest store) is tracked as a future defence-in-depth
     item, not required for correctness here.
     """
-    idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(
-        system_session, app_session, settings, provider_id=provider_id
-    )
+    idp_metadata, entity_id, sp_key, sp_cert, db_saml = await _resolve_saml_config(system_session, app_session, settings, provider_id=provider_id)
     idp_entity_id = _saml_idp_entity_id(idp_metadata)
     acs_url = _saml_acs_url(settings, provider_id)
     _validate_saml_response_destination(saml_response, acs_url)
@@ -1688,9 +1658,7 @@ async def saml_process_response(
         raise RuntimeError("No app session available for SAML JIT provisioning")
 
     default_org_id = await _scope_app_session_org(app_session, db_saml)
-    account, org_id, org_role = await _saml_jit_provision(
-        app_session, settings, email, display_name, sso_subject, default_org_id, db_saml
-    )
+    account, org_id, org_role = await _saml_jit_provision(app_session, settings, email, display_name, sso_subject, default_org_id, db_saml)
     await _apply_saml_group_mappings(app_session, _saml_groups(attrs), account, org_id, idp_entity_id)
     return await _issue_saml_tokens(account, org_id, org_role, app_session, settings)
 
@@ -1732,9 +1700,7 @@ def _saml_parse_idp_metadata(
     if sso_descriptor is None:
         raise ValueError("No IDPSSODescriptor in IdP metadata")
 
-    sso_service = sso_descriptor.find(
-        f"{{{md_ns}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']"
-    )
+    sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']")
     if sso_service is None:
         sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService")
     sso_url = sso_service.get("Location", "") if sso_service is not None else ""

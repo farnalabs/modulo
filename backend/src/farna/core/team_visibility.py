@@ -145,14 +145,7 @@ def connector_team_mismatch_detail(mismatches: list[ConnectorTeamMismatch]) -> s
     org-visibility connector never mismatches, so it is never built into a
     :class:`ConnectorTeamMismatch`).
     """
-    parts = [
-        (
-            f"connector '{m.connector_name}' (id={m.connector_id}) is team-private "
-            f"(owner team {m.connector_owner_team_id}) but pipeline is owned by team "
-            f"{m.pipeline_owner_team_id}"
-        )
-        for m in mismatches
-    ]
+    parts = [(f"connector '{m.connector_name}' (id={m.connector_id}) is team-private (owner team {m.connector_owner_team_id}) but pipeline is owned by team {m.pipeline_owner_team_id}") for m in mismatches]
     return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
@@ -181,9 +174,7 @@ class ConnectorBindingMissingError(Exception):
 def connector_binding_missing_detail(missing: Sequence[tuple[uuid.UUID, str | None]]) -> str:
     """Build the named ``connector_team_mismatch`` detail for unresolvable ids."""
     parts = [
-        f"connector id {connector_id} (node {node_id}) does not resolve to a connector in this "
-        f"organisation - the binding cannot be team-validated, so it is refused; fix or remove the "
-        f"binding (the connector may have been deleted, or belongs to another organisation)"
+        f"connector id {connector_id} (node {node_id}) does not resolve to a connector in this organisation - the binding cannot be team-validated, so it is refused; fix or remove the binding (the connector may have been deleted, or belongs to another organisation)"
         for connector_id, node_id in missing
     ]
     return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
@@ -290,14 +281,7 @@ def model_backend_team_mismatch_detail(mismatches: list[ModelBackendTeamMismatch
     The message always starts with the machine-readable named error
     ``model_backend_team_mismatch`` so clients can branch on it.
     """
-    parts = [
-        (
-            f"model backend '{m.model_backend_name}' (id={m.model_backend_id}) is team-private "
-            f"(owner team {m.model_backend_owner_team_id}) but pipeline is owned by team "
-            f"{m.pipeline_owner_team_id}"
-        )
-        for m in mismatches
-    ]
+    parts = [(f"model backend '{m.model_backend_name}' (id={m.model_backend_id}) is team-private (owner team {m.model_backend_owner_team_id}) but pipeline is owned by team {m.pipeline_owner_team_id}") for m in mismatches]
     return f"{MODEL_BACKEND_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
@@ -440,9 +424,7 @@ async def find_connector_team_mismatches(
     return []
 
 
-def _build_model_backend_mismatch(
-    backend: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None
-) -> ModelBackendTeamMismatch:
+def _build_model_backend_mismatch(backend: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None) -> ModelBackendTeamMismatch:
     return ModelBackendTeamMismatch(
         model_backend_id=backend.id,
         model_backend_name=backend.name,
@@ -452,9 +434,7 @@ def _build_model_backend_mismatch(
     )
 
 
-def _build_connector_mismatch(
-    instance: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None
-) -> ConnectorTeamMismatch:
+def _build_connector_mismatch(instance: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None) -> ConnectorTeamMismatch:
     return ConnectorTeamMismatch(
         connector_id=instance.id,
         connector_name=instance.name,

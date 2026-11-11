@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-os.environ.setdefault("MODULO_DB", "sqlite")
+os.environ.setdefault("FARNA_CONTROL_MODULO_DB", "sqlite")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
 # FAR-2200 withdrew Lifecycle Maps from Alpha-facing surfaces: the routes and
@@ -23,7 +23,7 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 # ``MODULO_DEV_MODE`` plus an operator principal. The BDD suite exercises that
 # retained internal surface (the ``client`` fixture is an org admin, which
 # satisfies the operator role), so it runs with developer mode enabled.
-os.environ.setdefault("MODULO_DEV_MODE", "true")
+os.environ.setdefault("FARNA_CONTROL_MODULO_DEV_MODE", "true")
 
 from farna.auth.jwt import AuthenticatedPrincipal
 from farna.settings import Settings
@@ -76,8 +76,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     config.addinivalue_line(
         "markers",
-        "real_verify_identity: run the real farna.auth.dependencies._verify_identity "
-        "instead of the BDD-scope AsyncMock shim",
+        "real_verify_identity: run the real farna.auth.dependencies._verify_identity instead of the BDD-scope AsyncMock shim",
     )
 
 
@@ -835,11 +834,7 @@ def _bdd_get_verify_chain_broken(client, request) -> None:
                 "first_gap_index": 2,
                 "first_tampered_id": "evt-3",
                 "chain_head_match": None,
-                "detail": (
-                    "Audit chain break at event 2 (id evt-3): stored previous_hash (tampered-hash) "
-                    "does not match the recomputed hash of the prior event (expected-hash). "
-                    "The event or one before it has been tampered with."
-                ),
+                "detail": ("Audit chain break at event 2 (id evt-3): stored previous_hash (tampered-hash) does not match the recomputed hash of the prior event (expected-hash). The event or one before it has been tampered with."),
             },
         ),
         patch("farna.api.routes.audit.set_rls_org"),
@@ -1107,9 +1102,7 @@ def _shared_user_exists_with_role(name: str, role: str, request) -> None:
 def _shared_user_member(name: str, team: str, request, role: str = "viewer") -> None:
     state = _shared_state(request)
     state["teams"].setdefault(team, _mock_team(team))
-    state["users"].setdefault(
-        name, {"id": uuid.uuid5(USER_ID, name), "name": name, "org_role": "viewer", "team_role": None}
-    )
+    state["users"].setdefault(name, {"id": uuid.uuid5(USER_ID, name), "name": name, "org_role": "viewer", "team_role": None})
     state["memberships"][(name, team)] = role
 
 
@@ -1389,9 +1382,7 @@ def _shared_create_team(name: str, description: str, request, mock_session) -> N
         _shared_store_resp(request, _mock_resp(422, {"detail": [{"msg": "name must not be empty"}]}))
         return
     if name in state["teams"]:
-        _shared_store_resp(
-            request, _mock_resp(409, {"detail": "A team with this name already exists in your organisation"})
-        )
+        _shared_store_resp(request, _mock_resp(409, {"detail": "A team with this name already exists in your organisation"}))
         return
 
     team = _mock_team(name=name, description=description)
@@ -1470,12 +1461,7 @@ def _shared_delete_team(team_name: str, request, mock_session) -> None:
             resp = client.delete(f"/api/v1/teams/{uuid.uuid4()}")
         _shared_store_resp(request, resp)
         return
-    has_resources = (
-        state.get("team_has_resources", False)
-        or bool(state["pipelines"])
-        or bool(state["connectors"])
-        or bool(state["model_backends"])
-    )
+    has_resources = state.get("team_has_resources", False) or bool(state["pipelines"]) or bool(state["connectors"]) or bool(state["model_backends"])
     if has_resources:
         mock_session.execute.return_value.scalar = MagicMock(return_value=1)
     with (
@@ -1820,9 +1806,7 @@ def _shared_revoke_session(user: str, request) -> None:
 @when(parsers.parse('I change user "{user}"\'s role from "{old_role}" to "{new_role}"'))
 def _shared_change_user_role(user: str, old_role: str, new_role: str, request) -> None:
     state = _shared_state(request)
-    state["users"].setdefault(
-        user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None}
-    )
+    state["users"].setdefault(user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None})
     state["users"][user]["org_role"] = new_role
     _shared_store_resp(request, _mock_resp(200, {"status": "updated"}))
 
@@ -1851,9 +1835,7 @@ def _shared_still_holds_jwt(user: str, request) -> None:
 @given(parsers.parse('user "{user}" holds a valid JWT'))
 def _shared_user_holds_jwt(user: str, request) -> None:
     state = _shared_state(request)
-    state["users"].setdefault(
-        user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None}
-    )
+    state["users"].setdefault(user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None})
 
 
 @when(parsers.parse('user "{user}" refreshes their JWT'))

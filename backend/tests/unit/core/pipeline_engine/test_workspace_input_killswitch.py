@@ -301,7 +301,7 @@ def _resolved_inputs() -> list[ResolvedInput]:
 @pytest.fixture(autouse=True)
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as the bindings tests)."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-e2b-key")
 
 
 class TestWorkspaceInputsKillswitchDispatch:
@@ -321,7 +321,7 @@ class TestWorkspaceInputsKillswitchDispatch:
         # set MODULO_WORKSPACE_INPUTS_ENABLED=true and left a cached True in the
         # lru_cache. Pin the env var and clear the cache so the precondition is
         # always read fresh.
-        monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "false")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_INPUTS_ENABLED", "false")
         get_settings.cache_clear()
 
         # Default is OFF; assert the precondition explicitly so the test is

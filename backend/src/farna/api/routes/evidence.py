@@ -81,9 +81,7 @@ _MSG_EVIDENCE_NOT_FOUND = "Evidence row not found"
 _EVIDENCE_LIST_LIMIT = 500
 
 #: Explicit severity ordering used when a run has decisions with several actions.
-_RISK_ACTIONS: tuple[str, ...] = tuple(
-    action for action in ("block", "escalate", "warn", "continue") if action in RESOLVED_ACTION_VALUES
-)
+_RISK_ACTIONS: tuple[str, ...] = tuple(action for action in ("block", "escalate", "warn", "continue") if action in RESOLVED_ACTION_VALUES)
 #: Canonical model vocabulary validates the action facet and row actions.
 _VALID_ACTIONS = frozenset(RESOLVED_ACTION_VALUES)
 _ACTION_SEVERITY = {action: rank for rank, action in enumerate(_RISK_ACTIONS)}
@@ -227,11 +225,7 @@ async def _load_redaction_rules(
     organisation_id: uuid.UUID,
 ) -> list[EvidenceRedactionRule]:
     """List the org's live redaction rules, deterministically ordered."""
-    result = await session.execute(
-        select(EvidenceRedactionRule)
-        .where(EvidenceRedactionRule.organisation_id == organisation_id)
-        .order_by(EvidenceRedactionRule.key_pattern.asc(), EvidenceRedactionRule.role.asc())
-    )
+    result = await session.execute(select(EvidenceRedactionRule).where(EvidenceRedactionRule.organisation_id == organisation_id).order_by(EvidenceRedactionRule.key_pattern.asc(), EvidenceRedactionRule.role.asc()))
     return list(result.scalars().all())
 
 
@@ -382,14 +376,10 @@ async def upsert_redaction_rule_endpoint(
 @router.get("/evidence/risk-assessment")
 @handle_db_errors(_CODE_RISK_ASSESSMENT)
 async def risk_assessment_endpoint(
-    key_prefix: str | None = Query(
-        default=None, description="Optional evidence key prefix filter (e.g. 'risk.' or 'assessment.')"
-    ),
+    key_prefix: str | None = Query(default=None, description="Optional evidence key prefix filter (e.g. 'risk.' or 'assessment.')"),
     pipeline_id: uuid.UUID | None = Query(default=None, description="Optional pipeline id filter"),
     days: int = Query(default=7, ge=1, le=365, description="Rolling time window in days (default 7)"),
-    action: str | None = Query(
-        default=None, description="Optional gate action filter (continue, warn, block, escalate)"
-    ),
+    action: str | None = Query(default=None, description="Optional gate action filter (continue, warn, block, escalate)"),
     limit: int = Query(default=100, ge=1, le=500, description="Maximum rows to return (default 100)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVIDENCE_READ),

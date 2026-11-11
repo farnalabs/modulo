@@ -47,10 +47,7 @@ def _is_postgres(bind) -> bool:
 
 def _role_exists(bind, role: str) -> bool:
     """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def upgrade() -> None:
@@ -65,27 +62,12 @@ def upgrade() -> None:
     op.execute(sa.text('ALTER TABLE public."run_evidence" ADD COLUMN IF NOT EXISTS organisation_id uuid'))
 
     # 2. Backfill every existing row from its parent run's organisation.
-    op.execute(
-        sa.text(
-            "UPDATE public.run_evidence re "
-            "SET organisation_id = r.organisation_id "
-            "FROM public.runs r "
-            "WHERE re.run_id = r.id AND re.organisation_id IS NULL"
-        )
-    )
+    op.execute(sa.text("UPDATE public.run_evidence re SET organisation_id = r.organisation_id FROM public.runs r WHERE re.run_id = r.id AND re.organisation_id IS NULL"))
 
     # 3. Now enforce NOT NULL + FK + index.
     op.execute(sa.text('ALTER TABLE public."run_evidence" ALTER COLUMN organisation_id SET NOT NULL'))
-    op.execute(
-        sa.text(
-            'ALTER TABLE public."run_evidence" '
-            "ADD CONSTRAINT fk_run_evidence_organisation_id "
-            "FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE"
-        )
-    )
-    op.execute(
-        sa.text('CREATE INDEX IF NOT EXISTS ix_run_evidence_organisation_id ON public."run_evidence" (organisation_id)')
-    )
+    op.execute(sa.text('ALTER TABLE public."run_evidence" ADD CONSTRAINT fk_run_evidence_organisation_id FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE'))
+    op.execute(sa.text('CREATE INDEX IF NOT EXISTS ix_run_evidence_organisation_id ON public."run_evidence" (organisation_id)'))
 
     # 4. Confine with RLS (FORCE so the owner role is also subject to it).
     op.execute(sa.text('ALTER TABLE public."run_evidence" ENABLE ROW LEVEL SECURITY'))

@@ -94,10 +94,7 @@ async def _create_org(
     created_at = datetime.now(UTC) - timedelta(seconds=created_at_offset_seconds)
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, created_at) "
-                "VALUES (:id, :name, :slug, '{}'::json, :created_at)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, created_at) VALUES (:id, :name, :slug, '{}'::json, :created_at)"),
             {"id": str(org_id), "name": f"Org {label}", "slug": slug, "created_at": created_at},
         )
     return org_id, slug
@@ -160,7 +157,7 @@ async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
 async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
     """Engine on the real ``modulo_system`` role (BYPASSRLS)."""
     engine = create_async_engine(
-        os.environ["MODULO_SYSTEM_DATABASE_URL"],
+        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"],
         echo=False,
         poolclass=NullPool,
     )
@@ -244,9 +241,7 @@ class TestSystemLegResolution:
         never a ``RuntimeError``→500 (the FAR-1058 anti-enumeration defect
         class)."""
         async with app_session_factory() as app_session:
-            resolved = await _resolve_oidc_provider(
-                f"no-such-{uuid.uuid4().hex[:8]}", system_session, app_session, _settings()
-            )
+            resolved = await _resolve_oidc_provider(f"no-such-{uuid.uuid4().hex[:8]}", system_session, app_session, _settings())
             assert resolved == (None, None, None, None, None)
             assert not app_session.in_transaction()
 

@@ -654,9 +654,7 @@ async def check_pipeline_circuit_breaker(
     # principal) — the execution hatch lets it read a team-private pipeline's
     # breaker state.
     await set_rls_execution_context(session)
-    pipeline = (
-        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
-    ).scalar_one_or_none()
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))).scalar_one_or_none()
     if pipeline is None:
         return True, None
     if pipeline.circuit_breaker_tripped:
@@ -716,11 +714,7 @@ async def trip_pipeline_circuit_breaker(
     """
     if pipeline is None:
         await set_rls_execution_context(session)
-        pipeline = (
-            await session.execute(
-                select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
-            )
-        ).scalar_one_or_none()
+        pipeline = (await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))).scalar_one_or_none()
         if pipeline is None:
             return False
     if pipeline.circuit_breaker_tripped:
@@ -768,9 +762,7 @@ async def reset_pipeline_circuit_breaker(
     when the pipeline had no active triggers) when the pipeline exists and the
     breaker was reset; ``None`` when no such pipeline exists in the org.
     """
-    pipeline = (
-        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
-    ).scalar_one_or_none()
+    pipeline = (await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))).scalar_one_or_none()
     if pipeline is None:
         return None
     pipeline.circuit_breaker_tripped = False

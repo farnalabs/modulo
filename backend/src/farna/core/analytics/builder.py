@@ -380,8 +380,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
                     ),
                     sa.func.extract(
                         "epoch",
-                        sa.func.coalesce(RunDailyFact.dispatch_phase_entered_at, RunDailyFact.started_at)
-                        - RunDailyFact.created_at,
+                        sa.func.coalesce(RunDailyFact.dispatch_phase_entered_at, RunDailyFact.started_at) - RunDailyFact.created_at,
                     )
                     * 1000.0,
                 ),
@@ -396,9 +395,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         # so this is the only analytics signal for a re-dispatched firing.
         # coalesce: the fact column is NULL for pre-FAR-1463 rows, and SUM over
         # an all-NULL group is NULL — an unknown/empty bucket must read 0.
-        sa.func.coalesce(sa.func.sum(RunDailyFact.node_deadline_watchdog_fired_count), 0).label(
-            "node_deadline_watchdog_fired_count"
-        ),
+        sa.func.coalesce(sa.func.sum(RunDailyFact.node_deadline_watchdog_fired_count), 0).label("node_deadline_watchdog_fired_count"),
     ]
 
     params: dict[str, Any] = {
@@ -953,9 +950,7 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     )
     # Same count-weighting as queue_wait: the SQL avg already ignores NULL
     # samples, so the bucket mean re-weights by the row's run count.
-    _accumulate_weighted_avg(
-        bucket, getattr(row, "avg_queue_wait_ms", None), sum_key="queue_wait_sum", n_key="queue_wait_n", weight=cnt
-    )
+    _accumulate_weighted_avg(bucket, getattr(row, "avg_queue_wait_ms", None), sum_key="queue_wait_sum", n_key="queue_wait_n", weight=cnt)
     _accumulate_weighted_avg(
         bucket,
         getattr(row, "avg_dispatch_latency_ms", None),
@@ -963,9 +958,7 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
         n_key="dispatch_latency_n",
         weight=cnt,
     )
-    _accumulate_weighted_avg(
-        bucket, getattr(row, "avg_final_idle_ms", None), sum_key="final_idle_sum", n_key="final_idle_n", weight=cnt
-    )
+    _accumulate_weighted_avg(bucket, getattr(row, "avg_final_idle_ms", None), sum_key="final_idle_sum", n_key="final_idle_n", weight=cnt)
     _accumulate_weighted_avg(
         bucket,
         getattr(row, "avg_output_bytes", None),
@@ -996,9 +989,7 @@ def _build_time_grid(group_by: AnalyticsGroupBy, date_from: date, date_to: date)
     return grid_times
 
 
-def _bucket_dim_keys(
-    agg: dict[tuple[Any, Any | None], dict[str, Any]], dimension: AnalyticsDimension | None
-) -> list[Any]:
+def _bucket_dim_keys(agg: dict[tuple[Any, Any | None], dict[str, Any]], dimension: AnalyticsDimension | None) -> list[Any]:
     dim_keys: list[Any] = [None]
     if dimension is not None:
         # All keys are already normalized to ``str | None``, so the sort is
@@ -1015,9 +1006,7 @@ def _bucket_averages(
     avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
     avg_capacity_wait = (b["capacity_wait_sum"] / b["capacity_wait_n"]) if b and b["capacity_wait_n"] else None
     avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
-    avg_dispatch_latency = (
-        (b["dispatch_latency_sum"] / b["dispatch_latency_n"]) if b and b["dispatch_latency_n"] else None
-    )
+    avg_dispatch_latency = (b["dispatch_latency_sum"] / b["dispatch_latency_n"]) if b and b["dispatch_latency_n"] else None
     avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
     avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
     return (avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes)
@@ -1048,9 +1037,7 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
     rate_denominator = count - benign
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
-    avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes = (
-        _bucket_averages(b)
-    )
+    avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes = _bucket_averages(b)
     success_rate = (complete / rate_denominator) if rate_denominator > 0 else None
     return {
         "date": _format_iso(tkey),

@@ -104,9 +104,7 @@ def _seed_row(request, *, key: str, ciphertext: bytes) -> None:
 
     async def _seed() -> None:
         async with _store(request)._session.begin():
-            _store(request)._session.add(
-                Secret(id=uuid.uuid4(), organisation_id=_ORG_A, key=key, encrypted_value=ciphertext)
-            )
+            _store(request)._session.add(Secret(id=uuid.uuid4(), organisation_id=_ORG_A, key=key, encrypted_value=ciphertext))
 
     _run(_seed())
 
@@ -135,9 +133,7 @@ def step_store_no_rls_context(request) -> None:
     _new_store(request)
     session = request.node._secret_stores["A"]._session
     session.info.clear()
-    request.node._secret_current_store = FernetSecretsBackend(
-        fernet_key=Fernet.generate_key().decode(), session=session
-    )
+    request.node._secret_current_store = FernetSecretsBackend(fernet_key=Fernet.generate_key().decode(), session=session)
 
 
 @given("the store holds a secret encrypted under a rotated-out key")
@@ -217,7 +213,7 @@ def step_org_read_secret(request, label: str, key: str) -> None:
 
 @when("I ask the factory for the default secret backend")
 def step_factory_default(request, monkeypatch) -> None:
-    monkeypatch.delenv("MODULO_SECRETS_BACKEND", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SECRETS_BACKEND", raising=False)
     _capture_factory(
         request,
         lambda: create_secrets_backend(fernet_key=Fernet.generate_key().decode()),
@@ -260,9 +256,7 @@ def _capture_factory(request, call: Callable[[], object]) -> None:
 def step_secret_is(request, key: str, value: str) -> None:
     error = request.node._secret_error
     assert error is None, f"expected a successful read of {key!r}, got: {error!r}"
-    assert request.node._secret_value == value, (
-        f"expected {key!r} to hold {value!r}, got {request.node._secret_value!r}"
-    )
+    assert request.node._secret_value == value, f"expected {key!r} to hold {value!r}, got {request.node._secret_value!r}"
 
 
 @then(parsers.parse('organisation {label} can read "{key}" as "{value}"'))
@@ -305,9 +299,7 @@ def step_runtime_error(request, fragment: str) -> None:
 def step_factory_fernet(request) -> None:
     error = request.node._secret_error
     assert error is None, f"expected the factory to succeed, got: {error!r}"
-    assert isinstance(request.node._secret_factory_backend, FernetSecretsBackend), (
-        f"expected a FernetSecretsBackend, got {type(request.node._secret_factory_backend).__name__}"
-    )
+    assert isinstance(request.node._secret_factory_backend, FernetSecretsBackend), f"expected a FernetSecretsBackend, got {type(request.node._secret_factory_backend).__name__}"
 
 
 @then("the factory refuses to substitute a Fernet backend")
@@ -321,10 +313,5 @@ def step_factory_refuses_fernet_substitution(request) -> None:
     """
     backend = request.node._secret_factory_backend
     error = request.node._secret_error
-    assert not isinstance(backend, FernetSecretsBackend), (
-        "a licence lapse must not silently downgrade a configured external backend "
-        f"to Fernet; got {type(backend).__name__}"
-    )
-    assert error is None or "license" not in str(error).lower(), (
-        f"licence state must not decide how the backend is constructed; got: {error!r}"
-    )
+    assert not isinstance(backend, FernetSecretsBackend), f"a licence lapse must not silently downgrade a configured external backend to Fernet; got {type(backend).__name__}"
+    assert error is None or "license" not in str(error).lower(), f"licence state must not decide how the backend is constructed; got: {error!r}"

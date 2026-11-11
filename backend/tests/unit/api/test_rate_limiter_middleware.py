@@ -69,7 +69,7 @@ class TestConstructorOverrides:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/runs",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
             )
         assert resp.status_code == 200
 
@@ -104,7 +104,7 @@ class TestConstructorOverrides:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/runs",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
             )
         assert resp.status_code == 200
 
@@ -116,7 +116,7 @@ class TestConstructorOverrides:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/runs",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "wrong-token"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "wrong-token"},
             )
         assert resp.status_code == 429
 
@@ -186,7 +186,7 @@ class TestBypassTokenComparison:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/runs",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
             )
         assert resp.status_code == 200
         assert seen == [("test-bypass", "test-bypass")]

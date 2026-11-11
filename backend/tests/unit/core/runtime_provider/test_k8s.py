@@ -61,10 +61,7 @@ _EXIT_SUCCESS = '{"metadata":{},"status":"Success"}'
 
 
 def _exit_failure(code: int) -> str:
-    return (
-        '{"metadata":{},"status":"Failure","message":"command terminated with non-zero exit code",'
-        f'"reason":"NonZeroExitCode","details":{{"causes":[{{"reason":"ExitCode","message":"{code}"}}]}}}}'
-    )
+    return f'{{"metadata":{{}},"status":"Failure","message":"command terminated with non-zero exit code","reason":"NonZeroExitCode","details":{{"causes":[{{"reason":"ExitCode","message":"{code}"}}]}}}}'
 
 
 def _frame(channel: int, text: str) -> SimpleNamespace:
@@ -227,7 +224,7 @@ async def _drain(process: Any) -> list[Any]:
 
 class TestRegistration:
     def test_not_registered_without_env_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", raising=False)
 
         hub = build_hub()
 
@@ -236,7 +233,7 @@ class TestRegistration:
 
     @pytest.mark.parametrize("signal", ["1", "true", "yes", "on", "registration-signal"])
     def test_registered_when_env_signal_set(self, monkeypatch: pytest.MonkeyPatch, signal: str) -> None:
-        monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", signal)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", signal)
 
         hub = build_hub()
         provider = hub.get("kubernetes")
@@ -247,7 +244,7 @@ class TestRegistration:
 
     @pytest.mark.parametrize("signal", ["0", "false", "no", "off", ""])
     def test_not_registered_when_env_signal_is_falsy(self, monkeypatch: pytest.MonkeyPatch, signal: str) -> None:
-        monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", signal)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", signal)
 
         hub = build_hub()
 
@@ -255,7 +252,7 @@ class TestRegistration:
 
     def test_not_registered_when_sdk_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A missing client SDK logs a warning and stays unregistered — boot never crashes."""
-        monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", "1")
         real_import = cast(Any, __import__)
 
         def _fake_import(name: str, *args: object, **kwargs: object) -> object:
@@ -279,8 +276,8 @@ class TestRegistration:
         """env_var_for_provider_type('kubernetes') returns the registration var."""
         from farna.core.runtime_provider import env_var_for_provider_type
 
-        assert env_var_for_provider_type("kubernetes") == "MODULO_KUBERNETES_ENABLED"
-        assert env_var_for_provider_type("KUBERNETES") == "MODULO_KUBERNETES_ENABLED"
+        assert env_var_for_provider_type("kubernetes") == "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"
+        assert env_var_for_provider_type("KUBERNETES") == "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"
 
     def test_resolve_unregistered_kubernetes_is_known_type_not_unknown(self) -> None:
         """A vocabulary member resolves to ProviderNotConfiguredError with its env var —
@@ -288,7 +285,7 @@ class TestRegistration:
         hub = RuntimeProviderHub()
         hub.register("local", LocalRuntimeProvider())
 
-        with pytest.raises(ProviderNotConfiguredError, match="MODULO_KUBERNETES_ENABLED") as exc_info:
+        with pytest.raises(ProviderNotConfiguredError, match="FARNA_CONTROL_MODULO_KUBERNETES_ENABLED") as exc_info:
             hub.resolve(SimpleNamespace(provider_type="kubernetes", provider_hint=None))
 
         assert exc_info.value.provider_type == "kubernetes"
@@ -308,16 +305,14 @@ class TestCreateWorkspace:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.create_workspace(_spec(egress_policy="selected"))
 
-    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2068: deny_all is accepted once the chart's workspace NetworkPolicy
         exists (the chart injects MODULO_WORKSPACE_NETWORK_POLICY=enabled).
 
         Pins the newly-accepted positive path at the provider level — the
         egress-resolution table alone does not prove create_workspace provisions.
         """
-        monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
         core = AsyncMock()
         core.read_namespaced_pod.return_value = _pod("Running")
         provider = _provider(core=core)
@@ -330,7 +325,7 @@ class TestCreateWorkspace:
     async def test_egress_none_refused_without_chart_network_policy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2068 fail-closed guard: without the chart signal (manifest absent),
         a deny_all claim is refused instead of being certified as declared."""
-        monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
         provider = _provider(core=AsyncMock())
 
         with pytest.raises(ProviderCapabilityUnsupportedError, match="workspaceNetworkPolicy"):
@@ -609,9 +604,7 @@ class TestExecCommand:
         ws_core = _FakeWsCore(ws)
         provider = _provider(ws_core=ws_core)
 
-        await provider.exec_command_stream(
-            "modulo-ws-abc", ["printenv", "RUN_TOKEN"], environment={"RUN_TOKEN": "s3cret value"}
-        )
+        await provider.exec_command_stream("modulo-ws-abc", ["printenv", "RUN_TOKEN"], environment={"RUN_TOKEN": "s3cret value"})
 
         command = ws_core.calls[0]["command"]
         assert command[0] == "sh"
@@ -885,11 +878,11 @@ class TestDeploymentIdentity:
         deployments sharing one namespace onto ONE identity, so each
         reconciler would sweep the other's pods as same-machine.
         """
-        monkeypatch.delenv("MODULO_RUNNER_MACHINE_ID", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", raising=False)
 
         assert KubernetesRuntimeProvider._deployment_identity() == socket.gethostname()
 
-        monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "explicit-machine")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "explicit-machine")
 
         assert KubernetesRuntimeProvider._deployment_identity() == "explicit-machine"
 
@@ -1030,12 +1023,10 @@ class TestApplyIsolation:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="selected"))
 
-    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2068: a deny_all isolation claim is accepted (no in-pod step) once
         the chart's workspace NetworkPolicy is deployed."""
-        monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
         provider = _provider(core=AsyncMock())
 
         result = await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
@@ -1045,7 +1036,7 @@ class TestApplyIsolation:
     async def test_egress_none_refused_without_chart_network_policy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2068 fail-closed guard: without the chart signal a deny_all
         isolation claim is refused, never silently accepted."""
-        monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
         provider = _provider(core=AsyncMock())
 
         with pytest.raises(ProviderCapabilityUnsupportedError, match="workspaceNetworkPolicy"):
@@ -1207,9 +1198,7 @@ class TestMigration0282Parity:
 
     def test_model_vocabulary_and_check_include_kubernetes(self) -> None:
         assert "kubernetes" in PROVIDER_TYPES
-        constraint = next(
-            c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type"
-        )
+        constraint = next(c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type")
         sqltext = str(getattr(constraint, "sqltext", constraint))
         assert "kubernetes" in sqltext
 
@@ -1386,9 +1375,7 @@ class TestSpecMappingArms:
     def test_invalid_label_key_is_skipped_in_labels_but_kept_in_annotations(self) -> None:
         provider = KubernetesRuntimeProvider()
 
-        labels, annotations = provider._build_metadata(
-            _spec(workspace_metadata={"bad key!": "v", "modulo.run.id": "run-1"})
-        )
+        labels, annotations = provider._build_metadata(_spec(workspace_metadata={"bad key!": "v", "modulo.run.id": "run-1"}))
 
         assert "bad key!" not in labels
         assert labels["modulo.run.id"] == "run-1"
@@ -1566,9 +1553,7 @@ class TestExecArms:
         with pytest.raises(asyncio.CancelledError):
             await provider.exec_command("modulo-ws-abc", ["sh"])
 
-    async def test_exec_command_unexpected_frame_failure_is_backend_unreachable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exec_command_unexpected_frame_failure_is_backend_unreachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = _provider(ws_core=_FakeWsCore(_FakeWs([])))
 
         async def _boom(ws: Any, state: Any) -> Any:
@@ -1737,9 +1722,7 @@ class TestIsolationArms:
         assert status is None
         assert len(calls) == 1
 
-    async def test_guard_install_detail_is_logged(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_guard_install_detail_is_logged(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         provider = _provider()
 
         async def _fake_exec(provider_ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:

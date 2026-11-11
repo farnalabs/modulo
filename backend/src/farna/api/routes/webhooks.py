@@ -110,10 +110,7 @@ _CODE_WEBHOOKS_CLEANUP_EXPIRED = "webhooks.cleanup_expired"
 # FAR-1034 handled-no-op ack. Deliberately a 2xx "handled" message, never a
 # "rejected" 4xx: the delivery was suppressed, not rejected, so a retry-on-4xx
 # sender must NOT loop on the very duplicates the gate exists to quiet.
-CI_FAILURE_COALESCED_ACK = (
-    "Duplicate CI-failure event for the same PR + head SHA within the "
-    "coalesce window — suppressed (no new Branch Fixer run)."
-)
+CI_FAILURE_COALESCED_ACK = "Duplicate CI-failure event for the same PR + head SHA within the coalesce window — suppressed (no new Branch Fixer run)."
 
 
 _log = logging.getLogger(__name__)
@@ -177,7 +174,7 @@ async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) 
                     "message": f"webhook dispatch failed for run {run_id}: {detail}",
                     "source": "saq",
                     "context_json": {"function": "webhook_dispatch", "run_id": run_id},
-                    "environment": os.environ.get("MODULO_ENV", "development"),
+                    "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
                     "version": get_version(),
                 },
             )
@@ -291,8 +288,7 @@ async def _verify_webhook_auth(
         bind_audit_actor_source(request, "signature_verified")
     else:
         _log.warning(
-            "webhooks.receive_webhook: unauthenticated delivery accepted "
-            "(no hmac_secret configured) — trigger %s org %s",
+            "webhooks.receive_webhook: unauthenticated delivery accepted (no hmac_secret configured) — trigger %s org %s",
             trigger_id,
             org_id,
         )
@@ -307,9 +303,7 @@ async def _verify_webhook_auth(
 # change. The detail is concurrency-specific so the event log never mislabels
 # the refusal as a busy/overlapping dispatch.
 _CONCURRENCY_REFUSAL_VALIDATION_RESULT = "concurrency_limit_reached"
-_CONCURRENCY_REFUSAL_ERROR_DETAIL = (
-    "Concurrent run limit reached — the trigger already has its maximum concurrent runs active; delivery not executed"
-)
+_CONCURRENCY_REFUSAL_ERROR_DETAIL = "Concurrent run limit reached — the trigger already has its maximum concurrent runs active; delivery not executed"
 
 # FAR-1916: the refused-delivery outcome recorded when a delivery (receive or
 # replay) hits the pipeline's configured rate limit. Reuses the engine's own
@@ -387,9 +381,7 @@ async def _record_rejected_delivery(
         # loudly — a swallowed programming error here is exactly the
         # silent-empty-record failure this guard exists to prevent.
         _log.warning(
-            "webhooks.record_rejected_delivery.invalid_payload_source "
-            "kind=%s trigger=%s has_raw_body=%s has_source_event_id=%s "
-            "— exactly one payload source is required",
+            "webhooks.record_rejected_delivery.invalid_payload_source kind=%s trigger=%s has_raw_body=%s has_source_event_id=%s — exactly one payload source is required",
             kind,
             trigger_id,
             raw_body is not None,
@@ -860,9 +852,7 @@ async def _receive_webhook_intake(
     # Bootstrap via the shared system-session helper (FAR-523): the trigger
     # read must precede any RLS org context on Postgres; the helper 404s a
     # principal referencing another org's trigger.
-    trigger, org_id = await load_trigger_and_org_global(
-        system_session, trigger_id, principal.organisation_id if principal else None
-    )
+    trigger, org_id = await load_trigger_and_org_global(system_session, trigger_id, principal.organisation_id if principal else None)
     state.trigger = trigger
     state.org_id = org_id
 
@@ -898,9 +888,7 @@ async def _receive_webhook_intake(
         if trigger.active:
             await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(
-            session, pipeline_id=trigger.pipeline_id, account_id=None
-        )
+        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
         if snapshot is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -966,9 +954,7 @@ async def _replay_webhook_intake(
     # Bootstrap via the shared system-session helper (FAR-523): the trigger
     # read must precede any RLS org context on Postgres; the helper 404s a
     # principal referencing another org's trigger.
-    trigger, org_id = await load_trigger_and_org_global(
-        system_session, trigger_id, principal.organisation_id if principal else None
-    )
+    trigger, org_id = await load_trigger_and_org_global(system_session, trigger_id, principal.organisation_id if principal else None)
     state.trigger = trigger
     state.org_id = org_id
 
@@ -1000,9 +986,7 @@ async def _replay_webhook_intake(
         if trigger.active:
             await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(
-            session, pipeline_id=trigger.pipeline_id, account_id=None
-        )
+        snapshot = await pipeline_snapshot.create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
         if snapshot is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1087,9 +1071,7 @@ def _raise_snapshot_lock_unavailable(
     )
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=(
-            f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the webhook delivery"
-        ),
+        detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the webhook delivery"),
     ) from exc
 
 
@@ -1695,9 +1677,7 @@ async def replay_webhook(
 @router.post(
     "/cleanup-expired",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("webhook_events_cleaned_up", "webhook_event", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("webhook_events_cleaned_up", "webhook_event", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_WEBHOOKS_CLEANUP_EXPIRED)
 async def cleanup_expired(

@@ -22,21 +22,11 @@ class ErrorGroup(OrgScoped):
 
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="new")
-    first_seen: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
-    last_seen: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     level_peak: Mapped[str] = mapped_column(String(20), nullable=False, server_default="error")
-    sample_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("error_events.id", ondelete="SET NULL"), index=True
-    )
-    sample_event: Mapped["ErrorEvent | None"] = relationship(
-        "ErrorEvent", foreign_keys=[sample_event_id], lazy="joined"
-    )
-    assigned_to: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    sample_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("error_events.id", ondelete="SET NULL"), index=True)
+    sample_event: Mapped["ErrorEvent | None"] = relationship("ErrorEvent", foreign_keys=[sample_event_id], lazy="joined")
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

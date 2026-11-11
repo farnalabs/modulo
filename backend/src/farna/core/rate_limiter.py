@@ -64,9 +64,7 @@ class RedisSlidingWindowRateLimiter:
         self._redis = redis_client
         self._prefix = prefix
 
-    async def check_with_retry_after(
-        self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS
-    ) -> tuple[bool, int]:
+    async def check_with_retry_after(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> tuple[bool, int]:
         """Record an accepted request and return its verdict and retry-after.
 
         Rejected requests are deliberately not inserted into the window. This
@@ -104,9 +102,7 @@ class RateLimiterRegistry:
     async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
         return await self._sliding.check(key, max_requests, window_s)
 
-    async def check_with_retry_after(
-        self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS
-    ) -> tuple[bool, int]:
+    async def check_with_retry_after(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> tuple[bool, int]:
         return await self._sliding.check_with_retry_after(key, max_requests, window_s)
 
 

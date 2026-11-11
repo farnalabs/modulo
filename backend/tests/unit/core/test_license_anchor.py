@@ -94,7 +94,7 @@ class TestVerificationReasons:
 
         assert result.valid is False
         assert result.reason == REASON_ANCHOR_MISMATCH
-        assert "MODULO_LICENSE_PUBLIC_KEY" in (result.hint or "")
+        assert "FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY" in (result.hint or "")
 
     def test_wrong_signer_under_configured_anchor_reports_signature_mismatch(self) -> None:
         authority = generate_keypair()
@@ -170,7 +170,7 @@ class TestStartupAnchorPolicy:
     def test_licence_without_anchor_fails_closed(self) -> None:
         settings = self._settings(modulo_license_key="env-licence-key")
 
-        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+        with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY"):
             api_main._configure_license_and_otel(settings)
 
     def test_community_instance_without_anchor_boots(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,7 +201,7 @@ class TestStartupAnchorPolicy:
     def test_invalid_anchor_fails_closed(self) -> None:
         settings = self._settings(modulo_license_public_key="not-hex")
 
-        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+        with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY"):
             api_main._configure_license_and_otel(settings)
 
 
@@ -238,7 +238,7 @@ class TestSharedLicenseBootstrap:
         assert using_builtin_dev_anchor() is True
 
     def test_licence_without_anchor_fails_closed(self) -> None:
-        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+        with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY"):
             configure_license_trust_anchor(self._settings(modulo_license_key="a.b"))
 
     def test_malformed_anchor_fails_closed(self) -> None:

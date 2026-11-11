@@ -67,9 +67,7 @@ def _python_heredoc(run_script: str, marker: str = "PY") -> str:
 
 
 def _release_validator() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py"
-    )
+    spec = importlib.util.spec_from_file_location("validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py")
     if spec is None or spec.loader is None:
         raise AssertionError("release validator module could not be loaded")
     module = importlib.util.module_from_spec(spec)
@@ -136,12 +134,7 @@ def test_release_signature_heredocs_compile_as_python() -> None:
     workflows = ((BUNDLE_WORKFLOW, "PYEOF"), (RELEASE_WORKFLOW, "PY"))
     for workflow_path, marker in workflows:
         workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-        scripts = [
-            step["run"]
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
-        ]
+        scripts = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")]
         assert scripts, f"expected at least one signing script in {workflow_path}"
         for script in scripts:
             compile(_python_heredoc(script, marker), str(workflow_path), "exec")
@@ -159,9 +152,7 @@ def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
         assert rehearsal_idx < real_idx, f"{job_id}: rehearsal must run BEFORE the real pre-migrate"
 
         destroy_idx = names.index(_REHEARSAL_DESTROY_NAME)
-        assert destroy_idx == rehearsal_idx + 1, (
-            f"{job_id}: rehearsal destroy must immediately follow the rehearsal step"
-        )
+        assert destroy_idx == rehearsal_idx + 1, f"{job_id}: rehearsal destroy must immediately follow the rehearsal step"
         assert steps[destroy_idx].get("if") == "always()", f"{job_id}: rehearsal destroy must run in every outcome"
 
 
@@ -202,9 +193,7 @@ def test_machine_log_capture_wired_per_leg() -> None:
         upload_name = _upload_step_name(suffix)
         assert upload_name in names, f"{job_id}: artifact upload step missing"
         upload_step = steps[names.index(upload_name)]
-        assert upload_step["uses"].startswith("actions/upload-artifact@"), (
-            f"{job_id}: log upload must use the official upload-artifact action"
-        )
+        assert upload_step["uses"].startswith("actions/upload-artifact@"), f"{job_id}: log upload must use the official upload-artifact action"
         assert upload_step["with"]["retention-days"] == 3
         assert upload_step["if"] == "always()"
         assert f"pre-migrate-machine-logs-{suffix}" == upload_step["with"]["name"]
@@ -218,9 +207,7 @@ def test_real_run_discovery_excludes_leaked_rehearsal_machine() -> None:
         steps = workflow["jobs"][job_id]["steps"]
         names = _step_names(steps)
         real_script = steps[names.index(_REAL_STEP_NAME)]["run"]
-        assert "/tmp/prerehearse-machine-id.txt" in real_script, (
-            f"{job_id}: real pre-migrate discovery must exclude the rehearsal machine's id"
-        )
+        assert "/tmp/prerehearse-machine-id.txt" in real_script, f"{job_id}: real pre-migrate discovery must exclude the rehearsal machine's id"
 
 
 def test_release_identity_resolves_annotated_tags_to_commit_sha_and_fails_closed() -> None:
@@ -240,9 +227,7 @@ def test_release_identity_resolves_annotated_tags_to_commit_sha_and_fails_closed
 def test_release_identity_keeps_normal_deploy_outside_rc_validation() -> None:
     workflow = _workflow()
     step_names = _step_names(workflow["jobs"]["deploy-throttle"]["steps"])
-    validation_script = workflow["jobs"]["deploy-throttle"]["steps"][
-        step_names.index("Validate requested release identity")
-    ]["run"]
+    validation_script = workflow["jobs"]["deploy-throttle"]["steps"][step_names.index("Validate requested release identity")]["run"]
 
     assert 'if [ -z "$REQUESTED_REF" ] && [ -z "$REQUESTED_SHA" ]; then' in validation_script
     assert 'echo "Normal deploy identity: ${{ github.sha }}"' in validation_script
@@ -312,13 +297,8 @@ def test_release_installer_callers_grant_permissions_their_jobs_require() -> Non
         granted = caller.get("permissions") or {}
 
         for permission, required_level in sorted(_declared_permissions(called).items()):
-            assert permission in granted, (
-                f"{caller_job_id} does not grant '{permission}', which {called_relative_path} declares"
-            )
-            assert _PERMISSION_RANK[granted[permission]] >= _PERMISSION_RANK[required_level], (
-                f"{caller_job_id} grants '{permission}: {granted[permission]}' but "
-                f"{called_relative_path} declares '{permission}: {required_level}'"
-            )
+            assert permission in granted, f"{caller_job_id} does not grant '{permission}', which {called_relative_path} declares"
+            assert _PERMISSION_RANK[granted[permission]] >= _PERMISSION_RANK[required_level], f"{caller_job_id} grants '{permission}: {granted[permission]}' but {called_relative_path} declares '{permission}: {required_level}'"
 
 
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
@@ -410,12 +390,7 @@ def test_native_release_smoke_has_exactly_one_fail_closed_n_minus_one_leg() -> N
     check, and it installed N-1 with a plain curl and no attestation gate.
     """
     workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
-    legs = [
-        (job_id, step)
-        for job_id, job in workflow["jobs"].items()
-        for step in job.get("steps", [])
-        if step.get("name") == "N-1 upgrade leg (canary leg only)"
-    ]
+    legs = [(job_id, step) for job_id, job in workflow["jobs"].items() for step in job.get("steps", []) if step.get("name") == "N-1 upgrade leg (canary leg only)"]
 
     assert [job_id for job_id, _step in legs] == ["canary"]
     assert 'gh attestation verify "${n1_dir}/${n1_tarball}"' in legs[0][1]["run"]
@@ -539,9 +514,7 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert "flex" in workflow_text
     assert "Download and sha256-verify pinned PostgreSQL source" in workflow_text
     pg_download_steps = yaml.safe_load(workflow_text)["jobs"]["bundle"]["steps"]
-    pg_download_script = pg_download_steps[
-        _step_names(pg_download_steps).index("Download and sha256-verify pinned PostgreSQL source")
-    ]["run"]
+    pg_download_script = pg_download_steps[_step_names(pg_download_steps).index("Download and sha256-verify pinned PostgreSQL source")]["run"]
     assert 'source "$GITHUB_WORKSPACE/.download-verified.sh"' in pg_download_script
     assert "download_verified" in pg_download_script
     assert '"${PG_SOURCE_SHA256}"' in pg_download_script
@@ -570,15 +543,9 @@ def test_bundle_release_builds_relocatable_postgres_with_runtime_data() -> None:
     assert 'test -z "${PG_REQUIRED_EXTENSIONS}"' in workflow_text
     assert "pg_config --sharedir" in workflow_text
     assert '[ -f "$BUNDLE_PG_PREFIX/share/postgresql/postgres.bki" ] || {' in workflow_text
-    assert (
-        'echo "::error::PostgreSQL runtime data file missing: '
-        '${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }' in workflow_text
-    )
+    assert 'echo "::error::PostgreSQL runtime data file missing: ${BUNDLE}/pg/share/postgresql/postgres.bki" >&2; exit 1; }' in workflow_text
     assert '[ -d "$BUNDLE_PG_PREFIX/share/postgresql/timezonesets" ] || {' in workflow_text
-    assert (
-        'echo "::error::PostgreSQL runtime data directory missing: '
-        '${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }' in workflow_text
-    )
+    assert 'echo "::error::PostgreSQL runtime data directory missing: ${BUNDLE}/pg/share/postgresql/timezonesets" >&2; exit 1; }' in workflow_text
     assert '[ -f "$BUNDLE/pg/share/postgresql/postgres.bki" ] || {' in workflow_text
     assert '[ -d "$BUNDLE/pg/share/postgresql/timezonesets" ] || {' in workflow_text
     assert 'BUNDLE_ROOT_ABS="$(realpath -e -- "$BUNDLE")"' in workflow_text
@@ -642,9 +609,7 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert 'smoke_home="$smoke_workspace/home"' in smoke_script
 
     assert 'smoke_dump="$smoke_dump_dir/roundtrip.sql"' in smoke_script
-    assert (
-        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
-    ) in smoke_script
+    assert ('sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"') in smoke_script
     assert 'HOME="$smoke_home"' in smoke_script
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
 
@@ -668,9 +633,7 @@ def test_bundle_release_proves_final_postgres_tarball_runtime() -> None:
     assert 'PATH="$smoke_bundle/pg/bin:/usr/bin:/bin"' in smoke_script
     assert 'smoke_dump_dir="$smoke_workspace/dump"' in smoke_script
     assert 'mkdir -p "$smoke_root" "$smoke_workspace"' in smoke_script
-    assert (
-        'sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"'
-    ) in smoke_script
+    assert ('sudo -u "$smoke_user" mkdir -p "$smoke_home" "$smoke_data" "$smoke_socket" "$smoke_dump_dir"') in smoke_script
     assert 'sudo chown "$smoke_user" "$smoke_workspace"' in smoke_script
     assert 'chown -R "$smoke_user:$smoke_user" "$smoke_root"' not in smoke_script
     assert 'chmod 0755 "$smoke_root" "$extract_root"' in smoke_script
@@ -956,9 +919,7 @@ def test_alpha_bundle_still_requires_the_macos_installer() -> None:
     assert "macos-installer" in workflow["jobs"]["publish-release"]["needs"]
 
     final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
-    downloads = [
-        step.get("with", {}).get("name") for step in final_steps if "download-artifact" in str(step.get("uses", ""))
-    ]
+    downloads = [step.get("with", {}).get("name") for step in final_steps if "download-artifact" in str(step.get("uses", ""))]
     assert "macos-installer-${{ inputs.version }}-arm64" in downloads
     assert "macos-installer-${{ inputs.version }}-x86_64" in downloads
 
@@ -1092,16 +1053,11 @@ def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
 
     for label, step in driving:
         env = cast(dict[str, str], step.get("env") or {})
-        assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET, (
-            f"{label} drives the release PR with GH_TOKEN={env.get('GH_TOKEN')!r}; "
-            "a github.token PR is authored by github-actions[bot] and skipped by the same-repo author guard"
-        )
+        assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET, f"{label} drives the release PR with GH_TOKEN={env.get('GH_TOKEN')!r}; a github.token PR is authored by github-actions[bot] and skipped by the same-repo author guard"
         assert "GITHUB_TOKEN" not in env, f"{label} must keep the branch push on the checkout github.token credential"
         script = cast(str, step["run"])
         assert "github.token" not in script
-        assert "MODULO_RELEASE_PR_TOKEN" in script, (
-            f"{label} must fail closed with an ::error:: naming MODULO_RELEASE_PR_TOKEN"
-        )
+        assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in script, f"{label} must fail closed with an ::error:: naming MODULO_RELEASE_PR_TOKEN"
         assert '[ -z "${GH_TOKEN:-}" ]' in script, f"{label} must reject an empty GH_TOKEN"
         guard_index = script.index('[ -z "${GH_TOKEN:-}" ]')
         first_gh = min(script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script)
@@ -1130,11 +1086,7 @@ _RELEASE_PR_DRIVING_COMMANDS = (
 
 def _release_workflow_steps() -> list[tuple[str, dict[str, Any]]]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    return [
-        (f"{job_id}: {step.get('name', '')}", cast(dict[str, Any], step))
-        for job_id, job in workflow["jobs"].items()
-        for step in job.get("steps", [])
-    ]
+    return [(f"{job_id}: {step.get('name', '')}", cast(dict[str, Any], step)) for job_id, job in workflow["jobs"].items() for step in job.get("steps", [])]
 
 
 def _release_pr_driving_steps() -> list[tuple[str, dict[str, Any]]]:
@@ -1215,8 +1167,7 @@ def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
         ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
         (
             "backend/uv.lock",
-            'version = 1\nrevision = 5\n\n[[package]]\nname = "farnalabs-modulo"\n'
-            'version = "0.1.0"\nsource = { editable = "." }\n',
+            'version = 1\nrevision = 5\n\n[[package]]\nname = "farnalabs-modulo"\nversion = "0.1.0"\nsource = { editable = "." }\n',
         ),
         ("frontend/package.json", '{"version": "0.1.0"}\n'),
         ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
@@ -1359,19 +1310,9 @@ def _run_cut_state_gate(
     bin_dir.mkdir()
     existing = existing_refs or set()
     release_rows = [{"tagName": ref.removeprefix("release:")} for ref in sorted(existing) if ref.startswith("release:")]
-    open_response = (
-        "echo query-error >&2; exit 1"
-        if gh_failure == "open_prs"
-        else "echo " + shlex.quote(json.dumps(open_prs or []))
-    )
-    closed_response = (
-        "echo query-error >&2; exit 1"
-        if gh_failure == "closed_prs"
-        else "echo " + shlex.quote(json.dumps(closed_prs or []))
-    )
-    release_response = (
-        "echo query-error >&2; exit 1" if gh_failure == "releases" else "echo " + shlex.quote(json.dumps(release_rows))
-    )
+    open_response = "echo query-error >&2; exit 1" if gh_failure == "open_prs" else "echo " + shlex.quote(json.dumps(open_prs or []))
+    closed_response = "echo query-error >&2; exit 1" if gh_failure == "closed_prs" else "echo " + shlex.quote(json.dumps(closed_prs or []))
+    release_response = "echo query-error >&2; exit 1" if gh_failure == "releases" else "echo " + shlex.quote(json.dumps(release_rows))
     all_prs = [
         {
             **pr,
@@ -1383,11 +1324,7 @@ def _run_cut_state_gate(
         }
         for pr in [*(open_prs or []), *(closed_prs or [])]
     ]
-    api_response = (
-        "echo query-error >&2; exit 1"
-        if gh_failure == "pr_history"
-        else "printf '%s\\n' " + shlex.quote(json.dumps([all_prs]))
-    )
+    api_response = "echo query-error >&2; exit 1" if gh_failure == "pr_history" else "printf '%s\\n' " + shlex.quote(json.dumps([all_prs]))
     gh_script = textwrap.dedent(
         f"""\
         #!/usr/bin/env bash
@@ -1596,9 +1533,7 @@ def test_cut_state_gate_rejects_github_query_error(tmp_path: Path) -> None:
 @pytest.mark.posix_only
 def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
-    result = _run_bash(
-        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
-    )
+    result = _run_bash(_release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env)
     assert result.returncode == 0, result.stderr + result.stdout
     observed = {line for line in Path(str(log) + ".tokens").read_text(encoding="utf-8").splitlines() if line}
     assert observed == {env["GH_TOKEN"]}
@@ -1613,23 +1548,17 @@ def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path,
         env.pop("GH_TOKEN")
     else:
         env["GH_TOKEN"] = token
-    result = _run_bash(
-        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
-    )
+    result = _run_bash(_release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env)
     assert result.returncode != 0
-    assert "MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
     assert not log.exists() or "gh " not in log.read_text(encoding="utf-8")
 
 
 @pytest.mark.posix_only
 def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
-    result = _run_bash(
-        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
-    )
-    assert result.returncode == 0, (
-        f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
-    )
+    result = _run_bash(_release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
     commands = log.read_text(encoding="utf-8")
     assert "git push --set-upstream origin release/version-0.2.0" in commands
     assert "gh pr create" in commands
@@ -1661,9 +1590,7 @@ esac
 """,
     )
     env.update({"CUT_SHA": cut_sha, "MODE": "cut"})
-    result = _run_bash(
-        _release_job_run("Assert schema-freshness gate green on exact cut/recut commit"), cwd=repo, env=env
-    )
+    result = _run_bash(_release_job_run("Assert schema-freshness gate green on exact cut/recut commit"), cwd=repo, env=env)
     assert result.returncode == 0, result.stderr
     commands = log.read_text(encoding="utf-8")
     assert f"--commit {cut_sha}" in commands
@@ -1853,9 +1780,7 @@ def test_schema_gate_aborts_when_the_schema_freshness_job_did_not_succeed(tmp_pa
     env, _log = _schema_gate_harness(
         tmp_path,
         run_lookups=[(_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0)],
-        jobs_lookups=[
-            (_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": jobs_conclusion}), 0)
-        ],
+        jobs_lookups=[(_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": jobs_conclusion}), 0)],
     )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
@@ -1873,9 +1798,7 @@ def test_schema_gate_treats_an_inconclusive_run_as_no_evidence(tmp_path: Path) -
     env, log = _schema_gate_harness(
         tmp_path,
         run_lookups=[(_run_payload({"databaseId": 123, "status": "completed", "conclusion": "success"}), 0)],
-        jobs_lookups=[
-            (_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": "cancelled"}), 0)
-        ],
+        jobs_lookups=[(_jobs_payload({"name": "Schema freshness", "status": "completed", "conclusion": "cancelled"}), 0)],
     )
     result = _run_schema_gate(tmp_path, env)
     output = result.stdout + result.stderr
@@ -2020,9 +1943,7 @@ case "$*" in
 esac
 """,
     )
-    failed_prep = _run_bash(
-        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
-    )
+    failed_prep = _run_bash(_release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env)
     assert failed_prep.returncode != 0
     cleanup_log = tmp_path / "cleanup.log"
     _write_executable(
@@ -2034,9 +1955,7 @@ if [ \"$1 $2 $3 $4\" = 'push origin --delete refs/heads/release-publication-hold
 exit 0
 """,
     )
-    cleanup = _run_bash(
-        _release_job_run("Clean up publication hold after failed cut preparation"), cwd=tmp_path, env=env
-    )
+    cleanup = _run_bash(_release_job_run("Clean up publication hold after failed cut preparation"), cwd=tmp_path, env=env)
     assert cleanup.returncode == 0, cleanup.stderr
     assert "git push origin --delete refs/heads/release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
 
@@ -2093,23 +2012,14 @@ def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
 
 def _cut_path_scripts() -> list[tuple[Path, str]]:
     release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    scripts = [
-        (RELEASE_WORKFLOW, step["run"])
-        for step in release["jobs"]["release"]["steps"]
-        if isinstance(step.get("run"), str) and "inputs.mode == 'promote'" not in str(step.get("if", ""))
-    ]
+    scripts = [(RELEASE_WORKFLOW, step["run"]) for step in release["jobs"]["release"]["steps"] if isinstance(step.get("run"), str) and "inputs.mode == 'promote'" not in str(step.get("if", ""))]
     for workflow_path in (
         BUNDLE_WORKFLOW,
         REPO_ROOT / ".github" / "workflows" / "windows-installer.yml",
         REPO_ROOT / ".github" / "workflows" / "macos-installer.yml",
     ):
         workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-        scripts.extend(
-            (workflow_path, step["run"])
-            for job in workflow.get("jobs", {}).values()
-            for step in job.get("steps", [])
-            if isinstance(step.get("run"), str)
-        )
+        scripts.extend((workflow_path, step["run"]) for job in workflow.get("jobs", {}).values() for step in job.get("steps", []) if isinstance(step.get("run"), str))
     return scripts
 
 
@@ -2231,9 +2141,7 @@ def _hold_lookup_fragment(script: str) -> str:
 )
 @pytest.mark.parametrize("lookup_rc", [2, 17])
 @pytest.mark.posix_only
-def test_release_publication_hold_establishment_handles_absent_and_remote_error(
-    tmp_path: Path, step_name: str, lookup_rc: int
-) -> None:
+def test_release_publication_hold_establishment_handles_absent_and_remote_error(tmp_path: Path, step_name: str, lookup_rc: int) -> None:
     script = _hold_lookup_fragment(_hold_step_script(step_name))
     result = _run_hold_lookup_script(tmp_path, script, lookup_rc=lookup_rc)
     commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
@@ -2272,9 +2180,7 @@ def test_release_publication_hold_establishment_handles_absent_and_remote_error(
     ),
 )
 @pytest.mark.posix_only
-def test_release_publication_hold_cleanup_is_explicitly_fail_closed(
-    tmp_path: Path, step_name: str, lookup_rc: int
-) -> None:
+def test_release_publication_hold_cleanup_is_explicitly_fail_closed(tmp_path: Path, step_name: str, lookup_rc: int) -> None:
     result = _run_hold_lookup_script(tmp_path, _hold_step_script(step_name), lookup_rc=lookup_rc)
     commands = (tmp_path / "hold-commands.log").read_text(encoding="utf-8")
     if lookup_rc == 0:
@@ -2325,7 +2231,7 @@ def test_release_promote_fails_closed_without_the_release_pr_token(tmp_path: Pat
         timeout=30,
     )
     assert result.returncode != 0
-    assert "MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
 
 
 def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> None:
@@ -2347,9 +2253,7 @@ def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> No
     assert 'git tag -a "$GA_TAG"' in script
     assert 'git push origin "$GA_TAG"' in script
     release_script = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
-    release_step = next(
-        step for step in release_script if step.get("name") == "Update CHANGELOG.md and GitHub Release for GA"
-    )
+    release_step = next(step for step in release_script if step.get("name") == "Update CHANGELOG.md and GitHub Release for GA")
     assert release_step["env"]["MERGED_SHA"] == "${{ steps.promote.outputs.promote_sha }}"
     assert 'gh release edit "$GA_TAG" --target "$MERGED_SHA"' in release_step["run"]
     assert 'gh release create "$GA_TAG" --target "$MERGED_SHA"' in release_step["run"]
@@ -2373,9 +2277,7 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _promote_harness(
-    tmp_path: Path, *, scenario: str, ci_sha: str | None = None
-) -> tuple[subprocess.CompletedProcess[str], Path, str, str, dict[str, str]]:
+def _promote_harness(tmp_path: Path, *, scenario: str, ci_sha: str | None = None) -> tuple[subprocess.CompletedProcess[str], Path, str, str, dict[str, str]]:
     root = tmp_path / "repo"
     origin = tmp_path / "origin.git"
     root.mkdir(parents=True)
@@ -2711,14 +2613,10 @@ def _run_release_block(
 
 def _freeze_lift_script() -> str:
     steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
-    return next(
-        step["run"] for step in steps if step.get("name") == "Lift release freeze after successful GA publication"
-    )
+    return next(step["run"] for step in steps if step.get("name") == "Lift release freeze after successful GA publication")
 
 
-def _run_publication_sequence(
-    root: Path, env: dict[str, str], *, failure: str | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run_publication_sequence(root: Path, env: dict[str, str], *, failure: str | None = None) -> subprocess.CompletedProcess[str]:
     block_names = (
         "Retag container images for GA",
         "Push Helm chart to OCI registry",
@@ -2728,12 +2626,7 @@ def _run_publication_sequence(
     workflow_steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
     for block_name in block_names:
         script = next(step["run"] for step in workflow_steps if step.get("name") == block_name)
-        blocks.append(
-            script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"')
-            .replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"')
-            .replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
-            .replace("set -euo pipefail", "set -uo pipefail", 1)
-        )
+        blocks.append(script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"').replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"').replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"').replace("set -euo pipefail", "set -uo pipefail", 1))
     recovery = _release_step("Re-establish release freeze after failed GA publication")["run"]
     lift = _freeze_lift_script()
     block_commands = [f"if bash -eo pipefail -c {shlex.quote(block)}; then :; else failure=1; fi" for block in blocks]
@@ -2798,9 +2691,7 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
     assert markers.count("freeze-present:notes") >= 1
     assert markers.index("freeze-present:docker") < markers.index("freeze-present:helm")
     assert markers.index("freeze-present:helm") < markers.index("freeze-present:notes")
-    output_values = dict(
-        line.split("=", 1) for line in (root / "github-output.txt").read_text(encoding="utf-8").splitlines()
-    )
+    output_values = dict(line.split("=", 1) for line in (root / "github-output.txt").read_text(encoding="utf-8").splitlines())
     assert output_values == {
         "ga_tag": "v1.2.3",
         "rc_tag": "v1.2.3-rc1",
@@ -3183,10 +3074,7 @@ def test_freeze_cleanup_is_a_dedicated_finalizer_job_after_publication() -> None
     jobs = cast(dict[str, Any], workflow["jobs"])
     assert _FREEZE_CLEANUP_JOB_ID in jobs
     job = cast(dict[str, Any], jobs[_FREEZE_CLEANUP_JOB_ID])
-    assert job["if"] == (
-        "always() && (inputs.mode == 'cut' || inputs.mode == 'recut') "
-        "&& needs.preflight.result == 'success' && failure()"
-    )
+    assert job["if"] == ("always() && (inputs.mode == 'cut' || inputs.mode == 'recut') && needs.preflight.result == 'success' && failure()")
     # The preflight discovery gate must succeed before the finalizer may clear
     # a freeze: a run whose gate never passed created no freeze of its own.
     assert "preflight" in job["needs"]
@@ -3437,11 +3325,7 @@ def test_final_release_manifest_builds_components_dict_conditionally() -> None:
     assert "if include_windows:" in script
     assert 'components["windows"] = "amd64"' in script
     # Both architecture-suffixed DMGs are unconditional manifest assets.
-    assert (
-        'names = [f"modulo-{version}-linux-amd64.tar.gz", '
-        'f"Modulo-{version}-macos-arm64.dmg", '
-        'f"Modulo-{version}-macos-x86_64.dmg"]'
-    ) in script
+    assert ('names = [f"modulo-{version}-linux-amd64.tar.gz", f"Modulo-{version}-macos-arm64.dmg", f"Modulo-{version}-macos-x86_64.dmg"]') in script
     assert 'names.append(f"modulo-{version}-windows-amd64.exe")' in script
 
 
@@ -3655,15 +3539,9 @@ def test_include_windows_referencing_steps_declare_env() -> None:
                 continue
             if "INCLUDE_WINDOWS" in run:
                 env = step.get("env") or {}
-                assert "INCLUDE_WINDOWS" in env, (
-                    f"{job_id}: step '{step.get('name', 'unnamed')}' references INCLUDE_WINDOWS "
-                    f"but does not declare it in env:"
-                )
+                assert "INCLUDE_WINDOWS" in env, f"{job_id}: step '{step.get('name', 'unnamed')}' references INCLUDE_WINDOWS but does not declare it in env:"
                 # Verify it maps to the input
-                assert env["INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}", (
-                    f"{job_id}: step '{step.get('name', 'unnamed')}' INCLUDE_WINDOWS env "
-                    f"must be '${{ inputs.include_windows }}'"
-                )
+                assert env["INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}", f"{job_id}: step '{step.get('name', 'unnamed')}' INCLUDE_WINDOWS env must be '${{ inputs.include_windows }}'"
 
 
 def test_windows_installer_gated_steps_use_parenthesised_condition() -> None:
@@ -3676,9 +3554,7 @@ def test_windows_installer_gated_steps_use_parenthesised_condition() -> None:
         if name in ("Download the Windows installer artefact", "Assert the exact Windows exe is present"):
             condition = step.get("if", "")
             # Must be parenthesised: (cut || recut) && include_windows
-            assert condition == "(inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows", (
-                f"Step '{name}' condition must be parenthesised, got: {condition}"
-            )
+            assert condition == "(inputs.mode == 'cut' || inputs.mode == 'recut') && inputs.include_windows", f"Step '{name}' condition must be parenthesised, got: {condition}"
 
 
 def test_attest_artefacts_needs_includes_windows_installer() -> None:
@@ -3689,9 +3565,7 @@ def test_attest_artefacts_needs_includes_windows_installer() -> None:
     assert "windows-installer" in needs, f"attest-artefacts.needs must include 'windows-installer', got: {needs}"
     # The job uses always() so a skipped windows-installer must not block it
     condition = attest_job.get("if", "")
-    assert "always()" in condition, (
-        f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
-    )
+    assert "always()" in condition, f"attest-artefacts must use always() to not block on skipped windows-installer, got: {condition}"
 
 
 # ---------------------------------------------------------------------------
@@ -3709,9 +3583,7 @@ def test_attest_artefacts_verify_step_uses_oci_prefix() -> None:
     verify_step = steps[verify_idx]
     script = verify_step["run"]
     # The subject must be built with oci:// prefix
-    assert 'subject="oci://ghcr.io/$image_name@$digest"' in script, (
-        f"Verify step subject must use oci:// prefix, got: {script}"
-    )
+    assert 'subject="oci://ghcr.io/$image_name@$digest"' in script, f"Verify step subject must use oci:// prefix, got: {script}"
     # The gh attestation verify call must use the subject variable
     assert 'gh attestation verify "$subject" --repo "${{ github.repository }}"' in script
 
@@ -3723,9 +3595,7 @@ def test_attest_artefacts_job_timeout_is_30_minutes() -> None:
     # Run 41770073539 spent ~14.5 min downloading final-release-artefacts
     # and ~5 min on the macOS artifact before attesting. The 20-minute cap
     # left no headroom for artifact download variance.
-    assert attest_job.get("timeout-minutes") == 30, (
-        f"attest-artefacts timeout-minutes must be 30, got: {attest_job.get('timeout-minutes')}"
-    )
+    assert attest_job.get("timeout-minutes") == 30, f"attest-artefacts timeout-minutes must be 30, got: {attest_job.get('timeout-minutes')}"
 
 
 @pytest.mark.posix_only
@@ -4140,9 +4010,7 @@ def test_publish_release_guard_covers_exactly_its_needs() -> None:
 
     env = job["steps"][0].get("env") or {}
     for name, variable in guarded.items():
-        assert env.get(variable) == "${{ needs." + name + ".result }}", (
-            f"guard variable {variable} must read needs.{name}.result"
-        )
+        assert env.get(variable) == "${{ needs." + name + ".result }}", f"guard variable {variable} must read needs.{name}.result"
 
 
 @pytest.mark.posix_only
@@ -4238,23 +4106,13 @@ def test_publish_release_assertion_is_the_last_failing_step_after_the_tag_push()
     assert names.index(_ASSERT_STEP_NAME) > names.index("Push the bundle tag")
 
     trailing = steps[names.index(_ASSERT_STEP_NAME) + 1 :]
-    assert _step_names(trailing) == ["Notify website to rebuild (Cloudflare Pages deploy hook)"], (
-        "only the best-effort website notification may follow the terminal assertion"
-    )
+    assert _step_names(trailing) == ["Notify website to rebuild (Cloudflare Pages deploy hook)"], "only the best-effort website notification may follow the terminal assertion"
     for step in trailing:
-        assert "continue-on-error" not in step, (
-            f"{step.get('name')!r} after the terminal assertion may not mask a failure"
-        )
-        assert "always()" not in str(step.get("if", "")), (
-            f"{step.get('name')!r} after the terminal assertion must not run when it failed"
-        )
+        assert "continue-on-error" not in step, f"{step.get('name')!r} after the terminal assertion may not mask a failure"
+        assert "always()" not in str(step.get("if", "")), f"{step.get('name')!r} after the terminal assertion must not run when it failed"
         trailing_script = step.get("run", "")
-        assert "exit 1" not in trailing_script, (
-            f"{step.get('name')!r} after the terminal assertion must never fail the job"
-        )
-        assert trailing_script.rstrip().endswith("exit 0"), (
-            f"{step.get('name')!r} after the terminal assertion must exit 0 on every path"
-        )
+        assert "exit 1" not in trailing_script, f"{step.get('name')!r} after the terminal assertion must never fail the job"
+        assert trailing_script.rstrip().endswith("exit 0"), f"{step.get('name')!r} after the terminal assertion must exit 0 on every path"
 
     script = _post_condition_script()
     raw_script = _extract_publish_release_step_script(_ASSERT_STEP_NAME)
@@ -4305,9 +4163,7 @@ def test_publish_release_assertion_reports_an_unknown_state_not_absence(tmp_path
 
 
 def _windows_installer_job(job_id: str) -> dict[str, Any]:
-    workflow = yaml.safe_load(
-        (REPO_ROOT / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
-    )
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8"))
     return cast(dict[str, Any], workflow["jobs"][job_id])
 
 
@@ -4323,9 +4179,7 @@ def test_windows_artifacts_is_a_reusable_workflow_building_the_release_ref() -> 
     the RC tag, and a payload built from an unrelated main commit would ship
     binaries that do not match the release.
     """
-    workflow = yaml.safe_load(
-        (REPO_ROOT / ".github" / "workflows" / "windows-artifacts.yml").read_text(encoding="utf-8")
-    )
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "windows-artifacts.yml").read_text(encoding="utf-8"))
     # PyYAML resolves the unquoted `on` key to boolean True (YAML 1.1).
     triggers = workflow.get("on", workflow.get(True))
     assert isinstance(triggers, dict)
@@ -4402,12 +4256,8 @@ def test_windows_installer_attests_and_publishes_the_versioned_installer() -> No
     attest = _windows_installer_job("attest")
     steps = cast(list[dict[str, Any]], attest["steps"])
 
-    assert _step_by_name(attest, "Download signed Windows installer")["with"]["name"] == (
-        "windows-installer-signed-${{ inputs.version }}"
-    )
-    attest_step = next(
-        step for step in steps if str(step.get("uses", "")).startswith("actions/attest-build-provenance@")
-    )
+    assert _step_by_name(attest, "Download signed Windows installer")["with"]["name"] == ("windows-installer-signed-${{ inputs.version }}")
+    attest_step = next(step for step in steps if str(step.get("uses", "")).startswith("actions/attest-build-provenance@"))
     assert attest_step["with"]["subject-path"] == "release-artefacts/modulo-*-windows-amd64.exe"
 
     upload = _step_by_name(attest, "Upload attested Windows installer")
@@ -4505,9 +4355,7 @@ def _redis_step_harness(
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     (root / "scripts" / "bundle-versions.env").write_text(
-        "REDIS_VERSION=8.0.2\n"
-        "REDIS_SOURCE_URL=https://download.redis.io/releases/redis-8.0.2.tar.gz\n"
-        f"REDIS_SOURCE_SHA256={pin_sha256}\n",
+        f"REDIS_VERSION=8.0.2\nREDIS_SOURCE_URL=https://download.redis.io/releases/redis-8.0.2.tar.gz\nREDIS_SOURCE_SHA256={pin_sha256}\n",
         encoding="utf-8",
     )
     fixture = tmp_path / "fixture-redis-src.tar.gz"
@@ -4609,6 +4457,4 @@ def test_bundle_workflow_keeps_sha256sum_manifests_relative_to_the_download_dir(
             for line in run.splitlines():
                 if "cd downloads" in line and "sha256sum --check" in line and "downloads/" in line:
                     offenders.append(f"{job_id}: {step.get('name', '')}: {line.strip()}")
-    assert not offenders, (
-        "sha256sum --check runs inside downloads/ but the manifest path is downloads/-prefixed: " + "; ".join(offenders)
-    )
+    assert not offenders, "sha256sum --check runs inside downloads/ but the manifest path is downloads/-prefixed: " + "; ".join(offenders)

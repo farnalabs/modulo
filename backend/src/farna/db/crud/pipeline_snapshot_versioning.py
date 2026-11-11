@@ -136,12 +136,7 @@ async def delete_snapshot(
     if target is None:
         return False
 
-    stmt = (
-        select(PipelineSnapshot)
-        .where(PipelineSnapshot.pipeline_id == target.pipeline_id)
-        .order_by(PipelineSnapshot.snapshot_version.desc())
-        .limit(1)
-    )
+    stmt = select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == target.pipeline_id).order_by(PipelineSnapshot.snapshot_version.desc()).limit(1)
     if organisation_id is not None:
         stmt = stmt.where(PipelineSnapshot.organisation_id == organisation_id)
     result = await session.execute(stmt)
@@ -256,24 +251,12 @@ async def list_snapshots(
         filters.append(PipelineSnapshot.created_kind.not_in(excluded))
     if exclude_drafts:
         filters.append(PipelineSnapshot.draft.is_(False))
-    result = await session.execute(
-        select(PipelineSnapshot)
-        .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
-        .where(*filters)
-        .order_by(PipelineSnapshot.snapshot_version.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    result = await session.execute(select(PipelineSnapshot).join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id).where(*filters).order_by(PipelineSnapshot.snapshot_version.desc()).offset(offset).limit(page_size))
     snapshots = list(result.scalars())
 
     # Get total count (same scope as the page, so total matches what is listed)
     try:
-        count_result = await session.execute(
-            select(func.count())
-            .select_from(PipelineSnapshot)
-            .join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id)
-            .where(*filters)
-        )
+        count_result = await session.execute(select(func.count()).select_from(PipelineSnapshot).join(Pipeline, PipelineSnapshot.pipeline_id == Pipeline.id).where(*filters))
         total = count_result.scalar() or 0
     except ProgrammingError:
         return [], 0
@@ -441,9 +424,7 @@ async def rollback_to_snapshot(
         grants_deny_privilege=grants_deny_privilege,
     )
 
-    old_rows = list(
-        (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
-    )
+    old_rows = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
     old_edges: list[dict[str, Any]] = [
         {
             "source_node_id": str(e.source_node_id),
@@ -727,18 +708,13 @@ def _compute_semantic_layer(
     for m in modified_nodes:
         # ``changes["ports"]`` is a ``diff_node_ports`` delta over the SAME node
         # in both snapshots, i.e. a genuine signature change.
-        port_changes.extend(
-            {**entry, "kind": _PORT_CHANGE_KIND_NODE_SIGNATURE} for entry in m.get("changes", {}).get("ports", [])
-        )
+        port_changes.extend({**entry, "kind": _PORT_CHANGE_KIND_NODE_SIGNATURE} for entry in m.get("changes", {}).get("ports", []))
     for m in modified_edges:
         # ``changes["ports"]`` is a ``diff_edge_ports`` delta dict (no node_id),
         # so normalise it to the node-change shape the oracle can consume.
         edge_port_delta: Any = m.get("changes", {}).get("ports")
         if edge_port_delta:
-            port_changes.extend(
-                {**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT}
-                for entry in normalise_edge_port_delta(m["edge"], edge_port_delta)
-            )
+            port_changes.extend({**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT} for entry in normalise_edge_port_delta(m["edge"], edge_port_delta))
     # FAR-1894: added nodes are NOT diffed here. Diffing one against an empty
     # placeholder produced a "port changed" claim for a node that never existed
     # (with the literal node_id "None"), polluting the array and collapsing N
@@ -747,9 +723,7 @@ def _compute_semantic_layer(
     for edge in added_edges:
         delta = diff_edge_ports({}, edge)
         if delta:
-            port_changes.extend(
-                {**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT} for entry in normalise_edge_port_delta(edge, delta)
-            )
+            port_changes.extend({**entry, "kind": _PORT_CHANGE_KIND_EDGE_PORT} for entry in normalise_edge_port_delta(edge, delta))
 
     graph_b_for_impact: dict[str, Any] = {
         "nodes": graph_b.get("nodes", []),

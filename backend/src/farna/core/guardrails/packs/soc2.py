@@ -155,22 +155,14 @@ def build_soc2_pack() -> PolicyPack:
         PolicyControl(
             id="CC6.1",
             title="Logical and physical access control",
-            description=(
-                "Prevent unauthorized access to systems and data. The guardrail blocks payloads "
-                "carrying AWS access-key identifiers (AKIA/ASIA prefixes), which would otherwise "
-                "permit credential theft and unauthorized logical access."
-            ),
+            description=("Prevent unauthorized access to systems and data. The guardrail blocks payloads carrying AWS access-key identifiers (AKIA/ASIA prefixes), which would otherwise permit credential theft and unauthorized logical access."),
             guardrail=_cc61_access_key_block(),
             mapped=True,
         ),
         PolicyControl(
             id="CC6.6",
             title="Prevent or detect malware",
-            description=(
-                "Detect and prevent executable/script content. The guardrail blocks payloads "
-                "carrying script tags, javascript: URI handlers, or base64-encoded executable "
-                "(MZ/PE) markers at the ingestion edge."
-            ),
+            description=("Detect and prevent executable/script content. The guardrail blocks payloads carrying script tags, javascript: URI handlers, or base64-encoded executable (MZ/PE) markers at the ingestion edge."),
             guardrail=_cc66_executable_content_block(),
             mapped=True,
         ),
@@ -189,31 +181,21 @@ def build_soc2_pack() -> PolicyPack:
         PolicyControl(
             id="CC8.1",
             title="Validate changes before deployment",
-            description=(
-                "Validate payload structure at the ingestion edge: a change payload that is not "
-                "a well-formed, non-empty object is flagged before it drives a run."
-            ),
+            description=("Validate payload structure at the ingestion edge: a change payload that is not a well-formed, non-empty object is flagged before it drives a run."),
             guardrail=_cc81_change_validation_warn(),
             mapped=True,
         ),
         PolicyControl(
             id="A1.2",
             title="Maintain availability through capacity and performance monitoring",
-            description=(
-                "Bound payload size at the ingestion edge (top-level property count and string "
-                "length) so oversized inputs cannot degrade pipeline availability."
-            ),
+            description=("Bound payload size at the ingestion edge (top-level property count and string length) so oversized inputs cannot degrade pipeline availability."),
             guardrail=_a12_payload_size_warn(),
             mapped=True,
         ),
         PolicyControl(
             id="P4.1",
             title="Personal information is identified and handled per privacy commitments",
-            description=(
-                "Mask personal-information fields (SSN, credit card, email) at the ingestion edge "
-                "via STATIC field-path redaction, so personal data is never persisted in raw form "
-                "(SOC 2 TSC privacy criteria; GDPR-adjacent data-privacy posture)."
-            ),
+            description=("Mask personal-information fields (SSN, credit card, email) at the ingestion edge via STATIC field-path redaction, so personal data is never persisted in raw form (SOC 2 TSC privacy criteria; GDPR-adjacent data-privacy posture)."),
             guardrail=_p41_pii_redact(),
             mapped=True,
         ),

@@ -617,9 +617,7 @@ def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str], provena
         urls.append(stripped)
 
 
-def _collect_marker_pr_urls(
-    raw_output_markers: Any, seen: set[str], urls: list[str], provenance: dict[str, str]
-) -> None:
+def _collect_marker_pr_urls(raw_output_markers: Any, seen: set[str], urls: list[str], provenance: dict[str, str]) -> None:
     """Collect valid pr_urls keyed by ANY attempt-key in the run's markers."""
     if not isinstance(raw_output_markers, dict):
         return
@@ -970,11 +968,7 @@ def _countable_result(
             work_intact=work_intact,
             declared_success_nodes=declared_success_nodes,
         )
-    reason = (
-        REASON_COMPENSATION_FAILED
-        if status == "compensation_failed"
-        else _derive_no_delivery_reason(error_code, raw_output_markers)
-    )
+    reason = REASON_COMPENSATION_FAILED if status == "compensation_failed" else _derive_no_delivery_reason(error_code, raw_output_markers)
     return _classification(
         RunClassificationValue.no_delivery,
         reason,
@@ -1076,9 +1070,7 @@ def _record_classification_failure(failure: str) -> None:
             provider = _otel_metrics.get_meter_provider()
             if provider is None:
                 return
-            _classification_failures_counter = provider.get_meter(
-                "modulo.pipeline_engine", version="0.1.0"
-            ).create_counter(
+            _classification_failures_counter = provider.get_meter("modulo.pipeline_engine", version="0.1.0").create_counter(
                 name="runs_classification_failures_total",
                 description="Run-outcome classification failures, by failure type",
                 unit="1",
@@ -1386,9 +1378,7 @@ async def _reconcile_classify_run(
                 await set_rls_org(session, org_id)
             fresh = (
                 await asyncio.wait_for(
-                    session.execute(
-                        select(Run).where(Run.id == run.id).with_for_update().execution_options(populate_existing=True)
-                    ),
+                    session.execute(select(Run).where(Run.id == run.id).with_for_update().execution_options(populate_existing=True)),
                     timeout=_CLASSIFICATION_WRITE_TIMEOUT_SECONDS,
                 )
             ).scalar_one_or_none()
@@ -1477,12 +1467,7 @@ async def reconcile_missing_classifications(
         async with session_factory() as session, session.begin():
             if org_id is not None:
                 await set_rls_org(session, org_id)
-            result = await session.execute(
-                select(Run)
-                .where(Run.status.in_(sorted(TERMINAL_STATUSES)), Run.run_classification.is_(None))
-                .order_by(Run.completed_at.desc())
-                .limit(max_runs)
-            )
+            result = await session.execute(select(Run).where(Run.status.in_(sorted(TERMINAL_STATUSES)), Run.run_classification.is_(None)).order_by(Run.completed_at.desc()).limit(max_runs))
             runs = list(result.scalars().all())
 
         for run in runs:

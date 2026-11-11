@@ -366,19 +366,9 @@ def compute_flip_guard_verdict(
     safe = warning_count == 0
 
     if safe:
-        advisory = (
-            f"Safe to flip: {total} enforcement record(s) examined, "
-            "zero lenient-mode warnings found.  No validation failures "
-            "would become hard errors in strict mode."
-        )
+        advisory = f"Safe to flip: {total} enforcement record(s) examined, zero lenient-mode warnings found.  No validation failures would become hard errors in strict mode."
     else:
-        advisory = (
-            f"NOT safe to flip: {warning_count} of {total} enforcement "
-            "record(s) are lenient-mode warnings that would become hard "
-            f"failures in strict mode.  Outcomes: "
-            f"{', '.join(sorted(warning_outcomes))}.  Resolve the "
-            "underlying validation failures before switching to strict."
-        )
+        advisory = f"NOT safe to flip: {warning_count} of {total} enforcement record(s) are lenient-mode warnings that would become hard failures in strict mode.  Outcomes: {', '.join(sorted(warning_outcomes))}.  Resolve the underlying validation failures before switching to strict."
 
     return FlipGuardVerdict(
         safe_to_flip=safe,

@@ -79,11 +79,7 @@ _INDEX_NAME = "ix_runs_webhook_decay_sweep"
 # The sweep's static filter, verbatim: webhook-triggered terminal runs.
 # Pinned in three places (this predicate, the model's Index, and the sweep's
 # own WHERE) by the structural unit test.
-_DECAY_WHERE = sa.text(
-    "trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', "
-    "'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', "
-    "'failed', 'rejected', 'router_no_match', 'stalled')"
-)
+_DECAY_WHERE = sa.text("trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', 'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', 'failed', 'rejected', 'router_no_match', 'stalled')")
 
 _INCLUDE_COLUMNS = ["organisation_id", "pipeline_id", "status", "node_deadline_watchdog_fired_count"]
 

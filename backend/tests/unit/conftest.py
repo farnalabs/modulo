@@ -14,7 +14,7 @@ from tests.unit._e2b_sandbox_bridge import install_bridge
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
-os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
 
 
 @pytest.fixture(autouse=True)
@@ -40,9 +40,7 @@ def _restore_app_dependency_overrides() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> Generator[None, None, None]:
+def _isolated_audit_session(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
     See ``tests.helpers.audit_session`` for why the double exists and why
@@ -589,7 +587,7 @@ def _far681_any_credential_default(request: pytest.FixtureRequest) -> None:
 # ``MODULO_TEST_COROUTINE_ATTRIBUTION=0`` disables the instrumentation for a
 # local debugging session. It is ON by default, so the CI unit run (``pytest
 # tests/unit/``) always has it without extra wiring.
-_ATTRIBUTION_ENV = "MODULO_TEST_COROUTINE_ATTRIBUTION"
+_ATTRIBUTION_ENV = "FARNA_CONTROL_MODULO_TEST_COROUTINE_ATTRIBUTION"
 _ATTRIBUTION_ENABLED = os.environ.get(_ATTRIBUTION_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
 
 #: ``sys.set_coroutine_origin_tracking_depth`` frames per coroutine. Deep enough
@@ -660,13 +658,7 @@ def _format_creation_stack(coroutine: object) -> str:
     origin = getattr(coroutine, "cr_origin", None)
     if not origin:
         return "  (no creation stack was recorded for this object)"
-    frames = [
-        (filename, lineno, funcname)
-        for filename, lineno, funcname in reversed(origin)
-        if funcname != "_record_asyncmock_coroutine"
-        and "/site-packages/_pytest/" not in filename
-        and "/site-packages/pluggy/" not in filename
-    ]
+    frames = [(filename, lineno, funcname) for filename, lineno, funcname in reversed(origin) if funcname != "_record_asyncmock_coroutine" and "/site-packages/_pytest/" not in filename and "/site-packages/pluggy/" not in filename]
     if not frames:
         frames = [(filename, lineno, funcname) for filename, lineno, funcname in reversed(origin)]
     lines = ["  Coroutine created at (most recent call last):"]
@@ -680,9 +672,7 @@ def _format_creation_stack(coroutine: object) -> str:
 
 def _report_leaks(nodeid: str, leaks: list[object]) -> None:
     """Fail *nodeid* for every never-awaited AsyncMock coroutine it created."""
-    details = "\n\n".join(
-        f"[{index}] {_format_creation_stack(coroutine)}" for index, coroutine in enumerate(leaks, start=1)
-    )
+    details = "\n\n".join(f"[{index}] {_format_creation_stack(coroutine)}" for index, coroutine in enumerate(leaks, start=1))
     pytest.fail(
         f"{len(leaks)} never-awaited AsyncMock coroutine(s) created during {nodeid}.\n\n"
         "A synchronous call on an AsyncMock - or a synchronous read of an AsyncMock's\n"

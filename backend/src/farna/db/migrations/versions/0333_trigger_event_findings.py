@@ -73,10 +73,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE public.trigger_event_findings ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE public.trigger_event_findings FORCE ROW LEVEL SECURITY")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.trigger_event_findings")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.trigger_event_findings USING "
-        "(organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.trigger_event_findings USING (organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)")
 
 
 def downgrade() -> None:

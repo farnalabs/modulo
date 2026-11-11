@@ -14,18 +14,10 @@ class PipelineFolder(OrgScoped):
     __tablename__ = "pipeline_folders"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete="CASCADE"), index=True
-    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete="CASCADE"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
 
-    parent: Mapped["PipelineFolder | None"] = relationship(
-        "PipelineFolder", remote_side="PipelineFolder.id", back_populates="children"
-    )
-    children: Mapped[list["PipelineFolder"]] = relationship(
-        "PipelineFolder", remote_side="PipelineFolder.parent_id", back_populates="parent"
-    )
+    parent: Mapped["PipelineFolder | None"] = relationship("PipelineFolder", remote_side="PipelineFolder.id", back_populates="children")
+    children: Mapped[list["PipelineFolder"]] = relationship("PipelineFolder", remote_side="PipelineFolder.parent_id", back_populates="parent")
     creator: Mapped["Account"] = relationship(foreign_keys=[account_id])

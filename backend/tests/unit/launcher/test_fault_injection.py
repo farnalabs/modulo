@@ -111,7 +111,7 @@ def _spawn_kill_driver(pgdata: Path, extra_env: dict[str, str]) -> Popen[str]:
     env.pop("PYTHONPATH", None)
     # Arm the deterministic initdb pause gate so the child blocks at
     # PAUSED:initdb_pre_rename (the point the test SIGKILLs / resumes at).
-    env["MODULO_TEST_PAUSE_AT"] = GATE_INITDB_PRE_RENAME
+    env["FARNA_CONTROL_MODULO_TEST_PAUSE_AT"] = GATE_INITDB_PRE_RENAME
     env.update(extra_env)
     return Popen(  # noqa: S603 — fixed argv, trusted synthesized test driver
         [sys.executable, "-c", _KILL_DRIVER, str(pgdata)],
@@ -131,9 +131,7 @@ def module_path_on_syspath(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @requires_posix
-def test_sigkill_mid_initdb_leaves_nothing_to_adopt_and_next_boot_heals(
-    tmp_path: Path, module_path_on_syspath: None
-) -> None:
+def test_sigkill_mid_initdb_leaves_nothing_to_adopt_and_next_boot_heals(tmp_path: Path, module_path_on_syspath: None) -> None:
     """SIGKILL at the deterministic gate → no adopted datadir → next boot heals.
 
     Advance window: the pause gate is stdin-blocked, so the kill is exact;
@@ -471,14 +469,14 @@ def test_entry_scrub_removes_the_poisoned_boot_env(tmp_path: Path, monkeypatch: 
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     monkeypatch.setenv("LD_PRELOAD", "/evil/interposer.so")
     monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/evil.dylib")
-    monkeypatch.setenv("MODULO_TEST_PAUSE_AT", GATE_INITDB_PRE_RENAME)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_PAUSE_AT", GATE_INITDB_PRE_RENAME)
     scrub_os_environment()
     assert "PGHOST" not in os.environ
     assert "PGPASSWORD" not in os.environ
     assert "PYTHONPATH" not in os.environ
     assert "LD_PRELOAD" not in os.environ
     assert "DYLD_INSERT_LIBRARIES" not in os.environ
-    assert "MODULO_TEST_PAUSE_AT" not in os.environ
+    assert "FARNA_CONTROL_MODULO_TEST_PAUSE_AT" not in os.environ
     assert os.environ.get("PATH")  # legitimate variables survive the scrub
 
 
@@ -564,9 +562,7 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="chmod 0500 semantics are POSIX-only")
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores mode bits — the fault is not injectable"
-)
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores mode bits — the fault is not injectable")
 def test_unwritable_datadir_refuses_the_boot_with_actionable_message(tmp_path: Path) -> None:
     """chmod 0500 the data dir; doctor must fail it with the actionable fix."""
     from farna.launcher.doctor import check_data_dir
@@ -576,9 +572,7 @@ def test_unwritable_datadir_refuses_the_boot_with_actionable_message(tmp_path: P
     data_dir.chmod(0o500)
     try:
         probes = minimal_probes(
-            assert_writable=lambda root: (_ for _ in ()).throw(
-                PermissionError(f"data dir {root} is not writable by this user")
-            ),
+            assert_writable=lambda root: (_ for _ in ()).throw(PermissionError(f"data dir {root} is not writable by this user")),
             listening_on=lambda _port: [],
             launcher_running=lambda: False,
         )
@@ -594,9 +588,7 @@ def test_unwritable_datadir_refuses_the_boot_with_actionable_message(tmp_path: P
 # ---------------------------------------------------------------------------
 
 
-_requires_posix_secrets = pytest.mark.skipif(
-    sys.platform == "win32", reason="the secrets file refuses Windows (P3 seam)"
-)
+_requires_posix_secrets = pytest.mark.skipif(sys.platform == "win32", reason="the secrets file refuses Windows (P3 seam)")
 
 
 def _seed_populated_datadir(tmp_path: Path, *, key: bytes) -> tuple[Path, secrets_file_module.LauncherSecrets, Any]:
@@ -672,9 +664,7 @@ def _try_mount_tiny_tmpfs(base: Path) -> Path | None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="tmpfs cap is POSIX-only")
-def test_disk_full_drives_the_data_dir_check_to_a_quantified_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_disk_full_drives_the_data_dir_check_to_a_quantified_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Disk-full -> doctor's data-dir floor fails with the quantified error.
 
     Uses a REAL 1 MiB tmpfs when the runner can mount one (the preferred

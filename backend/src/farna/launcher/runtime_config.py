@@ -32,10 +32,10 @@ from pathlib import Path
 RUNTIME_CONFIG_KEYS: frozenset[str] = frozenset({"monitor", "autoLogin"})
 RUNTIME_CONFIG_FILENAME = "runtime-config.js"
 
-_MONITOR_ENV = "MODULO_MONITOR_CONFIG"
-_AUTO_LOGIN_USERNAME_ENV = "MODULO_AUTO_LOGIN_USERNAME"
-_AUTO_LOGIN_PASSWORD_ENV = "MODULO_AUTO_LOGIN_PASSWORD"
-_AUTO_LOGIN_ORG_SLUG_ENV = "MODULO_AUTO_LOGIN_ORG_SLUG"
+_MONITOR_ENV = "FARNA_CONTROL_MODULO_MONITOR_CONFIG"
+_AUTO_LOGIN_USERNAME_ENV = "FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME"
+_AUTO_LOGIN_PASSWORD_ENV = "FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD"
+_AUTO_LOGIN_ORG_SLUG_ENV = "FARNA_CONTROL_MODULO_AUTO_LOGIN_ORG_SLUG"
 
 # The launcher-owned public surface (consumed by the deploy entrypoint, the
 # serve_spa mount, and the tests; vulture's dead-code gate special-cases
@@ -80,11 +80,7 @@ def build_runtime_config_payload(env: Mapping[str, str] | None = None) -> dict[s
 
 def render_runtime_config_js(payload: Mapping[str, object]) -> str:
     """Render the ``window.__MODULO_CONFIG__`` assignment line."""
-    return (
-        "window.__MODULO_CONFIG__ = Object.assign(window.__MODULO_CONFIG__ || {}, "
-        + json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
-        + ");\n"
-    )
+    return "window.__MODULO_CONFIG__ = Object.assign(window.__MODULO_CONFIG__ || {}, " + json.dumps(payload, separators=(",", ":"), ensure_ascii=True) + ");\n"
 
 
 def write_runtime_config_js(payload: Mapping[str, object], destination: str | os.PathLike[str]) -> None:

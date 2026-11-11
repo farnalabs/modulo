@@ -82,24 +82,11 @@ def upgrade() -> None:
         op.execute(sa.text(f'ALTER TABLE "{table}" ADD CONSTRAINT "{name}" UNIQUE (id, organisation_id)'))
     for name, table, column, target in _COMPOSITE_FKS:
         _drop_plain_fk(table, column)
-        op.execute(
-            sa.text(
-                f'ALTER TABLE "{table}" ADD CONSTRAINT "{name}" FOREIGN KEY ("{column}", organisation_id) '
-                f'REFERENCES "{target}" (id, organisation_id) ON DELETE CASCADE'
-            )
-        )
+        op.execute(sa.text(f'ALTER TABLE "{table}" ADD CONSTRAINT "{name}" FOREIGN KEY ("{column}", organisation_id) REFERENCES "{target}" (id, organisation_id) ON DELETE CASCADE'))
     op.execute(sa.text("DROP INDEX IF EXISTS uq_attr_binding_trigger_per_pipeline_node"))
     op.execute(sa.text("DROP INDEX IF EXISTS uq_attr_binding_action_per_pipeline_node"))
-    op.execute(
-        sa.text(
-            "CREATE UNIQUE INDEX uq_attr_binding_trigger_per_pipeline_node ON system_map_attribution_bindings (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'trigger' AND deleted_at IS NULL"
-        )
-    )
-    op.execute(
-        sa.text(
-            "CREATE UNIQUE INDEX uq_attr_binding_action_per_pipeline_node ON system_map_attribution_bindings (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'action_pipeline' AND deleted_at IS NULL"
-        )
-    )
+    op.execute(sa.text("CREATE UNIQUE INDEX uq_attr_binding_trigger_per_pipeline_node ON system_map_attribution_bindings (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'trigger' AND deleted_at IS NULL"))
+    op.execute(sa.text("CREATE UNIQUE INDEX uq_attr_binding_action_per_pipeline_node ON system_map_attribution_bindings (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'action_pipeline' AND deleted_at IS NULL"))
     op.create_check_constraint(
         "ck_system_map_attribution_bindings_trigger_semantics",
         "system_map_attribution_bindings",
@@ -119,11 +106,6 @@ def downgrade() -> None:
     op.execute(sa.text("DROP INDEX IF EXISTS uq_attr_binding_action_per_pipeline_node"))
     for name, table, column, target in reversed(_COMPOSITE_FKS):
         op.execute(sa.text(f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS "{name}"'))
-        op.execute(
-            sa.text(
-                f'ALTER TABLE "{table}" ADD CONSTRAINT "{table}_{column}_fkey" '
-                f'FOREIGN KEY ("{column}") REFERENCES "{target}" (id)'
-            )
-        )
+        op.execute(sa.text(f'ALTER TABLE "{table}" ADD CONSTRAINT "{table}_{column}_fkey" FOREIGN KEY ("{column}") REFERENCES "{target}" (id)'))
     for name, table in reversed(_UNIQUE_TARGETS):
         op.drop_constraint(name, table, type_="unique")

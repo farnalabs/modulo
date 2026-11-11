@@ -107,9 +107,7 @@ def destroy_candidates(value: Any, pattern: str | None) -> list[str]:
         try:
             compiled = re.compile(pattern)
         except re.error as exc:
-            raise GuardrailRedactionMechanismError(
-                f"destroy candidate pattern {pattern!r} is not a usable regex: {exc}"
-            ) from None
+            raise GuardrailRedactionMechanismError(f"destroy candidate pattern {pattern!r} is not a usable regex: {exc}") from None
         candidates = [match.group(0) for match in compiled.finditer(value)]
         if candidates:
             return candidates

@@ -193,9 +193,7 @@ class TestIngestUnhandledError:
                 mock.patch("farna.db.rls.set_rls_org", set_rls),
                 mock.patch("farna.core.error_tracking.ErrorIngestionService", return_value=service),
             ):
-                await _ingest_unhandled_error(
-                    _request(method="POST", path="/x", organisation_id="org-1", user_id="user-1")
-                )
+                await _ingest_unhandled_error(_request(method="POST", path="/x", organisation_id="org-1", user_id="user-1"))
         finally:
             correlation_id_var.reset(token)
 
@@ -212,7 +210,7 @@ class TestIngestUnhandledError:
         assert event["context_json"]["path"] == "/x"
         assert event["context_json"]["correlation_id"] == "corr-1"
         assert event["context_json"]["user_id"] == "user-1"
-        assert event["environment"] == os.environ.get("MODULO_ENV", "development")
+        assert event["environment"] == os.environ.get("FARNA_CONTROL_MODULO_ENV", "development")
 
     async def test_ingest_skips_ingestion_when_no_org(self) -> None:
         from farna.api.middleware.catch_all import _ingest_unhandled_error

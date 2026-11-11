@@ -33,9 +33,7 @@ async def set_parent_node(
         return None
 
     if parent_id is not None:
-        parent = (
-            await session.execute(select(Node).where(Node.id == parent_id).with_for_update())
-        ).scalar_one_or_none()
+        parent = (await session.execute(select(Node).where(Node.id == parent_id).with_for_update())).scalar_one_or_none()
         if parent is None:
             return None
 

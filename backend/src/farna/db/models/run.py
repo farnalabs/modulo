@@ -80,9 +80,7 @@ SUCCESS_STATUSES: frozenset[str] = frozenset({"complete"})
 # kept in this set (not a terminal status) so every existing consumer that
 # treats ``awaiting_human`` as in-flight treats a parked run identically — the
 # ONE exception is the pipeline capacity gate below, which excludes both.
-ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
-    {"pending", "running", "awaiting_human", "claimed", "unknown", "hitl_parked"}
-)
+ACTIVE_RUN_STATUSES: frozenset[str] = frozenset({"pending", "running", "awaiting_human", "claimed", "unknown", "hitl_parked"})
 
 # ---------------------------------------------------------------------------
 # FAR-1233 — WHY a run was cancelled. The CLOSED vocabulary behind
@@ -183,9 +181,7 @@ AWAITING_HUMAN_STATUS: Final[str] = "awaiting_human"
 # ``ACTIVE_RUN_STATUSES - {'pending'}``), so parked runs remain org-bounded.
 # Derived (qa F15): subtracting from ACTIVE_RUN_STATUSES keeps the two sets from
 # drifting apart when a status is added to the active vocabulary.
-PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
-    ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS}
-)
+PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
 
 # Run statuses under which an undecided HITL gate is actionable work (FAR-612).
 # ``awaiting_human`` gates are claimable now; ``claimed`` gates are held by a
@@ -255,14 +251,11 @@ class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', "
-            "'correction', 'slack_app_mention', 'rerun')",
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction', 'slack_app_mention', 'rerun')",
             name="ck_runs_trigger_type",
         ),
         CheckConstraint(
-            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', "
-            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', "
-            "'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected')",
+            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
@@ -339,16 +332,8 @@ class Run(OrgScoped):
         Index(
             "ix_runs_workspace_drift_sweep",
             "id",
-            postgresql_where=text(
-                "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
-                "AND workspace_inputs_drift_detected IS NULL"
-            ),
-            sqlite_where=text(
-                "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
-                "AND workspace_inputs_drift_detected IS NULL"
-            ),
+            postgresql_where=text("status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') AND workspace_inputs_drift_detected IS NULL"),
+            sqlite_where=text("status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') AND workspace_inputs_drift_detected IS NULL"),
         ),
         # FAR-2116 — pipeline-decay alerting (core/pipeline_decay_alerts.py).
         # The sweep runs on EVERY reconcile tick (60s) and reads a 2-hour
@@ -371,16 +356,8 @@ class Run(OrgScoped):
                 "status",
                 "node_deadline_watchdog_fired_count",
             ],
-            postgresql_where=text(
-                "trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', "
-                "'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', "
-                "'failed', 'rejected', 'router_no_match', 'stalled')"
-            ),
-            sqlite_where=text(
-                "trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', "
-                "'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', "
-                "'failed', 'rejected', 'router_no_match', 'stalled')"
-            ),
+            postgresql_where=text("trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', 'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', 'failed', 'rejected', 'router_no_match', 'stalled')"),
+            sqlite_where=text("trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', 'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', 'failed', 'rejected', 'router_no_match', 'stalled')"),
         ),
         # FAR-153 / §15.1 — the two partial unique indexes that REPLACE the
         # former global UNIQUE(langgraph_thread_id) (dropped by migration
@@ -424,12 +401,8 @@ class Run(OrgScoped):
         nullable=False,
         index=True,
     )
-    snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
-    trigger_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("triggers.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False, index=True)
+    trigger_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("triggers.id", ondelete=ONDELETE_SET_NULL), index=True)
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # FAR-1141 / ADR-042: the run-level execution origin — ONE of
     # EXECUTION_ORIGIN_VALUES, or NULL for "executed by Modulo / recorded
@@ -444,9 +417,7 @@ class Run(OrgScoped):
     # requires to distinguish the two origins.
     execution_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
-    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
     # FAR-153 / §15.1 — run-group identity. ``run_group_id`` is the ROOT run
     # id of the retry/resume group this attempt belongs to (indexed: group
     # queries read WHERE run_group_id = :root). NULL for roots, for signal /
@@ -461,9 +432,7 @@ class Run(OrgScoped):
     run_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
     run_group_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True)
     # account_id (FAR-1443): deliberately NOT indexed — no query filters this
     # column (it is written at create and read for display only; the sole
     # WHERE against it is by primary key), so migration 0283 drops
@@ -606,9 +575,7 @@ class Run(OrgScoped):
     # ``running`` + ``first_node_dispatched`` + stale-heartbeat shape) — the
     # claim-clear covers the healthy path; a wedged row's lingering flag is
     # never read and never surfaces.
-    guardrail_override_resume_pending: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false", default=False
-    )
+    guardrail_override_resume_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
     # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
@@ -752,9 +719,7 @@ class Run(OrgScoped):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL_NONE_AS_NULL, nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
-    variant_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("variant_groups.id", ondelete=ONDELETE_SET_NULL)
-    )
+    variant_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("variant_groups.id", ondelete=ONDELETE_SET_NULL))
     # FAR-332 batch-scoped variant comparison (migration 0118). Every run fired
     # together in one ``run_variant_batch`` shares the same ``batch_id``; the
     # compare route loads runs purely by batch_id (never a live group), so

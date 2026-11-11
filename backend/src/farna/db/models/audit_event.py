@@ -38,9 +38,7 @@ class AuditEvent(OrgScoped):
     )
 
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     resource_type: Mapped[str | None] = mapped_column(String(100))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     # DB stores JSONB (0147_json_to_jsonb_standardize); JSONB_COL keeps
@@ -61,9 +59,7 @@ class AuditChainHead(Base):
     # default (``event_count`` is NOT NULL) is kept here for create_all'd
     # SQLite/MariaDB schemas; 0292 sets the Postgres-side default.
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
@@ -72,7 +68,5 @@ class AuditChainHead(Base):
         index=True,
     )
     last_event_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    last_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("audit_events.id", ondelete="SET NULL"), index=True
-    )
+    last_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("audit_events.id", ondelete="SET NULL"), index=True)
     event_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")

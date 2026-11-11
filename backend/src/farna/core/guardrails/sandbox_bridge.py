@@ -119,9 +119,7 @@ def _args_sha256(args: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _escalation_payload(
-    tool_name: str, args: dict[str, Any], decision: dict[str, Any], direction: str
-) -> dict[str, Any]:
+def _escalation_payload(tool_name: str, args: dict[str, Any], decision: dict[str, Any], direction: str) -> dict[str, Any]:
     """Build the ``MODULO_BRIDGE_ESCALATED`` marker payload for one event.
 
     Summary-only by design: the tool name, direction, the firing guardrail, a
@@ -302,8 +300,8 @@ def _load_config(config_path: str | None) -> dict[str, Any]:
 
 
 def _build_client() -> tuple[BridgeClient, dict[str, Any]]:
-    endpoint = os.environ.get("MODULO_BRIDGE_ENDPOINT") or DEFAULT_ENDPOINT
-    config_path = os.environ.get("MODULO_BRIDGE_CONFIG")
+    endpoint = os.environ.get("FARNA_CONTROL_MODULO_BRIDGE_ENDPOINT") or DEFAULT_ENDPOINT
+    config_path = os.environ.get("FARNA_CONTROL_MODULO_BRIDGE_CONFIG")
     config = _load_config(config_path)
     return BridgeClient(endpoint, patterns=config.get("patterns", DEFAULT_PATTERNS)), config
 
@@ -435,7 +433,7 @@ def _build_cli_client(args: argparse.Namespace) -> BridgeClient:
     """Build the bridge client from the CLI flags / environment."""
     if args.config:
         config = _load_config(args.config)
-        endpoint = args.endpoint or os.environ.get("MODULO_BRIDGE_ENDPOINT") or DEFAULT_ENDPOINT
+        endpoint = args.endpoint or os.environ.get("FARNA_CONTROL_MODULO_BRIDGE_ENDPOINT") or DEFAULT_ENDPOINT
         return BridgeClient(endpoint, patterns=config.get("patterns", DEFAULT_PATTERNS))
     if args.endpoint:
         return BridgeClient(args.endpoint)

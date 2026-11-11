@@ -48,10 +48,10 @@ _ENV_KEYS_TO_DROP = (
     "XDG_STATE_HOME",
     "XDG_DATA_HOME",
     "VERSION",
-    "MODULO_INSTALL_ROOT",
-    "MODULO_BIN_DIR",
-    "MODULO_DATA_DIR",
-    "MODULO_LEGACY_SHIM_PATH",
+    "FARNA_CONTROL_MODULO_INSTALL_ROOT",
+    "FARNA_CONTROL_MODULO_BIN_DIR",
+    "FARNA_CONTROL_MODULO_DATA_DIR",
+    "FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH",
 )
 
 
@@ -69,11 +69,11 @@ def _install_env(tmp_path: Path, *, path_prefix: Path | None = None) -> dict[str
     env.update(
         {
             "HOME": str(home),
-            "MODULO_INSTALL_ROOT": str(tmp_path / "install-root"),
-            "MODULO_BIN_DIR": str(tmp_path / "bin"),
+            "FARNA_CONTROL_MODULO_INSTALL_ROOT": str(tmp_path / "install-root"),
+            "FARNA_CONTROL_MODULO_BIN_DIR": str(tmp_path / "bin"),
             # A real /usr/local/bin/modulo on the host must not mask the
             # failure this test is inducing.
-            "MODULO_LEGACY_SHIM_PATH": str(tmp_path / "no-legacy-shim"),
+            "FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH": str(tmp_path / "no-legacy-shim"),
         }
     )
     if path_prefix is not None:
@@ -223,14 +223,7 @@ def test_failure_exit_codes_are_unchanged(tmp_path: Path, args: list[str], extra
 @pytest.mark.posix_only
 def test_unsupported_architecture_prints_the_block(tmp_path: Path) -> None:
     """A common early exit (not a `die` in a later stage) must still print it."""
-    uname_stub = (
-        "#!/usr/bin/env bash\n"
-        'case "$1" in\n'
-        '  -s) printf "Linux\\n" ;;\n'
-        '  -m) printf "s390x\\n" ;;\n'
-        '  *) printf "Linux\\n" ;;\n'
-        "esac\n"
-    )
+    uname_stub = '#!/usr/bin/env bash\ncase "$1" in\n  -s) printf "Linux\\n" ;;\n  -m) printf "s390x\\n" ;;\n  *) printf "Linux\\n" ;;\nesac\n'
     bin_dir = _stub(tmp_path, "uname", uname_stub)
     result = _run_installer(_INSTALL_SH, [], _install_env(tmp_path, path_prefix=bin_dir))
     assert result.returncode == 1

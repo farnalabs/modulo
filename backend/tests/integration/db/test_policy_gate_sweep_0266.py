@@ -98,20 +98,12 @@ def _seed_matrix(
             )
             acc_id = uuid.uuid4()
             conn.execute(
-                sa.text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                    "VALUES (:id, :e, :n, 'hash', 'local', true)"
-                ),
+                sa.text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
                 {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
             )
             pipe_id = uuid.uuid4()
             conn.execute(
-                sa.text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                sa.text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
                 {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
             )
             for name, eval_type, action, has_node, soft_deleted, _expected in _SEED_SPECS:
@@ -122,12 +114,7 @@ def _seed_matrix(
                     cfg["type"] = "json_schema"
                     cfg["schema"] = dict(_JS_SCHEMA)
                 conn.execute(
-                    sa.text(
-                        "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, "
-                        "name, eval_type, config_json, version, deleted_at) "
-                        "VALUES (:id, :oid, :pid, :aid, :nid, :name, :et, CAST(:cfg AS jsonb), 1, "
-                        "CASE WHEN :soft THEN now() ELSE NULL END)"
-                    ),
+                    sa.text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, name, eval_type, config_json, version, deleted_at) VALUES (:id, :oid, :pid, :aid, :nid, :name, :et, CAST(:cfg AS jsonb), 1, CASE WHEN :soft THEN now() ELSE NULL END)"),
                     {
                         "id": str(eval_id),
                         "oid": str(org_id),
@@ -144,10 +131,7 @@ def _seed_matrix(
                 if name == "gr-block-gated":
                     pre_gate_id = uuid.uuid4()
                     conn.execute(
-                        sa.text(
-                            "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) "
-                            "VALUES (:id, :oid, :eid, :nid, 'block', 1)"
-                        ),
+                        sa.text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:id, :oid, :eid, :nid, 'block', 1)"),
                         {
                             "id": str(pre_gate_id),
                             "oid": str(org_id),
@@ -193,7 +177,7 @@ def sweep_db(monkeypatch):
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
-        m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
+        m.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
         from farna.db.bootstrap_role import bootstrap_roles
 
         asyncio.run(bootstrap_roles(raw, app_url))
@@ -211,11 +195,7 @@ def _live_gates(raw_asyncpg_url: str, eval_id: uuid.UUID, org_id: uuid.UUID) -> 
         with engine.connect() as conn:
             rows = (
                 conn.execute(
-                    sa.text(
-                        "SELECT id, action, version, node_id FROM policy_gates "
-                        "WHERE eval_id = :eid AND organisation_id = :oid AND deleted_at IS NULL "
-                        "ORDER BY created_at"
-                    ),
+                    sa.text("SELECT id, action, version, node_id FROM policy_gates WHERE eval_id = :eid AND organisation_id = :oid AND deleted_at IS NULL ORDER BY created_at"),
                     {"eid": str(eval_id), "oid": str(org_id)},
                 )
                 .mappings()

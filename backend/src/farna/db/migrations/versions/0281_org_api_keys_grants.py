@@ -54,9 +54,5 @@ def downgrade() -> None:
     bind = op.get_bind()
     remaining = bind.execute(sa.text("SELECT COUNT(*) FROM org_api_keys WHERE grants IS NOT NULL")).scalar()
     if remaining:
-        raise RuntimeError(
-            f"Refusing to downgrade 0281: {remaining} org_api_keys row(s) carry a grant-set. "
-            "Dropping the column would silently widen them to full-role keys. Turn the "
-            "api_key_grants flag off and revoke all grant-bearing keys first, then retry."
-        )
+        raise RuntimeError(f"Refusing to downgrade 0281: {remaining} org_api_keys row(s) carry a grant-set. Dropping the column would silently widen them to full-role keys. Turn the api_key_grants flag off and revoke all grant-bearing keys first, then retry.")
     op.drop_column("org_api_keys", "grants")

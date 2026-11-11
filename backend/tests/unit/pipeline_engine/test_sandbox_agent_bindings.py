@@ -30,7 +30,7 @@ _AGENT_ID = str(uuid.uuid4())
 @pytest.fixture(autouse=True)
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as the script tests)."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-e2b-key")
 
 
 def _read_router(output_json: str):
@@ -108,7 +108,7 @@ async def test_e2b_dispatch_sees_resolved_binding_and_node_wins() -> None:
     # THE NODE WINS (reviewbot GITHUB_TOKEN override keeps working).
     assert envs["GH_TOKEN"] == "node-token"
     # The FAR-296 reserved path stays set after the merge.
-    assert envs["MODULO_ORG_ID"] == _ORG_ID
+    assert envs["FARNA_CONTROL_MODULO_ORG_ID"] == _ORG_ID
 
 
 async def test_local_tier_refusal_raises_before_sandbox_create() -> None:

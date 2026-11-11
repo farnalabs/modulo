@@ -16,11 +16,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 TICKET_TRIAGER: dict[str, Any] = {
     "name": "Ticket Triager",
-    "description": (
-        "Analyses incoming tickets, categorises by type (bug/feature/enhancement), "
-        "determines priority, and suggests labels. Falls back to a general "
-        "classification when the input is ambiguous."
-    ),
+    "description": ("Analyses incoming tickets, categorises by type (bug/feature/enhancement), determines priority, and suggests labels. Falls back to a general classification when the input is ambiguous."),
     "node_type": "agent",
     "role": "triage",
     "prompt_template": (
@@ -77,11 +73,7 @@ TICKET_TRIAGER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 COMPLIANCE_CHECKER: dict[str, Any] = {
     "name": "Compliance Checker",
-    "description": (
-        "Reviews code or configuration for compliance with regulatory "
-        "standards including GDPR, SOC2, and HIPAA. Flags violations "
-        "with severity and remediation guidance."
-    ),
+    "description": ("Reviews code or configuration for compliance with regulatory standards including GDPR, SOC2, and HIPAA. Flags violations with severity and remediation guidance."),
     "node_type": "agent",
     "role": "reviewer",
     "prompt_template": (
@@ -141,11 +133,7 @@ COMPLIANCE_CHECKER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 DEPENDENCY_ANALYZER: dict[str, Any] = {
     "name": "Dependency Analyzer",
-    "description": (
-        "Analyses project dependency manifests (package.json, pyproject.toml, "
-        "Cargo.toml, etc.) for conflicts, outdated packages, and known "
-        "security vulnerabilities."
-    ),
+    "description": ("Analyses project dependency manifests (package.json, pyproject.toml, Cargo.toml, etc.) for conflicts, outdated packages, and known security vulnerabilities."),
     "node_type": "agent",
     "role": "analyzer",
     "prompt_template": (
@@ -216,10 +204,7 @@ DEPENDENCY_ANALYZER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 DOC_GENERATOR: dict[str, Any] = {
     "name": "Doc Generator",
-    "description": (
-        "Generates human-readable documentation from source code, "
-        "extracting comments, function signatures, and type annotations."
-    ),
+    "description": ("Generates human-readable documentation from source code, extracting comments, function signatures, and type annotations."),
     "node_type": "agent",
     "role": "generator",
     "prompt_template": (
@@ -273,11 +258,7 @@ DOC_GENERATOR: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 RELEASE_NOTE_GENERATOR: dict[str, Any] = {
     "name": "Release Note Generator",
-    "description": (
-        "Generates well-structured release notes from git log entries, "
-        "changelog fragments, and PR descriptions, organised by type "
-        "with highlights and breaking changes called out."
-    ),
+    "description": ("Generates well-structured release notes from git log entries, changelog fragments, and PR descriptions, organised by type with highlights and breaking changes called out."),
     "node_type": "agent",
     "role": "generator",
     "prompt_template": (
@@ -332,11 +313,7 @@ RELEASE_NOTE_GENERATOR: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TEST_GENERATOR: dict[str, Any] = {
     "name": "Test Generator",
-    "description": (
-        "Generates unit test code from function signatures, parameter "
-        "descriptions, and return type annotations. Produces ready-to-run "
-        "test code for the appropriate testing framework."
-    ),
+    "description": ("Generates unit test code from function signatures, parameter descriptions, and return type annotations. Produces ready-to-run test code for the appropriate testing framework."),
     "node_type": "agent",
     "role": "generator",
     "prompt_template": (
@@ -407,11 +384,7 @@ TEST_GENERATOR: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SCHEMA_INFERRER: dict[str, Any] = {
     "name": "Schema Inferrer",
-    "description": (
-        "Infers a JSON Schema from sample data records. Analyses field "
-        "types, nullability, enum values, and nested structures to "
-        "produce an accurate schema with field-level descriptions."
-    ),
+    "description": ("Infers a JSON Schema from sample data records. Analyses field types, nullability, enum values, and nested structures to produce an accurate schema with field-level descriptions."),
     "node_type": "agent",
     "role": "inferrer",
     "prompt_template": (
@@ -465,11 +438,7 @@ SCHEMA_INFERRER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CHANGELOG_WRITER: dict[str, Any] = {
     "name": "Changelog Writer",
-    "description": (
-        "Creates a single structured changelog entry from a set of "
-        "changes and version information, following Keep a Changelog "
-        "conventions."
-    ),
+    "description": ("Creates a single structured changelog entry from a set of changes and version information, following Keep a Changelog conventions."),
     "node_type": "agent",
     "role": "writer",
     "prompt_template": (
@@ -529,11 +498,7 @@ CHANGELOG_WRITER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SECURITY_REVIEWER: dict[str, Any] = {
     "name": "Security Reviewer",
-    "description": (
-        "Reviews source code for common security vulnerabilities including "
-        "SQL injection, XSS, CSRF, command injection, and insecure "
-        "cryptography. Provides CWE identifiers and remediation guidance."
-    ),
+    "description": ("Reviews source code for common security vulnerabilities including SQL injection, XSS, CSRF, command injection, and insecure cryptography. Provides CWE identifiers and remediation guidance."),
     "node_type": "agent",
     "role": "reviewer",
     "prompt_template": (
@@ -593,11 +558,7 @@ SECURITY_REVIEWER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CORRECTION_PROPOSER: dict[str, Any] = {
     "name": "Correction Proposer",
-    "description": (
-        "When a pipeline run fails or produces unexpected output, analyses "
-        "the failure context and proposes a correction to the prompt, "
-        "configuration, or input data."
-    ),
+    "description": ("When a pipeline run fails or produces unexpected output, analyses the failure context and proposes a correction to the prompt, configuration, or input data."),
     "node_type": "agent",
     "role": "proposer",
     "prompt_template": (
@@ -658,11 +619,7 @@ CORRECTION_PROPOSER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 PROMPT_IMPROVER: dict[str, Any] = {
     "name": "Prompt Improver",
-    "description": (
-        "Analyses prompt effectiveness by comparing expected vs actual "
-        "outputs and evaluation scores, then suggests concrete improvements "
-        "to the prompt template."
-    ),
+    "description": ("Analyses prompt effectiveness by comparing expected vs actual outputs and evaluation scores, then suggests concrete improvements to the prompt template."),
     "node_type": "agent",
     "role": "improver",
     "prompt_template": (
@@ -726,10 +683,7 @@ PROMPT_IMPROVER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 EVAL_PROPOSAL_WRITER: dict[str, Any] = {
     "name": "Eval Proposal Writer",
-    "description": (
-        "Proposes new evaluation cases based on run feedback, uncovered "
-        "behaviours, and edge cases observed during pipeline execution."
-    ),
+    "description": ("Proposes new evaluation cases based on run feedback, uncovered behaviours, and edge cases observed during pipeline execution."),
     "node_type": "agent",
     "role": "writer",
     "prompt_template": (
@@ -789,11 +743,7 @@ EVAL_PROPOSAL_WRITER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 FEEDBACK_ANALYZER: dict[str, Any] = {
     "name": "Feedback Analyzer",
-    "description": (
-        "Analyses user feedback (ratings, comments, surveys) and extracts "
-        "actionable patterns, sentiment trends, and top issues to "
-        "prioritise."
-    ),
+    "description": ("Analyses user feedback (ratings, comments, surveys) and extracts actionable patterns, sentiment trends, and top issues to prioritise."),
     "node_type": "agent",
     "role": "analyzer",
     "prompt_template": (
@@ -859,11 +809,7 @@ FEEDBACK_ANALYZER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CHANGELOG_AGGREGATOR: dict[str, Any] = {
     "name": "Changelog Aggregator",
-    "description": (
-        "Aggregates multiple changelog entries into a structured release "
-        "summary organised by conventional commit categories: added, "
-        "changed, fixed, deprecated, removed, security."
-    ),
+    "description": ("Aggregates multiple changelog entries into a structured release summary organised by conventional commit categories: added, changed, fixed, deprecated, removed, security."),
     "node_type": "agent",
     "role": "aggregator",
     "prompt_template": (
@@ -930,11 +876,7 @@ CHANGELOG_AGGREGATOR: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 STATUS_REPORTER: dict[str, Any] = {
     "name": "Status Reporter",
-    "description": (
-        "Generates a pipeline status report from run data, including "
-        "metrics (pass/fail rates, duration), trends over time, and "
-        "actionable recommendations."
-    ),
+    "description": ("Generates a pipeline status report from run data, including metrics (pass/fail rates, duration), trends over time, and actionable recommendations."),
     "node_type": "agent",
     "role": "reporter",
     "prompt_template": (
@@ -1015,11 +957,7 @@ STATUS_REPORTER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 MIGRATION_PLANNER: dict[str, Any] = {
     "name": "Migration Planner",
-    "description": (
-        "Analyses schema changes between old and new versions, identifies "
-        "breaking changes, and generates a structured migration plan with "
-        "steps, risks, and rollback instructions."
-    ),
+    "description": ("Analyses schema changes between old and new versions, identifies breaking changes, and generates a structured migration plan with steps, risks, and rollback instructions."),
     "node_type": "agent",
     "role": "planner",
     "prompt_template": (
@@ -1094,11 +1032,7 @@ MIGRATION_PLANNER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 ROLLBACK_PLANNER: dict[str, Any] = {
     "name": "Rollback Planner",
-    "description": (
-        "Creates a detailed rollback plan for deployment failures, "
-        "including step-by-step instructions, estimated time, and "
-        "risk assessment."
-    ),
+    "description": ("Creates a detailed rollback plan for deployment failures, including step-by-step instructions, estimated time, and risk assessment."),
     "node_type": "agent",
     "role": "planner",
     "prompt_template": (
@@ -1173,11 +1107,7 @@ ROLLBACK_PLANNER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TICKET_WRITER: dict[str, Any] = {
     "name": "Ticket Writer",
-    "description": (
-        "Creates a well-formatted ticket (issue/story) from a brief "
-        "summary and context, including title, description, acceptance "
-        "criteria, and suggested labels."
-    ),
+    "description": ("Creates a well-formatted ticket (issue/story) from a brief summary and context, including title, description, acceptance criteria, and suggested labels."),
     "node_type": "agent",
     "role": "writer",
     "prompt_template": (
@@ -1236,11 +1166,7 @@ TICKET_WRITER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 PRD_SUMMARIZER: dict[str, Any] = {
     "name": "PRD Summarizer",
-    "description": (
-        "Summarises a Product Requirements Document into key features, "
-        "constraints, stakeholders, and decisions — preserving all "
-        "critical details while reducing length."
-    ),
+    "description": ("Summarises a Product Requirements Document into key features, constraints, stakeholders, and decisions — preserving all critical details while reducing length."),
     "node_type": "agent",
     "role": "summarizer",
     "prompt_template": (
@@ -1286,11 +1212,7 @@ PRD_SUMMARIZER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CODE_REVIEWER: dict[str, Any] = {
     "name": "Code Reviewer",
-    "description": (
-        "Reviews pull request code changes for quality, style adherence, "
-        "potential bugs, and test coverage. Provides per-file inline "
-        "comments with severity ratings and an overall rating."
-    ),
+    "description": ("Reviews pull request code changes for quality, style adherence, potential bugs, and test coverage. Provides per-file inline comments with severity ratings and an overall rating."),
     "node_type": "agent",
     "role": "reviewer",
     "prompt_template": (
@@ -1361,11 +1283,7 @@ CODE_REVIEWER: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TICKET_ESTIMATOR: dict[str, Any] = {
     "name": "Ticket Estimator",
-    "description": (
-        "Estimates story points for tickets based on description and "
-        "acceptance criteria, using T-shirt sizing conventions (XS/S/M/L/XL) "
-        "aligned with the Modulo estimation convention."
-    ),
+    "description": ("Estimates story points for tickets based on description and acceptance criteria, using T-shirt sizing conventions (XS/S/M/L/XL) aligned with the Modulo estimation convention."),
     "node_type": "agent",
     "role": "estimator",
     "prompt_template": (

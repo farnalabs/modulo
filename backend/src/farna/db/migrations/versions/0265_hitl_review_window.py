@@ -75,20 +75,8 @@ _ADD_WINDOW_CHECK_NOT_VALID = (
     "hitl_review_window_seconds BETWEEN 60 AND 604800"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_WINDOW_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_pipelines_hitl_review_window' "
-    "AND conrelid = 'public.pipelines'::regclass AND NOT convalidated) "
-    "THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT "
-    "ck_pipelines_hitl_review_window; END IF; END $$;"
-)
-_DROP_WINDOW_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_pipelines_hitl_review_window' "
-    "AND conrelid = 'public.pipelines'::regclass) "
-    "THEN ALTER TABLE public.pipelines DROP CONSTRAINT "
-    "ck_pipelines_hitl_review_window; END IF; END $$;"
-)
+_VALIDATE_WINDOW_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_hitl_review_window' AND conrelid = 'public.pipelines'::regclass AND NOT convalidated) THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT ck_pipelines_hitl_review_window; END IF; END $$;"
+_DROP_WINDOW_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_hitl_review_window' AND conrelid = 'public.pipelines'::regclass) THEN ALTER TABLE public.pipelines DROP CONSTRAINT ck_pipelines_hitl_review_window; END IF; END $$;"
 
 # The terminalizer's population: an open (undecided) claim nobody has claimed.
 # Matches the sweep's per-claim gate exactly so the partial index only ever
@@ -117,8 +105,7 @@ def upgrade() -> None:
         with op.batch_alter_table(_PIPELINES_TABLE) as batch_op:
             batch_op.create_check_constraint(
                 _WINDOW_CHECK,
-                f"hitl_review_window_seconds IS NULL OR "
-                f"hitl_review_window_seconds BETWEEN {_WINDOW_MIN} AND {_WINDOW_MAX}",
+                f"hitl_review_window_seconds IS NULL OR hitl_review_window_seconds BETWEEN {_WINDOW_MIN} AND {_WINDOW_MAX}",
             )
 
     # --- Sweep index ---

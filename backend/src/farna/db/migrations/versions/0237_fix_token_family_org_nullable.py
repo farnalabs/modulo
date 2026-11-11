@@ -13,10 +13,7 @@ down_revision = "0236_add_organisations_constraints"
 
 
 def upgrade() -> None:
-    op.execute(
-        "UPDATE token_families SET organisation_id = '00000000-0000-0000-0000-000000000000' "
-        "WHERE organisation_id IS NULL"
-    )
+    op.execute("UPDATE token_families SET organisation_id = '00000000-0000-0000-0000-000000000000' WHERE organisation_id IS NULL")
     op.alter_column(
         "token_families",
         "organisation_id",

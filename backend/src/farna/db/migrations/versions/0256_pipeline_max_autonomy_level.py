@@ -28,12 +28,8 @@ down_revision: str | None = "0255_trigger_event_value_filter_label"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
-_ADD_PIPELINES_COLUMN = (
-    'ALTER TABLE public."pipelines" ADD COLUMN IF NOT EXISTS "max_autonomy_level" character varying(30);'
-)
-_ADD_SNAPSHOTS_COLUMN = (
-    'ALTER TABLE public."pipeline_snapshots" ADD COLUMN IF NOT EXISTS "max_autonomy_level" character varying(30);'
-)
+_ADD_PIPELINES_COLUMN = 'ALTER TABLE public."pipelines" ADD COLUMN IF NOT EXISTS "max_autonomy_level" character varying(30);'
+_ADD_SNAPSHOTS_COLUMN = 'ALTER TABLE public."pipeline_snapshots" ADD COLUMN IF NOT EXISTS "max_autonomy_level" character varying(30);'
 
 # Existence-gated CHECK, added NOT VALID (instant, brief ACCESS EXCLUSIVE) then
 # VALIDATEd in a separate guarded step (SHARE UPDATE EXCLUSIVE — non-blocking
@@ -45,11 +41,7 @@ _ADD_CHECK_NOT_VALID = (
     "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_max_autonomy_level' "
-    "AND NOT convalidated) THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT "
-    "ck_pipelines_max_autonomy_level; END IF; END $$;"
-)
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_max_autonomy_level' AND NOT convalidated) THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT ck_pipelines_max_autonomy_level; END IF; END $$;"
 
 
 def upgrade() -> None:

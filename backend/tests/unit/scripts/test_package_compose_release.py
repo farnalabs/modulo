@@ -218,9 +218,7 @@ def test_build_compose_release_end_to_end(tmp_path: Path):
     assert "watchdog" not in compose_data["services"]
 
     # Verify docker-compose.yml is identical copy
-    assert (extracted_dir / "docker-compose.yml").read_text(encoding="utf-8") == (
-        extracted_dir / "docker-compose.prod.yml"
-    ).read_text(encoding="utf-8")
+    assert (extracted_dir / "docker-compose.yml").read_text(encoding="utf-8") == (extracted_dir / "docker-compose.prod.yml").read_text(encoding="utf-8")
 
 
 def _pinned_modulo_image(tarball_path: Path) -> str:
@@ -239,9 +237,7 @@ def test_build_compose_release_distinguishes_rc_and_ga_image_pins(tmp_path: Path
     a promote that reused the cut bundle would ship an RC-pinned compose file
     under the GA release name.
     """
-    rc_image = _pinned_modulo_image(
-        build_compose_release(version="0.5.1", tag="v0.5.1-rc2", output_dir=tmp_path / "rc")
-    )
+    rc_image = _pinned_modulo_image(build_compose_release(version="0.5.1", tag="v0.5.1-rc2", output_dir=tmp_path / "rc"))
     ga_image = _pinned_modulo_image(build_compose_release(version="0.5.1", tag="v0.5.1", output_dir=tmp_path / "ga"))
 
     assert rc_image == "ghcr.io/farnalabs/modulo:v0.5.1-rc2"
@@ -314,11 +310,7 @@ def _interpolated_scalars(node: object) -> str:
 
 
 def _assignments(text: str) -> dict[str, str]:
-    return {
-        line.split("=", 1)[0].strip(): line.split("=", 1)[1].strip()
-        for line in text.splitlines()
-        if "=" in line and not line.lstrip().startswith("#")
-    }
+    return {line.split("=", 1)[0].strip(): line.split("=", 1)[1].strip() for line in text.splitlines() if "=" in line and not line.lstrip().startswith("#")}
 
 
 def _required_compose_vars() -> set[str]:
@@ -350,7 +342,7 @@ def test_bundled_env_example_ships_no_secret_values():
     machine instead, so the required SECRETS ship empty. (`SAQ_AUTH_USERNAME`
     is a username, not a secret, and legitimately ships as `admin`.)
     """
-    secret_names = {"MODULO_DB_PASSWORD", "SECRET_KEY", "FERNET_KEY", "SAQ_AUTH_PASSWORD"}
+    secret_names = {"FARNA_CONTROL_MODULO_DB_PASSWORD", "SECRET_KEY", "FERNET_KEY", "SAQ_AUTH_PASSWORD"}
     declared = _assignments(_bundled_files()[".env.example"])
 
     populated = sorted(name for name in secret_names if declared.get(name))

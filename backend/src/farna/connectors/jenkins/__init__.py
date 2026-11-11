@@ -82,16 +82,14 @@ def _reject_unsafe_job_name(job_name: str, origin: str) -> None:
         raise ValueError(f"Unsafe job name in {origin}: {job_name!r} is not a string job path")
     if not _JOB_NAME_PATH_RE.fullmatch(job_name):
         raise ValueError(
-            f"Unsafe job name in {origin}: {job_name!r} contains characters outside the "
-            "job-path allowlist (letters, digits, '-', '_', '.', space, '/' for folders)",
+            f"Unsafe job name in {origin}: {job_name!r} contains characters outside the job-path allowlist (letters, digits, '-', '_', '.', space, '/' for folders)",
         )
     for segment in job_name.split("/"):
         # ``""`` (leading/trailing/double slash) and ``"."``/``".."`` are the
         # traversal shapes; a segment of dots in any count is never a job name.
         if not segment or set(segment) == {"."}:
             raise ValueError(
-                f"Unsafe job name in {origin}: segment {segment!r} is empty or a '.'/'..' "
-                "traversal segment — refusing to address another path on the Jenkins host",
+                f"Unsafe job name in {origin}: segment {segment!r} is empty or a '.'/'..' traversal segment — refusing to address another path on the Jenkins host",
             )
 
 
@@ -288,8 +286,7 @@ class JenkinsConnector(ConnectorBase):
                     # No recognisable Location means no resolvable id — fail
                     # loud rather than hand back an id the next call rejects.
                     raise ValueError(
-                        f"Jenkins accepted the build for {job_name!r} but returned an unrecognised "
-                        f"Location {location!r} — refusing to return an unusable run id",
+                        f"Jenkins accepted the build for {job_name!r} but returned an unrecognised Location {location!r} — refusing to return an unusable run id",
                     )
                 run_id = f"{build_match.group(1)}/{build_match.group(2)}"
             return CIRun(

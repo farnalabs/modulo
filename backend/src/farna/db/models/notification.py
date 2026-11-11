@@ -38,9 +38,7 @@ class Notification(OrgScoped):
     )
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="SET NULL"), nullable=True, index=True
-    )
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="SET NULL"), nullable=True, index=True)
     level: Mapped[str] = mapped_column(String(20), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -78,9 +76,7 @@ class NotificationPreference(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
@@ -120,9 +116,7 @@ class Dismissal(Base):
         Index("ix_dismissals_user_scope", "dismissed_by_user_id", "dismiss_scope"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),

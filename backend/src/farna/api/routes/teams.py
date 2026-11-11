@@ -239,9 +239,7 @@ async def _remove_member_checked(
         if target_level >= caller_level:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Cannot remove member with role '{membership.role}' — your role is '{caller_membership.role}'"
-                ),
+                detail=(f"Cannot remove member with role '{membership.role}' — your role is '{caller_membership.role}'"),
             )
 
     if membership.role == "operator":
@@ -283,9 +281,7 @@ async def _change_member_role_checked(
         if target_level >= caller_level:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Cannot change role of member with role '{old_role}' — your role is '{caller_membership.role}'"
-                ),
+                detail=(f"Cannot change role of member with role '{old_role}' — your role is '{caller_membership.role}'"),
             )
 
     if old_role == "operator" and new_role != "operator":
@@ -603,9 +599,7 @@ async def get_team_endpoint(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_TEAMS_GET_TEAM_ENDPOINT)
-        _log.exception(
-            "get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -613,9 +607,7 @@ async def get_team_endpoint(
     except HTTPException:
         raise
     except Exception:
-        _log.exception(
-            "get_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("get_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching the team.",
@@ -633,9 +625,7 @@ async def get_team_endpoint(
     )
 
 
-@router.patch(
-    "/{team_id}", dependencies=[Depends(audited("api_access_patch", "team", principal_dep=get_current_tenant_user))]
-)
+@router.patch("/{team_id}", dependencies=[Depends(audited("api_access_patch", "team", principal_dep=get_current_tenant_user))])
 @handle_db_errors(_CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
 async def update_team_endpoint(
     team_id: uuid.UUID,
@@ -672,9 +662,7 @@ async def update_team_endpoint(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
-        _log.exception(
-            "update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -682,9 +670,7 @@ async def update_team_endpoint(
     except HTTPException:
         raise
     except Exception:
-        _log.exception(
-            "update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating the team.",
@@ -760,13 +746,7 @@ async def delete_team_endpoint(
                 (ModelBackend, "model backend"),
                 (LibraryPrimitive, "library primitive"),
             ]:
-                count = (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(model_cls)
-                        .where(model_cls.__table__.c.owner_team_id == team_id)
-                    )
-                ).scalar() or 0
+                count = (await session.execute(select(func.count()).select_from(model_cls).where(model_cls.__table__.c.owner_team_id == team_id))).scalar() or 0
                 if count > 0:
                     resource_checks.append((label, count))
 
@@ -792,9 +772,7 @@ async def delete_team_endpoint(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_TEAMS_DELETE_TEAM_ENDPOINT)
-        _log.exception(
-            "delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -802,9 +780,7 @@ async def delete_team_endpoint(
     except HTTPException:
         raise
     except Exception:
-        _log.exception(
-            "delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting the team.",
@@ -944,9 +920,7 @@ async def list_members_endpoint(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_TEAMS_LIST_MEMBERS_ENDPOINT)
-        _log.exception(
-            "list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -1023,9 +997,7 @@ async def add_member_endpoint(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_TEAMS_ADD_MEMBER_ENDPOINT)
-        _log.exception(
-            "add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -1033,9 +1005,7 @@ async def add_member_endpoint(
     except HTTPException:
         raise
     except Exception:
-        _log.exception(
-            "add_member unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
-        )
+        _log.exception("add_member unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while adding the member.",

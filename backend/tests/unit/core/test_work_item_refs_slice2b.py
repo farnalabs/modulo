@@ -266,9 +266,7 @@ class TestConfirmReportedRefs:
 
 class TestNodeInputInjection:
     def test_declares_true_only_for_work_item_refs_property(self) -> None:
-        assert _node_declares_work_item_refs(
-            {"input_schema_json": {"properties": {WORK_ITEM_REFS_KEY: {"type": "array"}}}}
-        )
+        assert _node_declares_work_item_refs({"input_schema_json": {"properties": {WORK_ITEM_REFS_KEY: {"type": "array"}}}})
         assert not _node_declares_work_item_refs({"input_schema_json": {"properties": {"other": {"type": "string"}}}})
         assert not _node_declares_work_item_refs({})
         assert not _node_declares_work_item_refs({"input_schema_json": "not-a-dict"})
@@ -316,7 +314,7 @@ class TestWorkItemRefsCapSetting:
         get_settings.cache_clear()
 
     def test_default_is_100(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_WORK_ITEM_REFS_CAP", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_WORK_ITEM_REFS_CAP", raising=False)
         assert work_item_refs_cap() == 100
 
     @pytest.mark.parametrize(
@@ -324,7 +322,7 @@ class TestWorkItemRefsCapSetting:
         [("25", 25), ("0", 1), ("999999", 100000), ("abc", 100), ("-5", 1)],
     )
     def test_clamps_out_of_range_and_garbage(self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int) -> None:
-        monkeypatch.setenv("MODULO_WORK_ITEM_REFS_CAP", raw)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_WORK_ITEM_REFS_CAP", raw)
         assert work_item_refs_cap() == expected
 
     def test_self_report_normaliser_uses_explicit_max_refs(self) -> None:

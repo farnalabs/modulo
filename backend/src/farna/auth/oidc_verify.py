@@ -236,9 +236,7 @@ async def verify_id_token(
         else:
             raise
 
-    return await _decode_and_verify(
-        id_token, jwk_dict, alg, client_id, issuer, jwks_uri, header_kid=kid, expected_nonce=expected_nonce
-    )
+    return await _decode_and_verify(id_token, jwk_dict, alg, client_id, issuer, jwks_uri, header_kid=kid, expected_nonce=expected_nonce)
 
 
 async def verify_id_token_with_discovery(
@@ -333,9 +331,7 @@ async def _decode_and_verify(
         # IdP-controlled. Comparing bytes keeps the check constant-time for a
         # well-formed nonce and rejects a malformed one with the same error
         # instead of escaping as an uncaught 500.
-        if not isinstance(token_nonce, str) or not hmac.compare_digest(
-            token_nonce.encode("utf-8"), expected_nonce.encode("utf-8")
-        ):
+        if not isinstance(token_nonce, str) or not hmac.compare_digest(token_nonce.encode("utf-8"), expected_nonce.encode("utf-8")):
             raise OidcVerifyError("ID token nonce does not match the authentication request")
 
     return dict(claims)

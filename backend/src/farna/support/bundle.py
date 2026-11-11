@@ -195,8 +195,8 @@ _PROXY_ENV_NAMES: tuple[str, ...] = (
     "all_proxy",
 )
 _CA_BUNDLE_ENV_NAMES: tuple[str, ...] = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
-_IMAGE_ENV_NAMES: tuple[str, ...] = ("IMAGE_REF", "APP_IMAGE", "FLY_IMAGE_REF", "MODULO_IMAGE")
-_BUILD_SHA_ENV_NAMES: tuple[str, ...] = ("GIT_SHA", "BUILD_SHA", "MODULO_BUILD_COMMIT")
+_IMAGE_ENV_NAMES: tuple[str, ...] = ("IMAGE_REF", "APP_IMAGE", "FLY_IMAGE_REF", "FARNA_CONTROL_MODULO_IMAGE")
+_BUILD_SHA_ENV_NAMES: tuple[str, ...] = ("GIT_SHA", "BUILD_SHA", "FARNA_CONTROL_MODULO_BUILD_COMMIT")
 _BUILD_TIMESTAMP_ENV_NAMES: tuple[str, ...] = ("BUILD_TIMESTAMP", "GIT_COMMIT_TIMESTAMP")
 
 _TABLE_ROW_COUNT_QUERIES: dict[str, str] = {
@@ -671,12 +671,7 @@ async def _resolve_org_id(session: Any) -> Any:
 
     async with session.begin():
         row = await session.execute(
-            text(
-                "SELECT id FROM organisations "
-                "WHERE deleted_at IS NULL "
-                "AND id NOT IN (:system_id, :registry_id) "
-                "ORDER BY created_at ASC LIMIT 1"
-            ),
+            text("SELECT id FROM organisations WHERE deleted_at IS NULL AND id NOT IN (:system_id, :registry_id) ORDER BY created_at ASC LIMIT 1"),
             {
                 "system_id": "00000000-0000-0000-0000-000000000000",
                 "registry_id": "00000000-0000-0000-0000-000000000001",
@@ -899,11 +894,7 @@ def _render_report(
     manifest_size: int,
     withheld: Sequence[Mapping[str, Any]] = (),
 ) -> str:
-    members = [
-        {"name": name, "bytes": size}
-        for name, size in sorted(sizes.items())
-        if name not in {MANIFEST_MEMBER, REPORT_MEMBER}
-    ]
+    members = [{"name": name, "bytes": size} for name, size in sorted(sizes.items()) if name not in {MANIFEST_MEMBER, REPORT_MEMBER}]
     members.append({"name": MANIFEST_MEMBER, "bytes": manifest_size})
     members.append({"name": REPORT_MEMBER, "bytes": report_size})
     members.sort(key=lambda entry: str(entry["name"]))
@@ -1182,11 +1173,7 @@ def _doctor_member_text(resolved: BundleSources) -> str:
 def _maybe_add_doctor_missing(resolved: BundleSources, missing: list[dict[str, str]]) -> None:
     """Add doctor member to missing list if no output was captured."""
     if resolved.doctor_output is None:
-        reason = (
-            "no launcher data dir; doctor checks are native-install only"
-            if resolved.data_dir is None
-            else "doctor output was not captured by this entry point"
-        )
+        reason = "no launcher data dir; doctor checks are native-install only" if resolved.data_dir is None else "doctor output was not captured by this entry point"
         missing.append({"member": DOCTOR_MEMBER, "reason": reason})
 
 
@@ -1225,9 +1212,7 @@ def _handle_log_members(
 ) -> None:
     """Add log members to raw_members or record as missing."""
     if not log_members:
-        missing.append(
-            {"member": f"{LOG_MEMBER_PREFIX}*{LOG_MEMBER_SUFFIX}", "reason": "no launcher data dir (container install)"}
-        )
+        missing.append({"member": f"{LOG_MEMBER_PREFIX}*{LOG_MEMBER_SUFFIX}", "reason": "no launcher data dir (container install)"})
     raw_members.update(log_members)
 
 
@@ -1391,9 +1376,7 @@ def _assemble_and_gate(
             redactor.gate(name, final[name], allowed_tokens=allowed_tokens)
 
     if len(archive) > max_bundle_bytes:
-        raise BundleTooLargeError(
-            f"bundle is {len(archive)} bytes after truncating every log member (cap {max_bundle_bytes})"
-        )
+        raise BundleTooLargeError(f"bundle is {len(archive)} bytes after truncating every log member (cap {max_bundle_bytes})")
 
     return final, archive, truncated
 
@@ -1510,12 +1493,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m modulo.support.bundle",
         description="Build, inspect, or text-redact a Modulo support bundle.",
-        epilog=(
-            "--redact-stdin reads UTF-8 text on stdin and writes the redacted text on stdout, "
-            "using the same redaction layers and fail-closed gate as a bundle build. It exits "
-            "non-zero, writing nothing on stdout, when the gate finds an unclassified "
-            "high-entropy token."
-        ),
+        epilog=("--redact-stdin reads UTF-8 text on stdin and writes the redacted text on stdout, using the same redaction layers and fail-closed gate as a bundle build. It exits non-zero, writing nothing on stdout, when the gate finds an unclassified high-entropy token."),
     )
     parser.add_argument("--out", type=Path, default=None, metavar="PATH", help="Bundle zip path.")
     parser.add_argument("--json", action="store_true", help="Print one JSON object (ref + path).")

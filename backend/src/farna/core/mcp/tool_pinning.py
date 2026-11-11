@@ -191,11 +191,7 @@ async def _create_drift_notification(
                 level="warning",
                 category=_DRIFT_NOTIFICATION_CATEGORY,
                 title=f"MCP server '{server.name}' tool definitions changed",
-                body=(
-                    "The MCP server's tool definitions no longer match the approved set. "
-                    "Its tool pin is now 'approved-stale' and it should be re-reviewed. "
-                    "Modulo does not block the server (it is outside Modulo's control); this is a prompt to re-approve."
-                ),
+                body=("The MCP server's tool definitions no longer match the approved set. Its tool pin is now 'approved-stale' and it should be re-reviewed. Modulo does not block the server (it is outside Modulo's control); this is a prompt to re-approve."),
                 action_url="/settings/mcp",
             )
     except SQLAlchemyError:

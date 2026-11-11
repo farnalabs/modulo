@@ -249,7 +249,7 @@ def test_bootstrap_refuses_unknown_pause_gate_name(
 ) -> None:
     # MODULO_TEST_PAUSE_AT is a test-only seam: an unknown value (a stale leak
     # from a developer shell) must fail the bootstrap loudly, never silently.
-    monkeypatch.setenv("MODULO_TEST_PAUSE_AT", "not_a_registered_gate")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_PAUSE_AT", "not_a_registered_gate")
     called: list[list[str]] = []
     monkeypatch.setattr(initdb_module, "_run_command", lambda argv: called.append(argv))
     with pytest.raises(InitdbError, match="not a registered pause gate"):
@@ -316,7 +316,7 @@ def _spawn_driver(pgdata: Path, pause_env: dict[str, str]) -> Popen[str]:
 def test_sigkill_mid_bootstrap_leaves_no_partial_pgdata(tmp_path: Path) -> None:
     """SIGKILL at the deterministic gate leaves NO half-initialised cluster."""
     pgdata = tmp_path / "pgdata"
-    proc = _spawn_driver(pgdata, {"MODULO_TEST_PAUSE_AT": GATE_INITDB_PRE_RENAME})
+    proc = _spawn_driver(pgdata, {"FARNA_CONTROL_MODULO_TEST_PAUSE_AT": GATE_INITDB_PRE_RENAME})
     try:
         marker = proc.stdout.readline().strip() if proc.stdout else ""
         assert marker == f"PAUSED:{GATE_INITDB_PRE_RENAME}"
@@ -355,7 +355,7 @@ def test_sigkill_mid_bootstrap_leaves_no_partial_pgdata(tmp_path: Path) -> None:
 def test_pause_gate_resume_completes_the_bootstrap(tmp_path: Path) -> None:
     """Resuming from the gate (stdin line) completes the atomic rename."""
     pgdata = tmp_path / "pgdata"
-    proc = _spawn_driver(pgdata, {"MODULO_TEST_PAUSE_AT": GATE_INITDB_PRE_RENAME})
+    proc = _spawn_driver(pgdata, {"FARNA_CONTROL_MODULO_TEST_PAUSE_AT": GATE_INITDB_PRE_RENAME})
     try:
         marker = proc.stdout.readline().strip() if proc.stdout else ""
         assert marker == f"PAUSED:{GATE_INITDB_PRE_RENAME}"

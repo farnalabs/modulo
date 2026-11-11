@@ -199,12 +199,6 @@ async def list_pending_for_org(
     count_q = select(func.count()).select_from(Invitation).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Invitation)
-        .where(*conditions)
-        .order_by(Invitation.created_at.desc(), Invitation.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    query = select(Invitation).where(*conditions).order_by(Invitation.created_at.desc(), Invitation.id.desc()).offset((page - 1) * page_size).limit(page_size)
     result = await session.execute(query)
     return list(result.scalars().all()), total

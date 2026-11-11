@@ -187,14 +187,14 @@ def _set_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
     monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
     monkeypatch.setenv("REDIS_URL", "redis://:redis-secret@cache-host:16379/0")
-    monkeypatch.setenv("MODULO_USERS", f"admin@modulo.run:{_USER_PASSWORD}")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_USERS", f"admin@modulo.run:{_USER_PASSWORD}")
     monkeypatch.setenv(
-        "MODULO_OIDC_PROVIDERS",
+        "FARNA_CONTROL_MODULO_OIDC_PROVIDERS",
         f'[{{"provider_id": "okta", "client_id": "abc", "client_secret": "{_OIDC_CLIENT_SECRET}"}}]',
     )
     monkeypatch.setenv("ALERT_WEBHOOK_URL", f"https://hooks.example.com/{_WEBHOOK_TOKEN}")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", _AWS_KEY_ID)
-    monkeypatch.setenv("MODULO_LICENSE_KEY", _LICENSE_KEY)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LICENSE_KEY", _LICENSE_KEY)
 
 
 @pytest.mark.parametrize("as_json", [False, True], ids=["table", "json"])
@@ -392,9 +392,7 @@ def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.Mo
     assert calls == [(tmp_path, True)]
 
 
-def test_doctor_command_render_runtime_error_as_click_exception(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_doctor_command_render_runtime_error_as_click_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import farna.cli.main as cli_main_module
     import farna.launcher.doctor as doctor_module
 
@@ -459,9 +457,7 @@ def test_logs_rotate_child_component_is_not_rotated(monkeypatch: pytest.MonkeyPa
     assert rotated_calls == [], f"child rotation must not run, but rotate_log was called on: {rotated_calls}"
 
 
-def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import farna.launcher.doctor as doctor_module
 
     captured: dict[str, object] = {}

@@ -85,14 +85,7 @@ async def enrich_with_pipeline_names(
     run_ids = list({r.run_id for r in rows if r.run_id})
     if not run_ids:
         return {}
-    run_rows = (
-        await session.execute(
-            select(Run.id, Pipeline.name)
-            .select_from(Run)
-            .join(Pipeline, Run.pipeline_id == Pipeline.id)
-            .where(Run.id.in_(run_ids))
-        )
-    ).all()
+    run_rows = (await session.execute(select(Run.id, Pipeline.name).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(Run.id.in_(run_ids)))).all()
     return {str(run_id): pipeline_name for run_id, pipeline_name in run_rows}
 
 
@@ -120,13 +113,7 @@ async def paginate_feedback_records(
     total = (await session.execute(total_q)).scalar() or 0
 
     offset = (page - 1) * page_size
-    q = (
-        select(FeedbackRecord)
-        .where(*conditions)
-        .order_by(FeedbackRecord.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    q = select(FeedbackRecord).where(*conditions).order_by(FeedbackRecord.created_at.desc()).offset(offset).limit(page_size)
     rows = (await session.execute(q)).scalars().all()
     return list(rows), total
 

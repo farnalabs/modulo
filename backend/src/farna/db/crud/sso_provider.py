@@ -89,11 +89,7 @@ def validate_allowed_domains(domains: list[str] | None) -> list[str]:
         if not domain:
             raise ValueError(f"Invalid allowed_domains entry: {raw!r} (empty)")
         if any(ch in domain for ch in _INVALID_DOMAIN_CHARS):
-            msg = (
-                f"Invalid allowed_domains entry: {domain!r} — provide a bare domain like "
-                "'example.com'; no @, URL scheme, path, or wildcard (subdomain matching "
-                "is not supported)"
-            )
+            msg = f"Invalid allowed_domains entry: {domain!r} — provide a bare domain like 'example.com'; no @, URL scheme, path, or wildcard (subdomain matching is not supported)"
             raise ValueError(msg)
         if "." not in domain:
             raise ValueError(f"Invalid allowed_domains entry: {domain!r} — a registrable domain must contain a dot")
@@ -123,9 +119,7 @@ async def _unique_provider_id(session: AsyncSession, base: str, _org_id: uuid.UU
     the session can see. ``_org_id`` is retained in the signature for call-site
     clarity; the scan itself is RLS-aware so it is correct either way.
     """
-    existing = {
-        pid for pid in (await session.execute(select(SsoProvider.provider_id))).scalars().all() if pid is not None
-    }
+    existing = {pid for pid in (await session.execute(select(SsoProvider.provider_id))).scalars().all() if pid is not None}
     candidate = base
     n = 2
     while candidate in existing:
@@ -135,15 +129,11 @@ async def _unique_provider_id(session: AsyncSession, base: str, _org_id: uuid.UU
 
 
 async def list_providers(session: AsyncSession, *, org_id: uuid.UUID) -> list[SsoProvider]:
-    result = await session.execute(
-        select(SsoProvider).where(SsoProvider.organisation_id == org_id).order_by(SsoProvider.created_at)
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id).order_by(SsoProvider.created_at))
     return list(result.scalars().all())
 
 
-async def get_provider(
-    session: AsyncSession, provider_id: uuid.UUID, *, org_id: uuid.UUID | None = None
-) -> SsoProvider | None:
+async def get_provider(session: AsyncSession, provider_id: uuid.UUID, *, org_id: uuid.UUID | None = None) -> SsoProvider | None:
     conditions = [SsoProvider.id == provider_id]
     if org_id is not None:
         conditions.append(SsoProvider.organisation_id == org_id)
@@ -176,12 +166,7 @@ async def get_enabled_saml_provider(session: AsyncSession) -> SsoProvider | None
     SAML selection. ``.limit(1)`` with ``order_by(created_at)`` keeps this
     deterministic (first-enabled-wins).
     """
-    result = await session.execute(
-        select(SsoProvider)
-        .where(SsoProvider.provider_type == "saml", SsoProvider.enabled)
-        .order_by(SsoProvider.created_at)
-        .limit(1)
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.provider_type == "saml", SsoProvider.enabled).order_by(SsoProvider.created_at).limit(1))
     return result.scalar_one_or_none()
 
 
@@ -226,9 +211,7 @@ async def create_provider(session: AsyncSession, **config: Unpack[CreateProvider
     await set_mutation_row_lock_timeout(session)
     normalized_allowed_domains = validate_allowed_domains(allowed_domains)
 
-    result = await session.execute(
-        select(SsoProvider).where(SsoProvider.name == name, SsoProvider.organisation_id == org_id).with_for_update()
-    )
+    result = await session.execute(select(SsoProvider).where(SsoProvider.name == name, SsoProvider.organisation_id == org_id).with_for_update())
     existing = result.scalar_one_or_none()
     if existing:
         msg = f"An SSO provider with name '{name}' already exists in this organisation"

@@ -13,10 +13,6 @@ class TeamMembership(OrgScoped):
         UniqueConstraint("team_id", "account_id", name="uq_team_memberships_team_account"),
     )
 
-    team_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    team_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, server_default="viewer")

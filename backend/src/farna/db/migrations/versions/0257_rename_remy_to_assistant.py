@@ -143,9 +143,7 @@ _RLS_TABLES: tuple[str, ...] = ("assistant_skills", "assistant_context_sources")
 # Data rewrite (system_config key prefix). The bare statements are portable
 # (Postgres AND SQLite both implement replace()); the *_PG wrappers add the
 # information_schema table/column guard inside a DO block.
-_CONFIG_UPDATE_FORWARD = (
-    "UPDATE system_config SET key = replace(key, 'remy_config:', 'assistant_config:') WHERE key LIKE 'remy_config:%'"
-)
+_CONFIG_UPDATE_FORWARD = "UPDATE system_config SET key = replace(key, 'remy_config:', 'assistant_config:') WHERE key LIKE 'remy_config:%'"
 _CONFIG_UPDATE_REVERSE = "UPDATE system_config SET key = replace(key, 'assistant_config:', 'remy_config:') WHERE key LIKE 'assistant_config:%'"
 _CONFIG_FORWARD_PG = (
     "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='system_config') "

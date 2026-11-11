@@ -96,16 +96,7 @@ def _table_counts(sync_db_url: str) -> dict[str, int]:
     engine = sa.create_engine(sync_db_url)
     try:
         with engine.connect() as conn:
-            names = (
-                conn.execute(
-                    sa.text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            names = conn.execute(sa.text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")).scalars().all()
             counts: dict[str, int] = {}
             for name in names:
                 counts[name] = int(
@@ -131,15 +122,7 @@ def _version_column_max_len(sync_db_url: str) -> int | None:
     engine = sa.create_engine(sync_db_url)
     try:
         with engine.connect() as conn:
-            return int(
-                conn.execute(
-                    sa.text(
-                        "SELECT character_maximum_length FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'alembic_version' "
-                        "AND column_name = 'version_num'"
-                    )
-                ).scalar_one()
-            )
+            return int(conn.execute(sa.text("SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'alembic_version' AND column_name = 'version_num'")).scalar_one())
     finally:
         engine.dispose()
 
@@ -154,9 +137,7 @@ def _seed_representative_data(sync_db_url: str) -> None:
     try:
         with engine.begin() as conn:
             conn.execute(
-                sa.text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
+                sa.text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                 {
                     "id": "11111111-1111-1111-1111-111111111111",
                     "name": "FAR-717 Rehearsal Org",
@@ -175,12 +156,8 @@ def _seeded_rows_alive(sync_db_url: str) -> bool:
     engine = sa.create_engine(sync_db_url)
     try:
         with engine.connect() as conn:
-            org = conn.execute(
-                sa.text("SELECT count(*) FROM organisations WHERE slug = 'far-717-rehearsal'")
-            ).scalar_one()
-            cfg = conn.execute(
-                sa.text("SELECT count(*) FROM system_config WHERE key = 'far-717-rehearsal'")
-            ).scalar_one()
+            org = conn.execute(sa.text("SELECT count(*) FROM organisations WHERE slug = 'far-717-rehearsal'")).scalar_one()
+            cfg = conn.execute(sa.text("SELECT count(*) FROM system_config WHERE key = 'far-717-rehearsal'")).scalar_one()
             return int(org) == 1 and int(cfg) == 1
     finally:
         engine.dispose()
@@ -191,9 +168,7 @@ def _table_exists(sync_db_url: str, table: str) -> bool:
     try:
         with engine.connect() as conn:
             present = conn.execute(
-                sa.text(
-                    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = :t"
-                ),
+                sa.text("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = :t"),
                 {"t": table},
             ).scalar_one()
             return int(present) > 0
@@ -236,7 +211,7 @@ def rehearsal_migration_db(monkeypatch):
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
-        m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
+        m.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
         from farna.db.bootstrap_role import bootstrap_roles
 
         _asyncio_run(bootstrap_roles(raw, app_url))

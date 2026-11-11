@@ -74,7 +74,7 @@ _DB_OP_TIMEOUT_SECONDS = 600
 
 
 def _resolve_admin_auth(token: str | None) -> str | None:
-    raw = token or os.environ.get("MODULO_ADMIN_SECRET", "")
+    raw = token or os.environ.get("FARNA_CONTROL_MODULO_ADMIN_SECRET", "")
     if not raw:
         return None
     if token:
@@ -489,7 +489,7 @@ def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) -> bool:
 @click.group()
 @click.option(
     "--token",
-    envvar="MODULO_ADMIN_TOKEN",
+    envvar="FARNA_CONTROL_MODULO_ADMIN_TOKEN",
     default=None,
     help="Admin JWT (or set MODULO_ADMIN_TOKEN)",
 )
@@ -499,10 +499,7 @@ def cli(ctx: click.Context, token: str | None) -> None:
     ctx.ensure_object(dict)
     admin_id = _resolve_admin_auth(token)
     if admin_id is None:
-        raise click.ClickException(
-            "Admin authentication required. Provide --token / MODULO_ADMIN_TOKEN "
-            "or set MODULO_ADMIN_SECRET environment variable."
-        )
+        raise click.ClickException("Admin authentication required. Provide --token / MODULO_ADMIN_TOKEN or set MODULO_ADMIN_SECRET environment variable.")
     ctx.obj["admin_user_id"] = admin_id
 
 
@@ -536,9 +533,7 @@ async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path,
     try:
         async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-            bundle = await _collect_org_data(
-                session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only
-            )
+            bundle = await _collect_org_data(session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only)
             hashes = _write_jsonl(bundle, output)
             export_completed = True
             record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
@@ -549,9 +544,7 @@ async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path,
     except click.ClickException:
         raise
     except TimeoutError:
-        raise click.ClickException(
-            f"Export timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung"
-        ) from None
+        raise click.ClickException(f"Export timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung") from None
     except Exception as exc:
         raise click.ClickException(f"Export failed: {exc}") from exc
     finally:
@@ -617,20 +610,13 @@ async def _async_import_org(
                 users_only=scope.users_only,
             )
             await session.commit()
-            click.echo(
-                f"Import complete: {counts['created']} created, "
-                f"{counts['overwritten']} overwritten, "
-                f"{counts['skipped']} skipped, "
-                f"{counts['errors']} errors"
-            )
+            click.echo(f"Import complete: {counts['created']} created, {counts['overwritten']} overwritten, {counts['skipped']} skipped, {counts['errors']} errors")
     except asyncio.CancelledError:
         raise
     except click.ClickException:
         raise
     except TimeoutError:
-        raise click.ClickException(
-            f"Import timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung"
-        ) from None
+        raise click.ClickException(f"Import timed out after {_DB_OP_TIMEOUT_SECONDS}s — database may be slow or hung") from None
     except Exception as exc:
         raise click.ClickException(f"Import failed: {exc}") from exc
 

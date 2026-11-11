@@ -145,9 +145,7 @@ class RunNodeOutput(Base, TimestampMixin):
 
     # Tenant anchor — the RLS policy subject. Indexed; FK CASCADE with the
     # parent org (matches migration 0133_run_evidence_rls).
-    organisation_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    organisation_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True)
 
     run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
     # Grammar-derived node id — deliberately NO FK (see module docstring).

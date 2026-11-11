@@ -245,8 +245,7 @@ class ShellConnector(ConnectorBase):
     def _check_command_allowed(self, command_str: str, command: list[str]) -> None:
         if not self._allowed_commands:
             raise ConnectorPermissionError(
-                "No commands are allowed (deny-all). "
-                "Operator must configure permitted commands in the connector configuration.",
+                "No commands are allowed (deny-all). Operator must configure permitted commands in the connector configuration.",
             )
         if _contains_unquoted_shell_syntax(command_str):
             raise ConnectorPermissionError(
@@ -264,11 +263,7 @@ class ShellConnector(ConnectorBase):
         Raises ValueError when no provider can be resolved; returns the live
         provider otherwise.
         """
-        if (
-            self._runtime_provider is None
-            and self._runtime_provider_hub is not None
-            and self._environment_profile_id is not None
-        ):
+        if self._runtime_provider is None and self._runtime_provider_hub is not None and self._environment_profile_id is not None:
             profile = await self._resolve_profile_from_hub()
             if profile is not None:
                 try:
@@ -294,9 +289,7 @@ class ShellConnector(ConnectorBase):
             raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
         return ConnectorResult(records=[{"path": path, "content": result["stdout"]}])
 
-    async def _list_directory(
-        self, provider: ShellRuntimeProvider, provider_ref: str | None, dir_path: str
-    ) -> ConnectorResult:
+    async def _list_directory(self, provider: ShellRuntimeProvider, provider_ref: str | None, dir_path: str) -> ConnectorResult:
         safe_path = shlex.quote(dir_path)
         result = await provider.execute_command(
             provider_ref,

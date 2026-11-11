@@ -27,8 +27,7 @@ class PipelineSnapshot(OrgScoped):
         # SAME vocabulary the live column is guarded by (0256 added the column
         # to both tables but only checked `pipelines`; 0259 closes the gap).
         CheckConstraint(
-            "max_autonomy_level IS NULL OR "
-            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            "max_autonomy_level IS NULL OR max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipeline_snapshots_max_autonomy_level",
         ),
         # FAR-1223: the frozen default gets the SAME vocabulary the live
@@ -43,8 +42,7 @@ class PipelineSnapshot(OrgScoped):
         # design (0110 dropped NOT NULL and no server default exists), so its
         # NULL arm is stated explicitly and means "nothing was frozen".
         CheckConstraint(
-            "default_autonomy_level IS NULL OR "
-            "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            "default_autonomy_level IS NULL OR default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipeline_snapshots_default_autonomy_level",
         ),
         # FAR-1280: the snapshot pair gets the SAME ceiling >= default invariant
@@ -56,15 +54,7 @@ class PipelineSnapshot(OrgScoped):
         # `validate_autonomy_ceiling` does - no explicit `default IS NULL` arm
         # is needed.
         CheckConstraint(
-            "max_autonomy_level IS NULL OR "
-            "(CASE default_autonomy_level "
-            "WHEN 'manual_approval' THEN 0 "
-            "WHEN 'notify_on_complete' THEN 1 "
-            "WHEN 'fully_autonomous' THEN 2 END) <= "
-            "(CASE max_autonomy_level "
-            "WHEN 'manual_approval' THEN 0 "
-            "WHEN 'notify_on_complete' THEN 1 "
-            "WHEN 'fully_autonomous' THEN 2 END)",
+            "max_autonomy_level IS NULL OR (CASE default_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END) <= (CASE max_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)",
             name="ck_pipeline_snapshots_max_autonomy_ge_default",
         ),
     )
@@ -76,9 +66,7 @@ class PipelineSnapshot(OrgScoped):
         index=True,
     )
     snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("environment_profiles.id", ondelete="SET NULL"),

@@ -103,9 +103,7 @@ ATTEMPT_TERMINAL_REASON_VALUES: Final[frozenset[str]] = frozenset(
 #: its own frozen copy (a shipped migration must not depend on live code); the
 #: migration test asserts the two are identical, so widening the vocabulary
 #: without a migration fails CI rather than drifting silently.
-ATTEMPT_TERMINAL_REASON_SQL: Final[str] = (
-    "terminal_reason IN ('deadline', 'stall', 'guard_cap', 'worker_lost', 'provider_error', 'completed', 'reset')"
-)
+ATTEMPT_TERMINAL_REASON_SQL: Final[str] = "terminal_reason IN ('deadline', 'stall', 'guard_cap', 'worker_lost', 'provider_error', 'completed', 'reset')"
 
 
 class RunAttempt(OrgScoped):
@@ -140,9 +138,7 @@ class RunAttempt(OrgScoped):
     attempt_index: Mapped[int] = mapped_column(Integer(), nullable=False)
     # When the attempt began. The allocator defaults this to server time; the
     # executor may pass the dispatch instant it actually observed.
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
     # NULL while the attempt is OPEN; stamped by close_attempt.
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # One of ATTEMPT_TERMINAL_REASON_VALUES while open->closed; NULL = open.

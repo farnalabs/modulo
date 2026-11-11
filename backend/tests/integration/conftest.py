@@ -44,9 +44,9 @@ os.environ.setdefault("SECRET_KEY", "a" * 32)
 # (the deploy gate failure). Must match what ci.yml sets at the workflow level.
 os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 os.environ.setdefault("REDIS_URL", "")
-os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
 
 BACKEND_ROOT = Path(__file__).parents[2]
 
@@ -101,29 +101,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
     if _ci_env_is_truthy():
         pytest.exit(
-            "FATAL: Docker is NOT available in CI — integration coverage cannot be "
-            "silently skipped. Fix the Docker daemon / testcontainers environment.",
+            "FATAL: Docker is NOT available in CI — integration coverage cannot be silently skipped. Fix the Docker daemon / testcontainers environment.",
             returncode=1,
         )
 
     # Local: skip every integration test loudly.
-    reason = (
-        "SKIPPED: Docker is not available locally — integration tests require "
-        "Docker (Testcontainers). These tests run in CI. "
-        "Install Docker Desktop or start Docker to run integration tests locally."
-    )
+    reason = "SKIPPED: Docker is not available locally — integration tests require Docker (Testcontainers). These tests run in CI. Install Docker Desktop or start Docker to run integration tests locally."
     for item in items:
         item.add_marker(pytest.mark.skip(reason=reason))
     _skip_count = len(items)
 
     border = "=" * 80
-    banner = (
-        f"\n{border}\n"
-        f"  WARNING: Docker is not available — SKIPPING the entire integration "
-        f"test suite ({_skip_count} tests).\n"
-        f"  These tests run in CI.\n"
-        f"{border}\n"
-    )
+    banner = f"\n{border}\n  WARNING: Docker is not available — SKIPPING the entire integration test suite ({_skip_count} tests).\n  These tests run in CI.\n{border}\n"
     # Write to stderr so it is always visible even with captured output.
     sys.stderr.write(banner)
     sys.stderr.flush()
@@ -139,10 +128,7 @@ def pytest_terminal_summary(
         for nodeid, detail in _leaked_asyncpg_connections:
             terminalreporter.write_line(f"  {nodeid}: {detail}", red=True)
         terminalreporter.write_line(
-            f"  {len(_leaked_asyncpg_connections)} unclosed asyncpg connection(s) were "
-            "attributed to the test that leaked them and quarantined so they cannot fail an "
-            "unrelated test. Fix the leaking session/engine; set "
-            "MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS=1 to make them a hard failure.",
+            f"  {len(_leaked_asyncpg_connections)} unclosed asyncpg connection(s) were attributed to the test that leaked them and quarantined so they cannot fail an unrelated test. Fix the leaking session/engine; set MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS=1 to make them a hard failure.",
             yellow=True,
         )
 
@@ -150,9 +136,7 @@ def pytest_terminal_summary(
         return
     terminalreporter.section("Integration suite — Docker unavailable (local)")
     terminalreporter.write_line(
-        f"  {_skip_count} integration test(s) were SKIPPED because Docker is not "
-        f"available locally. These tests run in CI.\n"
-        f"  To run locally, install Docker Desktop or start the Docker daemon.",
+        f"  {_skip_count} integration test(s) were SKIPPED because Docker is not available locally. These tests run in CI.\n  To run locally, install Docker Desktop or start the Docker daemon.",
         yellow=True,
     )
 
@@ -231,11 +215,7 @@ async def insert_eval(conn: AsyncConnection, fixture: EvalFixture) -> None:
     the objects it belongs to.
     """
     await conn.execute(
-        text(
-            "INSERT INTO evals "
-            "(id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) "
-            "VALUES (:id, :oid, :pid, :nid, :name, :eval_type, CAST(:cfg AS jsonb), :aid)"
-        ),
+        text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, :nid, :name, :eval_type, CAST(:cfg AS jsonb), :aid)"),
         {
             "id": str(fixture.id),
             "oid": str(fixture.organisation_id),
@@ -314,7 +294,7 @@ def db_url(
     # creates the role LOGIN BYPASSRLS with exactly this password, which
     # mirrors production: deploy/fly/bootstrap_db.derive_system_database_url
     # swaps the runtime URL's username to ``modulo_system``.
-    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "modulo_system", "syspass"))
+    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "modulo_system", "syspass"))
     return url
 
 
@@ -407,8 +387,8 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
                     {
                         "DATABASE_URL": db_url,
                         "DATABASE_ADMIN_URL": db_url,
-                        "MODULO_BREAK_GLASS_DATABASE_URL": bg_url,
-                        "MODULO_SYSTEM_DATABASE_URL": sys_url,
+                        "FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL": bg_url,
+                        "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": sys_url,
                     },
                 ):
                     await bootstrap_roles(db_url, app_url)
@@ -425,7 +405,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
     # Persist for the session: settings consumers (cron_helpers/saq_worker
     # system engine) read get_settings().modulo_system_database_url at test
     # time, after the per-test get_settings.cache_clear().
-    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
+    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
 
     async def _patch_schema() -> None:
         """Add the test-only schema surface the migrations don't cover.
@@ -645,7 +625,7 @@ _leak_logger = logging.getLogger("modulo.tests.integration.connection_leaks")
 
 def _strict_connection_leaks() -> bool:
     """True when an unclosed asyncpg connection must fail the test that leaked it."""
-    return os.environ.get("MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", "").strip().lower() in {"1", "true", "yes"}
+    return os.environ.get("FARNA_CONTROL_MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _is_unclosed_asyncpg_connection(unraisable: Any) -> bool:
@@ -657,9 +637,7 @@ def _is_unclosed_asyncpg_connection(unraisable: Any) -> bool:
     identified by its type and message instead.
     """
     exc_value = getattr(unraisable, "exc_value", None)
-    return isinstance(exc_value, ResourceWarning) and str(exc_value).startswith(
-        "unclosed connection <asyncpg.connection.Connection"
-    )
+    return isinstance(exc_value, ResourceWarning) and str(exc_value).startswith("unclosed connection <asyncpg.connection.Connection")
 
 
 def _record_unclosed_asyncpg_connection(item: pytest.Item, unraisable: Any) -> None:
@@ -667,18 +645,14 @@ def _record_unclosed_asyncpg_connection(item: pytest.Item, unraisable: Any) -> N
     detail = str(unraisable.exc_value)
     _leaks_by_nodeid.setdefault(item.nodeid, []).append(detail)
     _leak_logger.error(
-        "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the "
-        "session/connection that owns it (per-test engines must use NullPool or be "
-        "disposed on the loop that created them).",
+        "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the session/connection that owns it (per-test engines must use NullPool or be disposed on the loop that created them).",
         item.nodeid,
         detail,
     )
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[None]
-) -> Generator[pytest.TestReport, pytest.TestReport, pytest.TestReport]:
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Generator[pytest.TestReport, pytest.TestReport, pytest.TestReport]:
     """Carry this item's leaks to the controller on its teardown report.
 
     pytest-xdist serialises ``user_properties`` with every report, so this is the
@@ -912,9 +886,7 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {
                 "id": str(account_id),
@@ -924,8 +896,7 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {
                 "mid": str(uuid.uuid4()),
@@ -978,10 +949,7 @@ async def test_pipeline(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pipeline_id),
@@ -1028,9 +996,7 @@ async def test_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -1057,26 +1023,16 @@ async def test_suite_run(
     model_backend_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO eval_suites (id, organisation_id, name, visibility, owner_team_id) "
-                "VALUES (:id, :oid, 'Test Suite', 'org', NULL)"
-            ),
+            text("INSERT INTO eval_suites (id, organisation_id, name, visibility, owner_team_id) VALUES (:id, :oid, 'Test Suite', 'org', NULL)"),
             {"id": str(suite_id), "oid": str(test_org)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO eval_datasets (id, organisation_id, name, visibility, owner_team_id, version) "
-                "VALUES (:id, :oid, 'Test Dataset', 'org', NULL, 1)"
-            ),
+            text("INSERT INTO eval_datasets (id, organisation_id, name, visibility, owner_team_id, version) VALUES (:id, :oid, 'Test Dataset', 'org', NULL, 1)"),
             {"id": str(dataset_id), "oid": str(test_org)},
         )
         await conn.execute(
             text(
-                "INSERT INTO model_backends ("
-                "id, organisation_id, name, display_name, provider, model_id, "
-                "default_params, visibility, credentials_ciphertext, status, account_id) "
-                "VALUES (:id, :oid, 'Test Backend', 'Test Backend', 'opencode', "
-                "'test-model', '{}'::jsonb, 'org', '\\x00', 'active', :aid)"
+                "INSERT INTO model_backends (id, organisation_id, name, display_name, provider, model_id, default_params, visibility, credentials_ciphertext, status, account_id) VALUES (:id, :oid, 'Test Backend', 'Test Backend', 'opencode', 'test-model', '{}'::jsonb, 'org', '\\x00', 'active', :aid)"
             ),
             {"id": str(model_backend_id), "oid": str(test_org), "aid": str(test_user)},
         )

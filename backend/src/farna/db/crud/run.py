@@ -150,10 +150,7 @@ def run_idempotency_key(run_ref: str) -> str:
     that mints a fresh key every re-run.
     """
     if not isinstance(run_ref, str) or not _RUN_IDEMPOTENCY_REF_RE.match(run_ref):
-        raise ValueError(
-            "run_ref must be the stable logical run identity '<pipeline_id>:<run_number>' "
-            f"(recomputed on a re-run), NOT the per-replay run_id; got {run_ref!r}"
-        )
+        raise ValueError(f"run_ref must be the stable logical run identity '<pipeline_id>:<run_number>' (recomputed on a re-run), NOT the per-replay run_id; got {run_ref!r}")
     return run_ref
 
 
@@ -197,12 +194,8 @@ PAUSE_EXEMPT_TRIGGER_TYPES = frozenset({"manual", "correction"})
 # per-day "failed" bucket also counts the legacy ``expired`` spelling (a run
 # demoted before the status-set cleanup), while the failure-reason breakdown
 # only attributes genuinely failed executions (a cancelled run has no reason).
-_FAILURE_BUCKET_STATUSES: frozenset[str] = frozenset(
-    {"failed", "cancelled", "eval_failed", "expired", "stalled", "compensation_failed", "router_no_match"}
-)
-_FAILURE_REASON_STATUSES: frozenset[str] = frozenset(
-    {"failed", "eval_failed", "stalled", "compensation_failed", "router_no_match"}
-)
+_FAILURE_BUCKET_STATUSES: frozenset[str] = frozenset({"failed", "cancelled", "eval_failed", "expired", "stalled", "compensation_failed", "router_no_match"})
+_FAILURE_REASON_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled", "compensation_failed", "router_no_match"})
 
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MAX = 100
@@ -400,9 +393,7 @@ async def _load_registered_guardrail_capabilities(
     when at least one block-action guardrail carries a conformance claim, so
     the hot path stays free of the extra query.
     """
-    needs_conformance = any(
-        d.config.get("action") == "block" and (d.config.get("required_capabilities") or []) for d in definitions
-    )
+    needs_conformance = any(d.config.get("action") == "block" and (d.config.get("required_capabilities") or []) for d in definitions)
     if not needs_conformance:
         return {}
     from farna.db.models.environment_profile import EnvironmentProfile
@@ -454,9 +445,7 @@ async def _adopt_parent_work_item_id(
     """
     try:
         async with session.begin_nested():
-            result = await session.execute(
-                select(Run.work_item_id).where(Run.id == parent_run_id, Run.organisation_id == org_id)
-            )
+            result = await session.execute(select(Run.work_item_id).where(Run.id == parent_run_id, Run.organisation_id == org_id))
             return result.scalar_one_or_none()
     except asyncio.CancelledError:
         raise
@@ -619,11 +608,7 @@ def _merge_rank_guarded_refs(
 # (no SQL functions) so the statement is portable across Postgres and SQLite.
 # Parameters are bound per-row (:id0, :kind0, ...) — the assembled string
 # carries only bind placeholders, never values (parameterised-SQL rule).
-_HYDRATE_UPSERT_PREFIX = (
-    "INSERT INTO journeys "
-    "(id, organisation_id, kind, ref, canonical_work_item_id, provenance, first_seen_source, "
-    "created_at, updated_at) VALUES "
-)
+_HYDRATE_UPSERT_PREFIX = "INSERT INTO journeys (id, organisation_id, kind, ref, canonical_work_item_id, provenance, first_seen_source, created_at, updated_at) VALUES "
 _HYDRATE_UPSERT_SUFFIX = (
     " ON CONFLICT (organisation_id, kind, ref) DO UPDATE SET "
     "provenance = CASE "
@@ -638,9 +623,7 @@ _HYDRATE_UPSERT_SUFFIX = (
     # row becomes writable again).
     "WHERE journeys.dismissed_at IS NULL"
 )
-_HYDRATE_VALUES_TEMPLATE = (
-    "(:id{i}, :org_id, :kind{i}, :ref{i}, :canonical_id{i}, :prov{i}, :prov{i}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-)
+_HYDRATE_VALUES_TEMPLATE = "(:id{i}, :org_id, :kind{i}, :ref{i}, :canonical_id{i}, :prov{i}, :prov{i}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
 
 # Only caller/derived refs mint journey rows at create time by default.
 # ``agent`` refs (node emissions / reported claims) are stored on the run but
@@ -1070,18 +1053,14 @@ async def _enforce_deployment_drain_gate(session: AsyncSession, snapshot_id: uui
 
     await acquire_deployment_drain_lock(session)
     try:
-        result = await session.execute(
-            select(SystemConfig.value).where(SystemConfig.key == DEPLOYMENT_DRAIN_CONFIG_KEY)
-        )
+        result = await session.execute(select(SystemConfig.value).where(SystemConfig.key == DEPLOYMENT_DRAIN_CONFIG_KEY))
     except SQLAlchemyError:
         _log.exception("create_run.deployment_drain_read_failed")
         raise
     value = result.scalar_one_or_none()
     if not isinstance(value, dict) or value.get("active") is not True:
         return
-    snapshot = (
-        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-    ).scalar_one_or_none()
+    snapshot = (await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))).scalar_one_or_none()
     if _graph_contains_sandbox_agent(snapshot):
         raise TriggersPausedError
 
@@ -1379,12 +1358,7 @@ def _verify_policy_gate_pin_fingerprint(
     identity += f"pipeline snapshot {snapshot_id}"
     if snapshot_version is not None:
         identity += f" (version {snapshot_version})"
-    block_message = (
-        f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} "
-        f"({identity}, stored={truncated_stored}…, "
-        f"recomputed={truncated_recomputed}… — digest and content disagree; "
-        f"remediation: create a new run)"
-    )
+    block_message = f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} ({identity}, stored={truncated_stored}…, recomputed={truncated_recomputed}… — digest and content disagree; remediation: create a new run)"
     _log.error(
         "policy_gates.pin_fingerprint_mismatch",
         extra={
@@ -1438,9 +1412,7 @@ def _select_guardrail_definitions(
     """
     from farna.core.guardrails.output_intercept import exclude_output_interception_definitions
 
-    return exclude_output_interception_definitions(
-        _select_all_guardrail_definitions(guardrail_rows, pinned_defs, snap_pins, saved_fingerprint)
-    )
+    return exclude_output_interception_definitions(_select_all_guardrail_definitions(guardrail_rows, pinned_defs, snap_pins, saved_fingerprint))
 
 
 def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
@@ -1558,10 +1530,7 @@ async def _enforce_guardrail_conformance(
                 "state": derivation.state,
             },
         )
-        block_message = (
-            f"guardrail {eval_def.name!r} non-conformant: required capabilities unavailable "
-            f"({', '.join(derivation.missing + derivation.unreadable) or 'unknown'})"
-        )
+        block_message = f"guardrail {eval_def.name!r} non-conformant: required capabilities unavailable ({', '.join(derivation.missing + derivation.unreadable) or 'unknown'})"
         await notify_guardrail_event(
             org_id,
             "guardrail_enforcement_gap",
@@ -1716,9 +1685,7 @@ async def _run_guardrail_gate(
     payload = request.payload
     skipped_guardrails = pinned.skipped_guardrails
 
-    guardrail_defs = _select_guardrail_definitions(
-        guardrail_rows, pinned.pinned_defs, pinned.snap_pins, pinned.saved_fingerprint
-    )
+    guardrail_defs = _select_guardrail_definitions(guardrail_rows, pinned.pinned_defs, pinned.snap_pins, pinned.saved_fingerprint)
 
     observed_by_eval: dict[uuid.UUID, bool] = {}
     results: list[Any] = []
@@ -1774,10 +1741,7 @@ async def _run_guardrail_gate(
                     payload=payload,
                     is_replay=request.is_replay,
                     skipped_guardrails=skipped_guardrails,
-                    any_guarding=any(
-                        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
-                        for d in guardrail_defs
-                    ),
+                    any_guarding=any(not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs),
                     detection_only=False,
                 )
             )
@@ -2012,9 +1976,7 @@ async def _resolve_owner_team_id(
     """
     if owner_team_id is not None:
         return owner_team_id
-    return (
-        await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
-    ).scalar_one_or_none()
+    return (await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))).scalar_one_or_none()
 
 
 async def _read_work_item_refs_required(session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
@@ -2026,9 +1988,7 @@ async def _read_work_item_refs_required(session: AsyncSession, pipeline_id: uuid
     validation convenience, not a security control, so a malformed defaults
     blob degrades to "not required" rather than blocking run creation.
     """
-    defaults = (
-        await session.execute(select(Pipeline.run_context_defaults).where(Pipeline.id == pipeline_id))
-    ).scalar_one_or_none()
+    defaults = (await session.execute(select(Pipeline.run_context_defaults).where(Pipeline.id == pipeline_id))).scalar_one_or_none()
     if not isinstance(defaults, dict):
         return False
     return defaults.get("work_item_refs_required") is True
@@ -2213,10 +2173,7 @@ async def _validate_resume_thread_override(
         # A resume that does not carry its parent's thread gets a fresh one and
         # continues NOTHING — the silent failure mode the override kwarg exists
         # to prevent.
-        raise ValueError(
-            "run_group_kind='resume' requires thread_id=<parent's thread> — "
-            "a resume child must continue its parent's checkpoint (§15.1)"
-        )
+        raise ValueError("run_group_kind='resume' requires thread_id=<parent's thread> — a resume child must continue its parent's checkpoint (§15.1)")
     parent = (
         await session.execute(
             select(Run.id, Run.langgraph_thread_id).where(
@@ -2226,16 +2183,9 @@ async def _validate_resume_thread_override(
         )
     ).one_or_none()
     if parent is None:
-        raise ValueError(
-            "run_group_kind='resume' parent_run_id not found in this org — "
-            "the resume child's parent must be a run of the same organisation (§15.1)"
-        )
+        raise ValueError("run_group_kind='resume' parent_run_id not found in this org — the resume child's parent must be a run of the same organisation (§15.1)")
     if thread_id != parent.langgraph_thread_id:
-        raise ValueError(
-            "run_group_kind='resume' thread_id must equal the parent run's "
-            f"langgraph_thread_id — got {thread_id!r}, parent is on "
-            f"{parent.langgraph_thread_id!r} (§15.1)"
-        )
+        raise ValueError(f"run_group_kind='resume' thread_id must equal the parent run's langgraph_thread_id — got {thread_id!r}, parent is on {parent.langgraph_thread_id!r} (§15.1)")
 
 
 async def _validate_run_grouping_kwargs(
@@ -2258,9 +2208,7 @@ async def _validate_run_grouping_kwargs(
     """
     if run_group_kind is not None:
         if run_group_kind not in RUN_GROUP_KIND_VALUES:
-            raise ValueError(
-                f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})"
-            )
+            raise ValueError(f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})")
         if parent_run_id is None:
             # Both kinds are CHILD rows per §15.1. Without a parent the
             # exactly-one-resume partial unique (parent_run_id WHERE
@@ -2269,9 +2217,7 @@ async def _validate_run_grouping_kwargs(
             # the double-resume fence.
             raise ValueError("run_group_kind requires parent_run_id — retry/resume rows are child rows (§15.1)")
         if run_group_id is None:
-            raise ValueError(
-                f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)"
-            )
+            raise ValueError(f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)")
         if run_group_kind == RUN_GROUP_KIND_RESUME:
             await _validate_resume_thread_override(
                 session,
@@ -2566,9 +2512,7 @@ async def create_run(
     # (no silent failure path): it fails run creation loudly instead of
     # persisting a run whose externally-executed work would read as
     # Modulo-executed.
-    snapshot_graph = (
-        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-    ).scalar_one_or_none()
+    snapshot_graph = (await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))).scalar_one_or_none()
     execution_origin = EXECUTION_ORIGIN_DISPATCHED if graph_contains_dispatch(snapshot_graph) else None
 
     run = Run(
@@ -2750,14 +2694,7 @@ async def coalesce_pending_run(
             .all()
         )
         run = next(
-            (
-                r
-                for r in candidates
-                if getattr(r, "organisation_id", None) == org_id
-                and getattr(r, "claim_count", 0) == 0
-                and getattr(r, "started_at", None) is None
-                and read_coalesce_key(r.input_payload) == coalesce_key
-            ),
+            (r for r in candidates if getattr(r, "organisation_id", None) == org_id and getattr(r, "claim_count", 0) == 0 and getattr(r, "started_at", None) is None and read_coalesce_key(r.input_payload) == coalesce_key),
             None,
         )
     if run is None:
@@ -2895,12 +2832,7 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
-    count_q = (
-        select(func.count())
-        .select_from(Run)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
-        .where(Pipeline.deleted_at.is_(None))
-    )
+    count_q = select(func.count()).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False).where(Pipeline.deleted_at.is_(None))
     if organisation_id is not None:
         q = q.where(Run.organisation_id == organisation_id)
         count_q = count_q.where(Run.organisation_id == organisation_id)
@@ -3705,31 +3637,24 @@ def _resolve_store_org(
     """
     if session_org is None:
         raise DualWriteError(
-            f"run_node_outputs store write requires a bound RLS organisation context "
-            f"(origin={origin}); wrap the call in an org-bound transaction",
+            f"run_node_outputs store write requires a bound RLS organisation context (origin={origin}); wrap the call in an org-bound transaction",
             run_id=run_id,
             organisation_id=organisation_id,
             claim_token=claim_token,
             sqlstate=None,
             origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            "run_node_outputs store write requires a bound RLS organisation context; "
-            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
-        )
+        ) from OutputsRlsMismatch("run_node_outputs store write requires a bound RLS organisation context; wrap the call in `async with session.begin():` + set_rls_org(session, org)")
     if organisation_id is None:
         return session_org
     if session_org != organisation_id:
         raise DualWriteError(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
-            f"{organisation_id} (origin={origin})",
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id} (origin={origin})",
             run_id=run_id,
             organisation_id=organisation_id,
             claim_token=claim_token,
             sqlstate=None,
             origin="rls_precheck",
-        ) from OutputsRlsMismatch(
-            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
-        )
+        ) from OutputsRlsMismatch(f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}")
     return organisation_id
 
 
@@ -3946,9 +3871,7 @@ async def update_run_status(
     Bounding here remains deliberately out of scope for this shared function.
     """
     _reject_unknown_options(options, _RUN_STATUS_UPDATE_OPTION_DEFAULTS, "update_run_status")
-    resolved_options: dict[str, Any] = {
-        name: options.get(name, default) for name, default in _RUN_STATUS_UPDATE_OPTION_DEFAULTS.items()
-    }
+    resolved_options: dict[str, Any] = {name: options.get(name, default) for name, default in _RUN_STATUS_UPDATE_OPTION_DEFAULTS.items()}
     update = _RunStatusUpdate(**resolved_options)
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
@@ -3998,9 +3921,7 @@ async def update_run_status(
         # were dropped by migration 0215; the inherited-sentinel filter
         # speaks new-table
         # row ids now).
-        stored = await read_run_node_outputs_raw(
-            session, run_id=run_id, organisation_id=getattr(run, "organisation_id", None)
-        )
+        stored = await read_run_node_outputs_raw(session, run_id=run_id, organisation_id=getattr(run, "organisation_id", None))
         pre_write_outputs = stored.outputs
         pre_write_telemetry = stored.telemetry
     _apply_run_claim_fields(run, status, update)
@@ -4109,9 +4030,7 @@ async def _update_run_status_fenced(
             # object itself. JSON-typed params are serialized via ``_json_bind``:
             # asyncpg's json codec rejects raw dict/list (DataError), so the
             # fenced terminal write must encode them exactly like the ORM path.
-            "cost_breakdown": (
-                None if update.cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(update.cost_breakdown)
-            ),
+            "cost_breakdown": (None if update.cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(update.cost_breakdown)),
             "node_token_usage": _json_bind(update.node_token_usage),
             "claimed_by": update.claimed_by,
             "clear_error_code": update.clear_error_code,
@@ -4553,13 +4472,7 @@ RUNNER_TOMBSTONE_EXCLUSION_SQL = 'runs.sandbox_dispatch_state NOT LIKE \'%"state
 # absent-key default cap instead of being silently uncounted); the two must be
 # changed together — the Python set is the gate's membership test, this filter
 # is the count's scope.
-RUNNER_HOST_RESOURCE_FILTER_SQL = (
-    "COALESCE("
-    "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
-    "THEN substring(runs.sandbox_dispatch_state from "
-    '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
-    "'runner_docker') IN ('runner_docker', 'local', 'kubernetes')"
-)
+RUNNER_HOST_RESOURCE_FILTER_SQL = "COALESCE(CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' THEN substring(runs.sandbox_dispatch_state from '\"provider\"[[:space:]]*:[[:space:]]*\"([a-z_]+)\"') END, 'runner_docker') IN ('runner_docker', 'local', 'kubernetes')"
 
 
 async def count_active_runner_dispatches_for_deployment(session: AsyncSession) -> int:
@@ -4889,11 +4802,7 @@ async def get_run_stats(
 
 def _completed_durations_ms(completed_runs: list[Run]) -> list[int]:
     """Wall-clock durations (ms) of completed runs, sorted ascending."""
-    return sorted(
-        int((r.completed_at - r.started_at).total_seconds() * 1000)
-        for r in completed_runs
-        if r.completed_at is not None and r.started_at is not None
-    )
+    return sorted(int((r.completed_at - r.started_at).total_seconds() * 1000) for r in completed_runs if r.completed_at is not None and r.started_at is not None)
 
 
 def _runs_by_day(runs: list[Run]) -> dict[str, dict[str, int]]:
@@ -4949,9 +4858,7 @@ async def _get_run_stats_python(
     ]
     if account_id is not None:
         filters.append(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id))
-    result = await session.execute(
-        select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at)
-    )
+    result = await session.execute(select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at))
     runs: list[Run] = list(result.scalars().all())
 
     total = len(runs)
@@ -4983,9 +4890,7 @@ async def _get_run_stats_python(
         "p95_duration_ms": int(_percentile([float(x) for x in durations_ms], 95)),
         "p99_duration_ms": int(_percentile([float(x) for x in durations_ms], 99)),
         "runs_by_day": [{"date": d, **v} for d, v in sorted(by_day.items())],
-        "failure_by_reason": [
-            {"reason": r, "count": c} for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])
-        ],
+        "failure_by_reason": [{"reason": r, "count": c} for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])],
         "avg_duration_by_day": [{"date": d, "avg_ms": int(sum(v) / len(v))} for d, v in sorted(dur_by_day.items())],
     }
 
@@ -5010,9 +4915,7 @@ async def _get_run_stats_postgres(
         Pipeline.deleted_at.is_(None),
     ]
     if account_id is not None:
-        base_where.append(
-            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id)
-        )
+        base_where.append(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id))
     day = cast(Run.created_at, Date).label("day")
 
     # Per-day count/success/failed buckets plus per-day average duration. A day
@@ -5028,9 +4931,7 @@ async def _get_run_stats_postgres(
                     day,
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
-                    func.sum(
-                        case((and_(Run.status.in_(_FAILURE_BUCKET_STATUSES), _NOT_BENIGN_PREDICATE), 1), else_=0)
-                    ).label("failed"),
+                    func.sum(case((and_(Run.status.in_(_FAILURE_BUCKET_STATUSES), _NOT_BENIGN_PREDICATE), 1), else_=0)).label("failed"),
                     _benign_case_sum().label("benign_count"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
@@ -5104,19 +5005,9 @@ async def _get_run_stats_postgres(
         "p50_duration_ms": int(p50) if p50 is not None else None,
         "p95_duration_ms": int(p95) if p95 is not None else None,
         "p99_duration_ms": int(p99) if p99 is not None else None,
-        "runs_by_day": [
-            {"date": str(row.day), "count": int(row.run_count), "success": int(row.success), "failed": int(row.failed)}
-            for row in sorted(day_rows, key=attrgetter("day"))
-        ],
-        "failure_by_reason": [
-            {"reason": reason, "count": int(count)}
-            for reason, count in sorted(failure_rows, key=lambda item: -int(item[1]))
-        ],
-        "avg_duration_by_day": [
-            {"date": str(row.day), "avg_ms": int(row.avg_duration)}
-            for row in sorted(day_rows, key=attrgetter("day"))
-            if row.avg_duration is not None
-        ],
+        "runs_by_day": [{"date": str(row.day), "count": int(row.run_count), "success": int(row.success), "failed": int(row.failed)} for row in sorted(day_rows, key=attrgetter("day"))],
+        "failure_by_reason": [{"reason": reason, "count": int(count)} for reason, count in sorted(failure_rows, key=lambda item: -int(item[1]))],
+        "avg_duration_by_day": [{"date": str(row.day), "avg_ms": int(row.avg_duration)} for row in sorted(day_rows, key=attrgetter("day")) if row.avg_duration is not None],
     }
 
 
@@ -5136,9 +5027,7 @@ async def get_run_heatmap(
     ]
     if account_id is not None:
         filters.append(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id))
-    result = await session.execute(
-        select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at)
-    )
+    result = await session.execute(select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at))
     runs: list[Run] = list(result.scalars().all())
 
     by_day: dict[str, int] = defaultdict(int)

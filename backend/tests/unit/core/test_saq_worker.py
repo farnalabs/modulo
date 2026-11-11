@@ -81,9 +81,7 @@ def test_creates_engine_with_system_url_when_configured(reset_system_engine, mon
     assert create_engine.call_args.args[0] == system_url
 
 
-def test_system_engine_pool_recycle_from_settings_below_the_proxy_window(
-    reset_system_engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_system_engine_pool_recycle_from_settings_below_the_proxy_window(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1524: the worker's system engine must take pool_recycle from
     Settings.db_pool_recycle_seconds (default 1500 s), strictly below the
     Fly HAProxy 30-minute session window (1800 s) — never unbounded, never
@@ -106,7 +104,7 @@ def test_fails_closed_when_unset(reset_system_engine, monkeypatch: pytest.Monkey
     errors: list[tuple[object, object]] = []
     monkeypatch.setattr(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra)))
 
-    with pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"):
+    with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"):
         sw._get_system_async_engine()
 
     assert len(errors) == 1
@@ -228,9 +226,7 @@ class TestQueueNameDerivation:
             ("custom", "system"),
         ],
     )
-    def test_system_queue_derives_from_runs_queue(
-        self, monkeypatch: pytest.MonkeyPatch, runs_queue: str, expected: str
-    ) -> None:
+    def test_system_queue_derives_from_runs_queue(self, monkeypatch: pytest.MonkeyPatch, runs_queue: str, expected: str) -> None:
         monkeypatch.setattr(sw, "get_settings", lambda: SimpleNamespace(saq_runs_queue=runs_queue))
         assert sw._system_queue_name() == expected
 
@@ -243,23 +239,17 @@ class TestQueueNameDerivation:
 
 class TestAssertSystemAuthConfigured:
     def test_missing_password_refuses_to_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="", saq_auth_username="admin")
-        )
+        monkeypatch.setattr(sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="", saq_auth_username="admin"))
         with pytest.raises(RuntimeError, match="SAQ_AUTH_PASSWORD"):
             sw._assert_system_auth_configured()
 
     def test_missing_username_refuses_to_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="s3cret", saq_auth_username=None)
-        )
+        monkeypatch.setattr(sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="s3cret", saq_auth_username=None))
         with pytest.raises(RuntimeError, match="SAQ_AUTH_USERNAME"):
             sw._assert_system_auth_configured()
 
     def test_configured_auth_allows_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="s3cret", saq_auth_username="admin")
-        )
+        monkeypatch.setattr(sw, "get_settings", lambda: SimpleNamespace(saq_auth_password="s3cret", saq_auth_username="admin"))
         assert sw._assert_system_auth_configured() is None
 
 

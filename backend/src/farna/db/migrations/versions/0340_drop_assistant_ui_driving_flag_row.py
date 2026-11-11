@@ -56,9 +56,7 @@ RETIRED_FLAG_NAME: str = "assistant_ui_driving"
 
 #: The row's historical description, captured from the last ``_KNOWN_FLAGS``
 #: revision that declared it (``7b7cdf267``), used only by ``downgrade``.
-RETIRED_FLAG_DESCRIPTION: str = (
-    "Assistant browser UI driving — allows Assistant to navigate, click, and fill forms on your behalf."
-)
+RETIRED_FLAG_DESCRIPTION: str = "Assistant browser UI driving — allows Assistant to navigate, click, and fill forms on your behalf."
 
 #: The row's historical tier (``community``).
 RETIRED_FLAG_TIER_ID: str = "community"
@@ -97,12 +95,7 @@ def restore_retired_flag_row(bind: sa.Connection) -> int:
     if not _has_table(bind, _CATALOG_TABLE) or not _has_table(bind, _TIER_TABLE):
         return 0
     result = bind.execute(
-        sa.text(
-            'INSERT INTO "feature_flag_catalog" (name, description, tier_id, depends_on, is_active) '
-            "SELECT :name, :description, :tier_id, NULL, :is_active "
-            'WHERE EXISTS (SELECT 1 FROM "tier_catalog" WHERE tier_id = :tier_check) '
-            "ON CONFLICT (name) DO NOTHING"
-        ),
+        sa.text('INSERT INTO "feature_flag_catalog" (name, description, tier_id, depends_on, is_active) SELECT :name, :description, :tier_id, NULL, :is_active WHERE EXISTS (SELECT 1 FROM "tier_catalog" WHERE tier_id = :tier_check) ON CONFLICT (name) DO NOTHING'),
         {
             "name": RETIRED_FLAG_NAME,
             "description": RETIRED_FLAG_DESCRIPTION,

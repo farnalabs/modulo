@@ -145,29 +145,19 @@ def _read_registry(registry_path: str | None) -> dict[str, Any]:
     inside them is caught by the lookups below with a node-naming message.
     """
     if not registry_path:
-        raise ModelClassResolutionError(
-            "model_class resolution requires a model-class registry, but no registry path is "
-            "configured (set MODEL_CLASS_REGISTRY_PATH to a model-management.json file)"
-        )
+        raise ModelClassResolutionError("model_class resolution requires a model-class registry, but no registry path is configured (set MODEL_CLASS_REGISTRY_PATH to a model-management.json file)")
     path = Path(registry_path)
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ModelClassResolutionError(
-            f"model-class registry '{registry_path}' is unreadable ({type(exc).__name__}: {exc}) — "
-            "run refused pre-dispatch (ADR 037 D3)"
-        ) from exc
+        raise ModelClassResolutionError(f"model-class registry '{registry_path}' is unreadable ({type(exc).__name__}: {exc}) — run refused pre-dispatch (ADR 037 D3)") from exc
     if not isinstance(data, dict):
-        raise ModelClassResolutionError(
-            f"model-class registry '{registry_path}' is corrupt: top level is not a JSON object"
-        )
+        raise ModelClassResolutionError(f"model-class registry '{registry_path}' is corrupt: top level is not a JSON object")
     for section in ("classes", "pipelines"):
         value = data.get(section)
         if value is not None and not isinstance(value, dict):
-            raise ModelClassResolutionError(
-                f"model-class registry '{registry_path}' is corrupt: '{section}' is not a JSON object"
-            )
+            raise ModelClassResolutionError(f"model-class registry '{registry_path}' is corrupt: '{section}' is not a JSON object")
     return data
 
 
@@ -184,21 +174,14 @@ def _model_for_class(registry: dict[str, Any], class_name: str, node_id: Any) ->
     entry = classes.get(class_name)
     if not isinstance(entry, dict):
         known = ", ".join(sorted(str(k) for k in classes)) or "<none>"
-        raise ModelClassResolutionError(
-            f"sandbox_agent node '{node_id}' declares model_class '{class_name}' which the "
-            f"model-class registry does not define (known classes: {known}) — run refused "
-            "pre-dispatch (ADR 037 D3)"
-        )
+        raise ModelClassResolutionError(f"sandbox_agent node '{node_id}' declares model_class '{class_name}' which the model-class registry does not define (known classes: {known}) — run refused pre-dispatch (ADR 037 D3)")
     model = entry.get("model")
     if isinstance(model, str) and model.strip():
         return model.strip()
     fallback = entry.get("fallback")
     if isinstance(fallback, str) and fallback.strip():
         return fallback.strip()
-    raise ModelClassResolutionError(
-        f"sandbox_agent node '{node_id}': model class '{class_name}' declares neither 'model' "
-        "nor a 'fallback' — run refused pre-dispatch (ADR 037 D3)"
-    )
+    raise ModelClassResolutionError(f"sandbox_agent node '{node_id}': model class '{class_name}' declares neither 'model' nor a 'fallback' — run refused pre-dispatch (ADR 037 D3)")
 
 
 def _clean_class_name(value: Any, error_detail: str) -> str:
@@ -228,35 +211,26 @@ def _pipeline_map_class(registry: dict[str, Any], pipeline_name: str, node_id: A
     if isinstance(entry, str):
         return _clean_class_name(
             entry,
-            f"model-class registry pipelines entry for '{pipeline_name}' is an empty class name "
-            "— run refused pre-dispatch (ADR 037 D3)",
+            f"model-class registry pipelines entry for '{pipeline_name}' is an empty class name — run refused pre-dispatch (ADR 037 D3)",
         )
     if not isinstance(entry, dict):
-        raise ModelClassResolutionError(
-            f"model-class registry pipelines entry for '{pipeline_name}' is malformed "
-            f"({type(entry).__name__}) — run refused pre-dispatch (ADR 037 D3)"
-        )
+        raise ModelClassResolutionError(f"model-class registry pipelines entry for '{pipeline_name}' is malformed ({type(entry).__name__}) — run refused pre-dispatch (ADR 037 D3)")
     nodes_map = entry.get("nodes")
     if nodes_map is not None:
         if not isinstance(nodes_map, dict):
-            raise ModelClassResolutionError(
-                f"model-class registry pipelines entry for '{pipeline_name}' has a malformed "
-                "'nodes' map — run refused pre-dispatch (ADR 037 D3)"
-            )
+            raise ModelClassResolutionError(f"model-class registry pipelines entry for '{pipeline_name}' has a malformed 'nodes' map — run refused pre-dispatch (ADR 037 D3)")
         hit = nodes_map.get(str(node_id))
         if hit is not None:
             return _clean_class_name(
                 hit,
-                f"model-class registry per-node class for pipeline '{pipeline_name}' node "
-                f"'{node_id}' is malformed — run refused pre-dispatch (ADR 037 D3)",
+                f"model-class registry per-node class for pipeline '{pipeline_name}' node '{node_id}' is malformed — run refused pre-dispatch (ADR 037 D3)",
             )
     default = entry.get("default")
     if default is None:
         return None
     return _clean_class_name(
         default,
-        f"model-class registry pipelines entry for '{pipeline_name}' has a malformed 'default' "
-        "— run refused pre-dispatch (ADR 037 D3)",
+        f"model-class registry pipelines entry for '{pipeline_name}' has a malformed 'default' — run refused pre-dispatch (ADR 037 D3)",
     )
 
 
@@ -332,10 +306,7 @@ def _load_mint_registry(sandbox_nodes: list[dict[str, Any]], registry_path: str 
         opt_in = next((n for n in sandbox_nodes if n.get("model_class")), None)
         if opt_in is None:
             raise
-        raise ModelClassResolutionError(
-            f"sandbox_agent node '{opt_in.get('id')}' declares model_class "
-            f"{opt_in.get('model_class')!r} but resolution failed: {exc.detail}"
-        ) from exc
+        raise ModelClassResolutionError(f"sandbox_agent node '{opt_in.get('id')}' declares model_class {opt_in.get('model_class')!r} but resolution failed: {exc.detail}") from exc
 
 
 def _classify_node(
@@ -357,8 +328,7 @@ def _classify_node(
         return (
             _clean_class_name(
                 declared,
-                f"sandbox_agent node '{node.get('id')}' declares a malformed model_class "
-                f"{declared!r} — run refused pre-dispatch (ADR 037 D3)",
+                f"sandbox_agent node '{node.get('id')}' declares a malformed model_class {declared!r} — run refused pre-dispatch (ADR 037 D3)",
             ),
             MODEL_ORIGIN_NODE_MODEL_CLASS,
         )

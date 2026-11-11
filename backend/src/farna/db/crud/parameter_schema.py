@@ -53,17 +53,8 @@ async def list_schemas(
     cursor: str | None = None,
     limit: int = 20,
 ) -> PageResult[ParameterSchema]:
-    q = (
-        select(ParameterSchema)
-        .where(ParameterSchema.organisation_id == org_id)
-        .where(ParameterSchema.deleted_at.is_(None))
-    )
-    total_result = await session.execute(
-        select(func.count())
-        .select_from(ParameterSchema)
-        .where(ParameterSchema.organisation_id == org_id)
-        .where(ParameterSchema.deleted_at.is_(None))
-    )
+    q = select(ParameterSchema).where(ParameterSchema.organisation_id == org_id).where(ParameterSchema.deleted_at.is_(None))
+    total_result = await session.execute(select(func.count()).select_from(ParameterSchema).where(ParameterSchema.organisation_id == org_id).where(ParameterSchema.deleted_at.is_(None)))
     total = total_result.scalar_one()
 
     if cursor is not None:
@@ -131,23 +122,13 @@ async def update_schema(
 
 
 async def soft_delete_schema(session: AsyncSession, schema_id: uuid.UUID) -> ParameterSchema | None:
-    result = await session.execute(
-        update(ParameterSchema)
-        .where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_(None))
-        .values(deleted_at=func.now())
-        .returning(ParameterSchema)
-    )
+    result = await session.execute(update(ParameterSchema).where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_(None)).values(deleted_at=func.now()).returning(ParameterSchema))
     await session.flush()
     return result.scalar_one_or_none()
 
 
 async def restore_schema(session: AsyncSession, schema_id: uuid.UUID) -> ParameterSchema | None:
-    result = await session.execute(
-        update(ParameterSchema)
-        .where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_not(None))
-        .values(deleted_at=None)
-        .returning(ParameterSchema)
-    )
+    result = await session.execute(update(ParameterSchema).where(ParameterSchema.id == schema_id, ParameterSchema.deleted_at.is_not(None)).values(deleted_at=None).returning(ParameterSchema))
     await session.flush()
     return result.scalar_one_or_none()
 
@@ -156,17 +137,11 @@ async def delete_schema(
     session: AsyncSession,
     schema_id: uuid.UUID,
 ) -> bool:
-    agent_count = (
-        await session.execute(select(func.count()).select_from(Agent).where(Agent.parameter_schema_id == schema_id))
-    ).scalar_one()
+    agent_count = (await session.execute(select(func.count()).select_from(Agent).where(Agent.parameter_schema_id == schema_id))).scalar_one()
     if agent_count:
         return False
 
-    set_count = (
-        await session.execute(
-            select(func.count()).select_from(ParameterSet).where(ParameterSet.parameter_schema_id == schema_id)
-        )
-    ).scalar_one()
+    set_count = (await session.execute(select(func.count()).select_from(ParameterSet).where(ParameterSet.parameter_schema_id == schema_id))).scalar_one()
     if set_count:
         return False
 

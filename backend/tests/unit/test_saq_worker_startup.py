@@ -188,7 +188,7 @@ class TestStartupHookAppliesLicenseAnchor:
 
         with (
             patch.object(sw, "get_settings", return_value=settings),
-            pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"),
+            pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY"),
         ):
             await sw._startup_event_bus_hook({})
 
@@ -411,9 +411,7 @@ class TestCapacityProbeInstall:
         cfg.assert_not_awaited()
         assert db_capacity._platform_probe is probe
 
-    async def test_factory_failure_is_fail_open(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_factory_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         monkeypatch.setattr(
             "farna.core.capacity_providers.build_platform_capacity_probe",
             MagicMock(side_effect=RuntimeError("factory boom")),
@@ -742,9 +740,7 @@ class TestRunSystemWebStartupFailure:
             loop.run_until_complete(_serve_forever())
         except RuntimeError:
             if timed_out:
-                raise AssertionError(
-                    "run_system_web left the web app serving after the worker failed to start"
-                ) from None
+                raise AssertionError("run_system_web left the web app serving after the worker failed to start") from None
             raise
         else:
             if timed_out:
@@ -864,9 +860,7 @@ class TestRunSystemWebStartupFailure:
         with pytest.raises(asyncio.CancelledError):
             await sw._set_duplicate_terminal_cooldown()
 
-    async def test_cooldown_failure_is_logged_not_raised(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_cooldown_failure_is_logged_not_raised(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A Redis blip setting the cooldown must not crash the worker at boot."""
         monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
         monkeypatch.setattr(

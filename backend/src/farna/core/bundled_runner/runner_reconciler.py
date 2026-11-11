@@ -92,7 +92,7 @@ class _LabelledContainer:
 
 def deployment_identity() -> str:
     """The deployment-identity value (label rides every container filter)."""
-    return os.environ.get("MODULO_RUNNER_MACHINE_ID") or socket.gethostname()
+    return os.environ.get("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID") or socket.gethostname()
 
 
 class _DockerWorkspaceSource:
@@ -673,7 +673,7 @@ def _resolve_docker_host() -> str | None:
     # MODULO_DOCKER_HOST first, then DOCKER_HOST, else None (the engine's
     # local socket). The raw-socket operator override is documented in
     # docs/security/.
-    return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+    return os.environ.get("FARNA_CONTROL_MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
 
 
 def _local_docker_socket_paths() -> tuple[Path, ...]:
@@ -775,12 +775,7 @@ def docker_endpoint_skip_reason() -> str | None:
         return None
     if _default_docker_socket_present():
         return None
-    return (
-        "no Docker endpoint configured (MODULO_DOCKER_HOST, DOCKER_HOST and "
-        "DOCKER_CONTEXT all unset, no Docker context selected, no local "
-        "Docker socket) — set MODULO_DOCKER_HOST to enable the "
-        "workspace-orphan sweep"
-    )
+    return "no Docker endpoint configured (MODULO_DOCKER_HOST, DOCKER_HOST and DOCKER_CONTEXT all unset, no Docker context selected, no local Docker socket) — set MODULO_DOCKER_HOST to enable the workspace-orphan sweep"
 
 
 async def kubernetes_endpoint_skip_reason() -> str | None:
@@ -814,11 +809,7 @@ async def kubernetes_endpoint_skip_reason() -> str | None:
         return "the runtime-provider hub could not be built — see logs; the workspace-pod sweep cannot run"
     try:
         if provider_hub.get("kubernetes") is None:
-            return (
-                "the Kubernetes runtime provider is not registered — set "
-                "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
-                "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
-            )
+            return "the Kubernetes runtime provider is not registered — set MODULO_KUBERNETES_ENABLED to an enabling value (and install the kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
         return None
     finally:
         await provider_hub.aclose()
@@ -854,10 +845,7 @@ async def e2b_endpoint_skip_reason() -> str | None:
         return "the runtime-provider hub could not be built — see logs; the E2B sandbox sweep cannot run"
     try:
         if provider_hub.get("e2b") is None:
-            return (
-                "the E2B runtime provider is not registered — set MODULO_E2B_API_KEY "
-                "to enable the E2B sandbox orphan sweep"
-            )
+            return "the E2B runtime provider is not registered — set MODULO_E2B_API_KEY to enable the E2B sandbox orphan sweep"
         return None
     finally:
         await provider_hub.aclose()

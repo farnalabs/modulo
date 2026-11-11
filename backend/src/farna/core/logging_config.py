@@ -98,7 +98,7 @@ def _resolve_log_level(module_name: str) -> str:
     override = os.environ.get(env_key)
     if override:
         return override.upper()
-    return os.environ.get("MODULO_LOG_LEVEL", "INFO").upper()
+    return os.environ.get("FARNA_CONTROL_MODULO_LOG_LEVEL", "INFO").upper()
 
 
 def _log_async_emit_error(future: asyncio.Task[None]) -> None:
@@ -225,7 +225,7 @@ class ErrorTrackingLogHandler(logging.Handler):
                     "line": record.lineno,
                     "correlation_id": correlation_id_var.get(),
                 },
-                "environment": os.environ.get("MODULO_ENV", "development"),
+                "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
                 "version": get_version(),
             }
 
@@ -282,9 +282,9 @@ def _apply_per_module_levels() -> None:
     """Apply per-module log levels from MODULO_LOG_LEVEL_<MODULE> env vars."""
     seen: set[str] = set()
     for env_name, value in os.environ.items():
-        if not env_name.startswith("MODULO_LOG_LEVEL_"):
+        if not env_name.startswith("FARNA_CONTROL_MODULO_LOG_LEVEL_"):
             continue
-        module_path = env_name[len("MODULO_LOG_LEVEL_") :].lower().replace("_", ".")
+        module_path = env_name[len("FARNA_CONTROL_MODULO_LOG_LEVEL_") :].lower().replace("_", ".")
         if module_path in seen:
             continue
         seen.add(module_path)

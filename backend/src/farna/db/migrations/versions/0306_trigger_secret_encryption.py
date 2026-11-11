@@ -82,11 +82,7 @@ def _candidate_rows(bind: Any) -> list[Any]:
     structural unit tests never have a real table) run the same statement
     against their mock and get the broad behaviour for free.
     """
-    stmt = text(
-        "SELECT id, config_json FROM triggers "
-        "WHERE config_json->>'hmac_secret' IS NOT NULL "
-        "OR config_json->>'signing_secret' IS NOT NULL"
-    )
+    stmt = text("SELECT id, config_json FROM triggers WHERE config_json->>'hmac_secret' IS NOT NULL OR config_json->>'signing_secret' IS NOT NULL")
     return list(bind.execute(stmt).all())
 
 
@@ -134,11 +130,7 @@ def upgrade() -> None:
     # Filter to rows that actually need encryption. Python-side filtering is
     # the idempotency mechanism: second run, every candidate's secret keys are
     # already tokens/masked/absent → nothing is written.
-    pending: list[tuple[Any, dict[str, Any]]] = [
-        (row.id, row.config_json)
-        for row in rows
-        if isinstance(row.config_json, dict) and _config_needs_encryption(row.config_json)
-    ]
+    pending: list[tuple[Any, dict[str, Any]]] = [(row.id, row.config_json) for row in rows if isinstance(row.config_json, dict) and _config_needs_encryption(row.config_json)]
     if not pending:
         return
 
@@ -147,9 +139,7 @@ def upgrade() -> None:
     # Phase 1 — encrypt every pending row's payload in memory. Any failure
     # here aborts BEFORE a single write, so a partially-encrypted store can
     # never be left behind.
-    updated_payloads: list[tuple[Any, dict[str, Any]]] = [
-        (row_id, _encrypt_config(config, fernet_key)) for row_id, config in pending
-    ]
+    updated_payloads: list[tuple[Any, dict[str, Any]]] = [(row_id, _encrypt_config(config, fernet_key)) for row_id, config in pending]
 
     # Phase 2 — write the already-validated payloads.
     for row_id, updated in updated_payloads:

@@ -89,12 +89,8 @@ _REPORTED_CONTAINMENT = '[{"source": "reported"}]'
 
 # The per-row canon CASE used by the journeys backfill (constant literals;
 # migrations never import app constants).
-_LEGACY_PROVENANCE_WALL = (
-    "CASE j.latest_provenance WHEN 'reported' THEN 'agent' WHEN 'derived' THEN 'derived' ELSE j.provenance END"
-)
-_LEGACY_FIRST_SEEN_WALL = (
-    "CASE j.latest_provenance WHEN 'reported' THEN 'agent' WHEN 'derived' THEN 'derived' ELSE j.first_seen_source END"
-)
+_LEGACY_PROVENANCE_WALL = "CASE j.latest_provenance WHEN 'reported' THEN 'agent' WHEN 'derived' THEN 'derived' ELSE j.provenance END"
+_LEGACY_FIRST_SEEN_WALL = "CASE j.latest_provenance WHEN 'reported' THEN 'agent' WHEN 'derived' THEN 'derived' ELSE j.first_seen_source END"
 
 
 def _runs_update_sql() -> str:
@@ -156,23 +152,10 @@ def _journeys_backfill(bind: sa.Connection) -> int:
     ``latest_provenance``, id-keyed batches. Runs on ``op.get_bind()`` inside
     the migration transaction (see ``_runs_backfill`` for why a side
     autocommit connection is disallowed here)."""
-    select_sql = text(
-        "SELECT j.id FROM public.journeys AS j "
-        "WHERE j.first_seen_source IS NULL "
-        "  AND j.latest_provenance IN ('reported', 'derived') "
-        "ORDER BY j.id LIMIT :n"
-    )
+    select_sql = text("SELECT j.id FROM public.journeys AS j WHERE j.first_seen_source IS NULL   AND j.latest_provenance IN ('reported', 'derived') ORDER BY j.id LIMIT :n")
     update_sql = text(
         "UPDATE public.journeys AS j SET "  # noqa: S608  # nosec B608 - module constants only, never caller data
-        "  provenance = "
-        + str(_LEGACY_PROVENANCE_WALL)
-        + ", "
-        + "  first_seen_source = "
-        + str(_LEGACY_FIRST_SEEN_WALL)
-        + " "
-        + "WHERE j.first_seen_source IS NULL "
-        + "  AND j.latest_provenance IN ('reported', 'derived') "
-        + "  AND j.id = ANY(STRING_TO_ARRAY(:ids, ',')::uuid[])"
+        "  provenance = " + str(_LEGACY_PROVENANCE_WALL) + ", " + "  first_seen_source = " + str(_LEGACY_FIRST_SEEN_WALL) + " " + "WHERE j.first_seen_source IS NULL " + "  AND j.latest_provenance IN ('reported', 'derived') " + "  AND j.id = ANY(STRING_TO_ARRAY(:ids, ',')::uuid[])"
     )
     batches = 0
     while True:
@@ -193,32 +176,15 @@ def upgrade() -> None:
         return
 
     # --- 1/2: columns (existence-guarded ⇒ re-runs are no-ops) ---
-    have_provenance = bind.execute(
-        text(
-            "SELECT count(*) FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = 'provenance'"
-        )
-    ).scalar()
+    have_provenance = bind.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = 'provenance'")).scalar()
     if not have_provenance:
-        bind.execute(
-            text("ALTER TABLE public.journeys ADD COLUMN \"provenance\" varchar(30) NOT NULL DEFAULT 'derived'")
-        )
-    have_first_seen = bind.execute(
-        text(
-            "SELECT count(*) FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = 'first_seen_source'"
-        )
-    ).scalar()
+        bind.execute(text("ALTER TABLE public.journeys ADD COLUMN \"provenance\" varchar(30) NOT NULL DEFAULT 'derived'"))
+    have_first_seen = bind.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = 'first_seen_source'")).scalar()
     if not have_first_seen:
         bind.execute(text('ALTER TABLE public.journeys ADD COLUMN "first_seen_source" varchar(30)'))
 
     # --- 3: index (IF NOT EXISTS ⇒ idempotent) ---
-    bind.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_journeys_org_provenance "
-            "ON public.journeys USING btree (organisation_id, provenance)"
-        )
-    )
+    bind.execute(text("CREATE INDEX IF NOT EXISTS ix_journeys_org_provenance ON public.journeys USING btree (organisation_id, provenance)"))
 
     # --- 4/5: data legs (batched; inside the migration transaction) ---
     _journeys_backfill(bind)

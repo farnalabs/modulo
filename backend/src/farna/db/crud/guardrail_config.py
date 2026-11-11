@@ -75,9 +75,7 @@ async def set_guardrail_pin(session: AsyncSession, org_id: uuid.UUID, pin_json: 
     """
     result = cast(
         "CursorResult[Any]",
-        await session.execute(
-            update(Organisation).where(Organisation.id == org_id).values(guardrail_pins_json=pin_json)
-        ),
+        await session.execute(update(Organisation).where(Organisation.id == org_id).values(guardrail_pins_json=pin_json)),
     )
     if result.rowcount != 1:
         raise NoResultFound(f"Organisation {org_id} not found for guardrail pin update")

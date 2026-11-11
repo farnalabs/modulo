@@ -216,7 +216,7 @@ def evidence_enabled() -> bool:
     outside this work's file scope — the field can ship in a follow-up without
     a code change here.
     """
-    env = os.environ.get("MODULO_HEURISTIC_ENABLED")
+    env = os.environ.get("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED")
     if env is not None:
         return env.strip().lower() in {"1", "true", "yes", "on"}
     try:
@@ -344,9 +344,7 @@ def compute_work_intact(completed_node_outputs: dict[str, Any], node_ids: set[st
     by design: condition-skipped nodes make this False, which is the safe
     direction (never a false false-failure banner).
     """
-    completed = {
-        node_id for node_id, output in (completed_node_outputs or {}).items() if _node_output_has_valid_artifact(output)
-    }
+    completed = {node_id for node_id, output in (completed_node_outputs or {}).items() if _node_output_has_valid_artifact(output)}
     if not completed:
         return False
     return completed == set(node_ids)
@@ -623,9 +621,7 @@ def combine_probe_results(*results: EvidenceResult) -> tuple[EvidenceResult, str
         return EvidenceResult.has_work, "positive evidence (git diff / sandbox filesystem)"
     if any(r == EvidenceResult.unverifiable for r in results):
         return EvidenceResult.unverifiable, "evidence could not be verified"
-    return EvidenceResult.verified_empty, (
-        "git diff empty (whitespace ignored), no non-metadata output_json key, sandbox filesystem empty"
-    )
+    return EvidenceResult.verified_empty, ("git diff empty (whitespace ignored), no non-metadata output_json key, sandbox filesystem empty")
 
 
 def _estimate_probe_cost_usd(seconds: float) -> float:
@@ -844,18 +840,11 @@ async def reconcile_noop_evidence(
     deadline = time.monotonic() + budget_seconds
 
     async with session_factory() as session, session.begin():
-        result = await session.execute(
-            select(Run)
-            .where(Run.status.in_(RECONCILE_COMPLETE_STATUSES))
-            .order_by(Run.completed_at.desc())
-            .limit(max_runs)
-        )
+        result = await session.execute(select(Run).where(Run.status.in_(RECONCILE_COMPLETE_STATUSES)).order_by(Run.completed_at.desc()).limit(max_runs))
         runs = list(result.scalars().all())
         existing: set[tuple[UUID, str]] = set()
         if runs:
-            evidence_rows = await session.execute(
-                select(RunEvidence.run_id, RunEvidence.node_id).where(RunEvidence.run_id.in_([run.id for run in runs]))
-            )
+            evidence_rows = await session.execute(select(RunEvidence.run_id, RunEvidence.node_id).where(RunEvidence.run_id.in_([run.id for run in runs])))
             existing = {(row.run_id, str(row.node_id)) for row in evidence_rows.all()}
         # FAR-583 read-switch: the blobs reassemble from run_node_outputs
         # (new-table-only reader) INSIDE this transaction — one batched repo read
@@ -863,9 +852,7 @@ async def reconcile_noop_evidence(
         # runs after the transaction closes.
         from farna.db.crud.run_node_outputs import read_run_blobs
 
-        blobs_by_run = {
-            run.id: await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id) for run in runs
-        }
+        blobs_by_run = {run.id: await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id) for run in runs}
 
     await _sweep_noop_targets(
         runs,

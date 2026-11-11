@@ -84,7 +84,7 @@ def _run_scratch(
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(BACKEND), env.get("PYTHONPATH")]))
-    env.pop("MODULO_TEST_COROUTINE_ATTRIBUTION", None)
+    env.pop("FARNA_CONTROL_MODULO_TEST_COROUTINE_ATTRIBUTION", None)
     env.update(extra_env)
 
     return subprocess.run(  # noqa: S603 - fixed argv, sys.executable, no untrusted input

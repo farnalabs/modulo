@@ -111,15 +111,10 @@ def _reject_destroy_without_pepper(config_json: dict[str, Any]) -> None:
         from farna.core.guardrails import FieldRedactionMode
         from farna.core.guardrails.redaction_mode import resolve_guardrail_destroy_pepper
 
-        if (
-            any(isinstance(rule, dict) and rule.get("mode") == FieldRedactionMode.DESTROY for rule in redaction)
-            and not resolve_guardrail_destroy_pepper()
-        ):
+        if any(isinstance(rule, dict) and rule.get("mode") == FieldRedactionMode.DESTROY for rule in redaction) and not resolve_guardrail_destroy_pepper():
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    "Guardrail destroy redaction mode requires the guardrail_destroy_pepper setting to be configured."
-                ),
+                detail=("Guardrail destroy redaction mode requires the guardrail_destroy_pepper setting to be configured."),
             )
 
 

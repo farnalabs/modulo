@@ -80,9 +80,7 @@ def _resolve_private_key(private_key_hex: str | None) -> str:
     configured = get_settings().modulo_license_private_key
     if configured:
         return configured
-    raise LicenseSigningError(
-        "No license signing private key configured — set MODULO_LICENSE_PRIVATE_KEY or pass private_key_hex."
-    )
+    raise LicenseSigningError("No license signing private key configured — set MODULO_LICENSE_PRIVATE_KEY or pass private_key_hex.")
 
 
 def _validate_term_inputs(
@@ -94,20 +92,11 @@ def _validate_term_inputs(
     if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
         raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
     if expires_from is not None and expires_from.tzinfo is None:
-        raise LicenseSigningError(
-            "expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
-            "offset); a naive datetime would be compared against an aware now"
-        )
+        raise LicenseSigningError("expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an offset); a naive datetime would be compared against an aware now")
     if starts_at is not None and starts_at.tzinfo is None:
-        raise LicenseSigningError(
-            "starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
-            "offset); the signed claim is read against an aware now"
-        )
+        raise LicenseSigningError("starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an offset); the signed claim is read against an aware now")
     if starts_at is not None and expires_from is not None:
-        raise LicenseSigningError(
-            "starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, "
-            "expires_from continues a previous licence's window — supplying both would make one silently win"
-        )
+        raise LicenseSigningError("starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, expires_from continues a previous licence's window — supplying both would make one silently win")
 
 
 def _resolve_term_base(

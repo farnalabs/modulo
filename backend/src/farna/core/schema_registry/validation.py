@@ -122,8 +122,7 @@ def validate_union_schema(
         result.errors.append(
             SchemaValidationError(
                 path=path,
-                message="'oneOf'/'anyOf' must not appear alongside 'type' at the same level"
-                " — use a wrapping object or allOf instead",
+                message="'oneOf'/'anyOf' must not appear alongside 'type' at the same level — use a wrapping object or allOf instead",
             )
         )
 

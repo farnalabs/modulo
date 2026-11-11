@@ -65,7 +65,7 @@ from farna.core.ssrf import _is_blocked_ip, _resolve_all_sync, normalize_allow_n
 # SSH key blobs are inherently long; line-length enforcement is suppressed.
 GITHUB_HOST_KEYS: tuple[str, ...] = (
     "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=",  # noqa: E501
-    "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=",  # noqa: E501
+    "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=",
     "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
 )
 
@@ -73,7 +73,7 @@ GITHUB_HOST_KEYS: tuple[str, ...] = (
 # fingerprints.  Included so non-GitHub git remotes can also be pinned.
 _GITLAB_HOST_KEYS: tuple[str, ...] = (
     "gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsj2bNKTBSpIYDEGk9KxsGh3mySTRgMtXL583qmBpzeQ+jqCMRgBqB98u3z++J1sKlXHWfM9dyhSevkMwSbhoR8XIq/U0tCNyokEi/ueaBMCvbcTHhO7FcwzY92WK4Yt0aGROY5qX2UKSeOvuP4D6TPqKF1onrSzH9bx9XUf2lEdWT/ia1NEKjunUqu1xOB/StKDHMoX4/OKyIzuS0q/T1zOATthvasJFoPrAjkohTyaDUz2LN5JoH839hViyEG82yB+MjcFV5MU3N1l1QL3cVUCh93xSaua1N85qivl+siMkPGbO5xR/En4iEY6K2XPASUEMaieWVNTRCtJ4S8H+9",  # noqa: E501
-    "gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fVkhtj3Hw9xjLVXVYrU9QlYWrOLXBpQ6KWjbjTDTdDkoohFzgbEY=",  # noqa: E501
+    "gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fVkhtj3Hw9xjLVXVYrU9QlYWrOLXBpQ6KWjbjTDTdDkoohFzgbEY=",
     "gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf",
 )
 
@@ -143,11 +143,7 @@ def verify_pinned_host_keys() -> None:
             expected = published[key_type]
             actual = ssh_public_key_fingerprint(entry)
             if actual != expected:
-                raise ValueError(
-                    f"Pinned {key_type} host key for {hostname!r} does not match the "
-                    f"published fingerprint. Expected {expected}, got {actual}. "
-                    "The pinned key is stale, tampered, or fabricated — refusing to ship."
-                )
+                raise ValueError(f"Pinned {key_type} host key for {hostname!r} does not match the published fingerprint. Expected {expected}, got {actual}. The pinned key is stale, tampered, or fabricated — refusing to ship.")
 
 
 # ---------------------------------------------------------------------------
@@ -170,11 +166,7 @@ def generate_known_hosts_entry(hostname: str) -> str:
     """
     keys = KNOWN_HOSTS_BY_HOSTNAME.get(hostname)
     if not keys:
-        raise ValueError(
-            f"No published SSH host keys for {hostname!r} — cannot generate "
-            "a pinned known_hosts entry.  Add the host's keys to "
-            "KNOWN_HOSTS_BY_HOSTNAME before provisioning."
-        )
+        raise ValueError(f"No published SSH host keys for {hostname!r} — cannot generate a pinned known_hosts entry.  Add the host's keys to KNOWN_HOSTS_BY_HOSTNAME before provisioning.")
     return "\n".join(keys) + "\n"
 
 
@@ -237,16 +229,10 @@ def validate_and_pin_ip(
     except ValueError as exc:
         raise SshHostRefusedError(f"SSH hostname {hostname!r} DNS resolution failed: {exc}") from exc
     if not ip_strings:
-        raise SshHostRefusedError(
-            f"SSH hostname {hostname!r} resolved to no addresses. Cannot verify the target is not internal."
-        )
+        raise SshHostRefusedError(f"SSH hostname {hostname!r} resolved to no addresses. Cannot verify the target is not internal.")
     for ip_str in ip_strings:
         if _is_blocked_ip(ip_str, extra):
-            raise SshHostRefusedError(
-                f"SSH hostname {hostname!r} resolves to a blocked address "
-                f"({ip_str}). Refusing to connect — the address failed the "
-                "SSRF guard (private/internal/link-local/cloud-metadata)."
-            )
+            raise SshHostRefusedError(f"SSH hostname {hostname!r} resolves to a blocked address ({ip_str}). Refusing to connect — the address failed the SSRF guard (private/internal/link-local/cloud-metadata).")
     return tuple(ip_strings)
 
 
@@ -388,12 +374,7 @@ def build_ssh_transport_script(
     ssh_opts = build_ssh_options(validated_ip, hostname=hostname, known_hosts_path=known_hosts_path)
     opts_str = " ".join(shlex.quote(opt) for opt in ssh_opts)
     git_ssh_cmd = f"ssh {opts_str}"
-    return (
-        f"mkdir -p -m 0700 $(dirname {shlex.quote(known_hosts_path)})\n"
-        f"printf '%s' '{escaped_content}' > {shlex.quote(known_hosts_path)}\n"
-        f"chmod 0600 {shlex.quote(known_hosts_path)}\n"
-        f"export GIT_SSH_COMMAND={shlex.quote(git_ssh_cmd)}\n"
-    )
+    return f"mkdir -p -m 0700 $(dirname {shlex.quote(known_hosts_path)})\nprintf '%s' '{escaped_content}' > {shlex.quote(known_hosts_path)}\nchmod 0600 {shlex.quote(known_hosts_path)}\nexport GIT_SSH_COMMAND={shlex.quote(git_ssh_cmd)}\n"
 
 
 # ---------------------------------------------------------------------------

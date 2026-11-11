@@ -99,16 +99,10 @@ _ORG_POLICY = "((organisation_id = (NULLIF(current_setting('app.organisation_id'
 _ALTER_TABLE_PREFIX = 'ALTER TABLE "'
 _SET_NULL = "SET NULL"
 
-_ENABLE_RLS_STATEMENTS: tuple[str, ...] = tuple(
-    _ALTER_TABLE_PREFIX + table + '" ENABLE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES
-) + tuple(_ALTER_TABLE_PREFIX + table + '" FORCE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
+_ENABLE_RLS_STATEMENTS: tuple[str, ...] = tuple(_ALTER_TABLE_PREFIX + table + '" ENABLE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES) + tuple(_ALTER_TABLE_PREFIX + table + '" FORCE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
 
-_CREATE_POLICY_STATEMENTS: tuple[str, ...] = tuple(
-    'CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ") WITH CHECK (" + _TEAM_POLICY + ")"
-    for table in _TEAM_SCOPED_TABLES
-) + tuple(
-    'CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_POLICY + ") WITH CHECK (" + _ORG_POLICY + ")"
-    for table in _ORG_ONLY_TABLES
+_CREATE_POLICY_STATEMENTS: tuple[str, ...] = tuple('CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ") WITH CHECK (" + _TEAM_POLICY + ")" for table in _TEAM_SCOPED_TABLES) + tuple(
+    'CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_POLICY + ") WITH CHECK (" + _ORG_POLICY + ")" for table in _ORG_ONLY_TABLES
 )
 
 _DROP_POLICY_STATEMENTS: tuple[str, ...] = (
@@ -134,23 +128,13 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(
-            tbl="public." + table
-        )
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(tbl="public." + table)).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            table + " owner is " + repr(owner) + ", expected '" + _MIGRATE_ROLE + "' "
-            "(the app role must NOT own it — owner bypasses RLS)"
-        )
+        raise RuntimeError(table + " owner is " + repr(owner) + ", expected '" + _MIGRATE_ROLE + "' (the app role must NOT own it — owner bypasses RLS)")
 
 
 def _grant_dml(role: str) -> None:
@@ -369,9 +353,7 @@ def _create_tables() -> None:
         sa.Column("loop_config_id", sa.Uuid(), nullable=False),
         sa.Column("run_id", sa.Uuid(), nullable=False),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
-        sa.Column(
-            "reserved_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-        ),
+        sa.Column("reserved_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("cooldown_until", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(length=30), nullable=False, server_default="active"),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
@@ -411,11 +393,7 @@ def _create_indexes() -> None:
     op.create_index("ix_system_maps_account_id", _TABLE_SYSTEM_MAPS, ["account_id"])
     op.create_index("ix_system_maps_deleted_by", _TABLE_SYSTEM_MAPS, ["deleted_by"])
     # Partial unique: one live default map per org
-    op.execute(
-        'CREATE UNIQUE INDEX uq_system_maps_org_default_live ON "'
-        + _TABLE_SYSTEM_MAPS
-        + '" (organisation_id) WHERE default_map AND deleted_at IS NULL'
-    )
+    op.execute('CREATE UNIQUE INDEX uq_system_maps_org_default_live ON "' + _TABLE_SYSTEM_MAPS + '" (organisation_id) WHERE default_map AND deleted_at IS NULL')
 
     # system_map_revisions
     op.create_index("ix_system_map_revisions_organisation_id", _TABLE_SYSTEM_MAP_REVISIONS, ["organisation_id"])
@@ -439,9 +417,7 @@ def _create_indexes() -> None:
     # system_map_loop_configs
     op.create_index("ix_system_map_loop_configs_organisation_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["organisation_id"])
     op.create_index("ix_system_map_loop_configs_revision_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["revision_id"])
-    op.create_index(
-        "ix_system_map_loop_configs_action_pipeline_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["action_pipeline_id"]
-    )
+    op.create_index("ix_system_map_loop_configs_action_pipeline_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["action_pipeline_id"])
     op.create_index("ix_system_map_loop_configs_deleted_by", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["deleted_by"])
 
     # system_map_attribution_bindings
@@ -471,17 +447,9 @@ def _create_indexes() -> None:
         ["deleted_by"],
     )
     # Partial unique: one trigger binding per (org, pipeline_id, node_key)
-    op.execute(
-        'CREATE UNIQUE INDEX uq_attr_binding_trigger_per_pipeline_node ON "'
-        + _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS
-        + "\" (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'trigger'"
-    )
+    op.execute('CREATE UNIQUE INDEX uq_attr_binding_trigger_per_pipeline_node ON "' + _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS + "\" (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'trigger'")
     # Partial unique: one action_pipeline binding per (org, pipeline_id, node_key)
-    op.execute(
-        'CREATE UNIQUE INDEX uq_attr_binding_action_per_pipeline_node ON "'
-        + _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS
-        + "\" (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'action_pipeline'"
-    )
+    op.execute('CREATE UNIQUE INDEX uq_attr_binding_action_per_pipeline_node ON "' + _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS + "\" (organisation_id, pipeline_id, node_key) WHERE binding_kind = 'action_pipeline'")
 
     # system_map_loop_admission_attempts
     op.create_index(
@@ -613,9 +581,7 @@ def downgrade() -> None:
     op.drop_index("ix_system_map_attribution_bindings_trigger_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
     op.drop_index("ix_system_map_attribution_bindings_pipeline_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
     op.drop_index("ix_system_map_attribution_bindings_deleted_by", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
-    op.drop_index(
-        "ix_system_map_attribution_bindings_organisation_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS
-    )
+    op.drop_index("ix_system_map_attribution_bindings_organisation_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
 
     # Drop partial unique indexes
     op.execute("DROP INDEX IF EXISTS uq_attr_binding_action_per_pipeline_node")

@@ -139,12 +139,7 @@ async def _profile_opt_in_state(
     if profile is None:
         return (
             False,
-            (
-                f"Runner bindings refused (fail-closed): agent '{agent_label}' carries "
-                f"bindings but its environment profile '{env_profile_uuid}' could not "
-                "be resolved for the organisation; refusing binding injection until "
-                "the profile is fixed (or the bindings removed)."
-            ),
+            (f"Runner bindings refused (fail-closed): agent '{agent_label}' carries bindings but its environment profile '{env_profile_uuid}' could not be resolved for the organisation; refusing binding injection until the profile is fixed (or the bindings removed)."),
         )
     if profile.provider_type.strip().lower() == "local":
         config = profile.config_json if isinstance(profile.config_json, dict) else {}
@@ -186,9 +181,7 @@ async def _resolve_binding_values(
                 creds = hub.creds_for(binding.model_backend_id)
                 if creds is None:
                     raise AgentBindingResolutionError(
-                        f"credentials for model backend '{backend_row.name}' could not be "
-                        "decrypted/fetched — check the secrets backend configuration and "
-                        "the fernet key",
+                        f"credentials for model backend '{backend_row.name}' could not be decrypted/fetched — check the secrets backend configuration and the fernet key",
                         backend_id=binding.model_backend_id,
                     )
                 if binding.source_field not in creds:
@@ -246,9 +239,7 @@ async def resolve_agent_bindings(
         await set_rls_org(session, org_uuid)
         await set_rls_execution_context(session)
 
-        bindings_rows = await session.execute(
-            select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == agent_uuid)
-        )
+        bindings_rows = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == agent_uuid))
         bindings = list(bindings_rows.scalars())
         if not bindings:
             return {}
@@ -266,9 +257,7 @@ async def resolve_agent_bindings(
         agent_row = agent_rows.scalar_one_or_none()
         agent_label = agent_row.name if agent_row is not None else str(agent_uuid)
 
-        opted_in, profile_rationale = await _profile_opt_in_state(
-            session, org_uuid, environment_profile_id, agent_label
-        )
+        opted_in, profile_rationale = await _profile_opt_in_state(session, org_uuid, environment_profile_id, agent_label)
         if not opted_in:
             raise LocalProviderBindingsRefusedError(agent_label, reason=profile_rationale)
 

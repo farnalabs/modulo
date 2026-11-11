@@ -93,10 +93,7 @@ async def _create_org(engine: AsyncEngine, label: str, *, created_at_offset_seco
     created_at = datetime.now(UTC) - timedelta(seconds=created_at_offset_seconds)
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, created_at) "
-                "VALUES (:id, :name, :slug, '{}'::json, :created_at)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, created_at) VALUES (:id, :name, :slug, '{}'::json, :created_at)"),
             {"id": str(org_id), "name": f"Org {label}", "slug": slug, "created_at": created_at},
         )
     return org_id, slug
@@ -173,7 +170,7 @@ async def two_saml_orgs(db_engine: AsyncEngine) -> dict[str, str]:
 async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
     """Engine on the real ``modulo_system`` role (BYPASSRLS), like production."""
     engine = create_async_engine(
-        os.environ["MODULO_SYSTEM_DATABASE_URL"],
+        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"],
         echo=False,
         poolclass=NullPool,
     )
@@ -257,9 +254,7 @@ async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session:
 # ---------------------------------------------------------------------------
 
 
-def _build_saml_response(
-    *, audience: str, destination: str, recipient: str, name_id_value: str = "multiorg@example.com"
-) -> str:
+def _build_saml_response(*, audience: str, destination: str, recipient: str, name_id_value: str = "multiorg@example.com") -> str:
     from lxml import etree as lxml_etree
 
     s = f"{{{_NS_SAML}}}"

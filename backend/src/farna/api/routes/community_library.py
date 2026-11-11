@@ -163,9 +163,7 @@ async def get_entry(
     except (ValueError, KeyError):
         _log.exception("community_library.get_entry")
         entry = None
-    if entry is None or (
-        entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)
-    ):
+    if entry is None or (entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
@@ -182,9 +180,7 @@ async def get_entry(
 @router.post(
     "/{entry_id}/install",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("community_entry_installed", "community_entry", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("community_entry_installed", "community_entry", principal_dep=get_current_tenant_user))],
 )
 async def install(
     entry_id: str,

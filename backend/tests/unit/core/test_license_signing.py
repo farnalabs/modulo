@@ -64,11 +64,7 @@ class TestEncodeLicenseKeyRoundTrip:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
         key = encode_license_key({"tier": "team", "org_id": "o1"}, kp["private_key"])
-        tampered_payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
+        tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
         tampered = f"{tampered_payload_b64}.{key.split('.')[1]}"
         result = parse_and_verify(tampered)
         assert result.valid is False
@@ -131,10 +127,8 @@ class TestGenerateTeamLicense:
 
     def test_no_private_key_raises(self) -> None:
         with (
-            patch(
-                "farna.core.license_signing.get_settings", return_value=SimpleNamespace(modulo_license_private_key="")
-            ),
-            pytest.raises(LicenseSigningError, match="MODULO_LICENSE_PRIVATE_KEY"),
+            patch("farna.core.license_signing.get_settings", return_value=SimpleNamespace(modulo_license_private_key="")),
+            pytest.raises(LicenseSigningError, match="FARNA_CONTROL_MODULO_LICENSE_PRIVATE_KEY"),
         ):
             generate_team_license("Acme")
 

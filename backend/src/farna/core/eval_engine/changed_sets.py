@@ -145,9 +145,7 @@ class ChangedSet:
 
     def __post_init__(self) -> None:
         if self.provenance not in CHANGED_SET_PROVENANCE_VALUES:
-            raise ValueError(
-                f"ChangedSet.provenance must be one of {sorted(CHANGED_SET_PROVENANCE_VALUES)}; got {self.provenance!r}"
-            )
+            raise ValueError(f"ChangedSet.provenance must be one of {sorted(CHANGED_SET_PROVENANCE_VALUES)}; got {self.provenance!r}")
         if not self.source:
             raise ValueError("ChangedSet.source must be a non-empty channel name")
 
@@ -223,9 +221,7 @@ def resolve_changed_set(
     no changed set must fail closed rather than silently evaluate nothing.
     """
     if observed is None and reported is None:
-        raise ChangedSetResolutionError(
-            "no changed set available: neither an observed (platform) nor a reported (agent) set was supplied"
-        )
+        raise ChangedSetResolutionError("no changed set available: neither an observed (platform) nor a reported (agent) set was supplied")
     if observed is not None and observed.provenance != PROVENANCE_OBSERVED:
         raise ChangedSetResolutionError(f"observed set must carry provenance 'observed', got {observed.provenance!r}")
     if reported is not None and reported.provenance != PROVENANCE_REPORTED:
@@ -330,11 +326,7 @@ def evaluate_diff_policy(
         violations |= set(risk_inputs)
 
     passed = not violations
-    detail = (
-        f"diff_policy: provenance={resolved.evaluated_provenance} evaluated={len(files)} "
-        f"forbidden={len(forbidden_matches)} denied={len(denied_matches)} "
-        f"disallowed={len(disallowed_matches)} risk={len(risk_inputs)}"
-    )
+    detail = f"diff_policy: provenance={resolved.evaluated_provenance} evaluated={len(files)} forbidden={len(forbidden_matches)} denied={len(denied_matches)} disallowed={len(disallowed_matches)} risk={len(risk_inputs)}"
     if not passed:
         detail = f"{detail} violations={sorted(violations)}"
 

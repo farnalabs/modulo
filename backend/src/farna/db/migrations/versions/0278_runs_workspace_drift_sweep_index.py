@@ -68,11 +68,7 @@ INDEX_NAME: str = "ix_runs_workspace_drift_sweep"
 #: rendered as a literal IN list plus the NULL-flag conjunct. Keep byte-stable
 #: with the sweep predicate (the unit test compares them canonically, sorting
 #: the IN list on both sides so frozenset iteration order cannot flake).
-PREDICATE: str = (
-    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
-    "AND workspace_inputs_drift_detected IS NULL"
-)
+PREDICATE: str = "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') AND workspace_inputs_drift_detected IS NULL"
 
 
 def upgrade() -> None:

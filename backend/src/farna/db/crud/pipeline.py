@@ -80,10 +80,7 @@ def validate_max_concurrent_runs(value: int) -> int:
     validation error instead; pausing admission is the org triggers pause.
     """
     if value < 1:
-        raise ValueError(
-            f"max_concurrent_runs must be >= 1, got {value}. "
-            "0 or negative permanently wedges run admission; to pause admission use the org triggers pause."
-        )
+        raise ValueError(f"max_concurrent_runs must be >= 1, got {value}. 0 or negative permanently wedges run admission; to pause admission use the org triggers pause.")
     return value
 
 
@@ -152,9 +149,7 @@ class CircuitBreakerThresholdChangeDenied(Exception):  # noqa: N818 — denial-v
     def __init__(self, *, previous: Decimal | None, new: Decimal | None) -> None:
         self.previous = previous
         self.new = new
-        super().__init__(
-            "Raising or clearing circuit_breaker_threshold requires the 'cost.manage' permission (org admin)"
-        )
+        super().__init__("Raising or clearing circuit_breaker_threshold requires the 'cost.manage' permission (org admin)")
 
 
 def circuit_breaker_threshold_change_allowed(
@@ -528,9 +523,7 @@ async def list_pipelines(
         # total=0 means no rows exist, so has_more must be False — consistent,
         # not the default-by-omission that made the offset path always False.
         return PageResult(items=[], total=0, page=page, page_size=page_size, has_more=False)
-    items = list(
-        (await session.execute(base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))).scalars()
-    )
+    items = list((await session.execute(base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))).scalars())
     # Offset/page paging: more rows exist beyond this page when the rows we
     # have plus the rows already skipped are fewer than the total.
     has_more = (offset + len(items)) < total
@@ -766,9 +759,7 @@ async def soft_delete_pipeline(
     return result.scalar_one_or_none()
 
 
-async def restore_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline | None:
+async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline | None:
     """Restore a soft-deleted pipeline. Returns None if not found.
 
     Clears both ``deleted_at`` and ``deleted_by`` so a restored row never
@@ -784,9 +775,7 @@ async def restore_pipeline(
     return result.scalar_one_or_none()
 
 
-async def archive_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline | None:
+async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline | None:
     pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
     if pipeline is None:
         return None
@@ -795,9 +784,7 @@ async def archive_pipeline(
     return pipeline
 
 
-async def unarchive_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline | None:
+async def unarchive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline | None:
     """Unarchive: clear ``archived_at`` AND restore to PAUSED, not Active (FAR-1530).
 
     The ratified taxonomy (FAR-1530) says a dormant pipeline must not
@@ -822,9 +809,7 @@ async def unarchive_pipeline(
     return pipeline
 
 
-async def pause_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline | None:
+async def pause_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline | None:
     """Operator pause (FAR-1530): disable runs for a live pipeline.
 
     Idempotent — FIRST CAUSE OWNS THE REASON: a pipeline that is already
@@ -846,9 +831,7 @@ async def pause_pipeline(
     return pipeline
 
 
-async def resume_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline | None:
+async def resume_pipeline(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline | None:
     """Operator resume (FAR-1530): clear the unified Paused state.
 
     Idempotent when already enabled. The caller (the ``/resume`` route) must
@@ -1195,8 +1178,7 @@ async def _clone_snapshots(
             graph_json["nodes"] = cloned_nodes
         if dropped_policy_gates:
             _log.warning(
-                "policy_gate declaration(s) dropped on clone of snapshot %s of pipeline %s "
-                "(evals/gates are not cloned): %s",
+                "policy_gate declaration(s) dropped on clone of snapshot %s of pipeline %s (evals/gates are not cloned): %s",
                 _sanitise_log_value(str(snap["snapshot_version"])),
                 _sanitise_log_value(str(source_id)),
                 "; ".join(dropped_policy_gates),
@@ -1461,35 +1443,11 @@ async def _read_clone_source_snapshot(
             if on_step_a_held is not None:
                 await on_step_a_held()
 
-            edges = [
-                _edge_to_plain_dict(e)
-                for e in (
-                    await read_session.execute(
-                        select(PipelineEdge)
-                        .where(PipelineEdge.pipeline_id == pipeline_id, PipelineEdge.organisation_id == org_id)
-                        .order_by(PipelineEdge.created_at, PipelineEdge.id)
-                    )
-                ).scalars()
-            ]
-            snap_rows = list(
-                (
-                    await read_session.execute(
-                        select(PipelineSnapshot)
-                        .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                        .order_by(PipelineSnapshot.snapshot_version)
-                    )
-                ).scalars()
-            )
+            edges = [_edge_to_plain_dict(e) for e in (await read_session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id, PipelineEdge.organisation_id == org_id).order_by(PipelineEdge.created_at, PipelineEdge.id))).scalars()]
+            snap_rows = list((await read_session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline_id).order_by(PipelineSnapshot.snapshot_version))).scalars())
             snapshots: list[dict[str, Any]] = []
             for snap in snap_rows:
-                pins = [
-                    _snapshot_pin_to_dict(p)
-                    for p in (
-                        await read_session.execute(
-                            select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id)
-                        )
-                    ).scalars()
-                ]
+                pins = [_snapshot_pin_to_dict(p) for p in (await read_session.execute(select(SnapshotSchemaPin).where(SnapshotSchemaPin.snapshot_id == snap.id))).scalars()]
                 snapshots.append(_snapshot_to_dict(snap, pins))
 
             return _CloneSourceSnapshot(
@@ -1572,11 +1530,7 @@ class ManualNodeOutputSchemaError(Exception):
 
 
 def _manual_node_has_output_schema(node: dict[str, Any]) -> bool:
-    return (
-        node.get("output_schema_id") is not None
-        or node.get("output_schema_pin") is not None
-        or node.get("output_schema_json") is not None
-    )
+    return node.get("output_schema_id") is not None or node.get("output_schema_pin") is not None or node.get("output_schema_json") is not None
 
 
 def enforce_manual_node_output_schemas(
@@ -1599,11 +1553,7 @@ def enforce_manual_node_output_schemas(
     schema. New manual nodes, nodes whose stored schema is being removed, and
     nodes whose stored type was not manual are still rejected.
     """
-    legacy_schemaless_ids = {
-        str(prev.get("id"))
-        for prev in (previous_nodes or [])
-        if prev.get("node_type") == "manual" and prev.get("id") is not None and not _manual_node_has_output_schema(prev)
-    }
+    legacy_schemaless_ids = {str(prev.get("id")) for prev in (previous_nodes or []) if prev.get("node_type") == "manual" and prev.get("id") is not None and not _manual_node_has_output_schema(prev)}
     for node in nodes:
         if node.get("node_type") != "manual":
             continue
@@ -1666,11 +1616,7 @@ def graph_update_audit_payload(
         "new_edge_count": new_edge_count,
         "added_node_ids": sorted(new_ids - previous_ids),
         "removed_node_ids": sorted(previous_ids - new_ids),
-        "agent_commands_changed_node_ids": sorted(
-            node_id
-            for node_id in previous_ids & new_ids
-            if previous_by_id[node_id].get("agent_commands") != new_by_id[node_id].get("agent_commands")
-        ),
+        "agent_commands_changed_node_ids": sorted(node_id for node_id in previous_ids & new_ids if previous_by_id[node_id].get("agent_commands") != new_by_id[node_id].get("agent_commands")),
     }
     if patched_fields:
         payload["patched_fields"] = sorted(patched_fields)
@@ -1746,10 +1692,7 @@ def _iter_declared_policy_gates(nodes: list[dict[str, Any]]) -> list[tuple[str, 
 
 def _declared_policy_gates(nodes: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """Map ``eval_id`` -> ``{"node_id", "action"}`` for a graph's declared gates."""
-    return {
-        eval_id: {"node_id": node_id, "action": action}
-        for eval_id, node_id, action in _iter_declared_policy_gates(nodes)
-    }
+    return {eval_id: {"node_id": node_id, "action": action} for eval_id, node_id, action in _iter_declared_policy_gates(nodes)}
 
 
 def _reject_duplicate_policy_gates(nodes: list[dict[str, Any]]) -> None:
@@ -1764,10 +1707,7 @@ def _reject_duplicate_policy_gates(nodes: list[dict[str, Any]]) -> None:
         if eval_id in seen:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    f"policy_gate eval_id {eval_id} is declared on more than one node "
-                    f"({seen[eval_id]} and {node_id}); an eval may carry at most one live gate"
-                ),
+                detail=(f"policy_gate eval_id {eval_id} is declared on more than one node ({seen[eval_id]} and {node_id}); an eval may carry at most one live gate"),
             )
         seen[eval_id] = node_id
 
@@ -2162,9 +2102,7 @@ def _graph_content_unchanged(
     """
     if json.dumps(previous_nodes, sort_keys=True, default=str) != json.dumps(new_nodes, sort_keys=True, default=str):
         return False
-    return sorted(_canonical_edge_projection(e) for e in old_edges) == sorted(
-        _canonical_edge_projection(e) for e in new_edges
-    )
+    return sorted(_canonical_edge_projection(e) for e in old_edges) == sorted(_canonical_edge_projection(e) for e in new_edges)
 
 
 async def _record_edit_snapshot_if_needed(
@@ -2202,10 +2140,7 @@ async def _record_edit_snapshot_if_needed(
         # means the snapshot machinery could not allocate a version (e.g. the
         # snapshot_version column is not migrated). Fail closed — a save that
         # does not record history is a broken save.
-        raise RuntimeError(
-            f"graph save for pipeline {pipeline_id} could not record its edit snapshot; "
-            "refusing to commit an unversioned explicit save"
-        )
+        raise RuntimeError(f"graph save for pipeline {pipeline_id} could not record its edit snapshot; refusing to commit an unversioned explicit save")
     _log.info(
         "pipeline.graph_edit_snapshot_created pipeline_id=%s snapshot_version=%s",
         pipeline_id,
@@ -2319,11 +2254,7 @@ async def replace_pipeline_graph(
     # what the old separate defaults did (no snapshot, no declared fields), so
     # every call path behaves byte-identically to the two-flag version.
     recording = recording if recording is not None else GraphWriteRecording()
-    result = await session.execute(
-        select(Pipeline)
-        .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id, Pipeline.deleted_at.is_(None))
-        .with_for_update()
-    )
+    result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id, Pipeline.deleted_at.is_(None)).with_for_update())
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         return None
@@ -2341,9 +2272,7 @@ async def replace_pipeline_graph(
     )
 
     # Snapshot current edges into plain data BEFORE any write (defense in depth).
-    old_rows = list(
-        (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
-    )
+    old_rows = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
     old_edges: list[dict[str, Any]] = [
         {
             "source_node_id": str(e.source_node_id),
@@ -2414,11 +2343,7 @@ async def replace_pipeline_graph(
 
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
-    old_by_key = {
-        (str(e["source_node_id"]), str(e["target_node_id"]), str(e["edge_type"])): e["hitl_review_config"]
-        for e in old_edges
-        if e.get("hitl_review_config") is not None
-    }
+    old_by_key = {(str(e["source_node_id"]), str(e["target_node_id"]), str(e["edge_type"])): e["hitl_review_config"] for e in old_edges if e.get("hitl_review_config") is not None}
     # Coerce edge id/source/target to uuid.UUID objects. The REST Pydantic path
     # already does this, but MCP passes raw dicts with string ids — and SQLAlchemy's
     # insertmanyvalues sentinel matching (INSERT ... RETURNING) requires UUID

@@ -125,15 +125,10 @@ async def import_lifecycle_map_envelope(
     v1 envelope (no ``versions``) imports as a single-version map.
     """
     if envelope.get("primitive_type") != PRIMITIVE_TYPE:
-        raise LifecycleMapBundleError(
-            f"Unsupported primitive_type {envelope.get('primitive_type')!r}; expected '{PRIMITIVE_TYPE}'"
-        )
+        raise LifecycleMapBundleError(f"Unsupported primitive_type {envelope.get('primitive_type')!r}; expected '{PRIMITIVE_TYPE}'")
     format_version = envelope.get("format_version")
     if format_version not in _SUPPORTED_FORMAT_VERSIONS:
-        raise LifecycleMapBundleError(
-            "Unsupported bundle format version "
-            f"{format_version!r}; expected one of {sorted(_SUPPORTED_FORMAT_VERSIONS)}"
-        )
+        raise LifecycleMapBundleError(f"Unsupported bundle format version {format_version!r}; expected one of {sorted(_SUPPORTED_FORMAT_VERSIONS)}")
     name = envelope.get("name")
     if not isinstance(name, str) or not name.strip():
         raise LifecycleMapBundleError("Lifecycle map export envelope is missing a non-empty 'name'")
@@ -204,9 +199,7 @@ def _resolve_version_number(entry: dict[str, Any], index: int) -> int:
     if raw_number is None:
         return index + 1
     if isinstance(raw_number, bool) or not isinstance(raw_number, int):
-        raise LifecycleMapBundleError(
-            f"Lifecycle map 'versions' entry #{index} 'version' must be an integer, got {raw_number!r}"
-        )
+        raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'version' must be an integer, got {raw_number!r}")
     if raw_number < 1:
         raise LifecycleMapBundleError(f"Lifecycle map 'versions' entry #{index} 'version' must be at least 1")
     return raw_number

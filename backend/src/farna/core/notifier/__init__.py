@@ -682,9 +682,7 @@ class Notifier:
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception(
-                "notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)}
-            )
+            _log.exception("notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)})
         else:
             if notification is not None:
                 _fire_notification_sse_broadcast(org_id, notification)
@@ -852,9 +850,7 @@ class Notifier:
         """Send a single notification to one endpoint with retry logic."""
         signature = self._sign_payload(body, endpoint)
 
-        succeeded, attempt_count, response_code, last_error = await self._deliver_with_retries(
-            client, endpoint, signature, body
-        )
+        succeeded, attempt_count, response_code, last_error = await self._deliver_with_retries(client, endpoint, signature, body)
 
         status = "delivered" if succeeded else "dead_lettered"
 

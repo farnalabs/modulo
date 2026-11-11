@@ -140,11 +140,7 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
         else:
             backend_id_raw = config.get("model_backend_id")
         if not backend_id_raw:
-            detail = (
-                "model_judge eval has no model_backend_id configured; set the eval "
-                "definition's config['model_backend_id'] (or the typed "
-                "config['backing']['model_backend_id']) to an active model backend id"
-            )
+            detail = "model_judge eval has no model_backend_id configured; set the eval definition's config['model_backend_id'] (or the typed config['backing']['model_backend_id']) to an active model backend id"
             _log.error(
                 "suite_run_judge.missing_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},
@@ -165,11 +161,7 @@ def build_suite_run_model_judge_callable(hub: ModelBackendHub) -> ModelJudgeCall
             # A VALID-UUID id that the hub does not hold (deleted, deactivated,
             # or another org's backend) means the judge cannot run. It is a
             # configuration error (no verdict), never a failing verdict.
-            detail = (
-                f"model_judge eval's model_backend_id {key!r} is not an active model "
-                "backend for this organisation; set the eval definition's "
-                "config['model_backend_id'] to an active model backend id"
-            )
+            detail = f"model_judge eval's model_backend_id {key!r} is not an active model backend for this organisation; set the eval definition's config['model_backend_id'] to an active model backend id"
             _log.error(
                 "suite_run_judge.unknown_model_backend_id",
                 extra={"eval_id": str(eval_def.id), "detail": detail},

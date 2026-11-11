@@ -78,7 +78,7 @@ def coerce_dump_count(value: Any) -> int:
 # ---------------------------------------------------------------------------
 # Env var override
 # ---------------------------------------------------------------------------
-ENV_INSTANCE_SWITCH: str = "MODULO_PRODUCT_ANALYTICS_ENABLED"
+ENV_INSTANCE_SWITCH: str = "FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED"
 
 # ---------------------------------------------------------------------------
 # Dismiss cooldown

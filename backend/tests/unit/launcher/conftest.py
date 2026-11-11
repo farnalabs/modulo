@@ -43,10 +43,7 @@ def test_signing_keys() -> dict[str, str]:
 
 
 def _rows_to_store(rows: dict[str, tuple[str, str]]) -> dict[str, Ed25519PublicKey]:
-    return {
-        key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex))
-        for key_id, (_label, public_hex) in rows.items()
-    }
+    return {key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex)) for key_id, (_label, public_hex) in rows.items()}
 
 
 @pytest.fixture
@@ -80,7 +77,7 @@ def clean_launcher_env(monkeypatch: pytest.MonkeyPatch) -> None:
     MODULO_SYSTEM_DATABASE_URL) so launcher-only config resolution runs."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
 
 
 @pytest.fixture

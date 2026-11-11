@@ -213,9 +213,7 @@ async def _verify_slack_delivery(
         # Bootstrap via the shared system-session helper (FAR-523): the
         # trigger read must precede any RLS org context on Postgres; the
         # helper 404s a principal referencing another org's trigger.
-        trigger, org_id = await load_trigger_and_org_global(
-            system_session, trigger_id, principal.organisation_id if principal else None
-        )
+        trigger, org_id = await load_trigger_and_org_global(system_session, trigger_id, principal.organisation_id if principal else None)
         await set_rls_org(session, org_id)
         await set_rls_execution_context(session)
 
@@ -360,9 +358,7 @@ async def _run_slack_pipeline(
     """
     try:
         async with _map_trigger_delivery_errors(trigger_id=trigger_id):
-            snapshot = await _create_slack_snapshot(
-                session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id
-            )
+            snapshot = await _create_slack_snapshot(session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id)
             run, _, _input_payload = await handle_app_mention(
                 session,
                 trigger_id=trigger_id,
@@ -377,9 +373,7 @@ async def _run_slack_pipeline(
     except TriggersPausedError:
         # The SINGLE writer of the ``paused`` TriggerEvent; it commits with
         # this transaction (deliberately NOT after the unwind).
-        await _record_paused_slack_delivery(
-            session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id, raw_body=raw_body
-        )
+        await _record_paused_slack_delivery(session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id, raw_body=raw_body)
         return None
     except SlackEventTypeError as exc:
         raise HTTPException(
@@ -436,9 +430,7 @@ async def _run_slack_pipeline(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the Slack delivery"
-            ),
+            detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the Slack delivery"),
         ) from exc
 
 

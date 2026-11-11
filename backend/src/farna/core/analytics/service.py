@@ -247,9 +247,7 @@ def _check_hour_cap(
     effective_to: datetime,
 ) -> None:
     if group_by == AnalyticsGroupBy.HOUR and hour_groupby_span_exceeds(effective_from, effective_to):
-        raise AnalyticsValidationError(
-            f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less"
-        )
+        raise AnalyticsValidationError(f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less")
 
 
 async def _facts_freshness(
@@ -291,9 +289,7 @@ async def _facts_freshness(
                         await set_rls_user_context(session, account_id, org_role or "")
                     dialect = (await session.connection()).dialect.name
                     if dialect == "postgresql":
-                        timeout_ms = getattr(
-                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                        )
+                        timeout_ms = getattr(settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS)
                         await session.execute(
                             text(_SQL_SET_STATEMENT_TIMEOUT),
                             {"ms": str(int(timeout_ms))},
@@ -374,9 +370,7 @@ async def _execute_with_guards(
     """
     try:
         try:
-            async with _guarded_session(
-                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
-            ) as session:
+            async with _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session:
                 result = await session.execute(stmt, params)
                 return list(result.all())
         except asyncio.CancelledError:
@@ -422,9 +416,7 @@ async def run_analytics_query(
     params = replace(params, team_ids=team_ids)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
-    effective_group_by = (
-        resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
-    )
+    effective_group_by = resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
     _check_hour_cap(effective_group_by, effective_from, effective_to)
 
     query = AnalyticsQuery(
@@ -523,11 +515,7 @@ async def _resolve_pool_reference_value(
     org_limit = await get_org_run_concurrency_limit(session, org_id)
     # An org-wide query reads the WHOLE org's caps (the caps
     # statement scopes to sa.true() when no pipeline filter).
-    caps = (
-        scoped_caps
-        if scoped_caps is not None
-        else await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
-    )
+    caps = scoped_caps if scoped_caps is not None else await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
     return _pool_reference_decision(org_limit, caps)
 
 
@@ -615,9 +603,7 @@ async def run_concurrency_query(
     params = replace(params, team_ids=team_ids)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
-    effective_group_by = (
-        resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
-    )
+    effective_group_by = resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
     _check_hour_cap(effective_group_by, effective_from, effective_to)
 
     query = AnalyticsQuery(
@@ -646,10 +632,7 @@ async def run_concurrency_query(
         params=bind,
     )
     if len(rows) > CONCURRENCY_MAX_RAW_ROWS:
-        raise AnalyticsValidationError(
-            f"concurrency query exceeded the {CONCURRENCY_MAX_RAW_ROWS}-row raw cap — "
-            "reduce the date range or add pipeline/status filters"
-        )
+        raise AnalyticsValidationError(f"concurrency query exceeded the {CONCURRENCY_MAX_RAW_ROWS}-row raw cap — reduce the date range or add pipeline/status filters")
     buckets = bucket_concurrency_rows(
         rows,
         group_by=effective_group_by,
@@ -877,20 +860,13 @@ async def export_facts(
         count_stmt = count_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
         rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
     count_stmt = count_stmt.where(*conditions)
-    rows_stmt = (
-        rows_stmt.where(*conditions)
-        .order_by(RunDailyFact.run_date, RunDailyFact.created_at, RunDailyFact.run_id)
-        .offset(offset)
-        .limit(limit)
-    )
+    rows_stmt = rows_stmt.where(*conditions).order_by(RunDailyFact.run_date, RunDailyFact.created_at, RunDailyFact.run_id).offset(offset).limit(limit)
 
     total = 0
     rows: list[Any] = []
     try:
         try:
-            async with _guarded_session(
-                factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
-            ) as session:
+            async with _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session:
                 total = int((await session.execute(count_stmt, bind)).scalar_one())
                 result = await session.execute(rows_stmt, bind)
                 rows = list(result.all())

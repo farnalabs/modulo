@@ -143,7 +143,7 @@ async def test_docker_close_client_exception_logged() -> None:
 async def test_e2b_create_workspace_passes_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-empty workspace_metadata maps to the E2B sandbox ``metadata`` kwarg,
     and (FAR-1275) the provider's reserved identity keys ride alongside it."""
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-meta")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "deployment-meta")
     provider = E2BRuntimeProvider(api_key="test-key")
 
     sandbox = SimpleNamespace(

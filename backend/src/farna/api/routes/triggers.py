@@ -529,12 +529,7 @@ def _encrypt_trigger_config_secrets(
     result = dict(config)
     for key in _SECRET_CONFIG_KEYS:
         val = result.get(key)
-        if (
-            isinstance(val, str)
-            and val
-            and val != SENSITIVE_VALUE_MASK
-            and not is_encrypted_secret(val, fernet_key, old_fernet_key)
-        ):
+        if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not is_encrypted_secret(val, fernet_key, old_fernet_key):
             try:
                 result[key] = encrypt_stored_secret(val, fernet_key).decode()
             except Exception:
@@ -568,9 +563,7 @@ def _guard_ongoing_spend_limit(req: "TriggerUpdate") -> None:
 
 def _ongoing_changes_triggered(req: "TriggerUpdate") -> bool:
     """True when any pool-affecting field is being changed."""
-    return any(x is not None for x in [req.max_concurrent_runs, req.config_json, req.active]) or (
-        "daily_spend_limit" in req.model_fields_set
-    )
+    return any(x is not None for x in [req.max_concurrent_runs, req.config_json, req.active]) or ("daily_spend_limit" in req.model_fields_set)
 
 
 async def _validate_ongoing_changes(session: AsyncSession, trigger: Trigger, req: "TriggerUpdate") -> None:
@@ -579,12 +572,8 @@ async def _validate_ongoing_changes(session: AsyncSession, trigger: Trigger, req
     pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
     validate_ongoing_config(
         trigger.trigger_type,
-        max_concurrent_runs=(
-            req.max_concurrent_runs if req.max_concurrent_runs is not None else trigger.max_concurrent_runs
-        ),
-        daily_spend_limit=(
-            req.daily_spend_limit if "daily_spend_limit" in req.model_fields_set else trigger.daily_spend_limit
-        ),
+        max_concurrent_runs=(req.max_concurrent_runs if req.max_concurrent_runs is not None else trigger.max_concurrent_runs),
+        daily_spend_limit=(req.daily_spend_limit if "daily_spend_limit" in req.model_fields_set else trigger.daily_spend_limit),
         config_json=(req.config_json if req.config_json is not None else trigger.config_json),
         pipeline_max_concurrent_runs=pipeline_cap,
     )
@@ -682,17 +671,8 @@ async def list_triggers(
             if principal.org_role == "viewer":
                 trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
 
-            q = (
-                select(Trigger)
-                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
-                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
-            )
-            count_q = (
-                select(func.count())
-                .select_from(Trigger)
-                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
-                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
-            )
+            q = select(Trigger).join(Pipeline, Trigger.pipeline_id == Pipeline.id).where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
+            count_q = select(func.count()).select_from(Trigger).join(Pipeline, Trigger.pipeline_id == Pipeline.id).where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
             total_raw = (await session.execute(count_q)).scalar_one()
             total = int(total_raw) if total_raw is not None else 0
             offset = (page - 1) * page_size
@@ -882,11 +862,7 @@ async def preview_cron_schedule(
             ]
             if principal.org_role == "viewer":
                 trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
-            result = await session.execute(
-                select(Trigger)
-                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
-                .where(*trigger_filter, Pipeline.deleted_at.is_(None))
-            )
+            result = await session.execute(select(Trigger).join(Pipeline, Trigger.pipeline_id == Pipeline.id).where(*trigger_filter, Pipeline.deleted_at.is_(None)))
             trigger = result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
@@ -951,9 +927,7 @@ class PollingConfigUpdate(BaseModel):
     condition_expression: str | None = None
     poll_interval_seconds: int | None = Field(None, ge=60)
     snapshot_id: str | None = None
-    daily_spend_limit: Decimal | None = Field(
-        None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged"
-    )
+    daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged")
 
 
 @router.patch(
@@ -1023,9 +997,7 @@ async def update_polling_config(
                 ]
             ):
                 trigger_engine = TriggerEngine()
-                await trigger_engine.schedule_polling_trigger(
-                    session, trigger=trigger, _org_id=principal.organisation_id
-                )
+                await trigger_engine.schedule_polling_trigger(session, trigger=trigger, _org_id=principal.organisation_id)
 
             await session.flush()
     except ProgrammingError:
@@ -1265,9 +1237,7 @@ async def test_polling_condition(
 # ---------------------------------------------------------------------------
 
 
-async def _require_unique_trigger_name(
-    session: AsyncSession, pipeline_id: uuid.UUID, name: str, *, exclude_id: uuid.UUID | None = None
-) -> None:
+async def _require_unique_trigger_name(session: AsyncSession, pipeline_id: uuid.UUID, name: str, *, exclude_id: uuid.UUID | None = None) -> None:
     """409 when a live trigger on this pipeline already carries ``name``."""
     stmt = select(Trigger.id).where(
         Trigger.pipeline_id == pipeline_id,
@@ -1279,10 +1249,7 @@ async def _require_unique_trigger_name(
     if (await session.execute(stmt)).first() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"duplicate trigger name {name!r} for this pipeline - a live trigger "
-                "with this (pipeline, name) identity already exists"
-            ),
+            detail=(f"duplicate trigger name {name!r} for this pipeline - a live trigger with this (pipeline, name) identity already exists"),
         )
 
 
@@ -1364,9 +1331,7 @@ async def create_trigger(
                 # A fresh ongoing trigger must fire on the first scheduler tick
                 # (the scan selects next_fire_at IS NULL OR due).
                 next_fire_at = datetime.datetime.now(datetime.UTC)
-            encrypted_config = _encrypt_trigger_config_secrets(
-                req.config_json, settings.fernet_key, settings.fernet_key_old
-            )
+            encrypted_config = _encrypt_trigger_config_secrets(req.config_json, settings.fernet_key, settings.fernet_key_old)
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
@@ -1424,9 +1389,7 @@ class TriggerUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     active: bool | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
-    daily_spend_limit: Decimal | None = Field(
-        None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged"
-    )
+    daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged")
     config_json: dict[str, Any] | None = None
     cron_expression: str | None = None
     cron_timezone: str | None = None
@@ -1795,9 +1758,7 @@ async def _record_manual_test_run(
 
     Raised as part of the ``manual`` dispatch branch in ``test_trigger``.
     """
-    snapshot = await create_snapshot_from_live_graph(
-        session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id
-    )
+    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=principal.account_id)
     if snapshot is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1975,11 +1936,7 @@ async def list_trigger_events(
                     Trigger.organisation_id == principal.organisation_id,
                     Trigger.deleted_at.is_(None),
                     Pipeline.deleted_at.is_(None),
-                    *(
-                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
-                        if principal.org_role == "viewer"
-                        else []
-                    ),
+                    *([account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)] if principal.org_role == "viewer" else []),
                 )
             )
             trigger = trigger_result.scalar_one_or_none()
@@ -1995,11 +1952,7 @@ async def list_trigger_events(
                     TriggerEvent.organisation_id == principal.organisation_id,
                     Trigger.deleted_at.is_(None),
                     Pipeline.deleted_at.is_(None),
-                    *(
-                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
-                        if principal.org_role == "viewer"
-                        else []
-                    ),
+                    *([account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)] if principal.org_role == "viewer" else []),
                 )
             )
             if event_status is not None:

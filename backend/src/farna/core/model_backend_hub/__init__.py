@@ -89,10 +89,7 @@ class BackendCredentialsMissingError(BackendDecryptError):
         detail = f"model backend {backend_id}"
         if provider:
             detail += f" (provider {provider!r})"
-        detail += (
-            " has no stored credentials (no secrets row and no credentials_ciphertext)"
-            " — set its API key in Admin -> Model Backends"
-        )
+        detail += " has no stored credentials (no secrets row and no credentials_ciphertext) — set its API key in Admin -> Model Backends"
         super().__init__(backend_id)
         # Re-point the message: the parent's "failed to decrypt" wording would
         # be misleading here (nothing exists to decrypt).
@@ -530,9 +527,7 @@ _CUSTOM_ENDPOINT_KWARGS: dict[str, str] = {
     "gemini": "base_url",
     "mistral": "endpoint",
 }
-BASE_URL_CAPABLE_PROVIDERS: frozenset[str] = (
-    frozenset(_OPENAI_COMPATIBLE_BACKENDS) | frozenset(_CUSTOM_ENDPOINT_KWARGS) | {"openai"}
-)
+BASE_URL_CAPABLE_PROVIDERS: frozenset[str] = frozenset(_OPENAI_COMPATIBLE_BACKENDS) | frozenset(_CUSTOM_ENDPOINT_KWARGS) | {"openai"}
 
 
 def supports_custom_base_url(provider: str) -> bool:
@@ -572,9 +567,7 @@ _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
 # register them for the runtime path.  Keep this explicit rather than treating
 # every provider outside ``_API_KEY_REQUIRED_PROVIDERS`` as credential-free:
 # some adapters accept optional credentials today but may require them later.
-_NO_CREDENTIALS_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
-    {"jan", "llamacpp", "lm_studio", "localai", "ollama", "tgi", "vllm"}
-)
+_NO_CREDENTIALS_REQUIRED_PROVIDERS: frozenset[str] = frozenset({"jan", "llamacpp", "lm_studio", "localai", "ollama", "tgi", "vllm"})
 
 
 def _extract_fixture_map(

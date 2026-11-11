@@ -333,9 +333,7 @@ async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> Au
 
     Prevents concurrent appends from reading the same head and creating a fork.
     """
-    result = await session.execute(
-        select(AuditChainHead).where(AuditChainHead.organisation_id == org_id).with_for_update()
-    )
+    result = await session.execute(select(AuditChainHead).where(AuditChainHead.organisation_id == org_id).with_for_update())
     return result.scalar_one_or_none()
 
 
@@ -387,12 +385,7 @@ async def verify_chain(
     count_result = await session.execute(select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id))
     total_events = count_result.scalar() or 0
 
-    result = await session.execute(
-        select(AuditEvent)
-        .where(AuditEvent.organisation_id == org_id)
-        .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
-        .limit(max_events)
-    )
+    result = await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).limit(max_events))
     events = list(result.scalars())
 
     if not events:
@@ -500,11 +493,7 @@ def _describe_chain_break(
             "This is the first event in the org's chain, so a prior-event hash is not expected; "
             "the stored previous_hash indicates tampering."
         )
-    return (
-        f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash "
-        f"({stored_hash}) does not match the recomputed hash of the prior event ({expected_hash}). "
-        "The event or one before it has been tampered with."
-    )
+    return f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash ({stored_hash}) does not match the recomputed hash of the prior event ({expected_hash}). The event or one before it has been tampered with."
 
 
 async def export_chain(
@@ -606,10 +595,7 @@ async def stream_export_chain(
         while True:
             query = base_query
             if cursor_created_at is not None and cursor_id is not None:
-                query = query.where(
-                    (AuditEvent.created_at > cursor_created_at)
-                    | ((AuditEvent.created_at == cursor_created_at) & (AuditEvent.id > cursor_id))
-                )
+                query = query.where((AuditEvent.created_at > cursor_created_at) | ((AuditEvent.created_at == cursor_created_at) & (AuditEvent.id > cursor_id)))
             query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).limit(safe_page_size)
             result = await session.execute(query)
             page: list[Any] = list(result.scalars())
@@ -669,10 +655,7 @@ async def list_audit_events(
             cursor_data = json.loads(cursor)
             cursor_ts = datetime.fromisoformat(cursor_data["c"])
             cursor_id = uuid.UUID(cursor_data["i"])
-            query = query.where(
-                (AuditEvent.created_at < cursor_ts)
-                | ((AuditEvent.created_at == cursor_ts) & (AuditEvent.id < cursor_id))
-            )
+            query = query.where((AuditEvent.created_at < cursor_ts) | ((AuditEvent.created_at == cursor_ts) & (AuditEvent.id < cursor_id)))
         except (ValueError, KeyError, TypeError):
             _log.warning(
                 "list_audit_events: failed to decode cursor %r — falling back to first page",
@@ -732,9 +715,7 @@ async def get_audit_events_batch(
     if not ids:
         return []
 
-    result = await session.execute(
-        select(AuditEvent).where(AuditEvent.organisation_id == org_id).where(AuditEvent.id.in_(ids))
-    )
+    result = await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).where(AuditEvent.id.in_(ids)))
     events = list(result.scalars())
 
     return [_audit_event_to_dict(e) for e in events]

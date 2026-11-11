@@ -111,10 +111,7 @@ class SnapshotVersionAllocationError(IntegrityError):
     def __init__(self, pipeline_id: uuid.UUID, attempts: int) -> None:
         self.pipeline_id = pipeline_id
         self.attempts = attempts
-        message = (
-            f"could not allocate snapshot_version for pipeline {pipeline_id} after {attempts} attempts: "
-            f"concurrent creators kept colliding on {_SNAPSHOT_VERSION_CONSTRAINT}"
-        )
+        message = f"could not allocate snapshot_version for pipeline {pipeline_id} after {attempts} attempts: concurrent creators kept colliding on {_SNAPSHOT_VERSION_CONSTRAINT}"
         super().__init__(message, {}, RuntimeError(message))
 
 
@@ -130,11 +127,7 @@ class SnapshotLockTerminateDeniedError(RuntimeError):
 
     def __init__(self, sqlstate: str | None) -> None:
         self.sqlstate = sqlstate
-        super().__init__(
-            "the database role is not permitted to terminate other backends: "
-            "pg_terminate_backend requires superuser or "
-            'membership in pg_signal_backend (GRANT pg_signal_backend TO "<app role>";)'
-        )
+        super().__init__('the database role is not permitted to terminate other backends: pg_terminate_backend requires superuser or membership in pg_signal_backend (GRANT pg_signal_backend TO "<app role>";)')
 
 
 def _snapshot_lock_engine(session: AsyncSession) -> AsyncEngine:
@@ -170,10 +163,7 @@ def _snapshot_lock_engine(session: AsyncSession) -> AsyncEngine:
     bind = session.bind
     if isinstance(bind, AsyncEngine):
         return _dedicated_lock_engine(bind)
-    raise RuntimeError(
-        "create_snapshot_from_live_graph requires a session bound to an AsyncEngine so the "
-        f"snapshot advisory lock can live on a dedicated connection; got {type(bind).__name__}"
-    )
+    raise RuntimeError(f"create_snapshot_from_live_graph requires a session bound to an AsyncEngine so the snapshot advisory lock can live on a dedicated connection; got {type(bind).__name__}")
 
 
 def _dedicated_lock_engine(bind: AsyncEngine) -> AsyncEngine:
@@ -307,9 +297,7 @@ async def _open_and_poll_snapshot_lock(
             # without a break, so the budget is exhausted and the connection is
             # provably lock-free when it is disposed below.
             exhausted = True
-            raise SnapshotLockNotAvailableError(
-                f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
-            )
+            raise SnapshotLockNotAvailableError(f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts")
     finally:
         if not acquired:
             # Budget exhausted cleanly -> the connection is provably lock-free;
@@ -360,15 +348,10 @@ async def _acquire_snapshot_lock(
             pipeline_id,
             _SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
         )
-        raise SnapshotLockNotAvailableError(
-            f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable "
-            f"within {_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS}s"
-        ) from None
+        raise SnapshotLockNotAvailableError(f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable within {_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS}s") from None
     except Exception as exc:
         _log.warning("snapshot_lock_acquire_failed pipeline_id=%s", pipeline_id, exc_info=True)
-        raise SnapshotLockNotAvailableError(
-            f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable ({type(exc).__name__})"
-        ) from exc
+        raise SnapshotLockNotAvailableError(f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable ({type(exc).__name__})") from exc
 
 
 async def _release_snapshot_lock(lock_conn: AsyncConnection, *, key1: int, key2: int) -> None:
@@ -436,20 +419,12 @@ async def _acquire_snapshot_allocation_lock(session: AsyncSession, *, pipeline_i
 
     await set_mutation_row_lock_timeout(session)
     try:
-        await session.execute(
-            select(Pipeline)
-            .where(Pipeline.id == pipeline_id)
-            .with_for_update(key_share=True)
-            .execution_options(populate_existing=True)
-        )
+        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update(key_share=True).execution_options(populate_existing=True))
     except SQLAlchemyError as exc:
         if not is_row_lock_timeout(exc):
             raise
         _log.warning("snapshot_allocation_lock_timeout pipeline_id=%s", pipeline_id)
-        raise SnapshotLockNotAvailableError(
-            f"Cannot acquire snapshot allocation lock for pipeline {pipeline_id}: a concurrent creator "
-            "held it past the lock_timeout bound"
-        ) from exc
+        raise SnapshotLockNotAvailableError(f"Cannot acquire snapshot allocation lock for pipeline {pipeline_id}: a concurrent creator held it past the lock_timeout bound") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -478,12 +453,7 @@ _SNAPSHOT_LOCK_HOLDER_SQL = text(
 # Only GRANTED rows hold the lock — a waiter does not — and a backend is never
 # asked to terminate itself (belt-and-braces: this session never acquires the
 # snapshot lock, but a self-kill would take the request down mid-response).
-_SNAPSHOT_LOCK_HOLDER_PIDS_SQL = text(
-    "SELECT DISTINCT l.pid AS pid FROM pg_locks AS l "
-    "WHERE l.locktype = 'advisory' AND l.classid = :key1 AND l.objid = :key2 "
-    "AND l.granted AND l.pid <> pg_backend_pid() "
-    "ORDER BY l.pid"
-)
+_SNAPSHOT_LOCK_HOLDER_PIDS_SQL = text("SELECT DISTINCT l.pid AS pid FROM pg_locks AS l WHERE l.locktype = 'advisory' AND l.classid = :key1 AND l.objid = :key2 AND l.granted AND l.pid <> pg_backend_pid() ORDER BY l.pid")
 
 _TERMINATE_BACKEND_SQL = text("SELECT pg_terminate_backend(:pid) AS terminated")
 
@@ -550,18 +520,12 @@ async def terminate_snapshot_lock_holders(session: AsyncSession, pipeline_id: uu
     return {"released": len(terminated), "pids": terminated}
 
 
-async def _load_pipeline_and_edges(
-    session: AsyncSession, pipeline_id: uuid.UUID
-) -> tuple[Pipeline | None, list[dict[str, Any]], list[dict[str, Any]]]:
+async def _load_pipeline_and_edges(session: AsyncSession, pipeline_id: uuid.UUID) -> tuple[Pipeline | None, list[dict[str, Any]], list[dict[str, Any]]]:
     pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
     pipeline = pipeline_result.scalar_one_or_none()
     if pipeline is None:
         return (None, [], [])
-    edge_result = await session.execute(
-        select(PipelineEdge)
-        .where(PipelineEdge.pipeline_id == pipeline_id)
-        .order_by(PipelineEdge.created_at, PipelineEdge.id)
-    )
+    edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at, PipelineEdge.id))
     edges = list(edge_result.scalars())
     nodes = copy.deepcopy(list(pipeline.graph_nodes_json or []))
     edge_dicts = [
@@ -614,9 +578,7 @@ def _apply_agent_fields(node: dict[str, Any], agent: Agent) -> uuid.UUID | None:
     return agent.parameter_schema_id if agent.parameter_schema_id is not None else None
 
 
-async def _materialize_agent_fields(
-    session: AsyncSession, nodes: list[dict[str, Any]]
-) -> tuple[list[Agent], dict[uuid.UUID, Agent], set[uuid.UUID]]:
+async def _materialize_agent_fields(session: AsyncSession, nodes: list[dict[str, Any]]) -> tuple[list[Agent], dict[uuid.UUID, Agent], set[uuid.UUID]]:
     agent_ids = _ids(node.get("agent_id") for node in nodes)
     agents: list[Agent] = []
     agents_by_id: dict[uuid.UUID, Agent] = {}
@@ -638,14 +600,8 @@ async def _materialize_agent_fields(
     return (agents, agents_by_id, parameter_schema_ids)
 
 
-async def _load_parameter_schemas(
-    session: AsyncSession, parameter_schema_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, ParameterSchema]:
-    schema_rows = (
-        (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(parameter_schema_ids))))
-        .scalars()
-        .all()
-    )
+async def _load_parameter_schemas(session: AsyncSession, parameter_schema_ids: set[uuid.UUID]) -> dict[uuid.UUID, ParameterSchema]:
+    schema_rows = (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(parameter_schema_ids)))).scalars().all()
     return {s.id: s for s in schema_rows}
 
 
@@ -666,9 +622,7 @@ async def _load_parameter_sets(session: AsyncSession, set_ids: set[uuid.UUID]) -
     return sets_by_id
 
 
-def _resolve_node_parameters(
-    schema: ParameterSchema, sets_by_id: dict[uuid.UUID, ParameterSet], node: dict[str, Any]
-) -> dict[str, Any]:
+def _resolve_node_parameters(schema: ParameterSchema, sets_by_id: dict[uuid.UUID, ParameterSet], node: dict[str, Any]) -> dict[str, Any]:
     resolved: dict[str, Any] = {}
     for param in schema.parameters or []:
         if isinstance(param, dict) and "name" in param:
@@ -686,9 +640,7 @@ def _resolve_node_parameters(
     return resolved
 
 
-def _build_parameter_binding(
-    node: dict[str, Any], schema_id: uuid.UUID, resolved: dict[str, Any], raw_set_id: Any
-) -> dict[str, Any]:
+def _build_parameter_binding(node: dict[str, Any], schema_id: uuid.UUID, resolved: dict[str, Any], raw_set_id: Any) -> dict[str, Any]:
     return {
         "agent_id": str(node.get("agent_id")) if node.get("agent_id") else None,
         "parameter_schema_id": str(schema_id),
@@ -723,17 +675,11 @@ async def _resolve_parameter_bindings(
     return parameter_bindings
 
 
-async def _load_reference_models(
-    session: AsyncSession, nodes: list[dict[str, Any]], agents: list[Agent]
-) -> tuple[dict[uuid.UUID, ConnectorInstance], dict[uuid.UUID, Schema], dict[uuid.UUID, ModelBackend]]:
-    connector_ids = _ids(
-        binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None
-    )
+async def _load_reference_models(session: AsyncSession, nodes: list[dict[str, Any]], agents: list[Agent]) -> tuple[dict[uuid.UUID, ConnectorInstance], dict[uuid.UUID, Schema], dict[uuid.UUID, ModelBackend]]:
+    connector_ids = _ids(binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None)
     connectors: list[ConnectorInstance] = []
     if connector_ids:
-        connectors = list(
-            (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_ids)))).scalars()
-        )
+        connectors = list((await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_ids)))).scalars())
     connectors_by_id = {connector.id: connector for connector in connectors}
 
     schema_ids = {schema_id for agent in agents for schema_id in (agent.input_schema_id, agent.output_schema_id)}
@@ -750,9 +696,7 @@ async def _load_reference_models(
     return (connectors_by_id, schema_models_by_id, backends_by_id)
 
 
-def _build_connector_bindings(
-    nodes: list[dict[str, Any]], connectors_by_id: dict[uuid.UUID, ConnectorInstance]
-) -> list[dict[str, Any]]:
+def _build_connector_bindings(nodes: list[dict[str, Any]], connectors_by_id: dict[uuid.UUID, ConnectorInstance]) -> list[dict[str, Any]]:
     connector_bindings: list[dict[str, Any]] = []
     for node in nodes:
         binding = node.get("connector_binding")
@@ -796,9 +740,7 @@ def _build_schema_pins(agents: list[Agent], schema_models_by_id: dict[uuid.UUID,
     return schema_pins
 
 
-def _build_prompt_and_backend_pins(
-    agents: list[Agent], backends_by_id: dict[uuid.UUID, ModelBackend]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_prompt_and_backend_pins(agents: list[Agent], backends_by_id: dict[uuid.UUID, ModelBackend]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     prompt_pins = [
         {
             "agent_id": str(agent.id),
@@ -1056,11 +998,7 @@ def _resolve_model_classes_for_snapshot(source: _SnapshotSource, *, version_kind
 
 async def _next_snapshot_version(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
     """Read ``max(snapshot_version)`` for the pipeline and reserve the next value."""
-    version_result = await session.execute(
-        select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
-            PipelineSnapshot.pipeline_id == pipeline_id
-        )
-    )
+    version_result = await session.execute(select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(PipelineSnapshot.pipeline_id == pipeline_id))
     return int(version_result.scalar_one()) + 1
 
 

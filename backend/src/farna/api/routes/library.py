@@ -143,9 +143,7 @@ _GRANT_LIBRARY_SEARCH_IN_DEV = "library.search.in_dev"
 _VISIBILITY_PATTERN = "^(org|team)$"
 _CODE_LIBRARY_WRITE = "library.write"
 
-_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
-    "The library feature is temporarily unavailable due to a database issue. Please retry."
-)
+_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = "The library feature is temporarily unavailable due to a database issue. Please retry."
 _CODE_LIBRARY_MANAGE = "library.manage"
 _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
 _CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
@@ -186,11 +184,7 @@ def _reject_lifecycle_map_primitive_access(
     dev_mode: bool,
 ) -> None:
     """Reject direct mutation/copy of lifecycle-map primitives outside dev mode."""
-    if (
-        primitive is not None
-        and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
-        and not _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode)
-    ):
+    if primitive is not None and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Primitive not found",
@@ -727,8 +721,7 @@ async def _validate_manifest_pins(
             continue
         if prim.primitive_type not in _COLLECTION_PIN_TYPES_ALLOWED:
             errors.append(
-                f"Pin type '{prim.primitive_type}' is not allowed in collections. "
-                f"Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
+                f"Pin type '{prim.primitive_type}' is not allowed in collections. Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
             )
 
     return errors
@@ -889,11 +882,7 @@ async def _fetch_primitives(
                 session,
                 principal.organisation_id,
                 primitive_type=query.primitive_type,
-                primitive_types=(
-                    query.primitive_types
-                    if isinstance(query.primitive_types, list)
-                    else _split_primitive_types(query.primitive_types)
-                ),
+                primitive_types=(query.primitive_types if isinstance(query.primitive_types, list) else _split_primitive_types(query.primitive_types)),
                 search=query.search,
                 page=query.page,
                 page_size=query.page_size,
@@ -972,9 +961,7 @@ async def get_library_primitive_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("library_primitive_created", "library_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_primitive_created", "library_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.create_library_primitive_endpoint")
 async def create_library_primitive_endpoint(
@@ -1051,9 +1038,7 @@ async def create_library_primitive_endpoint(
 
 @router.patch(
     "/{primitive_id}",
-    dependencies=[
-        Depends(audited("library_primitive_updated", "library_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_primitive_updated", "library_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.update_library_primitive_endpoint")
 async def update_library_primitive_endpoint(
@@ -1114,9 +1099,7 @@ async def update_library_primitive_endpoint(
 
 @router.delete(
     "/{primitive_id}",
-    dependencies=[
-        Depends(audited("library_primitive_deleted", "library_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_primitive_deleted", "library_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.delete_library_primitive_endpoint")
 async def delete_library_primitive_endpoint(
@@ -1156,9 +1139,7 @@ async def delete_library_primitive_endpoint(
 
 @router.post(
     "/{primitive_id}/restore",
-    dependencies=[
-        Depends(audited("library_primitive_restored", "library_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_primitive_restored", "library_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.restore_library_primitive_endpoint")
 async def restore_library_primitive_endpoint(
@@ -1198,9 +1179,7 @@ async def restore_library_primitive_endpoint(
 
 @router.post(
     "/{primitive_id}/adapt",
-    dependencies=[
-        Depends(audited("library_primitive_adapted", "library_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_primitive_adapted", "library_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.copy_to_adapt_endpoint")
 async def copy_to_adapt_endpoint(
@@ -2233,9 +2212,7 @@ def _pipeline_from_template_response(
 @router.post(
     "/{primitive_id}/create-pipeline",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
 async def create_pipeline_from_template_endpoint(
@@ -2539,9 +2516,7 @@ async def admin_publish_contribution_endpoint(
 @router.post(
     "/collections",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("library_collection_created", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_created", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.create_collection_endpoint")
 async def create_collection_endpoint(
@@ -2611,9 +2586,7 @@ async def create_collection_endpoint(
 
 @router.patch(
     "/collections/{primitive_id}",
-    dependencies=[
-        Depends(audited("library_collection_updated", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_updated", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.update_collection_endpoint")
 async def update_collection_endpoint(
@@ -2646,9 +2619,7 @@ async def update_collection_endpoint(
 @router.post(
     "/collections/{primitive_id}/publish",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("library_collection_published", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_published", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.publish_collection_endpoint")
 async def publish_collection_endpoint(
@@ -2832,11 +2803,7 @@ async def _load_installed_entities(
     post-transaction call would silently see zero rows on Postgres. Callers
     thread the loaded list into :func:`_install_response`.
     """
-    stmt = (
-        select(CollectionInstallEntity)
-        .where(CollectionInstallEntity.install_id == install_id)
-        .order_by(CollectionInstallEntity.entity_type, CollectionInstallEntity.entity_id)
-    )
+    stmt = select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id).order_by(CollectionInstallEntity.entity_type, CollectionInstallEntity.entity_id)
     rows = (await session.execute(stmt)).scalars().all()
     return [{"entity_type": row.entity_type, "entity_id": str(row.entity_id)} for row in rows]
 
@@ -2960,11 +2927,7 @@ async def _install_collection_in_transaction(
                 session,
                 org_id=org_id,
                 owner_team_id=None,
-                bindings=(
-                    extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
-                    if installed_pipeline is not None
-                    else []
-                ),
+                bindings=(extract_connector_bindings(list(installed_pipeline.graph_nodes_json or [])) if installed_pipeline is not None else []),
             )
         # FAR-1754: load the entity list while the org RLS context is
         # still live — the child table's policy fails CLOSED outside the
@@ -2980,9 +2943,7 @@ async def _install_collection_in_transaction(
 @router.post(
     "/collections/{primitive_id}/install",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("library_collection_installed", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_installed", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.install_collection_endpoint")
 async def install_collection_endpoint(
@@ -3059,9 +3020,7 @@ async def install_collection_endpoint(
 @router.post(
     "/collections/{primitive_id}/uninstall",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("library_collection_uninstalled", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_uninstalled", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.uninstall_collection_endpoint")
 async def uninstall_collection_endpoint(
@@ -3143,14 +3102,10 @@ async def list_collection_installs_endpoint(
             # context is still live (the child policy fails closed outside
             # the transaction) — one query per install, mirroring the
             # per-install response build below.
-            entities_by_install: dict[uuid.UUID, list[dict[str, Any]]] = {
-                install.install_id: await _load_installed_entities(session, install.install_id) for install in installs
-            }
+            entities_by_install: dict[uuid.UUID, list[dict[str, Any]]] = {install.install_id: await _load_installed_entities(session, install.install_id) for install in installs}
             # FAR-1782: the runnability / update-available reads are org-RLS'd
             # too, so they are evaluated here, inside the same transaction.
-            facts_by_install: dict[uuid.UUID, _InstallFacts] = {
-                install.install_id: await _load_install_facts(session, install) for install in installs
-            }
+            facts_by_install: dict[uuid.UUID, _InstallFacts] = {install.install_id: await _load_install_facts(session, install) for install in installs}
     except ProgrammingError:
         _log.exception("library.list_collection_installs_endpoint")
         raise _not_implemented_error() from None
@@ -3158,10 +3113,7 @@ async def list_collection_installs_endpoint(
         _log.exception("library.list_collection_installs_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    items: list[CollectionInstallResponse] = [
-        _install_response(install, entities_by_install[install.install_id], facts_by_install[install.install_id])
-        for install in installs
-    ]
+    items: list[CollectionInstallResponse] = [_install_response(install, entities_by_install[install.install_id], facts_by_install[install.install_id]) for install in installs]
 
     return CollectionInstallListResponse(items=items)
 
@@ -3174,9 +3126,7 @@ async def list_collection_installs_endpoint(
 @router.post(
     "/collections/{primitive_id}/installs/{install_id}/grant",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("collection_agents_granted", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("collection_agents_granted", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.grant_collection_agents_endpoint")
 async def grant_collection_agents_endpoint(
@@ -3262,12 +3212,7 @@ async def get_collection_install_endpoint(
             # exactly like an absent row. ``session.get`` can resolve it from
             # the session identity map, bypassing the global ``deleted_at IS
             # NULL`` filter, so the guard is explicit.
-            if (
-                install is None
-                or install.deleted_at is not None
-                or install.collection_id != primitive_id
-                or install.organisation_id != org_id
-            ):
+            if install is None or install.deleted_at is not None or install.collection_id != primitive_id or install.organisation_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Install {install_id} not found for collection {primitive_id}",
@@ -3299,11 +3244,7 @@ async def get_collection_install_endpoint(
 @router.post(
     "/collections/{primitive_id}/versions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            audited("library_collection_version_created", "library_collection", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("library_collection_version_created", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.create_collection_version_endpoint")
 async def create_collection_version_endpoint(
@@ -3465,9 +3406,7 @@ async def get_collection_update_endpoint(
 @router.post(
     "/collections/{primitive_id}/installs/{install_id}/upgrade",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("library_collection_upgraded", "library_collection", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("library_collection_upgraded", "library_collection", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.upgrade_collection_endpoint")
 async def upgrade_collection_endpoint(

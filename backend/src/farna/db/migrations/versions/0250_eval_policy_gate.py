@@ -45,10 +45,7 @@ _ORGANISATIONS_FK = "organisations.id"
 # Ownership transfer to migration role so modulo_app (non-owner) is RLS-filtered.
 _NEW_TABLES = ("evals", "policy_gates", "policy_gate_decisions")
 
-_OWNER_TRANSFER_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
-    "THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
-)
+_OWNER_TRANSFER_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
 
 
 def _transfer_ownership() -> None:
@@ -88,15 +85,9 @@ def upgrade() -> None:
         op.create_table(
             "evals",
             sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
-            sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
-            ),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
-            sa.Column(
-                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
+            sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
             sa.Column("version", sa.Integer(), server_default="1", nullable=False),
             sa.Column("pre_version_raw", sa.JSON(), nullable=True),
             sa.Column("pipeline_id", sa.Uuid(), sa.ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False),
@@ -129,15 +120,9 @@ def upgrade() -> None:
         op.create_table(
             "policy_gates",
             sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
-            sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
-            ),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
-            sa.Column(
-                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
+            sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
             sa.Column("version", sa.Integer(), server_default="1", nullable=False),
             sa.Column("pre_version_raw", sa.JSON(), nullable=True),
             sa.Column("eval_id", sa.Uuid(), nullable=False),
@@ -172,15 +157,9 @@ def upgrade() -> None:
         op.create_table(
             "policy_gate_decisions",
             sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
-            sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
-            ),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
-            sa.Column(
-                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
+            sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
             sa.Column("policy_gate_id", sa.Uuid(), nullable=False),
             sa.Column("eval_id", sa.Uuid(), nullable=False),
             sa.ForeignKeyConstraint(

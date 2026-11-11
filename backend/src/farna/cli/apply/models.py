@@ -90,11 +90,7 @@ def check_api_version(raw: str) -> None:
     """
     declared_major = parse_api_version_major(raw)
     if declared_major != API_VERSION_SUPPORTED_MAJOR:
-        msg = (
-            "api_version major mismatch: config declares modulo.dev/v"
-            f"{declared_major}, this client supports modulo.dev/v"
-            f"{API_VERSION_SUPPORTED_MAJOR}"
-        )
+        msg = f"api_version major mismatch: config declares modulo.dev/v{declared_major}, this client supports modulo.dev/v{API_VERSION_SUPPORTED_MAJOR}"
         raise ApplyConfigError(msg)
 
 
@@ -230,11 +226,7 @@ class ModelBackendEntity(BaseModel):
         if value is None:
             return value
         if not ENV_REF_PATTERN.fullmatch(value) and not SECRET_REF_PATTERN.fullmatch(value):
-            msg = (
-                "api_key must be a reference (${env:VAR_NAME} — letters, digits, "
-                "underscores — or secretref://<key>); "
-                "inline secret values are forbidden"
-            )
+            msg = "api_key must be a reference (${env:VAR_NAME} — letters, digits, underscores — or secretref://<key>); inline secret values are forbidden"
             raise ValueError(msg)
         return value
 
@@ -246,10 +238,7 @@ class ModelBackendEntity(BaseModel):
         if value != value.strip() or any(ch.isspace() for ch in value):
             raise ValueError("credential_ref must be a vault key with no surrounding or internal whitespace")
         if value.startswith(SECRET_REF_SCHEME):
-            raise ValueError(
-                "credential_ref must be the bare vault key (omit the 'secretref://' prefix); "
-                "use api_key for an explicit 'secretref://<key>' token"
-            )
+            raise ValueError("credential_ref must be the bare vault key (omit the 'secretref://' prefix); use api_key for an explicit 'secretref://<key>' token")
         return value
 
     @model_validator(mode="after")
@@ -269,10 +258,7 @@ class ModelBackendEntity(BaseModel):
         meaningless" rule ``run_enabled: null`` follows.
         """
         if self.manages_allow_insecure_http and (not self.manages_base_url or self.base_url is None):
-            raise ValueError(
-                "allow_insecure_http requires base_url to declare a non-null endpoint; "
-                "declare both (or neither) - the opt-in only applies to a declared endpoint"
-            )
+            raise ValueError("allow_insecure_http requires base_url to declare a non-null endpoint; declare both (or neither) - the opt-in only applies to a declared endpoint")
         return self
 
     @property
@@ -766,40 +752,22 @@ class PipelineEntity(BaseModel):
     max_concurrent_runs: int = Field(default=5, ge=1)
     max_autonomy_level: str | None = Field(
         default=None,
-        description=(
-            "Hard ceiling on the autonomy level any HITL-gate resolution may "
-            "reach. Managed ONLY when declared (FAR-1221): an explicit null "
-            "CLEARS a UI/API-set ceiling, while omitting the key leaves the "
-            "live ceiling untouched. The server validates "
-            "ceiling >= default_autonomy_level."
-        ),
+        description=("Hard ceiling on the autonomy level any HITL-gate resolution may reach. Managed ONLY when declared (FAR-1221): an explicit null CLEARS a UI/API-set ceiling, while omitting the key leaves the live ceiling untouched. The server validates ceiling >= default_autonomy_level."),
     )
     graph: ApplyGraph | None = None
     business_owner_email: str | None = Field(
         default=None,
         max_length=320,
-        description=(
-            "Accountable business owner, referenced by the member's email. "
-            "Managed unconditionally (omission means null and CLEARS a set owner); "
-            "an email that does not resolve to an org member blocks this pipeline."
-        ),
+        description=("Accountable business owner, referenced by the member's email. Managed unconditionally (omission means null and CLEARS a set owner); an email that does not resolve to an org member blocks this pipeline."),
     )
     reliability_owner_email: str | None = Field(
         default=None,
         max_length=320,
-        description=(
-            "Accountable reliability/SRE owner, referenced by the member's email. "
-            "Managed unconditionally (omission means null and CLEARS a set owner); "
-            "an email that does not resolve to an org member blocks this pipeline."
-        ),
+        description=("Accountable reliability/SRE owner, referenced by the member's email. Managed unconditionally (omission means null and CLEARS a set owner); an email that does not resolve to an org member blocks this pipeline."),
     )
     stdout_retention_config: dict[str, Any] | None = Field(
         default=None,
-        description=(
-            "Pipeline-level default for sandbox stdout retention. "
-            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
-            "NULL = no pipeline override."
-        ),
+        description=('Pipeline-level default for sandbox stdout retention. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. NULL = no pipeline override.'),
     )
     hitl_review_window_seconds: int | None = Field(
         default=None,
@@ -830,19 +798,12 @@ class PipelineEntity(BaseModel):
         default=None,
         gt=0,
         le=CIRCUIT_BREAKER_THRESHOLD_MAX,
-        description=(
-            "Monthly spend circuit breaker (USD). null = disabled. Managed only when declared: "
-            "omit the key to leave the live value untouched."
-        ),
+        description=("Monthly spend circuit breaker (USD). null = disabled. Managed only when declared: omit the key to leave the live value untouched."),
     )
     node_timeout_seconds: int | None = Field(
         default=None,
         ge=1,
-        description=(
-            "Per-node timeout in seconds (>= 1; platform default 300). The REST API "
-            "rejects a null here (the column is never 'no timeout'), so the field is "
-            "managed only when declared: omit the key to leave the live value untouched."
-        ),
+        description=("Per-node timeout in seconds (>= 1; platform default 300). The REST API rejects a null here (the column is never 'no timeout'), so the field is managed only when declared: omit the key to leave the live value untouched."),
     )
     run_enabled: bool | None = Field(
         default=None,
@@ -873,12 +834,7 @@ class PipelineEntity(BaseModel):
     max_duration_seconds: int | None = Field(
         default=None,
         ge=1,
-        description=(
-            "Wall-clock cap on a single run in seconds (>= 1; platform default 3600). "
-            "The REST API rejects a null here (the cap cannot be lifted to 'no cap'), so "
-            "the field is managed only when declared: omit the key to leave the live "
-            "value untouched."
-        ),
+        description=("Wall-clock cap on a single run in seconds (>= 1; platform default 3600). The REST API rejects a null here (the cap cannot be lifted to 'no cap'), so the field is managed only when declared: omit the key to leave the live value untouched."),
     )
 
     @field_validator("circuit_breaker_threshold")
@@ -906,12 +862,7 @@ class PipelineEntity(BaseModel):
         """
         if value is False:
             return False
-        msg = (
-            "run_enabled may only be declared as `false` (pause this pipeline); "
-            "a config can never resume one (`true` would silently fight a UI pause "
-            "or revive a tripped spend circuit breaker). Omit the key to leave the "
-            "live pause state untouched."
-        )
+        msg = "run_enabled may only be declared as `false` (pause this pipeline); a config can never resume one (`true` would silently fight a UI pause or revive a tripped spend circuit breaker). Omit the key to leave the live pause state untouched."
         raise ValueError(msg)
 
     @property
@@ -951,10 +902,7 @@ class PipelineEntity(BaseModel):
         # how a config says "leave the live value alone" — a field default is
         # NOT validated, so the None default passes through untouched.
         if value is None:
-            msg = (
-                f"{info.field_name} cannot be set to null (the API only accepts a number of "
-                f"seconds >= 1); omit the key to leave the live value untouched"
-            )
+            msg = f"{info.field_name} cannot be set to null (the API only accepts a number of seconds >= 1); omit the key to leave the live value untouched"
             raise ValueError(msg)
         # YAML 1.1 resolves `on`/`yes`/`off` to booleans and pydantic's lax int
         # coercion turns True into 1 — a one-second kill switch that would apply
@@ -962,10 +910,7 @@ class PipelineEntity(BaseModel):
         # Reject booleans at load, mirroring the REST models' boolean guard on
         # circuit_breaker_threshold.
         if isinstance(value, bool):
-            msg = (
-                f"{info.field_name} must be a number of seconds, not a boolean "
-                f"(YAML `on`/`yes` resolve to True); declare a value >= 1 or omit the key"
-            )
+            msg = f"{info.field_name} must be a number of seconds, not a boolean (YAML `on`/`yes` resolve to True); declare a value >= 1 or omit the key"
             raise ValueError(msg)
         return value
 
@@ -1099,9 +1044,7 @@ class PipelineEntity(BaseModel):
         # as UUID STRINGS (or null) so a UUID object and its text form are
         # equal — the same id-space treatment the accountability owners get.
         if self.manages_environment_profile:
-            view["environment_profile_id"] = (
-                None if self.environment_profile_id is None else str(self.environment_profile_id)
-            )
+            view["environment_profile_id"] = None if self.environment_profile_id is None else str(self.environment_profile_id)
         if self.graph is not None:
             # FAR-1232: the DRIFT hash must compare the declared graph as the
             # server will DISPLAY it — the API read path masks credential-
@@ -1163,11 +1106,7 @@ class TriggerEntity(BaseModel):
             if not _is_secret_shaped(path[-1], value):
                 continue
             if not ENV_REF_PATTERN.fullmatch(value) and not SECRET_REF_PATTERN.fullmatch(value):
-                msg = (
-                    f"config_json secret value under {'.'.join(path)!r} must be a reference "
-                    "(${env:VAR_NAME} or secretref://<key>); inline secret values are forbidden "
-                    "(hmac_secret/signing_secret are Fernet-encrypted server-side on write)"
-                )
+                msg = f"config_json secret value under {'.'.join(path)!r} must be a reference (${{env:VAR_NAME}} or secretref://<key>); inline secret values are forbidden (hmac_secret/signing_secret are Fernet-encrypted server-side on write)"
                 raise ApplyConfigError(msg)
         return self
 
@@ -1562,10 +1501,7 @@ def _mask_graph_context_files_for_hash(context_files: dict[str, Any]) -> dict[st
     """CLI mirror of the API mask's context-file value tier (in-place redact)."""
     from farna.core.secret_patterns import mask_secret_values_in_text
 
-    return {
-        key: mask_secret_values_in_text(value) if isinstance(value, str) else value
-        for key, value in context_files.items()
-    }
+    return {key: mask_secret_values_in_text(value) if isinstance(value, str) else value for key, value in context_files.items()}
 
 
 def _mask_graph_deep_config_for_hash(values: dict[str, Any], key: str | None = None) -> Any:
@@ -1784,10 +1720,7 @@ def _reject_composite_separator(label: str, value: str) -> str:
     so it is a load-time error.
     """
     if COMPOSITE_KEY_SEPARATOR in value:
-        msg = (
-            f"{label} {value!r} must not contain {COMPOSITE_KEY_SEPARATOR!r} — it is the "
-            "(pipeline, name) composite-key separator"
-        )
+        msg = f"{label} {value!r} must not contain {COMPOSITE_KEY_SEPARATOR!r} — it is the (pipeline, name) composite-key separator"
         raise ValueError(msg)
     return value
 
@@ -1825,10 +1758,7 @@ class EntitySet(BaseModel):
                 key = str(gate.eval_id)
                 location = f"pipeline {pipeline.name!r} node {node.id!s}"
                 if key in seen:
-                    msg = (
-                        f"policy_gate eval_id {key} is declared more than once "
-                        f"({seen[key]} and {location}) - one eval may have at most one live gate"
-                    )
+                    msg = f"policy_gate eval_id {key} is declared more than once ({seen[key]} and {location}) - one eval may have at most one live gate"
                     raise ApplyConfigError(msg)
                 seen[key] = location
         return self
@@ -1891,11 +1821,7 @@ class ApplyConfig(BaseModel):
         other_pipelines = {p.name for p in other.entities.pipelines}
         for trigger in self.entities.triggers:
             if trigger.pipeline not in own_pipelines and trigger.pipeline in other_pipelines:
-                msg = (
-                    f"trigger {trigger.display_key()!r} forward-references pipeline {trigger.pipeline!r} "
-                    "declared in a later YAML document - move the pipeline into the trigger's document "
-                    "(or an earlier one)"
-                )
+                msg = f"trigger {trigger.display_key()!r} forward-references pipeline {trigger.pipeline!r} declared in a later YAML document - move the pipeline into the trigger's document (or an earlier one)"
                 raise ApplyConfigError(msg)
         merged_entities = EntitySet(
             schemas=[*self.entities.schemas, *other.entities.schemas],

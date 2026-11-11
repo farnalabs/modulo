@@ -120,9 +120,7 @@ class RuntimeProviderHub:
             if direct_match is not None:
                 return direct_match
 
-            matches = [
-                provider for _, provider in sorted(providers.items()) if provider.matches_provider_type(provider_type)
-            ]
+            matches = [provider for _, provider in sorted(providers.items()) if provider.matches_provider_type(provider_type)]
             if matches:
                 return matches[0]
 
@@ -229,11 +227,7 @@ class RuntimeProviderHub:
         # the docker/e2b arms do. Only pass keys the caller actually
         # supplied so the provider's own env/default fallbacks
         # (MODULO_KUBERNETES_NAMESPACE, KUBECONFIG, etc.) still apply.
-        kubernetes_kwargs: dict[str, Any] = {
-            key: provider_config[key]
-            for key in ("namespace", "default_image", "kubeconfig", "provision_timeout_s")
-            if key in provider_config
-        }
+        kubernetes_kwargs: dict[str, Any] = {key: provider_config[key] for key in ("namespace", "default_image", "kubeconfig", "provision_timeout_s") if key in provider_config}
         kubernetes_provider = KubernetesRuntimeProvider(**kubernetes_kwargs)
         self._register_or_warn(provider_name, kubernetes_provider)
 

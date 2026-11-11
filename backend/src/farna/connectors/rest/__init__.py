@@ -370,9 +370,7 @@ def _required_secret_error(message: str, fields: tuple[str, ...], creds: dict[st
     masked = [f for f in fields if creds.get(f) == _SENSITIVE_VALUE_MASK]
     if masked:
         names = " and ".join(f"creds['{f}']" for f in masked)
-        return ValueError(
-            f"{message} — {names} holds the redaction-mask placeholder, not a real secret; supply the actual secret"
-        )
+        return ValueError(f"{message} — {names} holds the redaction-mask placeholder, not a real secret; supply the actual secret")
     return ValueError(message)
 
 
@@ -735,9 +733,7 @@ class RestConnector(ConnectorBase):
         if raw_cardinality < 1:
             raise ValueError(f"REST fan_out.max_cardinality must be >= 1 (got {raw_cardinality})")
         if raw_cardinality > _MAX_FANOUT_CARDINALITY_CAP:
-            raise ValueError(
-                f"REST fan_out.max_cardinality must be <= {_MAX_FANOUT_CARDINALITY_CAP} (got {raw_cardinality})"
-            )
+            raise ValueError(f"REST fan_out.max_cardinality must be <= {_MAX_FANOUT_CARDINALITY_CAP} (got {raw_cardinality})")
         self._max_fanout_cardinality = raw_cardinality
         self._fanout_per_item_timeout = float(self._fanout_config.get("per_item_timeout", self._timeout))
         self._fanout_max_retries = int(self._fanout_config.get("max_retries", _MAX_RETRIES - 1))
@@ -839,9 +835,7 @@ class RestConnector(ConnectorBase):
             # may be carried as query params (apply_auth) — redact the URL and
             # status-prefixed detail through the credential redactor before it
             # leaves the connector.
-            return HealthResult(
-                ok=resp.status_code < 400, detail=self._redact(f"HTTP {resp.status_code}: {request.url}")
-            )
+            return HealthResult(ok=resp.status_code < 400, detail=self._redact(f"HTTP {resp.status_code}: {request.url}"))
         except asyncio.CancelledError:
             raise
         except (ValueError, httpx.HTTPError) as exc:
@@ -852,11 +846,7 @@ class RestConnector(ConnectorBase):
         resource = q.resource
         self._require_resource(resource)
         if q.cursor is not None:
-            raise ValueError(
-                "REST connector pagination is response-driven: supply the idempotent filter "
-                "that the operation templates, not a direct start cursor; use the returned "
-                "next_cursor for the next page"
-            )
+            raise ValueError("REST connector pagination is response-driven: supply the idempotent filter that the operation templates, not a direct start cursor; use the returned next_cursor for the next page")
         context = dict(q.filters or {})
         context.setdefault("resource", resource)
         request = await self._build_request(resource, context, surface="read")
@@ -922,8 +912,7 @@ class RestConnector(ConnectorBase):
         if size is not None:
             if size > cap:
                 raise RESTCardinalityExceededError(
-                    f"REST fan-out source has {size} items, exceeding max_cardinality {cap} "
-                    f"(fail-closed — no request emitted)",
+                    f"REST fan-out source has {size} items, exceeding max_cardinality {cap} (fail-closed — no request emitted)",
                     source_cardinality=size,
                     fanout_capacity=cap,
                 )
@@ -933,8 +922,7 @@ class RestConnector(ConnectorBase):
             buffered.append(item)
             if len(buffered) > cap:
                 raise RESTCardinalityExceededError(
-                    f"REST fan-out source exceeded max_cardinality {cap} (lazy source — buffered "
-                    f"{len(buffered)} eager items before fail-closed)",
+                    f"REST fan-out source exceeded max_cardinality {cap} (lazy source — buffered {len(buffered)} eager items before fail-closed)",
                     source_cardinality=None,
                     fanout_capacity=cap,
                     lazy=True,
@@ -1029,15 +1017,11 @@ class RestConnector(ConnectorBase):
             return min(1.0 / requests_per_second, 1.0), ok
         remaining = deadline - time.monotonic()
         if remaining <= 0.0:
-            raise RESTRateLimitTimeoutError(
-                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-            )
+            raise RESTRateLimitTimeoutError(f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}")
         try:
             ok = await asyncio.wait_for(limiter.consume(destination), timeout=remaining)
         except TimeoutError as exc:
-            raise RESTRateLimitTimeoutError(
-                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-            ) from exc
+            raise RESTRateLimitTimeoutError(f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}") from exc
         return min(1.0 / requests_per_second, 1.0, remaining), ok
 
     async def _wait_for_rate_token(
@@ -1129,8 +1113,7 @@ class RestConnector(ConnectorBase):
                 outcomes.append(outcome)
             except asyncio.CancelledError as exc:  # NOSONAR
                 raise RESTFanOutCancelledError(
-                    f"REST fan-out cancelled at item {index} of {len(resolved)} "
-                    f"after {success_count} successful item(s)",
+                    f"REST fan-out cancelled at item {index} of {len(resolved)} after {success_count} successful item(s)",
                     outcomes=outcomes,
                     success_count=success_count,
                     failure_count=sum(1 for o in outcomes if o["status"] == "failure"),
@@ -1238,16 +1221,12 @@ class RestConnector(ConnectorBase):
         """
         mode = str(creds.get("auth_mode", "")).strip().lower()
         if mode not in {"bearer", "api_key", "basic"}:
-            raise ValueError(
-                f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}"
-            )
+            raise ValueError(f"REST connector requires creds['auth_mode'] to be one of 'bearer', 'api_key', 'basic' — got {mode!r}")
         if mode == "bearer":
             if _is_secret_effectively_missing(creds.get("token")):
                 raise _required_secret_error("REST bearer auth requires creds['token']", ("token",), creds)
         elif mode == "basic":
-            if _is_secret_effectively_missing(creds.get("username")) or _is_secret_effectively_missing(
-                creds.get("password")
-            ):
+            if _is_secret_effectively_missing(creds.get("username")) or _is_secret_effectively_missing(creds.get("password")):
                 raise _required_secret_error(
                     "REST basic auth requires creds['username'] and creds['password']",
                     ("username", "password"),
@@ -1624,11 +1603,7 @@ class RestConnector(ConnectorBase):
         if not host:
             raise ValueError(f"REST URL must have a hostname: {url!r}")
         allowed = self._config.get("allowed_hosts")
-        if (
-            isinstance(allowed, list)
-            and allowed
-            and not any(host == str(allowed_host) or host.endswith("." + str(allowed_host)) for allowed_host in allowed)
-        ):
+        if isinstance(allowed, list) and allowed and not any(host == str(allowed_host) or host.endswith("." + str(allowed_host)) for allowed_host in allowed):
             raise ValueError(f"REST URL host {host!r} is not in allowed_hosts: {allowed!r}")
         if self._ssrf_validator is not None:
             result = self._ssrf_validator(url)
@@ -1696,12 +1671,8 @@ class RestConnector(ConnectorBase):
         start = self._clock()
 
         if not self._is_retryable(request):
-            await self._acquire_rate_token(
-                request.rate_limit_key or str(request.url), deadline_seconds=rate_wait_timeout
-            )
-            return await self._perform_with_metrics(
-                client, request, kwargs, host, start, request_timeout=request_timeout
-            )
+            await self._acquire_rate_token(request.rate_limit_key or str(request.url), deadline_seconds=rate_wait_timeout)
+            return await self._perform_with_metrics(client, request, kwargs, host, start, request_timeout=request_timeout)
         return await self._send_retryable(
             _RetryLoop(
                 client=client,
@@ -1780,9 +1751,7 @@ class RestConnector(ConnectorBase):
             if attempt:
                 await self._sleep(last_delay)
                 rest_metrics.record_retry(retry_reason)
-            await self._acquire_rate_token(
-                request.rate_limit_key or str(request.url), deadline_seconds=rate_wait_timeout
-            )
+            await self._acquire_rate_token(request.rate_limit_key or str(request.url), deadline_seconds=rate_wait_timeout)
             try:
                 resp, body_text = await self._perform_request(client, request, kwargs, request_timeout=request_timeout)
             except RESTStatusError as exc:
@@ -1846,9 +1815,7 @@ class RestConnector(ConnectorBase):
         if self._auth["mode"] == "api_key" and self._auth["in"] == "query":
             auth_param = self._auth["query_param_name"]
             if auth_param in params:
-                raise ValueError(
-                    f"REST param name {auth_param!r} collides with the api_key credential query param name"
-                )
+                raise ValueError(f"REST param name {auth_param!r} collides with the api_key credential query param name")
             params[auth_param] = self._auth["api_key"]
         kwargs: dict[str, Any] = {"headers": headers, "params": params}
         if request.body is not None:
@@ -1914,9 +1881,7 @@ class RestConnector(ConnectorBase):
         cap = self._max_response_size
         content_length = resp.headers.get("content-length")
         if content_length and content_length.isdigit() and int(content_length) > cap:
-            raise RESTResponseTooLargeError(
-                f"REST response too large: Content-Length {content_length} exceeds cap {cap} bytes"
-            )
+            raise RESTResponseTooLargeError(f"REST response too large: Content-Length {content_length} exceeds cap {cap} bytes")
         chunks: list[bytes] = []
         total = 0
         async for chunk in resp.aiter_bytes():
@@ -1950,9 +1915,7 @@ class RestConnector(ConnectorBase):
         # which can carry the credential) BEFORE truncating (FAR-1651):
         # truncating first can split a credential in half, leaving a fragment
         # the redactor cannot match.
-        return self._redact(
-            f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body_text}"
-        )[:200]
+        return self._redact(f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body_text}")[:200]
 
     @staticmethod
     def _parse_json_body(body_text: str, content_type: str) -> Any:
@@ -1967,9 +1930,7 @@ class RestConnector(ConnectorBase):
     def _dict_records(self, parsed: dict[str, Any], request: RestRequest) -> tuple[list[dict[str, Any]], str | None]:
         """Resolve ``records`` (via ``records_path`` JMESPath or the whole object) + cursor."""
         records_path = request.records_path
-        records = (
-            self._records_via_jmespath(parsed, records_path) if records_path else self._whole_object_records(parsed)
-        )
+        records = self._records_via_jmespath(parsed, records_path) if records_path else self._whole_object_records(parsed)
         next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
         return records, next_cursor
 
@@ -2086,9 +2047,7 @@ class RestConnector(ConnectorBase):
         error so a wrong path fails loud instead of returning wrong data.
         """
         if _DOT_INDEX.search(path):
-            raise ValueError(
-                f"REST JMESPath path {path!r} is invalid: use bracket index syntax like [0], not dot index like .0"
-            )
+            raise ValueError(f"REST JMESPath path {path!r} is invalid: use bracket index syntax like [0], not dot index like .0")
         return jmespath.search(path, data)
 
     @staticmethod

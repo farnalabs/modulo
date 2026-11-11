@@ -69,9 +69,7 @@ class CloneCredential:
     secret: str
 
     def __repr__(self) -> str:
-        return (
-            f"CloneCredential(kind={self.kind!r}, host={self.host!r}, username={self.username!r}, secret='[REDACTED]')"
-        )
+        return f"CloneCredential(kind={self.kind!r}, host={self.host!r}, username={self.username!r}, secret='[REDACTED]')"
 
     def __str__(self) -> str:
         return repr(self)
@@ -141,9 +139,7 @@ async def _decrypt_connector_creds(
         creds = json.loads(raw_str)
         if isinstance(creds, dict):
             return creds
-        raise CredentialResolutionError(
-            f"Connector {ci.id} credentials are not a JSON dict (got {type(creds).__name__})"
-        )
+        raise CredentialResolutionError(f"Connector {ci.id} credentials are not a JSON dict (got {type(creds).__name__})")
     except KeyError:
         pass
     except json.JSONDecodeError as exc:
@@ -227,11 +223,7 @@ async def resolve_clone_credential(
     if ci.connector_type_id not in _TOKEN_CREDENTIAL_TYPES:
         # DEFERRED: SSH-key auth shape on connector types not yet supported.
         # Document the gap and raise — do NOT change the ConnectorType model.
-        raise CredentialResolutionError(
-            f"Connector type {ci.connector_type_id!r} does not support git "
-            f"HTTPS clone credentials. SSH-key auth for workspace inputs is "
-            f"deferred to a future ticket (connector-model change required)."
-        )
+        raise CredentialResolutionError(f"Connector type {ci.connector_type_id!r} does not support git HTTPS clone credentials. SSH-key auth for workspace inputs is deferred to a future ticket (connector-model change required).")
 
     creds = await _decrypt_connector_creds(ci, session=session)
 
@@ -290,11 +282,7 @@ async def assert_clone_credential_is_read_only(
         # Conservative policy: for hosts where we cannot probe, we cannot
         # guarantee read-only.  The caller must handle this — document the
         # gap and refuse rather than silently allowing.
-        raise CredentialResolutionError(
-            f"Cannot verify read-only capability for host {cred.host!r} — "
-            f"no API probe available. Use a known read-only token or an "
-            f"SSH deploy key instead."
-        )
+        raise CredentialResolutionError(f"Cannot verify read-only capability for host {cred.host!r} — no API probe available. Use a known read-only token or an SSH deploy key instead.")
 
     # GitHub token scope probe.
     if http_client is None:
@@ -323,19 +311,11 @@ async def assert_clone_credential_is_read_only(
         # and ask for a classic read-only PAT or an SSH deploy key (which is
         # accepted via the ssh kind above).
         if not scopes_set:
-            raise CredentialResolutionError(
-                "GitHub token returned no X-OAuth-Scopes (empty scope header). "
-                "Cannot verify read-only capability — fine-grained PATs are not "
-                "supported by the probe. Use a classic read-only PAT or an SSH "
-                "deploy key for workspace inputs."
-            )
+            raise CredentialResolutionError("GitHub token returned no X-OAuth-Scopes (empty scope header). Cannot verify read-only capability — fine-grained PATs are not supported by the probe. Use a classic read-only PAT or an SSH deploy key for workspace inputs.")
 
         push_indicators = {"repo", "write:repo", "admin:repo", "write:org"}
         if scopes_set & push_indicators:
-            raise CredentialResolutionError(
-                f"GitHub token has push-capable scopes: {scopes_set & push_indicators}. "
-                f"Workspace input tokens must be read-only."
-            )
+            raise CredentialResolutionError(f"GitHub token has push-capable scopes: {scopes_set & push_indicators}. Workspace input tokens must be read-only.")
     except CredentialResolutionError:
         raise
     except Exception as exc:

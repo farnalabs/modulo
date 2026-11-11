@@ -377,10 +377,7 @@ def _remediation_hint(ip_str: str) -> str:
     """
     with contextlib.suppress(ValueError):
         if ipaddress.ip_address(ip_str).is_loopback:
-            return (
-                "Set SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128 to allow loopback "
-                "(BOTH entries; dual-stack), or use a public URL."
-            )
+            return "Set SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128 to allow loopback (BOTH entries; dual-stack), or use a public URL."
     return "Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL."
 
 
@@ -651,9 +648,7 @@ def _check_resolved(decoded: str, ip_strings: Sequence[str], extra_allow: tuple[
         raise ValueError(f"URL hostname {decoded} resolved to no addresses. Cannot verify the target is not internal.")
     for ip_str in ip_strings:
         if _is_blocked_ip(ip_str, extra_allow):
-            raise ValueError(
-                f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). {_remediation_hint(ip_str)}"
-            )
+            raise ValueError(f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). {_remediation_hint(ip_str)}")
 
 
 _SockAddr = tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]
@@ -816,10 +811,7 @@ async def resolve_pinned_ip(url: str, *, allow_networks: Sequence[str] | None = 
     extra = normalize_allow_networks(allow_networks)
     if target.literal_ip is not None:
         if _is_blocked_ip(target.literal_ip, extra):
-            raise ValueError(
-                f"URL targets a private/internal network address: {target.literal_ip}. "
-                f"{_remediation_hint(target.literal_ip)}"
-            )
+            raise ValueError(f"URL targets a private/internal network address: {target.literal_ip}. {_remediation_hint(target.literal_ip)}")
         return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=(target.literal_ip,))
     ips = await _resolve_all_async(target.host)
     _check_resolved(target.host, ips, extra)
@@ -841,10 +833,7 @@ def _resolve_pinned_ip_sync(url: str, *, allow_networks: Sequence[str] | None = 
     extra = normalize_allow_networks(allow_networks)
     if target.literal_ip is not None:
         if _is_blocked_ip(target.literal_ip, extra):
-            raise ValueError(
-                f"URL targets a private/internal network address: {target.literal_ip}. "
-                f"{_remediation_hint(target.literal_ip)}"
-            )
+            raise ValueError(f"URL targets a private/internal network address: {target.literal_ip}. {_remediation_hint(target.literal_ip)}")
         return PinnedTarget(scheme=target.scheme, host=target.host, port=target.port, ips=(target.literal_ip,))
     ips = _resolve_all_sync(target.host)
     _check_resolved(target.host, ips, extra)
@@ -895,9 +884,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         connector_type: str = egress_metrics.DEFAULT_CONNECTOR_TYPE,
     ) -> None:
         super().__init__()
-        self._pinned_hosts: dict[str, tuple[str, ...]] = {
-            _normalize_host(host): _coerce_pin_ips(ips) for host, ips in pinned_hosts.items()
-        }
+        self._pinned_hosts: dict[str, tuple[str, ...]] = {_normalize_host(host): _coerce_pin_ips(ips) for host, ips in pinned_hosts.items()}
         self._allow_networks = normalize_allow_networks(allow_networks)
         self._re_resolve = re_resolve
         self._connector_type = connector_type or egress_metrics.DEFAULT_CONNECTOR_TYPE
@@ -963,9 +950,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
             idx = (start + offset) % len(ips)
             ip = ips[idx]
             try:
-                stream = await self._connect_to_ip(
-                    ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options
-                )
+                stream = await self._connect_to_ip(ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options)
             except (httpcore.NetworkError, httpcore.TimeoutException) as exc:
                 last_exc = exc
                 self._cursor[host_key] = idx + 1
@@ -998,24 +983,14 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
                 extra={"host": host, "connector_type": self._connector_type},
             )
             egress_metrics.record_rejected(self._connector_type, host, egress_metrics.REASON_UNPINNED)
-            raise UnpinnedHostError(
-                f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only "
-                "connects to addresses it validated up front; a redirect or secondary request "
-                "must be re-validated before it can be reached."
-            )
+            raise UnpinnedHostError(f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only connects to addresses it validated up front; a redirect or secondary request must be re-validated before it can be reached.")
         # TTL-based self-heal: re-resolve before connecting when the pinned set has
         # gone stale, so a decommissioned IP does not keep failing forever.
-        if (
-            self._re_resolve
-            and self._resolve_ttl > 0
-            and time.time() - self._resolved_at.get(key, 0.0) > self._resolve_ttl
-        ):
+        if self._re_resolve and self._resolve_ttl > 0 and time.time() - self._resolved_at.get(key, 0.0) > self._resolve_ttl:
             self._pinned_hosts[key] = await self._refresh_ips(key)
             ips = self._pinned_hosts[key]
         try:
-            return await self._try_set(
-                key, ips, port, timeout=timeout, local_address=local_address, socket_options=socket_options
-            )
+            return await self._try_set(key, ips, port, timeout=timeout, local_address=local_address, socket_options=socket_options)
         except (httpcore.NetworkError, httpcore.TimeoutException):
             if not self._re_resolve:
                 raise
@@ -1258,22 +1233,12 @@ class _PinnedSyncNetworkBackend(httpcore.SyncBackend):
         if ips is None:
             _log.warning("ssrf.reject_unpinned_host", extra={"host": host, "connector_type": self._connector_type})
             egress_metrics.record_rejected(self._connector_type, host, egress_metrics.REASON_UNPINNED)
-            raise UnpinnedHostError(
-                f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only "
-                "connects to addresses it validated up front; a redirect or secondary request "
-                "must be re-validated before it can be reached."
-            )
-        if (
-            self._re_resolve
-            and self._resolve_ttl > 0
-            and time.time() - self._resolved_at.get(key, 0.0) > self._resolve_ttl
-        ):
+            raise UnpinnedHostError(f"SSRF: refusing to connect to unpinned host {host!r}. The pinned transport only connects to addresses it validated up front; a redirect or secondary request must be re-validated before it can be reached.")
+        if self._re_resolve and self._resolve_ttl > 0 and time.time() - self._resolved_at.get(key, 0.0) > self._resolve_ttl:
             self._pinned_hosts[key] = self._refresh_ips(key)
             ips = self._pinned_hosts[key]
         try:
-            return self._try_set(
-                key, ips, port, timeout=timeout, local_address=local_address, socket_options=socket_options
-            )
+            return self._try_set(key, ips, port, timeout=timeout, local_address=local_address, socket_options=socket_options)
         except (httpcore.NetworkError, httpcore.TimeoutException):
             if not self._re_resolve:
                 raise
@@ -1448,10 +1413,7 @@ async def pinned_async_client(
     rejected so a caller cannot silently bypass the pinned transport.
     """
     if "transport" in client_kwargs:
-        raise ValueError(
-            "pinned_async_client: 'transport' must not be passed via client_kwargs "
-            "— it would bypass the pinned transport. Use the pinned transport built here."
-        )
+        raise ValueError("pinned_async_client: 'transport' must not be passed via client_kwargs — it would bypass the pinned transport. Use the pinned transport built here.")
     transport = await pinned_async_transport(
         url,
         allow_networks=allow_networks,
@@ -1675,10 +1637,7 @@ def pinned_async_client_sync(
     transport.
     """
     if "transport" in client_kwargs:
-        raise ValueError(
-            "pinned_async_client_sync: 'transport' must not be passed via client_kwargs "
-            "— it would bypass the pinned transport. Use the pinned transport built here."
-        )
+        raise ValueError("pinned_async_client_sync: 'transport' must not be passed via client_kwargs — it would bypass the pinned transport. Use the pinned transport built here.")
     transport = pinned_async_transport_sync(
         url,
         allow_networks=allow_networks,

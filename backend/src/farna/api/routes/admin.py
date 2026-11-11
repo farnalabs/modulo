@@ -145,9 +145,7 @@ _CODE_ADMIN_CANCEL_ORG_DELETION = "admin.cancel_org_deletion"
 _CODE_ADMIN_EXPORT_ORG_DATA = "admin.export_org_data"
 # The caller's own organisation can never be deleted through this router: the
 # only target these routes can address is the active organisation.
-_MSG_ACTIVE_ORG_DELETION_REFUSED = (
-    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
-)
+_MSG_ACTIVE_ORG_DELETION_REFUSED = "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
 _RE_GREEN_OR_AMBER = "^(green|amber)$"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again later."
@@ -285,9 +283,7 @@ def _reject_active_org_deletion(
     )
 
 
-_MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE = (
-    "Service accounts are managed at /api/v1/service-accounts — the user admin surface applies to human users only"
-)
+_MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE = "Service accounts are managed at /api/v1/service-accounts — the user admin surface applies to human users only"
 
 
 def _reject_service_account_target(account: Account) -> None:
@@ -474,9 +470,7 @@ class _SearchParams(NamedTuple):
     offset: int
 
 
-async def _search_pipelines(
-    session: AsyncSession, params: _SearchParams
-) -> tuple[list[tuple[int, SearchResultItem]], int]:
+async def _search_pipelines(session: AsyncSession, params: _SearchParams) -> tuple[list[tuple[int, SearchResultItem]], int]:
     rows = (
         await session.execute(
             text("""
@@ -856,10 +850,7 @@ async def _existing_account_or_conflict(
             if existing.password_hash is not None and existing.auth_provider == "local":
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
-                        " in another organisation. Password-based adoption is not allowed."
-                    ),
+                    detail=("EMAIL_ACCOUNT_EXISTS: An account with this email exists in another organisation. Password-based adoption is not allowed."),
                 )
     return existing
 
@@ -884,10 +875,7 @@ async def _create_or_adopt_account(
             if account.password_hash is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
-                        " in another organisation. Password-based adoption is not allowed."
-                    ),
+                    detail=("EMAIL_ACCOUNT_EXISTS: An account with this email exists in another organisation. Password-based adoption is not allowed."),
                 )
             account.password_hash = pw_hash
         else:
@@ -1184,9 +1172,7 @@ async def admin_update_org(
                 # writing the whole settings_json back from the stale read above
                 # (which drops every concurrent writer's keys). The helper keeps
                 # the in-session org row in sync for any later read.
-                settings_after = await update_org_settings_patch(
-                    session, current_user.organisation_id, {"logo_url": req.logo_url}
-                )
+                settings_after = await update_org_settings_patch(session, current_user.organisation_id, {"logo_url": req.logo_url})
     except IntegrityError:
         logger.exception("admin_update_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         _raise_conflict()
@@ -1334,22 +1320,10 @@ async def _list_org_accounts(
     if role_filter:
         conditions.append(OrgMembership.role == role_filter)
 
-    count_q = (
-        select(func.count())
-        .select_from(OrgMembership)
-        .join(Account, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-    )
+    count_q = select(func.count()).select_from(OrgMembership).join(Account, Account.id == OrgMembership.account_id).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Account, OrgMembership)
-        .join(OrgMembership, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-        .order_by(Account.created_at)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    query = select(Account, OrgMembership).join(OrgMembership, Account.id == OrgMembership.account_id).where(*conditions).order_by(Account.created_at).offset((page - 1) * page_size).limit(page_size)
     result = await session.execute(query)
     return [(row[0], row[1]) for row in result.all()], total
 
@@ -1359,9 +1333,7 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-@router.put(
-    "/users/{user_id}", dependencies=[Depends(audited("user_updated", "user", principal_dep=get_current_tenant_user))]
-)
+@router.put("/users/{user_id}", dependencies=[Depends(audited("user_updated", "user", principal_dep=get_current_tenant_user))])
 @handle_db_errors("admin.admin_update_user")
 async def admin_update_user(
     user_id: uuid.UUID,
@@ -2216,13 +2188,7 @@ async def admin_list_teams(
             team_ids = [t.id for t in result.items if t is not None]
             member_counts: dict[uuid.UUID, int] = {}
             if team_ids:
-                count_rows = (
-                    await session.execute(
-                        select(TeamMembership.team_id, func.count().label("cnt"))
-                        .where(TeamMembership.team_id.in_(team_ids))
-                        .group_by(TeamMembership.team_id)
-                    )
-                ).all()
+                count_rows = (await session.execute(select(TeamMembership.team_id, func.count().label("cnt")).where(TeamMembership.team_id.in_(team_ids)).group_by(TeamMembership.team_id))).all()
                 member_counts.update({row.team_id: row.cnt for row in count_rows if row.team_id is not None})
 
             # Enrich with owned resource counts (4-way delete-blocking set)
@@ -2470,13 +2436,7 @@ async def admin_delete_team(
                 (ModelBackend, "model backend"),
                 (LibraryPrimitive, "library primitive"),
             ]:
-                count = (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(model_cls)
-                        .where(model_cls.__table__.c.owner_team_id == team_id)
-                    )
-                ).scalar() or 0
+                count = (await session.execute(select(func.count()).select_from(model_cls).where(model_cls.__table__.c.owner_team_id == team_id))).scalar() or 0
                 if count > 0:
                     resource_checks.append((label, count))
 
@@ -2642,21 +2602,11 @@ async def admin_billing_overview(
                 )
 
             org_id = current_user.organisation_id
-            user_count = (
-                await session.execute(
-                    select(func.count()).select_from(OrgMembership).where(OrgMembership.organisation_id == org_id)
-                )
-            ).scalar() or 0
+            user_count = (await session.execute(select(func.count()).select_from(OrgMembership).where(OrgMembership.organisation_id == org_id))).scalar() or 0
 
-            team_count = (
-                await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
-            ).scalar() or 0
+            team_count = (await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))).scalar() or 0
 
-            pipeline_count = (
-                await session.execute(
-                    select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-                )
-            ).scalar() or 0
+            pipeline_count = (await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id))).scalar() or 0
 
             month_start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             runs_this_month = (
@@ -3032,11 +2982,7 @@ async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBr
 
 
 async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[CoverageGap]:
-    pipelines = (
-        await session.execute(
-            select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(Pipeline.organisation_id == org_id)
-        )
-    ).all()
+    pipelines = (await session.execute(select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(Pipeline.organisation_id == org_id))).all()
 
     covered_pairs: set[tuple[uuid.UUID, str]] = set()
     # FAR-1725: read live ``evals`` rows, not the frozen ``eval_definitions``
@@ -3187,10 +3133,7 @@ async def eval_regressions(
     ),
     trend: str | None = Query(
         default=None,
-        description=(
-            "Filter alerts by trend direction: 'declining', 'stable' or 'improving'. "
-            "Use 'declining' to surface true regressions only."
-        ),
+        description=("Filter alerts by trend direction: 'declining', 'stable' or 'improving'. Use 'declining' to surface true regressions only."),
     ),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -3551,9 +3494,7 @@ async def admin_update_publisher(
                 )
 
             try:
-                publisher = await crud_update_publisher(
-                    session, publisher_id, updates, org_id=current_user.organisation_id
-                )
+                publisher = await crud_update_publisher(session, publisher_id, updates, org_id=current_user.organisation_id)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -3830,9 +3771,7 @@ async def _load_org_retention_setting(
             await set_rls_org(session, org_id)
             # FAR-1025: opt out of the global soft-delete filter — a
             # pending-deletion org is still operationally live.
-            result = await session.execute(
-                include_soft_deleted(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
-            )
+            result = await session.execute(include_soft_deleted(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1)))
             return result.scalar_one_or_none()
     except asyncio.CancelledError:
         raise
@@ -4090,9 +4029,7 @@ async def admin_get_sandbox_concurrency(
 
 @router.put(
     "/org/sandbox-concurrency",
-    dependencies=[
-        Depends(audited("sandbox_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("sandbox_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_200_OK,
 )
 async def admin_update_sandbox_concurrency(
@@ -4210,9 +4147,7 @@ async def admin_get_hitl_review_window(
 
 @router.put(
     "/org/hitl-review-window",
-    dependencies=[
-        Depends(audited("hitl_review_window_updated", "organisation", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("hitl_review_window_updated", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_200_OK,
 )
 async def admin_update_hitl_review_window(
@@ -4316,9 +4251,7 @@ async def admin_get_work_item_agent_minting(
 
 @router.put(
     "/org/work-item-agent-minting",
-    dependencies=[
-        Depends(audited("work_item_agent_minting_updated", "organisation", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("work_item_agent_minting_updated", "organisation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_200_OK,
 )
 async def admin_update_work_item_agent_minting(
@@ -4523,9 +4456,7 @@ async def admin_update_run_concurrency(
                 # FAR-1830: emit ONLY this writer's top-level key. The previous
                 # read-modify-write of the whole settings_json column silently
                 # dropped every other concern's keys written in the window.
-                await update_org_settings_patch(
-                    session, current_user.organisation_id, {"run_concurrency_limit": req.run_concurrency_limit}
-                )
+                await update_org_settings_patch(session, current_user.organisation_id, {"run_concurrency_limit": req.run_concurrency_limit})
             except IntegrityError:
                 logger.exception("admin.admin_update_run_concurrency")
                 raise HTTPException(
@@ -4686,19 +4617,9 @@ async def admin_get_storage(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            total = (
-                await session.execute(
-                    select(func.count()).select_from(Run).where(Run.organisation_id == current_user.organisation_id)
-                )
-            ).scalar() or 0
+            total = (await session.execute(select(func.count()).select_from(Run).where(Run.organisation_id == current_user.organisation_id))).scalar() or 0
 
-            status_rows = (
-                await session.execute(
-                    select(Run.status, func.count().label("cnt"))
-                    .where(Run.organisation_id == current_user.organisation_id)
-                    .group_by(Run.status)
-                )
-            ).all()
+            status_rows = (await session.execute(select(Run.status, func.count().label("cnt")).where(Run.organisation_id == current_user.organisation_id).group_by(Run.status))).all()
 
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
@@ -4924,10 +4845,7 @@ async def release_pipeline_snapshot_lock(
     if org_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Snapshot-lock release requires an organisation context so the terminated "
-                "backends can be recorded on that organisation's audit chain."
-            ),
+            detail=("Snapshot-lock release requires an organisation context so the terminated backends can be recorded on that organisation's audit chain."),
         )
 
     try:
@@ -4954,10 +4872,7 @@ async def release_pipeline_snapshot_lock(
             "pipeline_id": str(pipeline_id),
             "released": int(payload["released"]),
             "pids": [int(pid) for pid in payload["pids"]],
-            "summary": (
-                f"Terminated {payload['released']} backend(s) holding the snapshot advisory "
-                f"lock for pipeline {pipeline_id}"
-            ),
+            "summary": (f"Terminated {payload['released']} backend(s) holding the snapshot advisory lock for pipeline {pipeline_id}"),
         },
         log_key=_AUDIT_LOG_SNAPSHOT_LOCK_RELEASE,
     )

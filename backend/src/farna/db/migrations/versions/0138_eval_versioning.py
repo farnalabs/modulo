@@ -52,20 +52,12 @@ def upgrade() -> None:
     # eval_definitions: version + pre-version config snapshot.
     op.add_column("eval_definitions", sa.Column("version", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("eval_definitions", sa.Column("pre_version_raw", sa.JSON(), nullable=True))
-    op.execute(
-        "UPDATE eval_definitions "
-        "SET pre_version_raw = json_build_object('config_json', config_json) "
-        "WHERE pre_version_raw IS NULL"
-    )
+    op.execute("UPDATE eval_definitions SET pre_version_raw = json_build_object('config_json', config_json) WHERE pre_version_raw IS NULL")
 
     # eval_suites: version + pre-version suite snapshot.
     op.add_column("eval_suites", sa.Column("version", sa.Integer(), nullable=False, server_default="1"))
     op.add_column("eval_suites", sa.Column("pre_version_raw", sa.JSON(), nullable=True))
-    op.execute(
-        "UPDATE eval_suites "
-        "SET pre_version_raw = json_build_object('eval_definition_ids', eval_definition_ids) "
-        "WHERE pre_version_raw IS NULL"
-    )
+    op.execute("UPDATE eval_suites SET pre_version_raw = json_build_object('eval_definition_ids', eval_definition_ids) WHERE pre_version_raw IS NULL")
 
     # eval_results: the eval-definition version snapshot that scored each result.
     op.add_column("eval_results", sa.Column("eval_definition_version", sa.Integer(), nullable=True))

@@ -30,8 +30,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_organisations_deletion_token_expiry",
         "organisations",
-        "(deletion_token IS NULL AND deletion_token_expires_at IS NULL) OR "
-        "(deletion_token IS NOT NULL AND deletion_token_expires_at IS NOT NULL)",
+        "(deletion_token IS NULL AND deletion_token_expires_at IS NULL) OR (deletion_token IS NOT NULL AND deletion_token_expires_at IS NOT NULL)",
     )
     op.create_foreign_key(
         "fk_organisations_created_by",

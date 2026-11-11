@@ -79,10 +79,7 @@ class FilesystemConnector(ConnectorBase):
                 dir_path = self._safe_path(q.filters.get("path", "."))
 
                 def _list_dir() -> list[dict[str, Any]]:
-                    return [
-                        {"name": p.name, "type": "dir" if p.is_dir() else "file", "path": str(p)}
-                        for p in itertools.islice(sorted(dir_path.iterdir()), q.limit)
-                    ]
+                    return [{"name": p.name, "type": "dir" if p.is_dir() else "file", "path": str(p)} for p in itertools.islice(sorted(dir_path.iterdir()), q.limit)]
 
                 entries = await asyncio.to_thread(_list_dir)
                 return ConnectorResult(records=entries, total=len(entries))

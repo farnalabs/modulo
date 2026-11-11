@@ -88,8 +88,8 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
     sys_url = _with_credentials(migrated_db_url, "modulo_system", "syspass")
 
     monkeypatch.setenv("DATABASE_ADMIN_URL", migrated_db_url)
-    monkeypatch.delenv("MODULO_BREAK_GLASS_DATABASE_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
 
     from farna.api import main as api_main
     from farna.settings import get_settings
@@ -112,13 +112,10 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
         assert hash_after_boot1 == stale_hash, "a warm boot with no system URL must not reset the role password"
 
         # Boot 2 — operator supplies MODULO_SYSTEM_DATABASE_URL and restarts.
-        monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
         await api_main._run_migrations(settings)
         hash_after_boot2 = await _system_role_hash(admin)
-        assert hash_after_boot2 != stale_hash, (
-            "the warm boot with a system URL must reconcile the drifted password "
-            "(without the fix the fast-path skips the bootstrap and this stays stale)"
-        )
+        assert hash_after_boot2 != stale_hash, "the warm boot with a system URL must reconcile the drifted password (without the fix the fast-path skips the bootstrap and this stays stale)"
         await _assert_authenticates_as_system(sys_url)
 
         # Boot 3 — another warm boot with the URL configured: still
@@ -134,7 +131,7 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
         # into auth failures. Reconcile back to the session baseline (the
         # same bootstrap the ticket says an operator used to run by hand —
         # here only as cleanup, never as part of the assertions above).
-        monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
         from farna.db.bootstrap_role import bootstrap_roles
 
         await bootstrap_roles(migrated_db_url, app_url)

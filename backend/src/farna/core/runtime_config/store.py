@@ -41,46 +41,43 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "FERNET_KEY": _KeyConfig(boot_reason=_REASON_SECRET),
     "FERNET_KEY_OLD": _KeyConfig(boot_reason=_REASON_SECRET),
     "REDIS_URL": _KeyConfig(default="redis://localhost:6379/0", boot_reason=_REASON_INFRA),
-    "MODULO_DB": _KeyConfig(default="postgres", boot_reason=_REASON_INFRA),
-    "MODULO_SECRETS_BACKEND": _KeyConfig(default="fernet", boot_reason=_REASON_ENV_BOOT),
+    "FARNA_CONTROL_MODULO_DB": _KeyConfig(default="postgres", boot_reason=_REASON_INFRA),
+    "FARNA_CONTROL_MODULO_SECRETS_BACKEND": _KeyConfig(default="fernet", boot_reason=_REASON_ENV_BOOT),
     "CORS_ORIGINS": _KeyConfig(default="http://localhost:5173", boot_reason=_REASON_STARTUP),
     "CORS_MAX_AGE": _KeyConfig(default="600", boot_reason=_REASON_STARTUP),
-    "MODULO_USERS": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    "MODULO_ADMIN_PASSWORD": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    "MODULO_PUBLIC_URL": _KeyConfig(
+    "FARNA_CONTROL_MODULO_USERS": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_ADMIN_PASSWORD": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_PUBLIC_URL": _KeyConfig(
         default="http://localhost:8000",
         hot_reloadable=True,
         consumers=("farna.core.runtime_config.key_bridge:get_public_url",),
     ),
-    "MODULO_LICENSE_KEY": _KeyConfig(default="", boot_reason=_REASON_ENV_BOOT),
-    "MODULO_OIDC_PROVIDERS": _KeyConfig(default="[]", boot_reason=_REASON_STARTUP),
-    "MODULO_SAML_ENABLED": _KeyConfig(default="false", boot_reason=_REASON_STARTUP),
-    "MODULO_SAML_IDP_METADATA_URL": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    "MODULO_SAML_IDP_METADATA_XML": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    "MODULO_SAML_ENTITY_ID": _KeyConfig(default="modulo", boot_reason=_REASON_STARTUP),
-    "MODULO_SAML_SP_PRIVATE_KEY": _KeyConfig(default="", boot_reason=_REASON_SECRET),
-    "MODULO_SAML_SP_X509_CERT": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
-    "MODULO_SSO_DEFAULT_ROLE": _KeyConfig(default="runner", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_LICENSE_KEY": _KeyConfig(default="", boot_reason=_REASON_ENV_BOOT),
+    "FARNA_CONTROL_MODULO_OIDC_PROVIDERS": _KeyConfig(default="[]", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SAML_ENABLED": _KeyConfig(default="false", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SAML_IDP_METADATA_URL": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SAML_IDP_METADATA_XML": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SAML_ENTITY_ID": _KeyConfig(default="modulo", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SAML_SP_PRIVATE_KEY": _KeyConfig(default="", boot_reason=_REASON_SECRET),
+    "FARNA_CONTROL_MODULO_SAML_SP_X509_CERT": _KeyConfig(default="", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_SSO_DEFAULT_ROLE": _KeyConfig(default="runner", boot_reason=_REASON_STARTUP),
     # ── Hot-reloadable: every entry names its store-reading consumer(s) ──────
-    "MODULO_TELEMETRY_ENABLED": _KeyConfig(
+    "FARNA_CONTROL_MODULO_TELEMETRY_ENABLED": _KeyConfig(
         default="false",
         hot_reloadable=True,
         consumers=("farna.core.runtime_config.telemetry_bridge:is_telemetry_enabled",),
     ),
-    "MODULO_OTEL_SERVICE_NAME": _KeyConfig(
+    "FARNA_CONTROL_MODULO_OTEL_SERVICE_NAME": _KeyConfig(
         default="modulo",
-        boot_reason=(
-            "applied when the OTel pipeline is configured at startup; "
-            "restart (or re-run the telemetry toggle) to re-apply"
-        ),
+        boot_reason=("applied when the OTel pipeline is configured at startup; restart (or re-run the telemetry toggle) to re-apply"),
     ),
-    "MODULO_PLUGIN_DISCOVERY": _KeyConfig(default="true", boot_reason=_REASON_STARTUP),
-    "MODULO_LOG_LEVEL": _KeyConfig(
+    "FARNA_CONTROL_MODULO_PLUGIN_DISCOVERY": _KeyConfig(default="true", boot_reason=_REASON_STARTUP),
+    "FARNA_CONTROL_MODULO_LOG_LEVEL": _KeyConfig(
         default="INFO",
         hot_reloadable=True,
         consumers=("farna.core.runtime_config.key_bridge:apply_log_level",),
     ),
-    "MODULO_MAX_LOCAL_CONCURRENCY": _KeyConfig(
+    "FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY": _KeyConfig(
         default="2",
         hot_reloadable=True,
         consumers=(
@@ -92,11 +89,11 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     # Bridged with BOTH read sites moved together (FAR-1159): the
     # provider-registration gate and the node-runner enforcement check
     # resolve through key_bridge.get_e2b_api_key so they cannot disagree.
-    "MODULO_E2B_API_KEY": _KeyConfig(
+    "FARNA_CONTROL_MODULO_E2B_API_KEY": _KeyConfig(
         hot_reloadable=True,
         consumers=("farna.core.runtime_config.key_bridge:get_e2b_api_key",),
     ),
-    "MODULO_RATELIMIT_BYPASS_TOKEN": _KeyConfig(
+    "FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": _KeyConfig(
         default="",
         hot_reloadable=True,
         consumers=(
@@ -117,12 +114,12 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "AWS_ACCESS_KEY_ID": _KeyConfig(default="", boot_reason=_REASON_SECRET),
     "AWS_SECRET_ACCESS_KEY": _KeyConfig(default="", boot_reason=_REASON_SECRET),
     "AWS_REGION": _KeyConfig(default="us-east-1", boot_reason=_REASON_ENV_BOOT),
-    "MODULO_SCIM_TOKEN": _KeyConfig(
+    "FARNA_CONTROL_MODULO_SCIM_TOKEN": _KeyConfig(
         default="",
         hot_reloadable=True,
         consumers=("farna.auth.scim_auth:get_scim_principal",),
     ),
-    "MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(
+    "FARNA_CONTROL_MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(
         default="",
         hot_reloadable=True,
         consumers=("farna.auth.scim_auth:get_scim_principal",),

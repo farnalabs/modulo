@@ -442,14 +442,14 @@ async def test_apply_sandbox_policy_multi_host_helper_reachable() -> None:
         git_credentials="scoped",
         egress_policy="default",
         egress_allowlist=None,
-        allowed_hosts={"github.com": "MODULO_GIT_CRED_0", "gitlab.com": "MODULO_GIT_CRED_1"},
+        allowed_hosts={"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0", "gitlab.com": "FARNA_CONTROL_MODULO_GIT_CRED_1"},
     )
     # The installed helper must be the multi-host variant (both host case arms).
     assert "github.com" in sandbox.commands.runs[0]
     assert "gitlab.com" in sandbox.commands.runs[0]
     # Must not be the single-host scoped script (which only ever grants
     # github.com and never references a second host).
-    assert "MODULO_GIT_CRED_1" in sandbox.commands.runs[0]
+    assert "FARNA_CONTROL_MODULO_GIT_CRED_1" in sandbox.commands.runs[0]
 
 
 @pytest.mark.asyncio
@@ -466,7 +466,7 @@ async def test_apply_sandbox_policy_scoped_without_allowed_hosts_is_single_host(
         allowed_hosts=None,
     )
     assert "github.com" in sandbox.commands.runs[0]
-    assert "MODULO_GIT_CRED" not in sandbox.commands.runs[0]
+    assert "FARNA_CONTROL_MODULO_GIT_CRED" not in sandbox.commands.runs[0]
 
 
 @pytest.mark.asyncio
@@ -498,7 +498,7 @@ async def test_apply_sandbox_policy_multi_host_invalid_host_raises() -> None:
             git_credentials="scoped",
             egress_policy="default",
             egress_allowlist=None,
-            allowed_hosts={"bad|host": "MODULO_GIT_CRED_0"},
+            allowed_hosts={"bad|host": "FARNA_CONTROL_MODULO_GIT_CRED_0"},
         )
 
 
@@ -561,9 +561,7 @@ def test_derive_git_credentials_none_false() -> None:
 
 
 def test_derive_egress_selected_scoped() -> None:
-    caps = derive_sandbox_capabilities(
-        {"node_type": "sandbox_agent", "egress_policy": "selected", "egress_allowlist": [{"host": "x", "port": 443}]}
-    )
+    caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "egress_policy": "selected", "egress_allowlist": [{"host": "x", "port": 443}]})
     # selected denies all egress at the boolean level (allow_internet_access=False).
     assert caps["sandbox.egress"] is False
 
@@ -721,9 +719,7 @@ async def test_apply_sandbox_policy_guard_step_stderr_is_mirrored_into_the_log(
 
     class _StderrCommands:
         async def run(self, script: str, *, user: str = "root", timeout: float = 60.0) -> SimpleNamespace:  # noqa: ASYNC109 - matches the e2b SDK signature
-            return SimpleNamespace(
-                stderr="modulo: gh guard: WARNING no gh on PATH; nothing to guard", stdout="", exit_code=0
-            )
+            return SimpleNamespace(stderr="modulo: gh guard: WARNING no gh on PATH; nothing to guard", stdout="", exit_code=0)
 
     class _StderrSandbox:
         commands = _StderrCommands()
@@ -798,11 +794,7 @@ def _fake_gh(bindir: Path, *, fail_next: bool = False) -> Path:
     bindir.mkdir(parents=True, exist_ok=True)
     gh = bindir / "gh"
     gh.write_text(
-        "#!/bin/sh\n"
-        '_d="$(dirname "$0")"\n'
-        'printf \'%s\\n\' "$*" >> "$_d/gh-calls.log"\n'
-        'if [ -f "$_d/gh-fail-arm" ]; then rm -f "$_d/gh-fail-arm"; exit 1; fi\n'
-        "exit 0\n",
+        '#!/bin/sh\n_d="$(dirname "$0")"\nprintf \'%s\\n\' "$*" >> "$_d/gh-calls.log"\nif [ -f "$_d/gh-fail-arm" ]; then rm -f "$_d/gh-fail-arm"; exit 1; fi\nexit 0\n',
         encoding="utf-8",
         newline="\n",
     )
@@ -825,7 +817,7 @@ def _install_guard(bindir: Path, workdir: Path, marker: str, *, pre_spent: bool 
     result = _run_in_sh(body, cwd=workdir)
     assert result.returncode == 0, f"guard install failed: {result.stdout}\n{result.stderr}"
     assert (bindir / "gh.modulo-real").is_file(), "the real gh must be preserved before its path is shadowed"
-    assert "MODULO_GH_GUARD_EOF" not in result.stderr, "install heredoc must terminate cleanly"
+    assert "FARNA_CONTROL_MODULO_GH_GUARD_EOF" not in result.stderr, "install heredoc must terminate cleanly"
 
 
 def _gh(bindir: Path, workdir: Path, command: str) -> subprocess.CompletedProcess[str]:
@@ -1093,9 +1085,7 @@ def test_gh_pr_guard_shim_prints_claim_sentinel_on_a_successful_create(tmp_path:
 
     first = _gh(bindir, tmp_path, "gh pr create --title t")
     assert first.returncode == 0, f"first create must pass through: {first.stdout}\n{first.stderr}"
-    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" in first.stdout, (
-        "a successful create must print the FULL FAR-1315 claim sentinel settle matches"
-    )
+    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" in first.stdout, "a successful create must print the FULL FAR-1315 claim sentinel settle matches"
     # The primary spend signal: a receipt file inside the marker dir, written
     # only on a successful create (survives stdout truncation; not exposed by
     # reading the shim text itself).
@@ -1104,9 +1094,7 @@ def test_gh_pr_guard_shim_prints_claim_sentinel_on_a_successful_create(tmp_path:
 
     second = _gh(bindir, tmp_path, "gh pr create --title t2")
     assert second.returncode != 0, "the second create must be refused"
-    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" not in second.stdout, (
-        "a refused create must never print the claim sentinel"
-    )
+    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" not in second.stdout, "a refused create must never print the claim sentinel"
     _run_in_sh(f"rm -rf '{marker}' '{receipt}'\n", cwd=tmp_path)
 
 
@@ -1343,10 +1331,7 @@ def test_settle_ignores_a_sentinel_when_the_harvest_confirms_no_receipt() -> Non
     scope = f"pytest-{uuid.uuid4().hex}"
     assert acquire_run_pr_guard(scope, "node-1") == "acquired"
     shim_read = f"noise {_GH_PR_GUARD_CLAIM_SENTINEL} more noise"  # what reading the shim yields
-    assert (
-        settle_run_pr_guard(scope, "node-1", shim_read, claim_receipt=False, guard_install_status="installed")
-        == "released"
-    )
+    assert settle_run_pr_guard(scope, "node-1", shim_read, claim_receipt=False, guard_install_status="installed") == "released"
     # NOT spent: a later flagged node still gets its chance at the one PR.
     assert acquire_run_pr_guard(scope, "node-2") == "acquired"
 
@@ -1470,12 +1455,8 @@ def test_corroboration_pr_url_regex_is_pinned_to_node_runners_extraction() -> No
     import farna.core.pipeline_engine.node_runner as node_runner
     import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
-    assert sandbox_policy._GH_PR_URL_RE.pattern == node_runner._PR_URL_PATTERN.pattern, (
-        "sandbox_policy's corroboration mirror must stay identical to node_runner's extraction"
-    )
-    assert sandbox_policy._GH_PR_URL_RE.flags == node_runner._PR_URL_PATTERN.flags, (
-        "a flag change (e.g. IGNORECASE) on one copy only would also desynchronise matching"
-    )
+    assert sandbox_policy._GH_PR_URL_RE.pattern == node_runner._PR_URL_PATTERN.pattern, "sandbox_policy's corroboration mirror must stay identical to node_runner's extraction"
+    assert sandbox_policy._GH_PR_URL_RE.flags == node_runner._PR_URL_PATTERN.flags, "a flag change (e.g. IGNORECASE) on one copy only would also desynchronise matching"
 
 
 def test_gh_pr_guard_marker_and_receipt_paths_agree_for_non_canonical_run_ids() -> None:
@@ -1546,10 +1527,10 @@ async def test_harvest_gh_pr_claim_via_exec_parses_the_probe_reply() -> None:
 
     async def _present(command: list[str]) -> SimpleNamespace:
         assert command[:2] == ["sh", "-c"]
-        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
+        return SimpleNamespace(exit_code=0, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
 
     async def _absent(command: list[str]) -> SimpleNamespace:
-        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+        return SimpleNamespace(exit_code=0, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
 
     async def _silent(command: list[str]) -> SimpleNamespace:
         return SimpleNamespace(exit_code=0, stdout="", stderr="")
@@ -1558,7 +1539,7 @@ async def test_harvest_gh_pr_claim_via_exec_parses_the_probe_reply() -> None:
         raise RuntimeError("exec transport down")
 
     async def _nonzero(command: list[str]) -> SimpleNamespace:
-        return SimpleNamespace(exit_code=1, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="sh: boom")
+        return SimpleNamespace(exit_code=1, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT", stderr="sh: boom")
 
     assert await harvest_gh_pr_claim_via_exec(_present, run_scope=scope) is True
     assert await harvest_gh_pr_claim_via_exec(_absent, run_scope=scope) is False
@@ -1570,7 +1551,7 @@ async def test_harvest_gh_pr_claim_via_exec_parses_the_probe_reply() -> None:
 
     async def _capture(command: list[str]) -> SimpleNamespace:
         captured.append(command[-1])
-        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+        return SimpleNamespace(exit_code=0, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
 
     await harvest_gh_pr_claim_via_exec(_capture, run_scope=scope)
     assert gh_pr_claim_receipt_path(scope) in captured[0]
@@ -1682,10 +1663,10 @@ async def test_harvest_bounded_returns_the_probe_result() -> None:
     scope = str(uuid.uuid4())
 
     async def _present(command: list[str]) -> SimpleNamespace:
-        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
+        return SimpleNamespace(exit_code=0, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
 
     async def _absent(command: list[str]) -> SimpleNamespace:
-        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+        return SimpleNamespace(exit_code=0, stdout="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
 
     async def _boom(command: list[str]) -> SimpleNamespace:
         raise RuntimeError("exec transport down")
@@ -1849,9 +1830,7 @@ def test_is_valid_delivered_pr_url_is_pinned_to_the_classifier_spec(url: str) ->
     import farna.core.pipeline_engine.classify as classify
     import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
-    assert sandbox_policy._is_valid_delivered_pr_url(url) is classify._is_valid_pr_url(url), (
-        f"the delivered-pr_url mirror must agree with the classifier spec on {url!r}"
-    )
+    assert sandbox_policy._is_valid_delivered_pr_url(url) is classify._is_valid_pr_url(url), f"the delivered-pr_url mirror must agree with the classifier spec on {url!r}"
 
 
 def test_pr_url_corroboration_skips_empty_streams_and_non_matching_urls() -> None:

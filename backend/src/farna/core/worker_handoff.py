@@ -108,20 +108,13 @@ WORKER_LOST_ERROR_CODE = "harness.worker_lost"
 #: Synthetic error detail stamped on every handed-back run: names the shutdown
 #: and the handback so the operator reads the truth, not a dispatch-path
 #: generic.
-WORKER_LOST_DETAIL = (
-    "Worker executing this run was shut down (deploy or restart); the claim was "
-    "released and the run handed back for re-dispatch (FAR-1627)."
-)
+WORKER_LOST_DETAIL = "Worker executing this run was shut down (deploy or restart); the claim was released and the run handed back for re-dispatch (FAR-1627)."
 
 #: Detail stamped on a run the handback TERMINAL-FAILS instead of re-queuing
 #: (the requeue gate refused a safe re-run). Same truthful worker-loss prefix,
 #: plus the machine-checked reason — the operator learns both WHAT happened
 #: and WHY it was not retried, from the row alone.
-WORKER_LOST_NOT_REQUEUED_DETAIL = (
-    "Worker executing this run was shut down (deploy or restart); the run was "
-    "terminal-failed instead of handed back for re-dispatch because a re-run is "
-    "not safe (FAR-1627). Reason: "
-)
+WORKER_LOST_NOT_REQUEUED_DETAIL = "Worker executing this run was shut down (deploy or restart); the run was terminal-failed instead of handed back for re-dispatch because a re-run is not safe (FAR-1627). Reason: "
 
 # RLS set_config helper — same contract as the periodic sweeps (the per-org
 # statement runs inside set_config('app.organisation_id', ...)).
@@ -336,9 +329,7 @@ async def _load_handback_row(
     from farna.db.models.pipeline_snapshot import PipelineSnapshot
     from farna.db.models.run import Run
 
-    observed_activity = observed_activity_expr(run_id_column=Run.id, organisation_id_column=org_id).label(
-        "observed_activity"
-    )
+    observed_activity = observed_activity_expr(run_id_column=Run.id, organisation_id_column=org_id).label("observed_activity")
 
     stmt = (
         select(
@@ -528,8 +519,7 @@ async def _handback_one_entry(
         )
         return 1, 0, None
     _log.info(
-        "worker_handoff.skipped run=%s org=%s "
-        "(fenced out: fate already landed, claim rotated, or cancellation requested)",
+        "worker_handoff.skipped run=%s org=%s (fenced out: fate already landed, claim rotated, or cancellation requested)",
         entry.run_id,
         org_id,
     )
@@ -580,10 +570,7 @@ async def _handback_org(
             # heartbeat-TTL sweeps remain the backstop. WARNING, skip,
             # continue with the remaining orgs.
             _log.warning(
-                "worker_handoff.org_lock_timeout org=%s entries=%d "
-                "(SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — "
-                "org transaction rolled back with NO runs released; they fall back to the "
-                "heartbeat-TTL sweeps",
+                "worker_handoff.org_lock_timeout org=%s entries=%d (SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — org transaction rolled back with NO runs released; they fall back to the heartbeat-TTL sweeps",
                 org_id,
                 len(org_entries),
                 exc_info=True,
@@ -660,16 +647,14 @@ async def _terminalise_entry(
         raise
     except Exception:
         _log.exception(
-            "worker_handoff.terminal_failed_write_error run=%s org=%s "
-            "(stays running; falls back to the heartbeat-TTL sweeps)",
+            "worker_handoff.terminal_failed_write_error run=%s org=%s (stays running; falls back to the heartbeat-TTL sweeps)",
             entry.run_id,
             entry.org_id,
         )
         return 0, 1
     if ok:
         _log.warning(
-            "worker_handoff.terminalised run=%s org=%s reason=%s "
-            "(worker shutdown mid-run; re-run not safe, failed in place with %s)",
+            "worker_handoff.terminalised run=%s org=%s reason=%s (worker shutdown mid-run; re-run not safe, failed in place with %s)",
             entry.run_id,
             entry.org_id,
             reason,
@@ -689,8 +674,7 @@ async def _terminalise_entry(
         )
         return 1, 0
     _log.info(
-        "worker_handoff.terminal_skipped run=%s org=%s "
-        "(fenced out: fate already landed, claim rotated, or cancellation requested)",
+        "worker_handoff.terminal_skipped run=%s org=%s (fenced out: fate already landed, claim rotated, or cancellation requested)",
         entry.run_id,
         entry.org_id,
     )
@@ -767,9 +751,7 @@ async def handback_inflight_runs(
     unobserved = len(entries) - len(observed)
     if unobserved:
         _log.warning(
-            "worker_handoff.not_observed entries=%d "
-            "(task never observed SAQ cancellation — predecessor not provably dead; "
-            "runs left to the heartbeat-TTL sweeps)",
+            "worker_handoff.not_observed entries=%d (task never observed SAQ cancellation — predecessor not provably dead; runs left to the heartbeat-TTL sweeps)",
             unobserved,
         )
 
@@ -782,9 +764,7 @@ async def handback_inflight_runs(
     skipped = unobserved
     try:
         for org_id, org_entries in by_org.items():
-            org_handed_back, org_skipped, terminals, handed_back_entries = await _handback_org(
-                async_engine, org_id, org_entries
-            )
+            org_handed_back, org_skipped, terminals, handed_back_entries = await _handback_org(async_engine, org_id, org_entries)
             handed_back += org_handed_back
             skipped += org_skipped
             # The org transaction COMMITTED — close the attempts it ended (the

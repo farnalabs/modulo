@@ -401,9 +401,7 @@ async def create_provider_endpoint(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An SSO provider with this provider ID already exists.",
             ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="An SSO provider with this name already exists."
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An SSO provider with this name already exists.") from exc
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on create: %s", exc, exc_info=True)
         raise HTTPException(
@@ -816,9 +814,7 @@ def _parse_saml_metadata(
             ),
         )
 
-    sso_service = sso_descriptor.find(
-        f"{{{_SAML_MD_NS}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']"
-    )
+    sso_service = sso_descriptor.find(f"{{{_SAML_MD_NS}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']")
     if sso_service is None:
         sso_service = sso_descriptor.find(f"{{{_SAML_MD_NS}}}SingleSignOnService")
     sso_url = ""

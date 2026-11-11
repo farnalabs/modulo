@@ -238,9 +238,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
     if not data.pr_ages:
         return []
     avg_age = sum(data.pr_ages) / len(data.pr_ages)
-    evidence_detail = (
-        f"Average PR/MR age: {avg_age:.1f} days, {data.stale_pr_count}/{len(data.pr_ages)} open for >5 days"
-    )
+    evidence_detail = f"Average PR/MR age: {avg_age:.1f} days, {data.stale_pr_count}/{len(data.pr_ages)} open for >5 days"
     if data.stale_pr_count > 0:
         return [
             Finding(
@@ -248,8 +246,7 @@ def _find_stale_prs(data: _InferenceData) -> list[Finding]:
                 finding=(f"Potential review bottleneck: {data.stale_pr_count} PRs/MRs open for >5 days without merge"),
                 evidence=evidence_detail,
                 confidence="medium",
-                uncertainty="Cannot determine if PRs are waiting for review "
-                "or intentionally long-lived (e.g., draft PRs, WIP)",
+                uncertainty="Cannot determine if PRs are waiting for review or intentionally long-lived (e.g., draft PRs, WIP)",
                 related_connector=_contributing_connector(data, _PULL_RESOURCES),
             )
         ]
@@ -270,20 +267,14 @@ def _find_issue_lifecycle(data: _InferenceData) -> list[Finding]:
     if not data.issue_statuses:
         return []
     status_counts = Counter(data.issue_statuses)
-    transitions = " → ".join(
-        sorted(
-            {st for st in data.issue_statuses if st not in _PLANNING_STATUSES}
-            | {"planning" for st in data.issue_statuses if st in _PLANNING_STATUSES}
-        )
-    )
+    transitions = " → ".join(sorted({st for st in data.issue_statuses if st not in _PLANNING_STATUSES} | {"planning" for st in data.issue_statuses if st in _PLANNING_STATUSES}))
     return [
         Finding(
             category="transition",
             finding=f"Issue lifecycle observed: {transitions}",
             evidence=f"Issue statuses found: {dict(status_counts)}",
             confidence="medium",
-            uncertainty="Cannot infer transition order or speed from a single scan; "
-            "would need status change history or webhook events",
+            uncertainty="Cannot infer transition order or speed from a single scan; would need status change history or webhook events",
             related_connector=_contributing_connector(data, _ISSUE_RESOURCES),
         )
     ]
@@ -306,13 +297,9 @@ def _find_overview(data: _InferenceData) -> list[Finding]:
             Finding(
                 category="overview",
                 finding=f"SDLC stages detected: {', '.join(stages_found)}",
-                evidence=f"Out of 5 common stages (planning, development, "
-                f"code review, ci/cd, deployment), {len(stages_found)} "
-                f"{'was' if len(stages_found) == 1 else 'were'} detected",
+                evidence=f"Out of 5 common stages (planning, development, code review, ci/cd, deployment), {len(stages_found)} {'was' if len(stages_found) == 1 else 'were'} detected",
                 confidence="medium",
-                uncertainty="Deployment stage cannot be assessed "
-                "without deployment tool connector; "
-                "monitoring/incident stages not detectable from sampled data",
+                uncertainty="Deployment stage cannot be assessed without deployment tool connector; monitoring/incident stages not detectable from sampled data",
                 related_connector=_contributing_connector(data, _SDLC_RESOURCES),
             )
         ]

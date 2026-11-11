@@ -44,8 +44,7 @@ def build_platform_capacity_probe(settings: Settings) -> PlatformCapacityProbe |
         return None
     if provider not in _FLY_PROVIDERS:
         _log.warning(
-            "capacity.platform.unknown_provider - DB_CAPACITY_PLATFORM_PROVIDER=%r "
-            "is not a known provider; no platform probe installed",
+            "capacity.platform.unknown_provider - DB_CAPACITY_PLATFORM_PROVIDER=%r is not a known provider; no platform probe installed",
             provider,
         )
         return None

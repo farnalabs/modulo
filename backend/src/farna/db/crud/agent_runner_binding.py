@@ -21,11 +21,7 @@ _log = logging.getLogger(__name__)
 
 
 async def list_bindings_for_agent(session: AsyncSession, agent_id: uuid.UUID) -> list[AgentRunnerBinding]:
-    result = await session.execute(
-        select(AgentRunnerBinding)
-        .where(AgentRunnerBinding.agent_id == agent_id)
-        .order_by(AgentRunnerBinding.created_at.asc())
-    )
+    result = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == agent_id).order_by(AgentRunnerBinding.created_at.asc()))
     return list(result.scalars())
 
 

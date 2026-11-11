@@ -73,9 +73,7 @@ _CODE_SET_FAILED = "admin_org_feature_flags.set_failed"
 _CODE_CLEAR_FAILED = "admin_org_feature_flags.clear_failed"
 
 _MSG_UNKNOWN_FLAG = "Unknown feature flag: {flag_name}"
-_MSG_NOT_ORG_SETTABLE = (
-    "Feature flag '{flag_name}' is not settable by an organisation administrator; a system administrator must set it."
-)
+_MSG_NOT_ORG_SETTABLE = "Feature flag '{flag_name}' is not settable by an organisation administrator; a system administrator must set it."
 
 
 class OrgFeatureFlagItem(BaseModel):

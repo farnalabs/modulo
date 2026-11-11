@@ -31,9 +31,7 @@ __all__ = [
 ]
 
 
-async def _duplicate_exists(
-    session: AsyncSession, org_id: uuid.UUID, *, name: str, report_key: str | None, _kind: str
-) -> bool:
+async def _duplicate_exists(session: AsyncSession, org_id: uuid.UUID, *, name: str, report_key: str | None, _kind: str) -> bool:
     """Org-scoped duplicate pre-check (409). Explicit parens pin the precedence."""
     row = await session.execute(
         select(CostComponent.id)
@@ -103,18 +101,12 @@ async def create_cost_component(
 
 
 async def list_cost_components(session: AsyncSession) -> list[CostComponent]:
-    result = await session.execute(
-        select(CostComponent)
-        .where(CostComponent.deleted_at.is_(None))
-        .order_by(CostComponent.sort_order, CostComponent.name)
-    )
+    result = await session.execute(select(CostComponent).where(CostComponent.deleted_at.is_(None)).order_by(CostComponent.sort_order, CostComponent.name))
     return list(result.scalars().all())
 
 
 async def get_cost_component(session: AsyncSession, component_id: uuid.UUID) -> CostComponent | None:
-    result = await session.execute(
-        select(CostComponent).where(CostComponent.id == component_id, CostComponent.deleted_at.is_(None))
-    )
+    result = await session.execute(select(CostComponent).where(CostComponent.id == component_id, CostComponent.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
 
@@ -147,28 +139,16 @@ async def update_cost_component(
     new_report_key = updates.get("report_key", component.report_key)
 
     # kind-change guard: the last enabled calculated component cannot change kind.
-    if (
-        new_kind != component.kind
-        and component.kind == CostComponentKind.CALCULATED.value
-        and component.enabled
-        and await _is_last_enabled_calculated(session, component_id)
-    ):
+    if new_kind != component.kind and component.kind == CostComponentKind.CALCULATED.value and component.enabled and await _is_last_enabled_calculated(session, component_id):
         raise ValueError("last_calculated_kind_change")
 
     # disable-of-last-calculated guard.
-    if (
-        updates.get("enabled") is False
-        and component.kind == CostComponentKind.CALCULATED.value
-        and component.enabled
-        and await _is_last_enabled_calculated(session, component_id)
-    ):
+    if updates.get("enabled") is False and component.kind == CostComponentKind.CALCULATED.value and component.enabled and await _is_last_enabled_calculated(session, component_id):
         raise ValueError("last_calculated_disable")
 
     # duplicate check (excludes self: the name/report_key are compared against
     # OTHER active rows).
-    if (new_name != component.name or new_report_key != component.report_key) and await _duplicate_exists(
-        session, component.organisation_id, name=new_name, report_key=new_report_key, _kind=new_kind
-    ):
+    if (new_name != component.name or new_report_key != component.report_key) and await _duplicate_exists(session, component.organisation_id, name=new_name, report_key=new_report_key, _kind=new_kind):
         raise ValueError("duplicate_component")
 
     for key, value in updates.items():
@@ -188,11 +168,7 @@ async def soft_delete_cost_component(
     component = await get_cost_component(session, component_id)
     if component is None:
         return None
-    if (
-        component.kind == CostComponentKind.CALCULATED.value
-        and component.enabled
-        and await _is_last_enabled_calculated(session, component_id)
-    ):
+    if component.kind == CostComponentKind.CALCULATED.value and component.enabled and await _is_last_enabled_calculated(session, component_id):
         raise ValueError("last_calculated_delete")
     component.deleted_at = func.now()
     await session.flush()

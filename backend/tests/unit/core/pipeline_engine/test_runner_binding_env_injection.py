@@ -26,8 +26,8 @@ def test_build_sandbox_envs_injects_runner_bindings_between_profile_and_node():
         runner_bindings={"OPENAI_API_KEY": "binding-key", "ANTHROPIC_API_KEY": "binding-anthropic"},
     )
     # System vars set exactly once.
-    assert env["MODULO_RUN_ID"] == "run-1"
-    assert env["MODULO_PIPELINE_ID"] == "pipe-1"
+    assert env["FARNA_CONTROL_MODULO_RUN_ID"] == "run-1"
+    assert env["FARNA_CONTROL_MODULO_PIPELINE_ID"] == "pipe-1"
     # Node env_vars_extra wins over runner bindings (THE NODE WINS).
     assert env["OPENAI_API_KEY"] == "node-key"
     # Runner bindings present where the node did not override.

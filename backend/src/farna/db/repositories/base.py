@@ -90,9 +90,7 @@ class BaseRepository(ABC):
         result = await session.execute(stmt.offset(offset).limit(page_size))
         items = list(result.scalars().all())
 
-        return PageResult(
-            items=items, total=total, page=page, page_size=page_size, has_more=offset + len(items) < total
-        )
+        return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=offset + len(items) < total)
 
     async def execute(self, session: AsyncSession, stmt: Any) -> Any:
         """Thin wrapper around ``session.execute()``."""

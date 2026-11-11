@@ -134,10 +134,7 @@ async def rotate_key(
     if not settings.modulo_system_database_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Fernet key rotation is unavailable: the modulo_system role is "
-                "not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."
-            ),
+            detail=("Fernet key rotation is unavailable: the modulo_system role is not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."),
         )
 
     # Cross-process atomic guard: Redis SET NX + TTL.  The asyncio.Lock
@@ -368,19 +365,11 @@ async def _run_rotation_background(
         if not settings.modulo_system_database_url:
             _log.error(
                 "rotation.system_role_unprovisioned",
-                extra={
-                    "reason": (
-                        "MODULO_SYSTEM_DATABASE_URL unset — refusing to rotate on the "
-                        "NOBYPASSRLS app role (would silently no-op on RLS-scoped tables)"
-                    )
-                },
+                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL unset — refusing to rotate on the NOBYPASSRLS app role (would silently no-op on RLS-scoped tables)")},
             )
             _last_rotation_result = {
                 "status": "failed",
-                "error": (
-                    "modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); "
-                    "rotation refused to avoid a silent no-op."
-                ),
+                "error": ("modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); rotation refused to avoid a silent no-op."),
             }
             return
 

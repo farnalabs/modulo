@@ -166,10 +166,7 @@ async def run_pre_trigger_guardrail_pass(
     definitions = await _load_guardrail_definitions(session, org_id=org_id, pipeline_id=pipeline_id)
     if not definitions:
         return PreTriggerGuardrailOutcome(payload=dict(raw_payload))
-    any_guarding = any(
-        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
-        for d in definitions
-    )
+    any_guarding = any(not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
     from farna.core.eval_engine import EvalEngine
 
     try:
@@ -198,15 +195,7 @@ async def run_pre_trigger_guardrail_pass(
         )
 
     definitions_by_id = {definition.id: definition for definition in definitions}
-    meaningful_results = [
-        result
-        for result in outcome.results
-        if result.outcome == "error"
-        or (
-            (definition := definitions_by_id.get(result.eval_id)) is not None
-            and _interpret_violation(_resolve_detection(definition)[0], result)
-        )
-    ]
+    meaningful_results = [result for result in outcome.results if result.outcome == "error" or ((definition := definitions_by_id.get(result.eval_id)) is not None and _interpret_violation(_resolve_detection(definition)[0], result))]
     return PreTriggerGuardrailOutcome(
         payload=outcome.payload,
         blocked=outcome.blocked,

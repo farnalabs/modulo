@@ -150,7 +150,7 @@ def test_log_level_filtering() -> None:
 
 def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test per-module log level override via env var."""
-    monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_PIPELINE_ENGINE", "DEBUG")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "DEBUG")
 
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -170,7 +170,7 @@ def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_configure_logging_runs_without_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """configure_logging() wires the root logger for structured JSON output."""
-    monkeypatch.setenv("MODULO_LOG_LEVEL", "INFO")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL", "INFO")
     root_logger = logging.getLogger()
     before_level = root_logger.level
     before_handlers = set(root_logger.handlers)
@@ -255,6 +255,7 @@ class _AsyncCtx:
 
 class TestResolveLogLevel:
     def test_defaults_to_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+<<<<<<< HEAD
         monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
         monkeypatch.delenv("MODULO_LOG_LEVEL_FARNA_CORE_FOO", raising=False)
         assert _resolve_log_level("farna.core.foo") == "INFO"
@@ -272,6 +273,25 @@ class TestResolveLogLevel:
     def test_dotted_module_path_becomes_underscored_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
         monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_API_ROUTES_RUNS", "WARNING")
+=======
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO", raising=False)
+        assert _resolve_log_level("farna.core.foo") == "INFO"
+
+    def test_global_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO", raising=False)
+        assert _resolve_log_level("farna.core.foo") == "DEBUG"
+
+    def test_per_module_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL", "WARNING")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO", "ERROR")
+        assert _resolve_log_level("farna.core.foo") == "ERROR"
+
+    def test_dotted_module_path_becomes_underscored_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL", raising=False)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_API_ROUTES_RUNS", "WARNING")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
         assert _resolve_log_level("farna.api.routes.runs") == "WARNING"
 
 
@@ -512,9 +532,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
             org_id_var.reset(token)
         assert service.ingest.await_args.args[2]["stacktrace"] == "preformatted traceback"
 
-    async def test_invalid_org_id_logs_warning(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_invalid_org_id_logs_warning(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         service = MagicMock()
         service.ingest = AsyncMock()
         session = self._make_session()
@@ -553,9 +571,7 @@ class TestErrorTrackingLogHandlerAsyncEmit:
         service.ingest = AsyncMock()
         session = self._make_session()
         self._patch_deps(monkeypatch, service, session)
-        monkeypatch.setattr(
-            rls_mod, "set_rls_org", AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("db down")))
-        )
+        monkeypatch.setattr(rls_mod, "set_rls_org", AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("db down"))))
         handler = ErrorTrackingLogHandler()
         token = org_id_var.set(self._ORG)
         try:
@@ -592,7 +608,11 @@ class TestErrorTrackingLogHandlerAsyncEmit:
 
 class TestApplyPerModuleLevels:
     def test_sets_level_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+<<<<<<< HEAD
         monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_FOO", "WARNING")
+=======
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO", "WARNING")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
         logger = logging.getLogger("farna.core.foo")
         logger.setLevel(logging.NOTSET)
         try:
@@ -602,7 +622,11 @@ class TestApplyPerModuleLevels:
             logger.setLevel(logging.NOTSET)
 
     def test_unknown_level_falls_back_to_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+<<<<<<< HEAD
         monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_FOO", "BOGUSLEVEL")
+=======
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO", "BOGUSLEVEL")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
         logger = logging.getLogger("farna.core.foo")
         logger.setLevel(logging.NOTSET)
         try:
@@ -612,8 +636,13 @@ class TestApplyPerModuleLevels:
             logger.setLevel(logging.NOTSET)
 
     def test_duplicate_module_paths_deduped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+<<<<<<< HEAD
         monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_FOO_BAR", "ERROR")
         monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_FOO.BAR", "DEBUG")
+=======
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_FOO_BAR", "ERROR")
+        monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_FOO.BAR", "DEBUG")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
         logger = logging.getLogger("farna.core.foo.bar")
         logger.setLevel(logging.NOTSET)
         try:
@@ -627,22 +656,33 @@ def test_resolve_log_level_per_module_override_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A per-module MODULO_LOG_LEVEL_<MODULE> override beats the global default."""
+<<<<<<< HEAD
     monkeypatch.setenv("MODULO_LOG_LEVEL", "ERROR")
     monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_PIPELINE_ENGINE", "WARNING")
+=======
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL", "ERROR")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
     assert _resolve_log_level("farna.core.pipeline_engine") == "WARNING"
 
 
 def test_resolve_log_level_falls_back_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without a per-module override the global MODULO_LOG_LEVEL applies."""
-    monkeypatch.setenv("MODULO_LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
     assert _resolve_log_level("farna.core.unrelated") == "DEBUG"
 
 
 def test_resolve_log_level_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
     """With neither env var set the level defaults to INFO."""
+<<<<<<< HEAD
     monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
     monkeypatch.delenv("MODULO_LOG_LEVEL_FARNA_UNKNOWN", raising=False)
     assert _resolve_log_level("farna.unknown") == "INFO"
+=======
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_UNKNOWN", raising=False)
+    assert _resolve_log_level("modulo.unknown") == "INFO"
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
 
 
 def test_log_async_emit_error_reports_exception(caplog: pytest.LogCaptureFixture) -> None:
@@ -667,7 +707,11 @@ def test_apply_per_module_levels_sets_logger_level(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MODULO_LOG_LEVEL_<MODULE> env vars map to the matching logger's level."""
+<<<<<<< HEAD
     monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_PIPELINE_ENGINE", "WARNING")
+=======
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
     _apply_per_module_levels()
     assert logging.getLogger("farna.core.pipeline.engine").level == logging.WARNING
     logging.getLogger("farna.core.pipeline.engine").setLevel(logging.NOTSET)
@@ -677,7 +721,11 @@ def test_apply_per_module_levels_invalid_level_falls_back_to_info(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unrecognised level string falls back to INFO rather than raising."""
+<<<<<<< HEAD
     monkeypatch.setenv("MODULO_LOG_LEVEL_FARNA_CORE_PIPELINE_ENGINE", "VERBOSE")
+=======
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "VERBOSE")
+>>>>>>> 7d994b44b (feat(rebrand): Stage 3 - rename MODULO_ env vars to FARNA_CONTROL_)
     _apply_per_module_levels()
     assert logging.getLogger("farna.core.pipeline.engine").level == logging.INFO
     logging.getLogger("farna.core.pipeline.engine").setLevel(logging.NOTSET)
@@ -687,7 +735,7 @@ def test_apply_per_module_levels_ignores_dup_module_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Duplicate module paths (case/underscore variants) are applied only once."""
-    monkeypatch.setenv("MODULO_LOG_LEVEL_A_B", "WARNING")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LOG_LEVEL_A_B", "WARNING")
     monkeypatch.setenv("MODULO_LOG_LEVEL_a.b", "WARNING")
     _apply_per_module_levels()
     assert logging.getLogger("a.b").level == logging.WARNING

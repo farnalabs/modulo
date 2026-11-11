@@ -102,9 +102,7 @@ REASON_ABSENT = "no reasoning provided"
 #: inside quotes) and a port-addressed lookup like ``state["<uuid>"]``. Only
 #: UUID-shaped ids are extracted (live node ids are UUIDs; bare word keys are
 #: ambiguous against the merged state dict).
-_NODE_ID_IN_CONDITION_RE = re.compile(
-    r"""['"\[]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*['"\]]"""
-)
+_NODE_ID_IN_CONDITION_RE = re.compile(r"""['"\[]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*['"\]]""")
 
 #: Trigger values recorded in the bundle. ``"unknown"`` (FAR-688) marks a gate
 #: whose config (and snapshot node type) cannot be resolved — the trigger is

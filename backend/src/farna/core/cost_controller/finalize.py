@@ -641,11 +641,7 @@ def _rejected_zero_nodes(enriched: dict[str, dict[str, Any]]) -> set[str]:
     mislabel a sub-floor refusal as a rejected $0.00 (and vice versa —
     ``_rejection_reasons`` carries both classes).
     """
-    return {
-        node_id
-        for node_id, reason in _rejection_reasons(enriched).items()
-        if reason == MISSING_REASON_ZERO_REPORT_UNPROVEN
-    }
+    return {node_id for node_id, reason in _rejection_reasons(enriched).items() if reason == MISSING_REASON_ZERO_REPORT_UNPROVEN}
 
 
 def _fold_stored_clamped(node_dict: dict[str, Any]) -> None:
@@ -762,9 +758,7 @@ def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | Non
 #: producer -> ``model_tokens_*`` -> ``reported_*`` -> counter chain cannot
 #: drift between layers; reading order is (src, dst) — SOURCE first,
 #: DESTINATION second — matching node_runner's ``_TOKEN_USAGE_FIELD_MAP``.
-_REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
-    (binding.node_field, binding.union_key) for binding in REPORTED_TOKEN_CHAIN
-)
+_REPORTED_TOKEN_FIELD_MAP: tuple[tuple[str, str], ...] = tuple((binding.node_field, binding.union_key) for binding in REPORTED_TOKEN_CHAIN)
 
 
 #: FAR-1780: envelope provenance datum -> the union keys each datum folds
@@ -969,9 +963,7 @@ def _enrich_node_fields(
         node_dict["wall_clock_time_ms"] = wall_ms
 
     node_dict["sandbox_by_map"] = map_type == NODE_TYPE_SANDBOX_AGENT
-    node_dict["is_sandbox_for_wallclock"] = (map_type == NODE_TYPE_SANDBOX_AGENT) or (
-        map_type is None and wall_ms is not None
-    )
+    node_dict["is_sandbox_for_wallclock"] = (map_type == NODE_TYPE_SANDBOX_AGENT) or (map_type is None and wall_ms is not None)
 
     _fold_model_cost(node_dict, output_obj)
     _fold_token_usage(node_dict, output_obj)
@@ -1641,9 +1633,7 @@ async def _apply_spend_ceiling_gate(
     # The org row is read WITHOUT a row lock: it is not the ceiling source, it
     # only establishes that the org still exists (a deleted org's cost-state row
     # is gone via the FK CASCADE, so a missing org means no gate and no accrual).
-    org_row = (
-        await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
-    ).scalar_one_or_none()
+    org_row = (await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))).scalar_one_or_none()
     if org_row is None:
         return False, 0
     state = await get_org_cost_state(session, org_id)
@@ -1737,9 +1727,7 @@ async def _ledger_block(
 
     # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
     # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
-    skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(
-        session, locked, org_id=org_id, total=total, run_id=run_id, metric_sink=metric_sink
-    )
+    skip_ledger, accrual_cents = await _apply_spend_ceiling_gate(session, locked, org_id=org_id, total=total, run_id=run_id, metric_sink=metric_sink)
     if skip_ledger:
         return
 
@@ -1778,9 +1766,7 @@ async def _ledger_block(
         ok, reason = False, "whole_tx_abort"
 
     if _is_limit_refused(ok, reason):
-        await _handle_limit_refused(
-            session, locked, run_id, owner_team_id, org_id, reason, total, metric_sink=metric_sink
-        )
+        await _handle_limit_refused(session, locked, run_id, owner_team_id, org_id, reason, total, metric_sink=metric_sink)
         return
 
     if not ok:
@@ -1831,9 +1817,7 @@ async def _handle_limit_refused(
     try:
         from farna.db.soft_delete import include_soft_deleted
 
-        org_row = (
-            await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
-        ).scalar_one_or_none()
+        org_row = (await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))).scalar_one_or_none()
         if org_row is None:
             return
         day_spend = (
@@ -2325,11 +2309,7 @@ async def _advance_journeys_on_terminal(
             # unconfirmed / storage-only agent emission must still never
             # advance.
             confirmed_ids = {id(entry) for entry in resolution.confirmed}
-            mint_or_advance = [
-                entry
-                for entry in resolution.effective
-                if entry.get("source") in ("caller", "derived") or id(entry) in confirmed_ids
-            ]
+            mint_or_advance = [entry for entry in resolution.effective if entry.get("source") in ("caller", "derived") or id(entry) in confirmed_ids]
             advanced = await advance_journeys(
                 session,
                 run.organisation_id,
@@ -2453,9 +2433,7 @@ async def _fallback_finalize(
     # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
     # inside the never-fail fallback envelope: an agent-budget breach still
     # terminalizes ``budget_exceeded`` even when the component build failed.
-    status, error_code, error_detail = await _apply_agent_budget_override(
-        session, run, merged.usage, is_terminal, status, error_code, error_detail
-    )
+    status, error_code, error_detail = await _apply_agent_budget_override(session, run, merged.usage, is_terminal, status, error_code, error_detail)
     fallback_total = await _fallback_write(
         session,
         run_id,
@@ -2657,9 +2635,7 @@ async def finalize_cost(
         # and BEFORE the status write, so the ``budget_exceeded`` status +
         # error message land in the SAME ``update_run_status`` call. Cancelled
         # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
-        status, error_code, error_detail = await _apply_agent_budget_override(
-            session, run, built.enriched, is_terminal, status, error_code, error_detail
-        )
+        status, error_code, error_detail = await _apply_agent_budget_override(session, run, built.enriched, is_terminal, status, error_code, error_detail)
         # FAR-1033: fold agent-reported tokens into the canonical per-node
         # counters for nodes the server never measured (sandbox agents). Runs
         # AFTER the cost build AND the FAR-104 budget enforcement, so the
@@ -3693,14 +3669,8 @@ async def _finalize_failed_run(
         # caller names the killed node (the deadline watchdog), the marker must
         # belong to THAT node; an age-gate/cancel caller leaves it None because
         # its duration is the run's own liveness window (run-scoped proof).
-        sandbox_evidence = (
-            _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id) or dispatch_marker_evidence
-        )
-        has_derived_duration = (
-            derived_sandbox_wall_hours is not None
-            and math.isfinite(derived_sandbox_wall_hours)
-            and derived_sandbox_wall_hours > 0
-        )
+        sandbox_evidence = _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id) or dispatch_marker_evidence
+        has_derived_duration = derived_sandbox_wall_hours is not None and math.isfinite(derived_sandbox_wall_hours) and derived_sandbox_wall_hours > 0
         if has_derived_duration or salvage.has_evidence:
             await _write_derived_deadline_terminal(
                 session,

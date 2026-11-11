@@ -47,7 +47,7 @@ from farna.api.main import app
 from farna.auth.jwt import create_access_token
 from farna.settings import Settings, get_settings
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -156,9 +156,7 @@ async def _persisted_run_ids(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> 
         return {uuid.UUID(str(row)) for row in rows}
 
 
-_SNAPSHOT_VERSIONS_SQL = text(
-    "SELECT snapshot_version FROM pipeline_snapshots WHERE pipeline_id = :pid ORDER BY snapshot_version"
-)
+_SNAPSHOT_VERSIONS_SQL = text("SELECT snapshot_version FROM pipeline_snapshots WHERE pipeline_id = :pid ORDER BY snapshot_version")
 
 
 async def _persisted_snapshot_versions(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> list[int]:
@@ -272,10 +270,7 @@ async def test_concurrent_route_triggers_all_succeed_with_distinct_runs_and_vers
 
         # (1) Every caller accepted — no 4xx/5xx, no lost run.
         statuses = [resp.status_code for resp in responses]
-        assert statuses == [202] * _CONCURRENT_TRIGGERS, (
-            "concurrent POST /api/v1/runs must ALL be accepted; got "
-            f"{statuses} with bodies {[resp.text for resp in responses]}"
-        )
+        assert statuses == [202] * _CONCURRENT_TRIGGERS, f"concurrent POST /api/v1/runs must ALL be accepted; got {statuses} with bodies {[resp.text for resp in responses]}"
 
         # (2) N distinct run ids returned.
         run_ids = [resp.json()["run_id"] for resp in responses]
@@ -284,9 +279,7 @@ async def test_concurrent_route_triggers_all_succeed_with_distinct_runs_and_vers
 
         # (3) N persisted snapshots with contiguous versions 1..N.
         versions = await _persisted_snapshot_versions(db_engine, pipeline_id)
-        assert versions == list(range(1, _CONCURRENT_TRIGGERS + 1)), (
-            f"snapshot versions must be distinct and contiguous from 1; got {versions}"
-        )
+        assert versions == list(range(1, _CONCURRENT_TRIGGERS + 1)), f"snapshot versions must be distinct and contiguous from 1; got {versions}"
 
         # (4) Every returned run id is persisted and belongs to one of the
         # burst's snapshots (a phantom 202 or a mis-linked run would fail here).

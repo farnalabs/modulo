@@ -37,13 +37,7 @@ async def list_templates(
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     offset = (page - 1) * page_size
-    items_stmt = (
-        select(LibraryPrimitive)
-        .where(*conditions)
-        .order_by(LibraryPrimitive.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    items_stmt = select(LibraryPrimitive).where(*conditions).order_by(LibraryPrimitive.created_at.desc()).offset(offset).limit(page_size)
     items = list((await session.execute(items_stmt)).scalars())
 
     has_more = (offset + len(items)) < total

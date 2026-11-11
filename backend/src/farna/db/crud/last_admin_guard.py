@@ -95,9 +95,7 @@ async def assert_not_last_admin(
     if dialect == "postgresql":
         await _acquire_org_lock(session, org_id)
 
-    target_row: Any = await session.execute(
-        select(Account.active, Account.is_break_glass).where(Account.id == target_account_id)
-    )
+    target_row: Any = await session.execute(select(Account.active, Account.is_break_glass).where(Account.id == target_account_id))
     target = target_row.first()
     target_active_now = bool(target[0]) if target is not None else False
     target_is_break_glass = bool(target[1]) if target is not None else False

@@ -204,9 +204,7 @@ async def list_composite_templates_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def create_composite_template_endpoint(
@@ -354,9 +352,7 @@ async def _persist_composite_update(
 
 @router.patch(
     "/{template_id}",
-    dependencies=[
-        Depends(audited("composite_template_updated", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_updated", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def update_composite_template_endpoint(
@@ -402,9 +398,7 @@ async def update_composite_template_endpoint(
 @router.delete(
     "/{template_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(audited("composite_template_deleted", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_deleted", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def delete_composite_template_endpoint(
@@ -443,9 +437,7 @@ async def delete_composite_template_endpoint(
 
 @router.post(
     "/{template_id}/restore",
-    dependencies=[
-        Depends(audited("composite_template_restored", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_restored", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def restore_composite_template_endpoint(
@@ -540,9 +532,7 @@ async def get_composite_editor_endpoint(
 
 @router.put(
     "/{template_id}/editor",
-    dependencies=[
-        Depends(audited("composite_template_editor_saved", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_editor_saved", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT)
 async def save_composite_editor_endpoint(
@@ -564,9 +554,7 @@ async def save_composite_editor_endpoint(
             # the pipeline graph write paths); a sentinel the resolve cannot map
             # to a stored value is refused 422 instead of silently dropped.
             raw_nodes = graph.get("nodes")
-            stored_nodes: list[dict[str, Any]] = (
-                [n for n in raw_nodes if isinstance(n, dict)] if isinstance(raw_nodes, list) else []
-            )
+            stored_nodes: list[dict[str, Any]] = [n for n in raw_nodes if isinstance(n, dict)] if isinstance(raw_nodes, list) else []
             resolved_nodes = resolve_and_reject_mask_sentinels(list(req.nodes), stored_nodes)
             graph["nodes"] = resolved_nodes
             graph["edges"] = req.edges
@@ -718,9 +706,7 @@ class PublishResponse(BaseModel):
 
 @router.post(
     "/{template_id}/publish",
-    dependencies=[
-        Depends(audited("composite_template_published", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_published", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PUBLISH_COMPOSITE_ENDPOINT)
 async def publish_composite_endpoint(

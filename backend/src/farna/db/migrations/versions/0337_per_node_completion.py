@@ -80,16 +80,7 @@ def _relation_visible(conn: sa.Connection) -> bool:
 
 def _migration_transaction_locks_table() -> bool:
     """Return whether this transaction already holds a lock on the table."""
-    count = (
-        op.get_bind()
-        .execute(
-            sa.text(
-                "SELECT count(*) FROM pg_locks "
-                "WHERE pid = pg_backend_pid() AND relation = to_regclass('public.run_node_outputs')"
-            )
-        )
-        .scalar()
-    )
+    count = op.get_bind().execute(sa.text("SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = to_regclass('public.run_node_outputs')")).scalar()
     return bool(count)
 
 

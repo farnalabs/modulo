@@ -302,7 +302,7 @@ class TestResolveSchemaValidatorMode:
                 AsyncMock(return_value=_Org({"schema_validator_mode": "strict"})),
             )
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
 
     async def test_system_config_wins_over_env_var(self) -> None:
@@ -314,7 +314,7 @@ class TestResolveSchemaValidatorMode:
                 "farna.db.settings_resolver.get_config",
                 AsyncMock(return_value=MagicMock(value="strict")),
             )
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
 
     async def test_env_var_applies_when_no_runtime_setting(self) -> None:
@@ -324,7 +324,7 @@ class TestResolveSchemaValidatorMode:
         with pytest.MonkeyPatch().context() as m:
             m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "strict"
 
     async def test_defaults_to_lenient_when_nothing_set(self) -> None:
@@ -333,7 +333,7 @@ class TestResolveSchemaValidatorMode:
         with pytest.MonkeyPatch().context() as m:
             m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.delenv("MODULO_SCHEMA_VALIDATOR_MODE", raising=False)
+            m.delenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", raising=False)
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
 
     async def test_invalid_runtime_value_coerces_to_lenient(self) -> None:
@@ -353,7 +353,7 @@ class TestResolveSchemaValidatorMode:
         with pytest.MonkeyPatch().context() as m:
             m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({})))
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "BOGUS")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "BOGUS")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"
 
     async def test_none_org_id_resolves_from_env(self) -> None:
@@ -363,7 +363,7 @@ class TestResolveSchemaValidatorMode:
         with pytest.MonkeyPatch().context() as m:
             m.setattr("farna.db.settings_resolver.get_organisation", AsyncMock(return_value=None))
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, None) == "strict"
 
     async def test_env_var_does_not_override_runtime(self) -> None:
@@ -375,5 +375,5 @@ class TestResolveSchemaValidatorMode:
                 AsyncMock(return_value=_Org({"schema_validator_mode": "lenient"})),
             )
             m.setattr("farna.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            m.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+            m.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "strict")
             assert await resolve_schema_validator_mode(session, _ORG_ID) == "lenient"

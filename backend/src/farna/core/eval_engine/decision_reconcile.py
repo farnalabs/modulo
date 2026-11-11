@@ -131,12 +131,7 @@ async def reconcile_decision_records(
 
     # 1a. Duplicate event rows — a non-NULL eval_result_id on >1 row.
     dup_stmt = _scoped_decision_query(
-        select(PolicyGateDecision.eval_result_id, func.count().label("row_count"))
-        .where(PolicyGateDecision.eval_result_id.is_not(None))
-        .group_by(PolicyGateDecision.eval_result_id)
-        .having(func.count() > 1)
-        .order_by(func.count().desc())
-        .limit(sample_limit),
+        select(PolicyGateDecision.eval_result_id, func.count().label("row_count")).where(PolicyGateDecision.eval_result_id.is_not(None)).group_by(PolicyGateDecision.eval_result_id).having(func.count() > 1).order_by(func.count().desc()).limit(sample_limit),
         org_id,
     )
     for eval_result_id, row_count in (await session.execute(dup_stmt)).all():
@@ -204,10 +199,7 @@ async def reconcile_decision_records(
     # 3a. Orphaned evaluation result — eval_result_id with no EvalResult row.
     eval_result_exists = select(EvalResult.id).where(EvalResult.id == PolicyGateDecision.eval_result_id).exists()
     orphan_er_stmt = _scoped_decision_query(
-        select(PolicyGateDecision.id, PolicyGateDecision.eval_result_id)
-        .where(PolicyGateDecision.eval_result_id.is_not(None), ~eval_result_exists)
-        .order_by(PolicyGateDecision.id)
-        .limit(sample_limit),
+        select(PolicyGateDecision.id, PolicyGateDecision.eval_result_id).where(PolicyGateDecision.eval_result_id.is_not(None), ~eval_result_exists).order_by(PolicyGateDecision.id).limit(sample_limit),
         org_id,
     )
     for decision_id, eval_result_id in (await session.execute(orphan_er_stmt)).all():
@@ -221,10 +213,7 @@ async def reconcile_decision_records(
     # 3b. Orphaned run — run_id with no Run row.
     run_exists = select(Run.id).where(Run.id == PolicyGateDecision.run_id).exists()
     orphan_run_stmt = _scoped_decision_query(
-        select(PolicyGateDecision.id, PolicyGateDecision.run_id)
-        .where(PolicyGateDecision.run_id.is_not(None), ~run_exists)
-        .order_by(PolicyGateDecision.id)
-        .limit(sample_limit),
+        select(PolicyGateDecision.id, PolicyGateDecision.run_id).where(PolicyGateDecision.run_id.is_not(None), ~run_exists).order_by(PolicyGateDecision.id).limit(sample_limit),
         org_id,
     )
     for decision_id, run_id in (await session.execute(orphan_run_stmt)).all():

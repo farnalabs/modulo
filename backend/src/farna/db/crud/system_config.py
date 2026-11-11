@@ -78,11 +78,7 @@ async def set_config(
     # Unconditional first-write path: ``INSERT … ON CONFLICT DO NOTHING`` then
     # re-SELECT. No existence-check-gated UPDATE branch exists, so the TOFU
     # invariant above holds for every caller, concurrent or sequential.
-    insert_stmt = (
-        (await _dialect_insert(session))(SystemConfig)
-        .values(key=key, value=value, updated_by=updated_by)
-        .on_conflict_do_nothing(index_elements=["key"])
-    )
+    insert_stmt = (await _dialect_insert(session))(SystemConfig).values(key=key, value=value, updated_by=updated_by).on_conflict_do_nothing(index_elements=["key"])
     await session.execute(insert_stmt)
     stored = (await session.execute(select(SystemConfig).where(SystemConfig.key == key))).scalar_one()
     await session.flush()

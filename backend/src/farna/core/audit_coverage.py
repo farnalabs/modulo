@@ -678,9 +678,7 @@ def audited_system(
             # Resolved at TEARDOWN (post-handler), not on entry, so the org and
             # actor_source the handler published during the request are what the
             # event carries.
-            return _resolve_audit_org(request), _system_payload(
-                request, outcome, _resolve_actor_source(request, actor_source)
-            )
+            return _resolve_audit_org(request), _system_payload(request, outcome, _resolve_actor_source(request, actor_source))
 
         try:
             yield

@@ -398,9 +398,7 @@ async def _collect_pack_events(settings: Settings, org_id: _UUID) -> tuple[list[
     """
     events: list[dict[str, Any]] = []
     truncated = False
-    stream = stream_export_chain(
-        factory=_audit_session_factory(settings), org_id=org_id, page_size=SCAN_KEYSET_PAGE_SIZE
-    )
+    stream = stream_export_chain(factory=_audit_session_factory(settings), org_id=org_id, page_size=SCAN_KEYSET_PAGE_SIZE)
     async for event in stream:
         if len(events) >= _EVIDENCE_PACK_MAX_EVENTS:
             truncated = True

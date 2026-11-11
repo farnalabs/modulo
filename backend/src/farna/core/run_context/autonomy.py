@@ -212,9 +212,7 @@ def resolve_autonomy(
 
     rec = _try_autonomy(rec_raw, "run_context autonomy_recommendation")
     default_level = _try_autonomy(pipeline_default, "pipeline_default_autonomy_level")
-    ceiling = (
-        _try_autonomy(ceiling_raw, "run_context _pipeline_max_autonomy") or default_level or AutonomyLevel.default()
-    )
+    ceiling = _try_autonomy(ceiling_raw, "run_context _pipeline_max_autonomy") or default_level or AutonomyLevel.default()
     base_default = default_level or AutonomyLevel.default()
 
     # In-flight pin (ADR 062 §3): min(pinned-at-start, live) so a demotion wins
@@ -304,9 +302,7 @@ def validate_autonomy_ceiling(
     default_level = _try_autonomy(default if isinstance(default, str) else None, "default_autonomy_level")
     effective_default = default_level or AutonomyLevel.default()
     if autonomy_level_rank(ceiling_level) < autonomy_level_rank(effective_default):
-        msg = (
-            f"max_autonomy_level ({ceiling_level.value}) must be >= default_autonomy_level ({effective_default.value})"
-        )
+        msg = f"max_autonomy_level ({ceiling_level.value}) must be >= default_autonomy_level ({effective_default.value})"
         raise ValueError(msg)
 
 

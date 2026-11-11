@@ -67,8 +67,8 @@ _log = logging.getLogger(__name__)
 
 # ── Config (env-overridable; read per call so operators don't need a restart) ──
 
-ENV_AGENT_MINT_BUDGET_LIMIT = "MODULO_AGENT_MINT_BUDGET_LIMIT"
-ENV_AGENT_MINT_BUDGET_WINDOW_MINUTES = "MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES"
+ENV_AGENT_MINT_BUDGET_LIMIT = "FARNA_CONTROL_MODULO_AGENT_MINT_BUDGET_LIMIT"
+ENV_AGENT_MINT_BUDGET_WINDOW_MINUTES = "FARNA_CONTROL_MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES"
 
 #: Default budget: 500 agent-minted work items per organisation per hour.
 DEFAULT_BUDGET_LIMIT = 500
@@ -179,9 +179,7 @@ async def consume_agent_mint_budget(
             dialect_name = session.get_bind().dialect.name
         except Exception:  # pragma: no cover - session without a bind
             dialect_name = "postgresql"
-        window_start_value: datetime | str = (
-            window_start if dialect_name.startswith("postgres") else window_start.isoformat()
-        )
+        window_start_value: datetime | str = window_start if dialect_name.startswith("postgres") else window_start.isoformat()
         result = await session.execute(
             _MINT_BUDGET_UPSERT_SQL,
             {

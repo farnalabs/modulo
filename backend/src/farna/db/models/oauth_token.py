@@ -68,14 +68,10 @@ class OAuthAuthorizationCode(Base):
     scopes: Mapped[str] = mapped_column(Text, nullable=False, comment="Space-separated requested scopes")
     redirect_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
     code_challenge: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="PKCE S256 challenge")
-    code_challenge_method: Mapped[str] = mapped_column(
-        String(8), nullable=False, server_default="S256", comment="PKCE method — S256 only"
-    )
+    code_challenge_method: Mapped[str] = mapped_column(String(8), nullable=False, server_default="S256", comment="PKCE method — S256 only")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
 
 
 class OAuthConsentState(Base):
@@ -113,9 +109,7 @@ class OAuthConsentState(Base):
         comment="Populated at approve from the Bearer principal",
         index=True,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
 
 
 class OAuthTokenFamily(Base):
@@ -139,9 +133,7 @@ class OAuthTokenFamily(Base):
         {"comment": "Token families for MCP OAuth access token rotation"},
     )
 
-    family_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
@@ -151,7 +143,5 @@ class OAuthTokenFamily(Base):
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
     blacklisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

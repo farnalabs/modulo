@@ -51,106 +51,64 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "scopes" text;')
     op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "auto_provision" boolean DEFAULT true;')
-    op.execute(
-        'ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "default_role" character varying(32) DEFAULT \'runner\'::character varying;'
-    )
-    op.execute(
-        'ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "group_mappings" json DEFAULT \'[]\'::json;'
-    )
+    op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "default_role" character varying(32) DEFAULT \'runner\'::character varying;')
+    op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "group_mappings" json DEFAULT \'[]\'::json;')
     op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."sso_providers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "family_id" uuid;')
     op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "client_id" character varying(64);')
     op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "max_sequence" integer;')
     op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "is_blacklisted" boolean;')
-    op.execute(
-        'ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "blacklisted_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."oauth_token_families" ADD COLUMN IF NOT EXISTS "blacklisted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "client_id" character varying(64);')
-    op.execute(
-        'ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "client_secret_hash" character varying(128);'
-    )
+    op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "client_secret_hash" character varying(128);')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "scopes" text;')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "redirect_uris" text;')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."oauth_clients" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "team_id" uuid;')
     op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "role" character varying(20);')
     op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."team_memberships" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "resource_type" character varying(50);')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "resource_id" uuid;')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "token_hash" character varying(64);')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;')
-    op.execute(
-        'ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "created_by" uuid;')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."mcp_setup_tokens" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "key" character varying(255);')
     op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "encrypted_value" bytea;')
     op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."secrets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "key" character varying(255);')
     op.execute('ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "value" json;')
-    op.execute(
-        'ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "updated_by" uuid;')
     op.execute('ALTER TABLE public."system_config" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "id" uuid DEFAULT gen_random_uuid();')
     op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "completed_actions" character varying[] DEFAULT \'{}\'::character varying[];'
-    )
-    op.execute(
-        'ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "skipped_actions" character varying[] DEFAULT \'{}\'::character varying[];'
-    )
+    op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "completed_actions" character varying[] DEFAULT \'{}\'::character varying[];')
+    op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "skipped_actions" character varying[] DEFAULT \'{}\'::character varying[];')
     op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "dismissed" boolean DEFAULT false;')
-    op.execute(
-        'ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();'
-    )
-    op.execute(
-        'ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();'
-    )
+    op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();')
+    op.execute('ALTER TABLE public."onboarding_progress" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "description" text;')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "view_type" character varying(50);')
@@ -161,65 +119,37 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."saved_views" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code" character varying(128);')
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "client_id" character varying(64);'
-    )
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "client_id" character varying(64);')
     op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "scopes" text;')
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "redirect_uri" character varying(1024);'
-    )
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge" character varying(128);'
-    )
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "redirect_uri" character varying(1024);')
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge" character varying(128);')
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "used" boolean;')
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge_method" character varying(8) DEFAULT \'S256\'::character varying;'
-    )
+    op.execute('ALTER TABLE public."oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge_method" character varying(8) DEFAULT \'S256\'::character varying;')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "state" character varying(128);')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "client_id" character varying(64);')
-    op.execute(
-        'ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "redirect_uri" character varying(1024);'
-    )
+    op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "redirect_uri" character varying(1024);')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "scopes" json;')
-    op.execute(
-        'ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "code_challenge" character varying(128);'
-    )
+    op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "code_challenge" character varying(128);')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "consumed" boolean DEFAULT false;')
     op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."oauth_consent_states" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "family_id" uuid;')
     op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "max_sequence" integer;')
     op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "is_blacklisted" boolean;')
-    op.execute(
-        'ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "blacklisted_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."token_families" ADD COLUMN IF NOT EXISTS "blacklisted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "lookup_prefix" character varying(8);')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "hashed_secret" character varying(64);')
@@ -227,61 +157,35 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "team_id" uuid;')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "last_used_at" timestamp with time zone;')
-    op.execute(
-        'ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone DEFAULT (now() + \'365 days\'::interval);'
-    )
+    op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone DEFAULT (now() + \'365 days\'::interval);')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."org_api_keys" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "email" character varying(320);')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "display_name" character varying(255);')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "password_hash" character varying(255);')
-    op.execute(
-        'ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "auth_provider" character varying(20) DEFAULT \'local\'::character varying;'
-    )
+    op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "auth_provider" character varying(20) DEFAULT \'local\'::character varying;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "sso_subject" character varying(512);')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "active" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "last_login" timestamp with time zone;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "preferences" json DEFAULT \'{}\'::json;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "is_system_admin" boolean DEFAULT false;')
-    op.execute(
-        'ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "is_break_glass" boolean DEFAULT false;')
-    op.execute(
-        'ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "break_glass_expires_at" timestamp with time zone;'
-    )
-    op.execute(
-        'ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "break_glass_deactivated_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "break_glass_expires_at" timestamp with time zone;')
+    op.execute('ALTER TABLE public."accounts" ADD COLUMN IF NOT EXISTS "break_glass_deactivated_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "role" character varying(20) DEFAULT \'runner\'::character varying;'
-    )
-    op.execute(
-        'ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "role" character varying(20) DEFAULT \'runner\'::character varying;')
+    op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."org_memberships" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "event_type" character varying(100);')
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "resource_type" character varying(100);')
@@ -291,12 +195,8 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "previous_hash" text;')
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."audit_events" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."audit_chain_heads" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."audit_chain_heads" ADD COLUMN IF NOT EXISTS "last_event_hash" text;')
     op.execute('ALTER TABLE public."audit_chain_heads" ADD COLUMN IF NOT EXISTS "last_event_id" uuid;')
@@ -310,31 +210,19 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "daily_spend_limit" numeric(14,6);')
     op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."teams" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "signal" character varying(100);')
-    op.execute(
-        'ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."deleted_defaults" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "slug" character varying(255);')
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "status" character varying(20) DEFAULT \'active\'::character varying;'
-    )
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "status" character varying(20) DEFAULT \'active\'::character varying;')
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "created_by" uuid;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "settings_json" json;')
@@ -342,22 +230,14 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "plan_id" character varying(255);')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "daily_spend_limit" numeric(14,6);')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "deletion_token" character varying(128);')
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "deletion_token_expires_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "deletion_token_expires_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "export_bundle_json" json;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "authz_enforce" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "triggers_paused" boolean DEFAULT false;')
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "triggers_paused_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "triggers_paused_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "guardrail_pins_json" json;')
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "guardrails_kill_switch" boolean DEFAULT false;'
-    )
-    op.execute(
-        'ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "guardrails_kill_switch_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "guardrails_kill_switch" boolean DEFAULT false;')
+    op.execute('ALTER TABLE public."organisations" ADD COLUMN IF NOT EXISTS "guardrails_kill_switch_at" timestamp with time zone;')
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='alembic_version' AND column_name='version_num' AND is_nullable='YES') AND NOT EXISTS (SELECT 1 FROM \"alembic_version\" WHERE \"version_num\" IS NULL) THEN ALTER TABLE public.\"alembic_version\" ALTER COLUMN \"version_num\" SET NOT NULL; END IF; END $$;"
     )
@@ -982,72 +862,42 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='break_glass_expires_at' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"break_glass_expires_at\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='last_login' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"last_login\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='password_hash' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"password_hash\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='sso_subject' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"sso_subject\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='last_login' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"last_login\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='password_hash' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"password_hash\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='sso_subject' AND is_nullable='NO') THEN ALTER TABLE public.\"accounts\" ALTER COLUMN \"sso_subject\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_chain_heads' AND column_name='last_event_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_chain_heads\" ALTER COLUMN \"last_event_id\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='previous_hash' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"previous_hash\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='request_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"request_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='resource_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"resource_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='resource_type' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"resource_type\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='previous_hash' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"previous_hash\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='request_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"request_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='resource_id' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"resource_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_events' AND column_name='resource_type' AND is_nullable='NO') THEN ALTER TABLE public.\"audit_events\" ALTER COLUMN \"resource_type\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='mcp_setup_tokens' AND column_name='completed_at' AND is_nullable='NO') THEN ALTER TABLE public.\"mcp_setup_tokens\" ALTER COLUMN \"completed_at\" DROP NOT NULL; END IF; END $$;"
     )
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='oauth_authorization_codes' AND column_name='code_challenge' AND is_nullable='NO') THEN ALTER TABLE public.\"oauth_authorization_codes\" ALTER COLUMN \"code_challenge\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='oauth_clients' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"oauth_clients\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='oauth_clients' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"oauth_clients\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='oauth_consent_states' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"oauth_consent_states\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;"
     )
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='oauth_token_families' AND column_name='blacklisted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"oauth_token_families\" ALTER COLUMN \"blacklisted_at\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='last_used_at' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"last_used_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='revoked_at' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"revoked_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='team_id' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"team_id\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='last_used_at' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"last_used_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='revoked_at' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"revoked_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_api_keys' AND column_name='team_id' AND is_nullable='NO') THEN ALTER TABLE public.\"org_api_keys\" ALTER COLUMN \"team_id\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='org_memberships' AND column_name='deactivated_at' AND is_nullable='NO') THEN ALTER TABLE public.\"org_memberships\" ALTER COLUMN \"deactivated_at\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='created_by' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"created_by\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='created_by' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"created_by\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='daily_spend_limit' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"daily_spend_limit\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='deletion_token' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"deletion_token\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='deletion_token' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"deletion_token\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='deletion_token_expires_at' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"deletion_token_expires_at\" DROP NOT NULL; END IF; END $$;"
     )
@@ -1060,57 +910,25 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='guardrails_kill_switch_at' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"guardrails_kill_switch_at\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='plan_id' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"plan_id\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='plan_id' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"plan_id\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='organisations' AND column_name='triggers_paused_at' AND is_nullable='NO') THEN ALTER TABLE public.\"organisations\" ALTER COLUMN \"triggers_paused_at\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='columns' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"columns\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='sort_by' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"sort_by\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='client_id' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"client_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='client_secret' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"client_secret\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='discovery_url' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"discovery_url\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='entity_id' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"entity_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='metadata_url' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"metadata_url\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='metadata_xml' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"metadata_xml\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='scopes' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"scopes\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='system_config' AND column_name='updated_by' AND is_nullable='NO') THEN ALTER TABLE public.\"system_config\" ALTER COLUMN \"updated_by\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='daily_spend_limit' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"daily_spend_limit\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='columns' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"columns\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_views' AND column_name='sort_by' AND is_nullable='NO') THEN ALTER TABLE public.\"saved_views\" ALTER COLUMN \"sort_by\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='client_id' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"client_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='client_secret' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"client_secret\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='discovery_url' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"discovery_url\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='entity_id' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"entity_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='metadata_url' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"metadata_url\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='metadata_xml' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"metadata_xml\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sso_providers' AND column_name='scopes' AND is_nullable='NO') THEN ALTER TABLE public.\"sso_providers\" ALTER COLUMN \"scopes\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='system_config' AND column_name='updated_by' AND is_nullable='NO') THEN ALTER TABLE public.\"system_config\" ALTER COLUMN \"updated_by\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='daily_spend_limit' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"daily_spend_limit\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='teams' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"teams\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='token_families' AND column_name='blacklisted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"token_families\" ALTER COLUMN \"blacklisted_at\" DROP NOT NULL; END IF; END $$;"
     )
@@ -1118,89 +936,37 @@ def upgrade() -> None:
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='token_families' AND column_name='organisation_id' AND is_nullable='NO') THEN ALTER TABLE public.\"token_families\" ALTER COLUMN \"organisation_id\" DROP NOT NULL; END IF; END $$;"
     )
     op.execute("ALTER TABLE public.teams DROP CONSTRAINT IF EXISTS uq_teams_organisation_name;")
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_audit_chain_heads_organisation_id ON public.audit_chain_heads USING btree (organisation_id);"
-    )
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_audit_chain_heads_organisation_id ON public.audit_chain_heads USING btree (organisation_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_audit_events_event_type ON public.audit_events USING btree (event_type);")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_audit_events_organisation_id ON public.audit_events USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_deleted_defaults_organisation_id ON public.deleted_defaults USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_mcp_setup_tokens_organisation_id ON public.mcp_setup_tokens USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_mcp_setup_tokens_resource_id ON public.mcp_setup_tokens USING btree (resource_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_account_id ON public.oauth_authorization_codes USING btree (account_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_client_id ON public.oauth_authorization_codes USING btree (client_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_organisation_id ON public.oauth_authorization_codes USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_oauth_clients_client_id ON public.oauth_clients USING btree (client_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_clients_organisation_id ON public.oauth_clients USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_consent_states_organisation_id ON public.oauth_consent_states USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_token_families_client_id ON public.oauth_token_families USING btree (client_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_oauth_token_families_organisation_id ON public.oauth_token_families USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_onboarding_progress_organisation_id ON public.onboarding_progress USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_org_api_keys_organisation_id ON public.org_api_keys USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_org_memberships_account_id ON public.org_memberships USING btree (account_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_org_memberships_org_account ON public.org_memberships USING btree (organisation_id, account_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_org_memberships_organisation_id ON public.org_memberships USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_saved_views_organisation_id ON public.saved_views USING btree (organisation_id);"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_audit_events_organisation_id ON public.audit_events USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_deleted_defaults_organisation_id ON public.deleted_defaults USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_mcp_setup_tokens_organisation_id ON public.mcp_setup_tokens USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_mcp_setup_tokens_resource_id ON public.mcp_setup_tokens USING btree (resource_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_account_id ON public.oauth_authorization_codes USING btree (account_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_client_id ON public.oauth_authorization_codes USING btree (client_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_authorization_codes_organisation_id ON public.oauth_authorization_codes USING btree (organisation_id);")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_oauth_clients_client_id ON public.oauth_clients USING btree (client_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_clients_organisation_id ON public.oauth_clients USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_consent_states_organisation_id ON public.oauth_consent_states USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_token_families_client_id ON public.oauth_token_families USING btree (client_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_oauth_token_families_organisation_id ON public.oauth_token_families USING btree (organisation_id);")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_onboarding_progress_organisation_id ON public.onboarding_progress USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_api_keys_organisation_id ON public.org_api_keys USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_memberships_account_id ON public.org_memberships USING btree (account_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_memberships_org_account ON public.org_memberships USING btree (organisation_id, account_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_org_memberships_organisation_id ON public.org_memberships USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_saved_views_organisation_id ON public.saved_views USING btree (organisation_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_saved_views_view_type ON public.saved_views USING btree (view_type);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_secrets_key ON public.secrets USING btree (key);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_secrets_organisation_id ON public.secrets USING btree (organisation_id);")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_sso_providers_organisation_id ON public.sso_providers USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_team_memberships_account_id ON public.team_memberships USING btree (account_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_team_memberships_organisation_id ON public.team_memberships USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_team_memberships_team_id ON public.team_memberships USING btree (team_id);"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_sso_providers_organisation_id ON public.sso_providers USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_team_memberships_account_id ON public.team_memberships USING btree (account_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_team_memberships_organisation_id ON public.team_memberships USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_team_memberships_team_id ON public.team_memberships USING btree (team_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_teams_organisation_id ON public.teams USING btree (organisation_id);")
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_teams_organisation_name ON public.teams USING btree (organisation_id, name) WHERE (deleted_at IS NULL);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_token_families_account_id ON public.token_families USING btree (account_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_token_families_organisation_id ON public.token_families USING btree (organisation_id);"
-    )
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_teams_organisation_name ON public.teams USING btree (organisation_id, name) WHERE (deleted_at IS NULL);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_token_families_account_id ON public.token_families USING btree (account_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_token_families_organisation_id ON public.token_families USING btree (organisation_id);")
     op.execute(
         "CREATE OR REPLACE FUNCTION public.audit_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'audit_events are append-only: DELETE is not permitted'; ELSIF TG_OP = 'UPDATE' THEN RAISE EXCEPTION 'audit_events are append-only: UPDATE is not permitted'; END IF; RETURN NULL; END; $$;"
     )
@@ -1219,17 +985,11 @@ def upgrade() -> None:
     op.execute(
         "CREATE OR REPLACE FUNCTION public.error_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'error_events are append-only: DELETE is not permitted'; ELSIF TG_OP = 'UPDATE' THEN RAISE EXCEPTION 'error_events are append-only: UPDATE is not permitted'; END IF; RETURN NULL; END; $$;"
     )
-    op.execute(
-        "CREATE OR REPLACE FUNCTION public.lookup_api_key_org(lookup_prefix_value text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$ SELECT organisation_id FROM org_api_keys WHERE lookup_prefix = lookup_prefix_value AND revoked_at IS NULL LIMIT 1 $$;"
-    )
+    op.execute("CREATE OR REPLACE FUNCTION public.lookup_api_key_org(lookup_prefix_value text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public' AS $$ SELECT organisation_id FROM org_api_keys WHERE lookup_prefix = lookup_prefix_value AND revoked_at IS NULL LIMIT 1 $$;")
     op.execute("DROP TRIGGER IF EXISTS trg_stages_account_id_tenant ON public.stages;")
     op.execute("DROP TRIGGER IF EXISTS trg_stages_owner_team_id_tenant ON public.stages;")
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='audit_events_no_delete') THEN CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.audit_events_append_only(); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='audit_events_no_update') THEN CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.audit_events_append_only(); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='audit_events_no_delete') THEN CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.audit_events_append_only(); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='audit_events_no_update') THEN CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.audit_events_append_only(); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_chain_heads_last_event_id_tenant') THEN CREATE TRIGGER trg_audit_chain_heads_last_event_id_tenant BEFORE INSERT OR UPDATE OF last_event_id, organisation_id ON public.audit_chain_heads FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('audit_events', 'last_event_id'); END IF; END $$;"
     )
@@ -1260,9 +1020,7 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_team_memberships_team_id_tenant') THEN CREATE TRIGGER trg_team_memberships_team_id_tenant BEFORE INSERT OR UPDATE OF team_id, organisation_id ON public.team_memberships FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('teams', 'team_id'); END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_team_privilege_cap') THEN CREATE TRIGGER trg_team_privilege_cap BEFORE INSERT OR UPDATE ON public.team_memberships FOR EACH ROW EXECUTE FUNCTION public.check_team_privilege_cap(); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_team_privilege_cap') THEN CREATE TRIGGER trg_team_privilege_cap BEFORE INSERT OR UPDATE ON public.team_memberships FOR EACH ROW EXECUTE FUNCTION public.check_team_privilege_cap(); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_teams_account_id_tenant') THEN CREATE TRIGGER trg_teams_account_id_tenant BEFORE INSERT OR UPDATE OF account_id, organisation_id ON public.teams FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('accounts', 'account_id'); END IF; END $$;"
     )
@@ -1287,169 +1045,73 @@ def upgrade() -> None:
     op.execute("ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;")
     op.execute("ALTER TABLE public.token_families ENABLE ROW LEVEL SECURITY;")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.audit_chain_heads;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.audit_chain_heads USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.audit_chain_heads USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.audit_events;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.audit_events USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.audit_events USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.deleted_defaults;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.deleted_defaults USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.deleted_defaults USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.mcp_setup_tokens;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.mcp_setup_tokens USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.mcp_setup_tokens USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.oauth_authorization_codes;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.oauth_authorization_codes USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.oauth_authorization_codes USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.oauth_clients;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.oauth_clients USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.oauth_clients USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.oauth_consent_states;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.oauth_consent_states USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.oauth_consent_states USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.oauth_token_families;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.oauth_token_families USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.oauth_token_families USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.onboarding_progress;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.onboarding_progress USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.onboarding_progress USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.org_api_keys;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.org_api_keys USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.org_api_keys USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.org_memberships;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.org_memberships USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.org_memberships USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.saved_views;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.saved_views USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.saved_views USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.secrets;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.secrets USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.secrets USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.sso_providers;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.sso_providers USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.sso_providers USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.team_memberships;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.team_memberships USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.team_memberships USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.teams;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.teams USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.teams USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.token_families;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.token_families USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.token_families USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL)));")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_org_memberships_role' AND regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g') <> 'CHECK(((role)::text=ANY((ARRAY[''admin''::charactervarying,''operator''::charactervarying,''runner''::charactervarying,''viewer''::charactervarying])::text[])))') THEN ALTER TABLE public.org_memberships DROP CONSTRAINT IF EXISTS ck_org_memberships_role; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='accounts_pkey') THEN ALTER TABLE public.accounts ADD CONSTRAINT accounts_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='alembic_version_pkey') THEN ALTER TABLE public.alembic_version ADD CONSTRAINT alembic_version_pkey PRIMARY KEY (version_num); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_chain_heads_pkey') THEN ALTER TABLE public.audit_chain_heads ADD CONSTRAINT audit_chain_heads_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_events_pkey') THEN ALTER TABLE public.audit_events ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='deleted_defaults_pkey') THEN ALTER TABLE public.deleted_defaults ADD CONSTRAINT deleted_defaults_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='mcp_setup_tokens_pkey') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT mcp_setup_tokens_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_authorization_codes_pkey') THEN ALTER TABLE public.oauth_authorization_codes ADD CONSTRAINT oauth_authorization_codes_pkey PRIMARY KEY (code); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_clients_pkey') THEN ALTER TABLE public.oauth_clients ADD CONSTRAINT oauth_clients_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_consent_states_pkey') THEN ALTER TABLE public.oauth_consent_states ADD CONSTRAINT oauth_consent_states_pkey PRIMARY KEY (state); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_token_families_pkey') THEN ALTER TABLE public.oauth_token_families ADD CONSTRAINT oauth_token_families_pkey PRIMARY KEY (family_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='onboarding_progress_pkey') THEN ALTER TABLE public.onboarding_progress ADD CONSTRAINT onboarding_progress_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_pkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_memberships_pkey') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT org_memberships_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='organisations_pkey') THEN ALTER TABLE public.organisations ADD CONSTRAINT organisations_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_pkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='secrets_pkey') THEN ALTER TABLE public.secrets ADD CONSTRAINT secrets_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sso_providers_pkey') THEN ALTER TABLE public.sso_providers ADD CONSTRAINT sso_providers_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='system_config_pkey') THEN ALTER TABLE public.system_config ADD CONSTRAINT system_config_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_pkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_pkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='token_families_pkey') THEN ALTER TABLE public.token_families ADD CONSTRAINT token_families_pkey PRIMARY KEY (family_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='accounts_email_key') THEN ALTER TABLE public.accounts ADD CONSTRAINT accounts_email_key UNIQUE (email); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_deleted_defaults_org_signal') THEN ALTER TABLE public.deleted_defaults ADD CONSTRAINT uq_deleted_defaults_org_signal UNIQUE (organisation_id, signal); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='mcp_setup_tokens_token_hash_key') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT mcp_setup_tokens_token_hash_key UNIQUE (token_hash); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_onboarding_progress_org') THEN ALTER TABLE public.onboarding_progress ADD CONSTRAINT uq_onboarding_progress_org UNIQUE (organisation_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_org_api_keys_lookup_prefix') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT uq_org_api_keys_lookup_prefix UNIQUE (lookup_prefix); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_org_memberships_account_org') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT uq_org_memberships_account_org UNIQUE (account_id, organisation_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='organisations_slug_key') THEN ALTER TABLE public.organisations ADD CONSTRAINT organisations_slug_key UNIQUE (slug); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_secrets_org_key') THEN ALTER TABLE public.secrets ADD CONSTRAINT uq_secrets_org_key UNIQUE (organisation_id, key); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='system_config_key_key') THEN ALTER TABLE public.system_config ADD CONSTRAINT system_config_key_key UNIQUE (key); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_team_memberships_team_account') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT uq_team_memberships_team_account UNIQUE (team_id, account_id); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='accounts_pkey') THEN ALTER TABLE public.accounts ADD CONSTRAINT accounts_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='alembic_version_pkey') THEN ALTER TABLE public.alembic_version ADD CONSTRAINT alembic_version_pkey PRIMARY KEY (version_num); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_chain_heads_pkey') THEN ALTER TABLE public.audit_chain_heads ADD CONSTRAINT audit_chain_heads_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_events_pkey') THEN ALTER TABLE public.audit_events ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='deleted_defaults_pkey') THEN ALTER TABLE public.deleted_defaults ADD CONSTRAINT deleted_defaults_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='mcp_setup_tokens_pkey') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT mcp_setup_tokens_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_authorization_codes_pkey') THEN ALTER TABLE public.oauth_authorization_codes ADD CONSTRAINT oauth_authorization_codes_pkey PRIMARY KEY (code); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_clients_pkey') THEN ALTER TABLE public.oauth_clients ADD CONSTRAINT oauth_clients_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_consent_states_pkey') THEN ALTER TABLE public.oauth_consent_states ADD CONSTRAINT oauth_consent_states_pkey PRIMARY KEY (state); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_token_families_pkey') THEN ALTER TABLE public.oauth_token_families ADD CONSTRAINT oauth_token_families_pkey PRIMARY KEY (family_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='onboarding_progress_pkey') THEN ALTER TABLE public.onboarding_progress ADD CONSTRAINT onboarding_progress_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_pkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_memberships_pkey') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT org_memberships_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='organisations_pkey') THEN ALTER TABLE public.organisations ADD CONSTRAINT organisations_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_pkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='secrets_pkey') THEN ALTER TABLE public.secrets ADD CONSTRAINT secrets_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sso_providers_pkey') THEN ALTER TABLE public.sso_providers ADD CONSTRAINT sso_providers_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='system_config_pkey') THEN ALTER TABLE public.system_config ADD CONSTRAINT system_config_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_pkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_pkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='token_families_pkey') THEN ALTER TABLE public.token_families ADD CONSTRAINT token_families_pkey PRIMARY KEY (family_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='accounts_email_key') THEN ALTER TABLE public.accounts ADD CONSTRAINT accounts_email_key UNIQUE (email); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_deleted_defaults_org_signal') THEN ALTER TABLE public.deleted_defaults ADD CONSTRAINT uq_deleted_defaults_org_signal UNIQUE (organisation_id, signal); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='mcp_setup_tokens_token_hash_key') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT mcp_setup_tokens_token_hash_key UNIQUE (token_hash); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_onboarding_progress_org') THEN ALTER TABLE public.onboarding_progress ADD CONSTRAINT uq_onboarding_progress_org UNIQUE (organisation_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_org_api_keys_lookup_prefix') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT uq_org_api_keys_lookup_prefix UNIQUE (lookup_prefix); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_org_memberships_account_org') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT uq_org_memberships_account_org UNIQUE (account_id, organisation_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='organisations_slug_key') THEN ALTER TABLE public.organisations ADD CONSTRAINT organisations_slug_key UNIQUE (slug); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_secrets_org_key') THEN ALTER TABLE public.secrets ADD CONSTRAINT uq_secrets_org_key UNIQUE (organisation_id, key); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='system_config_key_key') THEN ALTER TABLE public.system_config ADD CONSTRAINT system_config_key_key UNIQUE (key); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_team_memberships_team_account') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT uq_team_memberships_team_account UNIQUE (team_id, account_id); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_accounts_auth_provider') THEN ALTER TABLE public.accounts ADD CONSTRAINT ck_accounts_auth_provider CHECK (((auth_provider)::text = ANY ((ARRAY['local'::character varying, 'oidc'::character varying, 'saml'::character varying, 'scim'::character varying])::text[]))); END IF; END $$;"
     )
@@ -1468,9 +1130,7 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_organisations_status') THEN ALTER TABLE public.organisations ADD CONSTRAINT ck_organisations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying, 'deleted'::character varying])::text[]))); END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_organisations_triggers_paused_at') THEN ALTER TABLE public.organisations ADD CONSTRAINT ck_organisations_triggers_paused_at CHECK (((NOT triggers_paused) OR (triggers_paused_at IS NOT NULL))); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_organisations_triggers_paused_at') THEN ALTER TABLE public.organisations ADD CONSTRAINT ck_organisations_triggers_paused_at CHECK (((NOT triggers_paused) OR (triggers_paused_at IS NOT NULL))); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_saved_views_type') THEN ALTER TABLE public.saved_views ADD CONSTRAINT ck_saved_views_type CHECK (((view_type)::text = ANY ((ARRAY['run_list'::character varying, 'pipeline_list'::character varying, 'audit_log'::character varying])::text[]))); END IF; END $$;"
     )
@@ -1483,18 +1143,14 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_chain_heads_organisation_id_fkey') THEN ALTER TABLE public.audit_chain_heads ADD CONSTRAINT audit_chain_heads_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_events_account_id_fkey') THEN ALTER TABLE public.audit_events ADD CONSTRAINT audit_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_events_account_id_fkey') THEN ALTER TABLE public.audit_events ADD CONSTRAINT audit_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='audit_events_organisation_id_fkey') THEN ALTER TABLE public.audit_events ADD CONSTRAINT audit_events_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='deleted_defaults_organisation_id_fkey') THEN ALTER TABLE public.deleted_defaults ADD CONSTRAINT deleted_defaults_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_mcp_setup_tokens_created_by') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT fk_mcp_setup_tokens_created_by FOREIGN KEY (created_by) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_mcp_setup_tokens_created_by') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT fk_mcp_setup_tokens_created_by FOREIGN KEY (created_by) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='mcp_setup_tokens_organisation_id_fkey') THEN ALTER TABLE public.mcp_setup_tokens ADD CONSTRAINT mcp_setup_tokens_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
@@ -1504,9 +1160,7 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_authorization_codes_organisation_id_fkey') THEN ALTER TABLE public.oauth_authorization_codes ADD CONSTRAINT oauth_authorization_codes_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_clients_account_id_fkey') THEN ALTER TABLE public.oauth_clients ADD CONSTRAINT oauth_clients_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_clients_account_id_fkey') THEN ALTER TABLE public.oauth_clients ADD CONSTRAINT oauth_clients_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='oauth_clients_organisation_id_fkey') THEN ALTER TABLE public.oauth_clients ADD CONSTRAINT oauth_clients_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
@@ -1522,54 +1176,30 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='onboarding_progress_organisation_id_fkey') THEN ALTER TABLE public.onboarding_progress ADD CONSTRAINT onboarding_progress_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_account_id_fkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_account_id_fkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_organisation_id_fkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_team_id_fkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_memberships_account_id_fkey') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT org_memberships_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_api_keys_team_id_fkey') THEN ALTER TABLE public.org_api_keys ADD CONSTRAINT org_api_keys_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_memberships_account_id_fkey') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT org_memberships_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='org_memberships_organisation_id_fkey') THEN ALTER TABLE public.org_memberships ADD CONSTRAINT org_memberships_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_account_id_fkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_organisation_id_fkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='secrets_organisation_id_fkey') THEN ALTER TABLE public.secrets ADD CONSTRAINT secrets_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_account_id_fkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='saved_views_organisation_id_fkey') THEN ALTER TABLE public.saved_views ADD CONSTRAINT saved_views_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='secrets_organisation_id_fkey') THEN ALTER TABLE public.secrets ADD CONSTRAINT secrets_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sso_providers_organisation_id_fkey') THEN ALTER TABLE public.sso_providers ADD CONSTRAINT sso_providers_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_system_config_updated_by') THEN ALTER TABLE public.system_config ADD CONSTRAINT fk_system_config_updated_by FOREIGN KEY (updated_by) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_account_id_fkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_system_config_updated_by') THEN ALTER TABLE public.system_config ADD CONSTRAINT fk_system_config_updated_by FOREIGN KEY (updated_by) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_account_id_fkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_organisation_id_fkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_team_id_fkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_account_id_fkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_organisation_id_fkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='token_families_account_id_fkey') THEN ALTER TABLE public.token_families ADD CONSTRAINT token_families_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='team_memberships_team_id_fkey') THEN ALTER TABLE public.team_memberships ADD CONSTRAINT team_memberships_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_account_id_fkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='teams_organisation_id_fkey') THEN ALTER TABLE public.teams ADD CONSTRAINT teams_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='token_families_account_id_fkey') THEN ALTER TABLE public.token_families ADD CONSTRAINT token_families_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='token_families_organisation_id_fkey') THEN ALTER TABLE public.token_families ADD CONSTRAINT token_families_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )

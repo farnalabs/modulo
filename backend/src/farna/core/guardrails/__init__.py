@@ -338,9 +338,7 @@ def _apply_block_policy(
     present = value is not None and (not isinstance(value, (str, list, dict)) or bool(value))
     if present and raise_on_block:
         raise GuardrailBlockedError(guardrail_name, f"blocked field {path!r} present in payload")
-    return RedactionEntry(
-        path=path, mode=policy.mode.value, applied=present, reason="present" if present else "field-absent"
-    )
+    return RedactionEntry(path=path, mode=policy.mode.value, applied=present, reason="present" if present else "field-absent")
 
 
 def _apply_drop_policy(redacted: dict[str, Any], policy: FieldRedactionPolicy, path: str) -> RedactionEntry:
@@ -376,9 +374,7 @@ def _apply_destroy_policy(
     """
     pepper = resolve_guardrail_destroy_pepper()
     if not pepper:
-        raise GuardrailRedactionMechanismError(
-            "guardrail destroy redaction requires a configured guardrail_destroy_pepper"
-        )
+        raise GuardrailRedactionMechanismError("guardrail destroy redaction requires a configured guardrail_destroy_pepper")
     candidates = destroy_candidates(value, detection_pattern)
     if isinstance(value, str) and candidates:
         replacement = value
@@ -574,15 +570,11 @@ def _validate_guarding_regex_pattern(eval_def: EvalDefinition, pattern: Any) -> 
     if _resolve_action(eval_def) not in (GuardrailAction.BLOCK, GuardrailAction.REDACT):
         return
     if not isinstance(pattern, str):
-        raise GuardrailConfigError(
-            f"Guardrail {eval_def.name!r} regex detection pattern must be a string (got {type(pattern).__name__})"
-        )
+        raise GuardrailConfigError(f"Guardrail {eval_def.name!r} regex detection pattern must be a string (got {type(pattern).__name__})")
     try:
         re.compile(pattern)
     except (re.error, OverflowError) as exc:
-        raise GuardrailConfigError(
-            f"Guardrail {eval_def.name!r} regex detection pattern does not compile: {exc}"
-        ) from exc
+        raise GuardrailConfigError(f"Guardrail {eval_def.name!r} regex detection pattern does not compile: {exc}") from exc
 
 
 def _validate_guardrail_definition(eval_def: EvalDefinition) -> GuardrailConfig:
@@ -592,22 +584,14 @@ def _validate_guardrail_definition(eval_def: EvalDefinition) -> GuardrailConfig:
         raise GuardrailConfigError(f"Guardrail {eval_def.name!r} must never carry failure_behaviour='retry'")
     detection_type, effective_config = _resolve_detection(eval_def)
     if detection_type not in GUARDRAIL_DETECTION_TYPES:
-        raise GuardrailConfigError(
-            f"Guardrail {eval_def.name!r} must use regex or json_schema detection (got config {eval_def.config!r})"
-        )
+        raise GuardrailConfigError(f"Guardrail {eval_def.name!r} must use regex or json_schema detection (got config {eval_def.config!r})")
     if detection_type == EvalType.JSON_SCHEMA:
         if not isinstance(effective_config.get("schema"), dict):
-            raise GuardrailConfigError(
-                f"Guardrail {eval_def.name!r} json_schema detection requires a 'schema' dict "
-                f"(got config {eval_def.config!r})"
-            )
+            raise GuardrailConfigError(f"Guardrail {eval_def.name!r} json_schema detection requires a 'schema' dict (got config {eval_def.config!r})")
     elif not effective_config.get("pattern") or not effective_config.get("field"):
         # Fail-closed at validation: a block/redact guardrail whose detector
         # cannot run (missing pattern/field) must not silently pass through.
-        raise GuardrailConfigError(
-            f"Guardrail {eval_def.name!r} regex detection requires non-empty 'pattern' and 'field' "
-            f"(got config {eval_def.config!r})"
-        )
+        raise GuardrailConfigError(f"Guardrail {eval_def.name!r} regex detection requires non-empty 'pattern' and 'field' (got config {eval_def.config!r})")
     else:
         # FAR-1700: a present-but-uncompilable pattern is the same
         # "detector cannot run" failure — fail closed for block/redact.
@@ -869,11 +853,7 @@ def _detect_block(
     """
     for eval_def, result in zip(definitions, results, strict=True):
         detection_type, _ = _resolve_detection(eval_def)
-        if (
-            not eval_def.is_muted
-            and _interpret_violation(detection_type, result)
-            and eval_def.config.get("action") == GuardrailAction.BLOCK
-        ):
+        if not eval_def.is_muted and _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
             return BlockDecision(
                 blocked=True,
                 block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
@@ -1251,9 +1231,7 @@ def _over_budget_enforcement_outcome(
     seam: str,
 ) -> GuardrailInterceptionOutcome:
     """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
-    any_guarding = any(
-        not d.is_muted and _resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions
-    )
+    any_guarding = any(not d.is_muted and _resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
     if any_guarding:
         _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
@@ -1887,9 +1865,7 @@ def fingerprint_guardrail_pins(pins: Sequence[Mapping[str, Any]] | None) -> str 
     """
     if not pins:
         return None
-    items = sorted(
-        json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins if isinstance(pin, Mapping)
-    )
+    items = sorted(json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins if isinstance(pin, Mapping))
     if not items:
         return None
     canonical = "[" + ",".join(items) + "]"

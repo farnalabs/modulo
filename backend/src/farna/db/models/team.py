@@ -22,9 +22,7 @@ class Team(SoftDeleteMixin, OrgScoped):  # SoftDeleteMixin FIRST (house pattern)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
     notification_endpoints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

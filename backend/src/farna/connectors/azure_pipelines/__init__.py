@@ -133,9 +133,7 @@ class AzurePipelinesConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=self._redacted_detail(
-                    f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text}"
-                )[:200],
+                detail=self._redacted_detail(f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Pipelines API timeout")
@@ -178,8 +176,7 @@ class AzurePipelinesConnector(ConnectorBase):
                 self._split_run_id(run.id)
             except ValueError as exc:
                 raise ValueError(
-                    f"Azure Pipelines accepted the run request for {pipeline_id!r} but the response "
-                    "did not yield a consumable run id — refusing to return an unusable run id",
+                    f"Azure Pipelines accepted the run request for {pipeline_id!r} but the response did not yield a consumable run id — refusing to return an unusable run id",
                 ) from exc
             return run
 

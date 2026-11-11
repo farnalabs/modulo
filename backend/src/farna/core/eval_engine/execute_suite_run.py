@@ -114,9 +114,7 @@ class SuiteJudgingBudgetExhaustedError(RuntimeError):
 # Eval/feedback event families that must NEVER re-fire a trigger through the
 # trigger-watch/dedup event set (loop guard). Selection of the watch set calls
 # ``exclude_eval_families`` to drop these.
-EVAL_WATCH_EVENT_FAMILIES: frozenset[str] = frozenset(
-    {"eval_regression", "eval_blocked", "suite_run", "eval_result", "feedback"}
-)
+EVAL_WATCH_EVENT_FAMILIES: frozenset[str] = frozenset({"eval_regression", "eval_blocked", "suite_run", "eval_result", "feedback"})
 
 
 class SuiteRunExecutionError(SuiteRunError):
@@ -319,10 +317,7 @@ def _synthesise_output(case: EvalCase, scenario_inputs: dict[str, Any] | None) -
 
 def _is_discovery_definition(definition: EvalDefinition) -> bool:
     """Return whether *definition* opts into the reserved discovery adapter."""
-    return (
-        definition.eval_type == EvalType.CUSTOM_FUNCTION
-        and definition.config.get("function") == DISCOVERY_EVAL_FUNCTION
-    )
+    return definition.eval_type == EvalType.CUSTOM_FUNCTION and definition.config.get("function") == DISCOVERY_EVAL_FUNCTION
 
 
 def _evaluate_case_output(
@@ -1118,9 +1113,7 @@ async def suite_run_daily_spend_used(session: AsyncSession, org_id: uuid.UUID) -
     return Decimal(str(value or 0))
 
 
-async def suite_run_daily_spend_used_for_trigger(
-    session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID
-) -> Decimal:
+async def suite_run_daily_spend_used_for_trigger(session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID) -> Decimal:
     """Sum today's ``suite_runs`` cost for one *trigger_id* (per-trigger pool).
 
     ``daily_spend_limit`` is configured PER TRIGGER, so the daily suite-run

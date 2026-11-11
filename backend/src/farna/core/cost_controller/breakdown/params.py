@@ -168,12 +168,8 @@ REPORTED_TOKEN_CHAIN: tuple[ReportedTokenBinding, ...] = (
     ReportedTokenBinding("input", "model_tokens_input", "reported_input_tokens", "tokens_input_reported"),
     ReportedTokenBinding("output", "model_tokens_output", "reported_output_tokens", "tokens_output_reported"),
     ReportedTokenBinding("total", "model_tokens_total", "reported_total_tokens", "tokens_total_reported"),
-    ReportedTokenBinding(
-        "cache_read", "model_tokens_cache_read", "reported_cache_read_tokens", "tokens_cache_read_reported"
-    ),
-    ReportedTokenBinding(
-        "cache_write", "model_tokens_cache_write", "reported_cache_write_tokens", "tokens_cache_write_reported"
-    ),
+    ReportedTokenBinding("cache_read", "model_tokens_cache_read", "reported_cache_read_tokens", "tokens_cache_read_reported"),
+    ReportedTokenBinding("cache_write", "model_tokens_cache_write", "reported_cache_write_tokens", "tokens_cache_write_reported"),
 )
 
 #: The plausibility ceiling for ONE agent-reported token count (FAR-532
@@ -236,16 +232,8 @@ _REPORTED_TOKEN_PRODUCER_KEYS: tuple[str, ...] = tuple(binding.producer_key for 
 _REPORTED_TOKEN_NODE_FIELDS: tuple[str, ...] = tuple(binding.node_field for binding in REPORTED_TOKEN_CHAIN)
 _REPORTED_TOKEN_UNION_KEYS: tuple[str, ...] = tuple(binding.union_key for binding in REPORTED_TOKEN_CHAIN)
 
-_PROVEN_ZERO_MANDATORY_NODE_FIELDS = frozenset(
-    binding.node_field
-    for binding in REPORTED_TOKEN_CHAIN
-    if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS
-)
-_PROVEN_ZERO_MANDATORY_UNION_KEYS = frozenset(
-    binding.union_key
-    for binding in REPORTED_TOKEN_CHAIN
-    if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS
-)
+_PROVEN_ZERO_MANDATORY_NODE_FIELDS = frozenset(binding.node_field for binding in REPORTED_TOKEN_CHAIN if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS)
+_PROVEN_ZERO_MANDATORY_UNION_KEYS = frozenset(binding.union_key for binding in REPORTED_TOKEN_CHAIN if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS)
 
 
 def _proven_zero_via_keys(values: Any, keys: tuple[str, ...], mandatory: frozenset[str]) -> bool:
@@ -665,15 +653,9 @@ def _missing_self_report_message(reason: Any) -> str:
     keeps the original, deliberate "did not report" text.
     """
     if reason == MISSING_REASON_ZERO_REPORT_UNPROVEN:
-        return (
-            "The agent reported a model cost of $0.00 for this run, but it was rejected "
-            "as unproven (token usage was not zero)."
-        )
+        return "The agent reported a model cost of $0.00 for this run, but it was rejected as unproven (token usage was not zero)."
     if reason == MISSING_REASON_SUB_FLOOR_REJECTED:
-        return (
-            "The agent reported a model cost below the minimum that can be counted for this run, "
-            "so it was not included."
-        )
+        return "The agent reported a model cost below the minimum that can be counted for this run, so it was not included."
     return "The agent did not report a model cost for this run."
 
 

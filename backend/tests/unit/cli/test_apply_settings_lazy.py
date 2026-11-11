@@ -39,8 +39,8 @@ _DB_OR_SECRET_ENV_VARS = (
 
 #: Mirrors the only two variables ``apply`` legitimately reads.
 _APPLY_ENV = {
-    "MODULO_URL": "https://modulo.example.test",
-    "MODULO_API_KEY": "mk_apply_only",
+    "FARNA_CONTROL_MODULO_URL": "https://modulo.example.test",
+    "FARNA_CONTROL_MODULO_API_KEY": "mk_apply_only",
 }
 
 # Executed in a fresh interpreter; prints a marker only on full success.
@@ -53,8 +53,8 @@ from click.testing import CliRunner
 
 for _name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"):
     assert os.environ.get(_name) is None, f"{_name} leaked into the child env"
-assert os.environ.get("MODULO_URL")
-assert os.environ.get("MODULO_API_KEY")
+assert os.environ.get("FARNA_CONTROL_MODULO_URL")
+assert os.environ.get("FARNA_CONTROL_MODULO_API_KEY")
 
 import farna.cli.main as cli_main
 from farna.settings import get_settings

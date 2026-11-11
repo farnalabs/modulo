@@ -52,12 +52,8 @@ class HitlClaim(OrgScoped):
         ),
     )
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    required_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
-    )
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    required_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True)
     review_id: Mapped[str] = mapped_column(String(255), nullable=False)
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
@@ -65,9 +61,7 @@ class HitlClaim(OrgScoped):
         nullable=False,
         index=True,
     )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     # FAR-748: the durable per-actor DECISION record. ``account_id`` is the
     # claimant and is NULLed at decision time (a decided row no longer owns a
     # claim), so the FAR-611 sweep alarm previously had to reconstruct the
@@ -79,9 +73,7 @@ class HitlClaim(OrgScoped):
     # column exists carries an actor; rows decided before it carry NULL
     # (legacy) and are skipped by the sweep detection rather than
     # backfilled with a fictitious actor.
-    decided_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_token: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

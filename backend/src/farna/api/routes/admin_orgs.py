@@ -64,10 +64,7 @@ _CODE_ADMIN_ORGS_ADMIN_GET_ORG_GUARDRAILS_KILL_SWITCH = "admin_orgs.admin_get_or
 
 _ALLOWED_ORG_ROLES = ("admin", "operator", "runner", "viewer")
 
-_MSG_EMAIL_ACCOUNT_EXISTS = (
-    "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
-    " in another organisation. Password-based adoption is not allowed."
-)
+_MSG_EMAIL_ACCOUNT_EXISTS = "EMAIL_ACCOUNT_EXISTS: An account with this email exists in another organisation. Password-based adoption is not allowed."
 
 
 logger = logging.getLogger(__name__)
@@ -631,9 +628,7 @@ class InvalidOrgLicenseError(ProblemException):
         detail = validation.error or "Invalid license key"
         if validation.hint:
             detail = f"{detail}. {validation.hint}"
-        problem = cast(
-            _OrgLicenseProblemDetail, _OrgLicenseProblemDetail.from_type(ProblemType.VALIDATION_ERROR, detail)
-        )
+        problem = cast(_OrgLicenseProblemDetail, _OrgLicenseProblemDetail.from_type(ProblemType.VALIDATION_ERROR, detail))
         problem.reason = validation.reason or REASON_MALFORMED
         problem.hint = validation.hint
         super().__init__(ProblemType.VALIDATION_ERROR, detail)
@@ -658,9 +653,7 @@ def _verify_license_key(req: SetOrgLicenseRequest) -> Any:
 
 @router.put(
     "/{org_id}/license",
-    dependencies=[
-        Depends(audited("organisation_license_updated", "organisation", principal_dep=resolve_audit_principal))
-    ],
+    dependencies=[Depends(audited("organisation_license_updated", "organisation", principal_dep=resolve_audit_principal))],
 )
 @handle_db_errors("admin.orgs.admin_set_org_license")
 async def admin_set_org_license(
@@ -689,9 +682,7 @@ async def admin_set_org_license(
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
                 raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_SET)
-                _raise_db_unavailable(
-                    _CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc
-                )
+                _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc)
             except HTTPException:
                 raise
             except Exception as exc:
@@ -765,9 +756,7 @@ async def admin_remove_org_license(
                 _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
             except SQLAlchemyError as exc:
                 raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_REMOVE)
-                _raise_db_unavailable(
-                    _CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while fetching org for remove-license.", exc
-                )
+                _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while fetching org for remove-license.", exc)
             except HTTPException:
                 raise
             except Exception as exc:
@@ -810,9 +799,7 @@ class SetOrgAuthzEnforceResponse(BaseModel):
 
 @router.patch(
     "/{org_id}/authz-enforce",
-    dependencies=[
-        Depends(audited("organisation_authz_enforce_updated", "organisation", principal_dep=resolve_audit_principal))
-    ],
+    dependencies=[Depends(audited("organisation_authz_enforce_updated", "organisation", principal_dep=resolve_audit_principal))],
 )
 @handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
 async def admin_set_org_authz_enforce(
@@ -831,18 +818,14 @@ async def admin_set_org_authz_enforce(
         async with session.begin():
             result = cast(
                 "CursorResult[Any]",
-                await session.execute(
-                    update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)
-                ),
+                await session.execute(update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)),
             )
             affected = result.rowcount or 0
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE)
-        _raise_db_unavailable(
-            _CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE, "Database error while updating org authz-enforce.", exc
-        )
+        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET_ORG_AUTHZ_ENFORCE, "Database error while updating org authz-enforce.", exc)
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_authz_enforce", exc)
 

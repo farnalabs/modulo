@@ -193,11 +193,7 @@ _ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID = (
     ") NOT VALID; END IF; END $$;"
 )
 _VALIDATE_CEILING_GE_DEFAULT_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_pipelines_max_autonomy_ge_default' "
-    "AND conrelid = 'public.pipelines'::regclass AND NOT convalidated) "
-    "THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT "
-    "ck_pipelines_max_autonomy_ge_default; END IF; END $$;"
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_max_autonomy_ge_default' AND conrelid = 'public.pipelines'::regclass AND NOT convalidated) THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT ck_pipelines_max_autonomy_ge_default; END IF; END $$;"
 )
 
 #: Ordered statement payload: the existence-gated "add NOT VALID" FIRST (so its

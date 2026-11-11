@@ -73,21 +73,8 @@ _ADD_CHECK_NOT_VALID = (
     "evaluation_mode IN ('automatic', 'human')"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_policy_gates_evaluation_mode' "
-    "AND conrelid = 'public.policy_gates'::regclass "
-    "AND NOT convalidated) "
-    "THEN ALTER TABLE public.policy_gates "
-    "VALIDATE CONSTRAINT ck_policy_gates_evaluation_mode; END IF; END $$;"
-)
-_DROP_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_policy_gates_evaluation_mode' "
-    "AND conrelid = 'public.policy_gates'::regclass) "
-    "THEN ALTER TABLE public.policy_gates "
-    "DROP CONSTRAINT ck_policy_gates_evaluation_mode; END IF; END $$;"
-)
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_evaluation_mode' AND conrelid = 'public.policy_gates'::regclass AND NOT convalidated) THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_evaluation_mode; END IF; END $$;"
+_DROP_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_evaluation_mode' AND conrelid = 'public.policy_gates'::regclass) THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_evaluation_mode; END IF; END $$;"
 
 #: SQLite batch-mode predicate — must match the model CheckConstraint
 #: EXACTLY so metadata.create_all() / SQLite-mirror CTAS parity holds.
@@ -112,11 +99,7 @@ def upgrade() -> None:
     #    batch mode — table recreate from the reflected schema, the 0265
     #    pattern; the server default backfills existing rows.
     if _is_postgres():
-        op.execute(
-            sa.text(
-                "ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS evaluation_mode TEXT NOT NULL DEFAULT 'automatic'"
-            )
-        )
+        op.execute(sa.text("ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS evaluation_mode TEXT NOT NULL DEFAULT 'automatic'"))
     elif _is_sqlite():
         with op.batch_alter_table(_TABLE) as batch_op:
             batch_op.add_column(sa.Column(_COLUMN, sa.Text(), nullable=False, server_default="automatic"))

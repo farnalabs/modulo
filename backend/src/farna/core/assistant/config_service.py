@@ -36,9 +36,7 @@ class AssistantConfig(BaseModel):
     system_prompt: str = ""
     additional_guidance: str = ""
     product_primer: str = ""
-    access_rules: dict[str, list[Any]] = Field(
-        default_factory=lambda: {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
-    )
+    access_rules: dict[str, list[Any]] = Field(default_factory=lambda: {"user_ids": [], "team_ids": [], "org_roles": ["admin"]})
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000

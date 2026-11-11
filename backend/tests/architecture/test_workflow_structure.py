@@ -142,16 +142,12 @@ def test_ci_yml_has_no_pr_reviewer_dispatch_job() -> None:
     if "notify-pr-review" in _job_keys(wf):
         violations.append("  ci.yml: job key 'notify-pr-review' present — reviewer dispatch must live in pr-review.yml")
     if "Trigger PR Reviewer" in _job_names(wf):
-        violations.append(
-            "  ci.yml: a job named 'Trigger PR Reviewer' present — reviewer dispatch must live in pr-review.yml"
-        )
+        violations.append("  ci.yml: a job named 'Trigger PR Reviewer' present — reviewer dispatch must live in pr-review.yml")
     if "pr-review.yml" in raw:
         violations.append("  ci.yml: references pr-review.yml — ci.yml must not dispatch the reviewer workflow")
-    if "MODULO_PR_REVIEW_WEBHOOK_URL" in raw:
+    if "FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_URL" in raw:
         violations.append("  ci.yml: embeds the PR-review webhook secret — that dispatch belongs in pr-review.yml")
-    assert not violations, "ci.yml has re-coupled the PR-reviewer dispatch into product CI (FAR-1843):\n" + "\n".join(
-        violations
-    )
+    assert not violations, "ci.yml has re-coupled the PR-reviewer dispatch into product CI (FAR-1843):\n" + "\n".join(violations)
 
 
 def test_pr_review_yml_dispatches_on_product_ci_completion() -> None:
@@ -164,21 +160,15 @@ def test_pr_review_yml_dispatches_on_product_ci_completion() -> None:
         violations.append("  pr-review.yml: workflow_dispatch trigger missing (operational manual re-trigger)")
     workflow_run = on.get("workflow_run")
     if not isinstance(workflow_run, dict):
-        violations.append(
-            "  pr-review.yml: workflow_run trigger missing — the reviewer is no longer driven by CI completion"
-        )
+        violations.append("  pr-review.yml: workflow_run trigger missing — the reviewer is no longer driven by CI completion")
     else:
         workflows = workflow_run.get("workflows") or []
         if PRODUCT_CI_WORKFLOW_NAME not in workflows:
-            violations.append(
-                f"  pr-review.yml: workflow_run.workflows must include {PRODUCT_CI_WORKFLOW_NAME!r} (got {workflows!r})"
-            )
+            violations.append(f"  pr-review.yml: workflow_run.workflows must include {PRODUCT_CI_WORKFLOW_NAME!r} (got {workflows!r})")
         types = workflow_run.get("types") or []
         if "completed" not in types:
             violations.append(f"  pr-review.yml: workflow_run.types must include 'completed' (got {types!r})")
-    assert not violations, "pr-review.yml no longer dispatches on product-CI completion (FAR-1843):\n" + "\n".join(
-        violations
-    )
+    assert not violations, "pr-review.yml no longer dispatches on product-CI completion (FAR-1843):\n" + "\n".join(violations)
 
 
 # --- Reviewer dispatch is independent of CI colour --------------------------
@@ -210,40 +200,19 @@ def test_pr_review_dispatches_on_red_ci_too() -> None:
     """
     job = _job_named(_load_yaml(PR_REVIEW_YML), "Trigger Modulo PR Review")
     condition = job.get("if")
-    assert isinstance(condition, str), (
-        "pr-review.yml: the 'Trigger Modulo PR Review' job has no scalar `if:` gate — "
-        "reviewer dispatch is no longer conditioned on the product-CI conclusion"
-    )
-    assert condition.strip(), (
-        "pr-review.yml: the 'Trigger Modulo PR Review' job has a blank `if:` gate — "
-        "the product-CI conclusion is no longer inspected"
-    )
+    assert isinstance(condition, str), "pr-review.yml: the 'Trigger Modulo PR Review' job has no scalar `if:` gate — reviewer dispatch is no longer conditioned on the product-CI conclusion"
+    assert condition.strip(), "pr-review.yml: the 'Trigger Modulo PR Review' job has a blank `if:` gate — the product-CI conclusion is no longer inspected"
     code = condition.replace('"', "'")
     violations: list[str] = []
     if "workflow_run" not in code:
-        violations.append(
-            "  the job gate does not reference github.event.workflow_run — it no longer inspects the product-CI "
-            "conclusion, so a cancelled (superseded) run could dispatch a review"
-        )
+        violations.append("  the job gate does not reference github.event.workflow_run — it no longer inspects the product-CI conclusion, so a cancelled (superseded) run could dispatch a review")
     if "conclusion ==" in code:
-        violations.append(
-            "  the job gate compares the conclusion for EQUALITY — an inclusion list silently withholds the review "
-            "from every conclusion it omits (timed_out, action_required, neutral, ...); exclude only 'cancelled'"
-        )
+        violations.append("  the job gate compares the conclusion for EQUALITY — an inclusion list silently withholds the review from every conclusion it omits (timed_out, action_required, neutral, ...); exclude only 'cancelled'")
     if "== 'success'" in code:
-        violations.append(
-            "  the job gate requires the 'success' conclusion — a red-CI PR is no longer reviewed; only 'cancelled' "
-            "may be excluded"
-        )
+        violations.append("  the job gate requires the 'success' conclusion — a red-CI PR is no longer reviewed; only 'cancelled' may be excluded")
     if "!= 'cancelled'" not in code:
-        violations.append(
-            "  the job gate does not exclude the 'cancelled' conclusion — a superseded product-CI run would "
-            "dispatch a review for a head SHA the newer run owns"
-        )
-    assert not violations, (
-        "pr-review.yml no longer dispatches the reviewer for a red (but completed) product-CI run:\n"
-        + "\n".join(violations)
-    )
+        violations.append("  the job gate does not exclude the 'cancelled' conclusion — a superseded product-CI run would dispatch a review for a head SHA the newer run owns")
+    assert not violations, "pr-review.yml no longer dispatches the reviewer for a red (but completed) product-CI run:\n" + "\n".join(violations)
 
 
 # --- FAR-2111: the review STARTS when the PR is ready, not when CI finishes --
@@ -280,10 +249,7 @@ def _job_steps(job_name: str) -> list[dict]:
 
 def _step(job_name: str, step_name: str) -> dict:
     matches = [step for step in _job_steps(job_name) if step.get("name") == step_name]
-    assert len(matches) == 1, (
-        f"pr-review.yml: expected exactly one {step_name!r} step in job {job_name!r}, "
-        f"found {len(matches)} — the gate moved; update this test deliberately"
-    )
+    assert len(matches) == 1, f"pr-review.yml: expected exactly one {step_name!r} step in job {job_name!r}, found {len(matches)} — the gate moved; update this test deliberately"
     return matches[0]
 
 
@@ -327,9 +293,7 @@ def _top_level_block_end(lines: list[str], start: int) -> int:
                 depth -= 1
                 if depth == 0:
                     return index
-    raise AssertionError(
-        "pr-review.yml: the event-dispatch `if` in 'Set PR details' is unterminated — cannot locate the block end"
-    )
+    raise AssertionError("pr-review.yml: the event-dispatch `if` in 'Set PR details' is unterminated — cannot locate the block end")
 
 
 def test_pr_review_yml_dispatches_the_review_when_the_pr_is_ready() -> None:
@@ -347,19 +311,12 @@ def test_pr_review_yml_dispatches_the_review_when_the_pr_is_ready() -> None:
     """
     on = _trigger_block()
     early = on.get(EARLY_EVENT)
-    assert isinstance(early, dict), (
-        f"pr-review.yml: no {EARLY_EVENT} trigger — a review still cannot start until the whole "
-        "~50-min product-CI run completes (Test (Backend) alone is 48-53 min), so every PR waits an "
-        "hour before it can be approved and the merge queue idles at APPROVED_COUNT=0"
-    )
+    assert isinstance(early, dict), f"pr-review.yml: no {EARLY_EVENT} trigger — a review still cannot start until the whole ~50-min product-CI run completes (Test (Backend) alone is 48-53 min), so every PR waits an hour before it can be approved and the merge queue idles at APPROVED_COUNT=0"
     types = early.get("types") or []
     violations: list[str] = []
     for required in ("opened", "ready_for_review"):
         if required not in types:
-            violations.append(
-                f"  {EARLY_EVENT}.types must include {required!r} (got {types!r}) — "
-                "'opened' covers a PR created ready, 'ready_for_review' covers a draft marked ready"
-            )
+            violations.append(f"  {EARLY_EVENT}.types must include {required!r} (got {types!r}) — 'opened' covers a PR created ready, 'ready_for_review' covers a draft marked ready")
     if "synchronize" in types:
         violations.append(
             f"  {EARLY_EVENT}.types must NOT include 'synchronize' (got {types!r}) — a push is already "
@@ -367,9 +324,7 @@ def test_pr_review_yml_dispatches_the_review_when_the_pr_is_ready() -> None:
             "is a new head SHA, so head-SHA dedup cannot coalesce a burst and a few quick pushes would "
             "fan a review storm onto the shared model capacity"
         )
-    assert not violations, "pr-review.yml no longer reviews a PR when it becomes ready (FAR-2111):\n" + "\n".join(
-        violations
-    )
+    assert not violations, "pr-review.yml no longer reviews a PR when it becomes ready (FAR-2111):\n" + "\n".join(violations)
 
 
 def test_pr_review_early_trigger_keeps_its_checks_off_the_pr_head() -> None:
@@ -411,14 +366,9 @@ def test_pr_review_manual_delivery_gate_is_not_bypassed_on_the_early_path() -> N
     run = step.get("run") or ""
     lines = run.splitlines()
     arms = [index for index, line in enumerate(lines) if "*,manual-delivery,*" in line]
-    assert len(arms) == 1, (
-        "pr-review.yml: expected exactly ONE manual-delivery case arm in 'Set PR details', "
-        f"found {len(arms)} — a duplicated or missing gate means the two dispatch paths can diverge"
-    )
+    assert len(arms) == 1, f"pr-review.yml: expected exactly ONE manual-delivery case arm in 'Set PR details', found {len(arms)} — a duplicated or missing gate means the two dispatch paths can diverge"
     dispatch = [index for index, line in enumerate(lines) if 'if [ "$EVENT_NAME" = "pull_request" ]' in line]
-    assert len(dispatch) == 1, (
-        f"pr-review.yml: expected one per-event PR resolution block in 'Set PR details', found {len(dispatch)}"
-    )
+    assert len(dispatch) == 1, f"pr-review.yml: expected one per-event PR resolution block in 'Set PR details', found {len(dispatch)}"
     block_end = _top_level_block_end(lines, dispatch[0])
     assert arms[0] > block_end, (
         "pr-review.yml: the manual-delivery gate runs INSIDE the per-event dispatch block (it ends at line "
@@ -426,10 +376,7 @@ def test_pr_review_manual_delivery_gate_is_not_bypassed_on_the_early_path() -> N
         "auto-reviewed on the other path (the early trigger bypasses it). Move the gate after the block so "
         "every path shares it."
     )
-    assert 'if [ "$EVENT_NAME" != "workflow_dispatch" ]' in run, (
-        'pr-review.yml: the manual-delivery gate must be guarded by `!= "workflow_dispatch"` so it covers '
-        "the CI-completion AND early paths while a manual operator re-trigger still bypasses it"
-    )
+    assert 'if [ "$EVENT_NAME" != "workflow_dispatch" ]' in run, 'pr-review.yml: the manual-delivery gate must be guarded by `!= "workflow_dispatch"` so it covers the CI-completion AND early paths while a manual operator re-trigger still bypasses it'
 
 
 def test_pr_review_fork_gate_is_not_bypassed_on_the_early_path() -> None:
@@ -443,18 +390,10 @@ def test_pr_review_fork_gate_is_not_bypassed_on_the_early_path() -> None:
     """
     step = _step("Trigger Modulo PR Review", "Same-repo author gate (FAR-264)")
     condition = str(step.get("if") or "")
-    assert "github.event_name" not in condition, (
-        "pr-review.yml: the same-repo author gate is restricted by event name — the early path would "
-        "dispatch a review for a fork / external-author PR (FAR-264)"
-    )
-    assert "same-repo-author-guard.py" in (step.get("run") or ""), (
-        "pr-review.yml: the same-repo author gate no longer calls the shared versioned guard script"
-    )
+    assert "github.event_name" not in condition, "pr-review.yml: the same-repo author gate is restricted by event name — the early path would dispatch a review for a fork / external-author PR (FAR-264)"
+    assert "same-repo-author-guard.py" in (step.get("run") or ""), "pr-review.yml: the same-repo author gate no longer calls the shared versioned guard script"
     checkout = _step("Trigger Modulo PR Review", "Checkout repository (for the gate scripts)")
-    assert "github.event_name" not in str(checkout.get("if") or ""), (
-        "pr-review.yml: the gate-script checkout is event-gated — the dedup and fork gates cannot run on "
-        "the early path without it"
-    )
+    assert "github.event_name" not in str(checkout.get("if") or ""), "pr-review.yml: the gate-script checkout is event-gated — the dedup and fork gates cannot run on the early path without it"
 
 
 def test_pr_review_early_path_is_deduplicated_per_head_sha() -> None:
@@ -473,23 +412,14 @@ def test_pr_review_early_path_is_deduplicated_per_head_sha() -> None:
     condition = str(step.get("if") or "")
     violations: list[str] = []
     if "workflow_dispatch" not in condition:
-        violations.append(
-            "  the dedup gate no longer names workflow_dispatch — a manual operator re-trigger must stay "
-            "explicit and bypass dedup, as it always has"
-        )
+        violations.append("  the dedup gate no longer names workflow_dispatch — a manual operator re-trigger must stay explicit and bypass dedup, as it always has")
     if "== 'workflow_run'" in condition:
-        violations.append(
-            "  the dedup gate is still restricted to workflow_run — the early dispatch is never coalesced, "
-            "so the same head SHA can be reviewed twice (e.g. a draft marked ready after its completion "
-            "review, or a repeated ready_for_review)"
-        )
+        violations.append("  the dedup gate is still restricted to workflow_run — the early dispatch is never coalesced, so the same head SHA can be reviewed twice (e.g. a draft marked ready after its completion review, or a repeated ready_for_review)")
     if "steps.pr-details.outputs.ready == 'true'" not in condition:
         violations.append("  the dedup gate no longer requires a resolved PR (ready == 'true')")
     if "pr-review-dedup.py" not in (step.get("run") or ""):
         violations.append("  the dedup step no longer calls the versioned .github/scripts/pr-review-dedup.py")
-    assert not violations, "pr-review.yml cannot guarantee one review per head SHA (FAR-2111):\n" + "\n".join(
-        violations
-    )
+    assert not violations, "pr-review.yml cannot guarantee one review per head SHA (FAR-2111):\n" + "\n".join(violations)
 
 
 def test_ci_yml_dispatches_no_reviewer_webhook() -> None:
@@ -497,10 +427,7 @@ def test_ci_yml_dispatches_no_reviewer_webhook() -> None:
     (payload construction or HMAC signing against the review secret) must be
     gone from product CI too."""
     raw = _code(CI_YML.read_text(encoding="utf-8"))
-    assert "MODULO_PR_REVIEW_WEBHOOK_SECRET" not in raw, (
-        "ci.yml signs PR-review webhooks (MODULO_PR_REVIEW_WEBHOOK_SECRET) — "
-        "reviewer dispatch must live only in pr-review.yml (FAR-1843)"
-    )
+    assert "FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_SECRET" not in raw, "ci.yml signs PR-review webhooks (MODULO_PR_REVIEW_WEBHOOK_SECRET) — reviewer dispatch must live only in pr-review.yml (FAR-1843)"
 
 
 # --- D2/D5: merge-queue CI gate is product-CI-only -------------------------
@@ -518,14 +445,9 @@ def test_merge_queue_ci_gate_references_only_product_ci() -> None:
     violations: list[str] = []
     for ref in _workflow_refs(raw):
         if ref not in ALLOWED_MERGE_QUEUE_WORKFLOW_REFS:
-            violations.append(
-                f"  merge-queue.yml: --workflow {ref!r} is not in the allowed set "
-                f"{sorted(ALLOWED_MERGE_QUEUE_WORKFLOW_REFS)} — the merge gate may consult product CI only"
-            )
+            violations.append(f"  merge-queue.yml: --workflow {ref!r} is not in the allowed set {sorted(ALLOWED_MERGE_QUEUE_WORKFLOW_REFS)} — the merge gate may consult product CI only")
     if "pr-review" in raw or "Review: Modulo Agent" in raw:
-        violations.append(
-            "  merge-queue.yml: references the PR-reviewer workflow — a review outage must not gate merges"
-        )
+        violations.append("  merge-queue.yml: references the PR-reviewer workflow — a review outage must not gate merges")
     assert not violations, "merge-queue.yml CI gate is no longer product-CI-only (FAR-1843):\n" + "\n".join(violations)
 
 
@@ -537,18 +459,10 @@ def test_merge_queue_per_branch_gate_uses_product_ci_name() -> None:
     bookkeeping query (queue self-health) legitimately uses the filename form
     of the same product-CI workflow."""
     raw = _code(MERGE_QUEUE_YML.read_text(encoding="utf-8"))
-    gate_lines = [
-        line for line in raw.splitlines() if "gh run list" in line and '"$CI_BRANCH"' in line and "--workflow" in line
-    ]
-    assert gate_lines, (
-        "merge-queue.yml: no per-branch 'gh run list --workflow' gate found — "
-        "the merge gate moved or was removed; update this test deliberately"
-    )
+    gate_lines = [line for line in raw.splitlines() if "gh run list" in line and '"$CI_BRANCH"' in line and "--workflow" in line]
+    assert gate_lines, "merge-queue.yml: no per-branch 'gh run list --workflow' gate found — the merge gate moved or was removed; update this test deliberately"
     bad = [line.strip() for line in gate_lines if PRODUCT_CI_WORKFLOW_NAME not in line]
-    assert not bad, (
-        "merge-queue.yml: per-branch CI gate(s) no longer query "
-        f"{PRODUCT_CI_WORKFLOW_NAME!r}:\n" + "\n".join(f"  {line}" for line in bad)
-    )
+    assert not bad, f"merge-queue.yml: per-branch CI gate(s) no longer query {PRODUCT_CI_WORKFLOW_NAME!r}:\n" + "\n".join(f"  {line}" for line in bad)
 
 
 def test_merge_queue_ci_gates_are_pinned_to_the_pr_head_sha() -> None:
@@ -588,29 +502,15 @@ def test_merge_queue_concurrency_is_scoped_to_the_queue_job() -> None:
     job_concurrency = _queue_job(workflow).get("concurrency")
     violations: list[str] = []
     if "concurrency" in workflow:
-        violations.append(
-            "  merge-queue.yml: workflow-level `concurrency` is present — the group must be scoped to the "
-            "`queue` job, or event-gate's pacing sleep holds it and delays every chained pass"
-        )
+        violations.append("  merge-queue.yml: workflow-level `concurrency` is present — the group must be scoped to the `queue` job, or event-gate's pacing sleep holds it and delays every chained pass")
     if not isinstance(job_concurrency, dict):
-        violations.append(
-            "  merge-queue.yml: jobs.queue has no `concurrency` mapping — merges to main are no longer serialised"
-        )
+        violations.append("  merge-queue.yml: jobs.queue has no `concurrency` mapping — merges to main are no longer serialised")
     else:
         if job_concurrency.get("group") != "merge-queue":
-            violations.append(
-                "  merge-queue.yml: jobs.queue.concurrency.group must be 'merge-queue' "
-                f"(got {job_concurrency.get('group')!r})"
-            )
+            violations.append(f"  merge-queue.yml: jobs.queue.concurrency.group must be 'merge-queue' (got {job_concurrency.get('group')!r})")
         if job_concurrency.get("cancel-in-progress") is not False:
-            violations.append(
-                "  merge-queue.yml: jobs.queue.concurrency.cancel-in-progress must be false "
-                f"(got {job_concurrency.get('cancel-in-progress')!r}) — a later run must never cancel "
-                "an in-flight merge"
-            )
-    assert not violations, (
-        "merge-queue.yml no longer scopes the merge-queue concurrency group to the queue job:\n" + "\n".join(violations)
-    )
+            violations.append(f"  merge-queue.yml: jobs.queue.concurrency.cancel-in-progress must be false (got {job_concurrency.get('cancel-in-progress')!r}) — a later run must never cancel an in-flight merge")
+    assert not violations, "merge-queue.yml no longer scopes the merge-queue concurrency group to the queue job:\n" + "\n".join(violations)
 
 
 # --- The queue only collects PRs that target main ---------------------------
@@ -620,9 +520,7 @@ def _collect_step() -> dict:
     for step in _queue_steps(_load_yaml(MERGE_QUEUE_YML)):
         if step.get("id") == "collect":
             return step
-    raise AssertionError(
-        "merge-queue.yml: the 'collect' step (id: collect) is missing — the queue's PR selection moved"
-    )
+    raise AssertionError("merge-queue.yml: the 'collect' step (id: collect) is missing — the queue's PR selection moved")
 
 
 def test_merge_queue_collects_only_prs_targeting_main() -> None:
@@ -640,19 +538,14 @@ def test_merge_queue_collects_only_prs_targeting_main() -> None:
     run = _collect_step().get("run") or ""
     violations: list[str] = []
     if "baseRefName" not in run:
-        violations.append(
-            "  the collect step's `gh pr list --json` does not request `baseRefName` — it cannot filter stacked PRs"
-        )
+        violations.append("  the collect step's `gh pr list --json` does not request `baseRefName` — it cannot filter stacked PRs")
     if "BASE_REF=$(echo \"$pr\" | jq -r '.baseRefName')" not in run:
         violations.append("  the collect step does not read each PR's base branch into BASE_REF")
     if 'if [ "$BASE_REF" != "main" ]' not in run:
         violations.append("  the collect step does not skip PRs whose base branch is not main")
     if "continue" not in run:
         violations.append("  the collect step's base-branch gate does not `continue` (the PR would still be queued)")
-    assert not violations, (
-        "merge-queue.yml can queue a stacked PR and deadlock every pass on its base-branch conflict:\n"
-        + "\n".join(violations)
-    )
+    assert not violations, "merge-queue.yml can queue a stacked PR and deadlock every pass on its base-branch conflict:\n" + "\n".join(violations)
 
 
 # --- FAR-1939: an undelivered Branch Fixer notification is never silent -----
@@ -689,10 +582,7 @@ def _dispatch_failure_arm(run: str) -> str:
     the end of the script is the failure arm — the exact text a silent
     notification would hide in.
     """
-    assert DISPATCH_FAILURE_GUARD in run, (
-        f"merge-queue.yml: no {DISPATCH_FAILURE_GUARD!r} guard in a Branch Fixer notify step — "
-        "the ultimate-failure path moved; update this test deliberately"
-    )
+    assert DISPATCH_FAILURE_GUARD in run, f"merge-queue.yml: no {DISPATCH_FAILURE_GUARD!r} guard in a Branch Fixer notify step — the ultimate-failure path moved; update this test deliberately"
     return run.rsplit(DISPATCH_FAILURE_GUARD, 1)[-1]
 
 
@@ -724,51 +614,29 @@ def test_merge_queue_branch_fixer_dispatch_failures_are_attributable() -> None:
     """
     steps = _queue_steps(_load_yaml(MERGE_QUEUE_YML))
     posting = [step for step in steps if BRANCH_FIXER_POST in (step.get("run") or "")]
-    assert len(posting) >= 3, (
-        "merge-queue.yml: expected the three shared-script dispatch steps "
-        f"(merge-conflict, migration-collision, CI-failure); found {len(posting)} — "
-        "the notification surface moved; update this test deliberately"
-    )
+    assert len(posting) >= 3, f"merge-queue.yml: expected the three shared-script dispatch steps (merge-conflict, migration-collision, CI-failure); found {len(posting)} — the notification surface moved; update this test deliberately"
     violations: list[str] = []
     for step in posting:
         name = step.get("name", "<unnamed>")
         env = step.get("env") or {}
         arm = _dispatch_failure_arm(step.get("run") or "")
         if "GH_TOKEN" not in env:
-            violations.append(
-                f"  {name!r}: env has no GH_TOKEN — the failure arm's `gh pr comment` cannot authenticate"
-            )
-        attributed = [
-            line.strip()
-            for line in arm.splitlines()
-            if ("::error::" in line or "::warning::" in line) and "not delivered" in line
-        ]
+            violations.append(f"  {name!r}: env has no GH_TOKEN — the failure arm's `gh pr comment` cannot authenticate")
+        attributed = [line.strip() for line in arm.splitlines() if ("::error::" in line or "::warning::" in line) and "not delivered" in line]
         if not attributed:
             violations.append(f"  {name!r}: failure arm has no 'was not delivered' ::error::/::warning:: annotation")
         for line in attributed:
             if "PR" not in line or "${" not in line:
                 violations.append(f"  {name!r}: failure-arm annotation does not name the affected PR(s): {line!r}")
         if 'gh pr comment "$NUM"' not in arm:
-            violations.append(
-                f'  {name!r}: failure arm has no `gh pr comment "$NUM"` — the undelivered notification '
-                "leaves no durable signal on the PR"
-            )
+            violations.append(f'  {name!r}: failure arm has no `gh pr comment "$NUM"` — the undelivered notification leaves no durable signal on the PR')
         if "for NUM in $" not in arm:
-            violations.append(
-                f"  {name!r}: failure arm does not iterate the affected PR list — the comment cannot be per-PR"
-            )
+            violations.append(f"  {name!r}: failure arm does not iterate the affected PR list — the comment cannot be per-PR")
         if "exit 1" not in arm:
-            violations.append(
-                f"  {name!r}: failure arm has no `exit 1` — a PR left with no durable signal must fail the step"
-            )
+            violations.append(f"  {name!r}: failure arm has no `exit 1` — a PR left with no durable signal must fail the step")
         if "exit 0" not in arm:
-            violations.append(
-                f"  {name!r}: failure arm has no `exit 0` — a durably signalled notification failure must "
-                "let the pass continue instead of discarding a completed merge"
-            )
-    assert not violations, (
-        "merge-queue.yml Branch Fixer notifications can be dropped silently (FAR-1939):\n" + "\n".join(violations)
-    )
+            violations.append(f"  {name!r}: failure arm has no `exit 0` — a durably signalled notification failure must let the pass continue instead of discarding a completed merge")
+    assert not violations, "merge-queue.yml Branch Fixer notifications can be dropped silently (FAR-1939):\n" + "\n".join(violations)
 
 
 # --- FAR-1940: the git credential is configured exactly once ----------------
@@ -801,62 +669,36 @@ def test_merge_queue_configures_the_git_credential_exactly_once() -> None:
 
     present = [name for name in CREDENTIAL_MECHANISMS if name in raw]
     if len(present) != 1:
-        violations.append(
-            "  merge-queue.yml: expected exactly ONE git-credential mechanism, found "
-            f"{present} — two mechanisms put two Authorization headers on the push (FAR-1940)"
-        )
+        violations.append(f"  merge-queue.yml: expected exactly ONE git-credential mechanism, found {present} — two mechanisms put two Authorization headers on the push (FAR-1940)")
     if "extraheader" in present:
-        violations.append(
-            "  merge-queue.yml: the eliminated http.<url>.extraheader Authorization header is back; "
-            "keep the url.<base>.insteadOf rewrite only (FAR-1940)"
-        )
+        violations.append("  merge-queue.yml: the eliminated http.<url>.extraheader Authorization header is back; keep the url.<base>.insteadOf rewrite only (FAR-1940)")
 
     env = workflow.get("env") or {}
     if "insteadOf" in present and str(env.get("GIT_CONFIG_COUNT", "")) != "1":
-        violations.append(
-            "  merge-queue.yml: workflow-level GIT_CONFIG_COUNT must inject exactly one url rewrite "
-            f"(got {env.get('GIT_CONFIG_COUNT')!r}) — a second entry is a second credential mechanism"
-        )
+        violations.append(f"  merge-queue.yml: workflow-level GIT_CONFIG_COUNT must inject exactly one url rewrite (got {env.get('GIT_CONFIG_COUNT')!r}) — a second entry is a second credential mechanism")
 
     checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")]
     if not checkouts:
         violations.append("  merge-queue.yml: the queue job has no actions/checkout step")
     for step in checkouts:
         if (step.get("with") or {}).get("persist-credentials") is not False:
-            violations.append(
-                "  merge-queue.yml: actions/checkout must set `persist-credentials: false` — otherwise it "
-                "re-persists an http.extraheader Authorization header and the duplicate returns (FAR-1940)"
-            )
+            violations.append("  merge-queue.yml: actions/checkout must set `persist-credentials: false` — otherwise it re-persists an http.extraheader Authorization header and the duplicate returns (FAR-1940)")
 
     pushes = [step for step in steps if BRANCH_PUSH_FRAGMENT in (step.get("run") or "")]
-    assert len(pushes) >= 2, (
-        "merge-queue.yml: expected the two merge-queue branch pushes (reference + preserve-on-failure); "
-        f"found {len(pushes)} — the push surface moved; update this test deliberately"
-    )
+    assert len(pushes) >= 2, f"merge-queue.yml: expected the two merge-queue branch pushes (reference + preserve-on-failure); found {len(pushes)} — the push surface moved; update this test deliberately"
     for step in pushes:
         name = step.get("name", "<unnamed>")
         step_env = step.get("env") or {}
         key0 = str(step_env.get("GIT_CONFIG_KEY_0", ""))
-        if "MODULO_REVIEWBOT_TOKEN" not in key0 or "insteadOf" not in key0:
-            violations.append(
-                f"  {name!r}: does not route the push through the single insteadOf rewrite carrying "
-                "secrets.MODULO_REVIEWBOT_TOKEN — a branch containing .github/workflows/* needs the "
-                "workflows-scoped PAT (FAR-1940)"
-            )
+        if "FARNA_CONTROL_MODULO_REVIEWBOT_TOKEN" not in key0 or "insteadOf" not in key0:
+            violations.append(f"  {name!r}: does not route the push through the single insteadOf rewrite carrying secrets.MODULO_REVIEWBOT_TOKEN — a branch containing .github/workflows/* needs the workflows-scoped PAT (FAR-1940)")
         arm = _failure_branch(step.get("run") or "")
         if "::error::" not in arm:
-            violations.append(
-                f"  {name!r}: push failure is swallowed — the failure arm must emit an ::error:: annotation"
-            )
+            violations.append(f"  {name!r}: push failure is swallowed — the failure arm must emit an ::error:: annotation")
         if "merge-queue/failed-" in (step.get("run") or "") and "exit 1" not in arm:
-            violations.append(
-                f"  {name!r}: push failure must fail the step loudly (`exit 1`) — a silently-swallowed push "
-                "failure is exactly how the duplicate-header breakage hid (FAR-1940)"
-            )
+            violations.append(f"  {name!r}: push failure must fail the step loudly (`exit 1`) — a silently-swallowed push failure is exactly how the duplicate-header breakage hid (FAR-1940)")
 
-    assert not violations, (
-        "merge-queue.yml no longer configures the git credential exactly once (FAR-1940):\n" + "\n".join(violations)
-    )
+    assert not violations, "merge-queue.yml no longer configures the git credential exactly once (FAR-1940):\n" + "\n".join(violations)
 
 
 # --- FAR-2001: a notification that cannot post, or whose failure is silently
@@ -1044,8 +886,7 @@ def _notification_violations(name: str, workflow: dict) -> list[_NotificationVio
                             str(job_id),
                             step_name,
                             "repo-context",
-                            f"{command!r} has no --repo in a job with no checkout — "
-                            "`gh` cannot infer the repository and the notification dies before posting",
+                            f"{command!r} has no --repo in a job with no checkout — `gh` cannot infer the repository and the notification dies before posting",
                         )
                     )
                 fallback = _NOOP_FALLBACK.search(code_stmt)
@@ -1056,8 +897,7 @@ def _notification_violations(name: str, workflow: dict) -> list[_NotificationVio
                             str(job_id),
                             step_name,
                             "no-op-fallback",
-                            f"{command!r} is wrapped in a no-op fallback {fallback.group(0)!r} — "
-                            "a failed notification becomes a log line instead of failing the step",
+                            f"{command!r} is wrapped in a no-op fallback {fallback.group(0)!r} — a failed notification becomes a log line instead of failing the step",
                         )
                     )
             if step_notification and (job_continue_on_error or step.get("continue-on-error") is True):
@@ -1067,8 +907,7 @@ def _notification_violations(name: str, workflow: dict) -> list[_NotificationVio
                         str(job_id),
                         step_name,
                         "continue-on-error",
-                        "continue-on-error is set on a notification step — its failure can no longer fail the "
-                        "job, so an undelivered notification is invisible",
+                        "continue-on-error is set on a notification step — its failure can no longer fail the job, so an undelivered notification is invisible",
                     )
                 )
     return violations
@@ -1174,9 +1013,7 @@ jobs:
         run: gh pr comment "$PR_NUM" --body "done"
 """
     violations = _notification_violations("wf.yml", _write_workflow(tmp_path, body))
-    assert not violations, "GH_REPO must satisfy the repo-context requirement:\n" + "\n".join(
-        str(v) for v in violations
-    )
+    assert not violations, "GH_REPO must satisfy the repo-context requirement:\n" + "\n".join(str(v) for v in violations)
 
 
 def test_notification_guard_flags_continue_on_error(tmp_path: Path) -> None:
@@ -1191,9 +1028,7 @@ jobs:
         run: gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "done"
 """
     violations = _notification_violations("wf.yml", _write_workflow(tmp_path, body))
-    assert any(violation.kind == "continue-on-error" for violation in violations), (
-        "guard did not flag continue-on-error on a notification step:\n" + "\n".join(str(v) for v in violations)
-    )
+    assert any(violation.kind == "continue-on-error" for violation in violations), "guard did not flag continue-on-error on a notification step:\n" + "\n".join(str(v) for v in violations)
 
 
 def test_notification_guard_flags_repo_scoped_gh_api_placeholder(tmp_path: Path) -> None:
@@ -1206,9 +1041,7 @@ jobs:
         run: gh api "repos/{owner}/{repo}/issues/1/comments" -f body=hi
 """
     violations = _notification_violations("wf.yml", _write_workflow(tmp_path, body))
-    assert any("gh api" in violation.detail for violation in violations), (
-        "guard did not flag a repo-scoped gh api placeholder:\n" + "\n".join(str(v) for v in violations)
-    )
+    assert any("gh api" in violation.detail for violation in violations), "guard did not flag a repo-scoped gh api placeholder:\n" + "\n".join(str(v) for v in violations)
 
 
 def test_notification_guard_ignores_non_notification_gh_calls(tmp_path: Path) -> None:
@@ -1241,9 +1074,7 @@ def test_workflow_notifications_cannot_be_silently_unpostable() -> None:
     violations: list[_NotificationViolation] = []
     for path in (CI_YML, MERGE_QUEUE_YML, PR_CONFLICT_YML):
         violations.extend(_notification_violations(path.name, _load_yaml(path)))
-    assert not violations, "A workflow notification can be silently undeliverable (FAR-2001):\n" + "\n".join(
-        str(violation) for violation in violations
-    )
+    assert not violations, "A workflow notification can be silently undeliverable (FAR-2001):\n" + "\n".join(str(violation) for violation in violations)
 
 
 # --- A saturated Branch Fixer trigger is retried, never terminally dropped ---
@@ -1284,14 +1115,8 @@ def _branch_fixer_dispatch_runs(workflow: dict) -> dict[str, str]:
     for job_id in BRANCH_FIXER_NOTIFY_JOBS:
         job = jobs.get(job_id)
         assert isinstance(job, dict), f"ci.yml: job {job_id!r} is missing — the Branch Fixer dispatch moved"
-        dispatch = [
-            step
-            for step in (job.get("steps") or [])
-            if isinstance(step, dict) and step.get("name") == "Trigger Modulo Branch Fixer"
-        ]
-        assert len(dispatch) == 1, (
-            f"ci.yml job {job_id!r}: expected exactly one 'Trigger Modulo Branch Fixer' step, found {len(dispatch)}"
-        )
+        dispatch = [step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Trigger Modulo Branch Fixer"]
+        assert len(dispatch) == 1, f"ci.yml job {job_id!r}: expected exactly one 'Trigger Modulo Branch Fixer' step, found {len(dispatch)}"
         runs[job_id] = dispatch[0].get("run") or ""
     return runs
 
@@ -1310,21 +1135,14 @@ def test_branch_fixer_dispatch_uses_the_one_shared_policy() -> None:
     violations: list[str] = []
     for job_id, run in runs.items():
         if SHARED_DISPATCH_MARKER not in run:
-            violations.append(
-                f"  {job_id}: does not call {SHARED_DISPATCH_MARKER!r} — the dispatch policy must have ONE definition"
-            )
+            violations.append(f"  {job_id}: does not call {SHARED_DISPATCH_MARKER!r} — the dispatch policy must have ONE definition")
         if "DISPATCH_BODY=" not in run:
             violations.append(f"  {job_id}: does not pass DISPATCH_BODY to the shared script")
         if "DISPATCH_RESULT_FILE" not in run:
-            violations.append(
-                f"  {job_id}: does not read DISPATCH_RESULT_FILE — its own durable signal would be composed from "
-                "guessed values rather than the observed last HTTP status / attempt count"
-            )
+            violations.append(f"  {job_id}: does not read DISPATCH_RESULT_FILE — its own durable signal would be composed from guessed values rather than the observed last HTTP status / attempt count")
         for definition in INLINE_POLICY_DEFINITIONS:
             if definition in run:
-                violations.append(
-                    f"  {job_id}: re-inlines the policy ({definition!r}) — call the shared script instead"
-                )
+                violations.append(f"  {job_id}: re-inlines the policy ({definition!r}) — call the shared script instead")
         if "GITHUB_STEP_SUMMARY" not in run:
             violations.append(f"  {job_id}: no job-specific run-summary line when the dispatch is not delivered")
 
@@ -1333,15 +1151,9 @@ def test_branch_fixer_dispatch_uses_the_one_shared_policy() -> None:
         # exactly one shallow, credential-free checkout and the contents: read
         # permission it needs.
         job = jobs.get(job_id) or {}
-        checkouts = [
-            step
-            for step in (job.get("steps") or [])
-            if isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/checkout@")
-        ]
+        checkouts = [step for step in (job.get("steps") or []) if isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/checkout@")]
         if len(checkouts) != 1:
-            violations.append(
-                f"  {job_id}: expected exactly one actions/checkout (for the script), found {len(checkouts)}"
-            )
+            violations.append(f"  {job_id}: expected exactly one actions/checkout (for the script), found {len(checkouts)}")
         else:
             with_ = checkouts[0].get("with") or {}
             if with_.get("persist-credentials") is not False:
@@ -1351,9 +1163,7 @@ def test_branch_fixer_dispatch_uses_the_one_shared_policy() -> None:
         permissions = job.get("permissions") or {}
         if str(permissions.get("contents", "")) != "read":
             violations.append(f"  {job_id}: job permissions must grant `contents: read` for the script checkout")
-    assert not violations, "ci.yml Branch Fixer dispatch no longer uses the one shared policy:\n" + "\n".join(
-        violations
-    )
+    assert not violations, "ci.yml Branch Fixer dispatch no longer uses the one shared policy:\n" + "\n".join(violations)
 
 
 # --- Signing canary: identity is read from the EMBEDDED signature -----------
@@ -1392,16 +1202,10 @@ def test_signing_canary_does_not_assert_on_envelope_subject_alone() -> None:
     run = _verify_step_run_text()
     violations: list[str] = []
     if "$subject -notlike" in run:
-        violations.append(
-            "  signing-canary.yml: still uses the envelope-only `$subject -notlike` check; "
-            "Get-AuthenticodeSignature reports the Windows catalog signer of a copied system file"
-        )
+        violations.append("  signing-canary.yml: still uses the envelope-only `$subject -notlike` check; Get-AuthenticodeSignature reports the Windows catalog signer of a copied system file")
     if "*FARNA LABS LTD*" in run:
         violations.append("  signing-canary.yml: still uses the old literal '*FARNA LABS LTD*' pattern")
-    assert not violations, (
-        "signing-canary.yml still asserts on the certificate Get-AuthenticodeSignature reported:\n"
-        + "\n".join(violations)
-    )
+    assert not violations, "signing-canary.yml still asserts on the certificate Get-AuthenticodeSignature reported:\n" + "\n".join(violations)
 
 
 def test_signing_canary_reads_and_verifies_the_embedded_signature() -> None:
@@ -1428,9 +1232,7 @@ def test_signing_canary_traverses_nested_signatures() -> None:
         violations.append("  signing-canary.yml: does not inspect SignerInfo.UnauthenticatedAttributes")
     if "SignedCms" not in run or ".Decode(" not in run:
         violations.append("  signing-canary.yml: does not decode nested SignedCms")
-    assert not violations, (
-        "signing-canary.yml does not traverse nested signatures to find the company identity:\n" + "\n".join(violations)
-    )
+    assert not violations, "signing-canary.yml does not traverse nested signatures to find the company identity:\n" + "\n".join(violations)
 
 
 def _company_pattern_from_workflow() -> str:
@@ -1452,9 +1254,7 @@ def test_signing_canary_company_pattern_matches_identity() -> None:
     ):
         assert re.search(pattern, subject), f"company pattern {pattern!r} does not match {subject!r}"
     windows_subject = "CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
-    assert not re.search(pattern, windows_subject), (
-        f"company pattern {pattern!r} would accept the Windows certificate {windows_subject!r}"
-    )
+    assert not re.search(pattern, windows_subject), f"company pattern {pattern!r} would accept the Windows certificate {windows_subject!r}"
 
 
 def test_signing_canary_status_gate_remains() -> None:
@@ -1652,9 +1452,7 @@ def test_deploy_watchdog_email_fires_on_the_transition_not_per_tick() -> None:
         msg = "  notify step must read the watchdog's structured health verdict"
         violations.append(msg)
     # The step it names must actually exist, or the previous verdict is always UNKNOWN.
-    assert any(s.get("name") == WATCHDOG_VERDICT_STEP for s in _all_steps(DEPLOY_WATCHDOG_YML)), (
-        f"deploy-watchdog.yml: state-vector step {WATCHDOG_VERDICT_STEP!r} is missing"
-    )
+    assert any(s.get("name") == WATCHDOG_VERDICT_STEP for s in _all_steps(DEPLOY_WATCHDOG_YML)), f"deploy-watchdog.yml: state-vector step {WATCHDOG_VERDICT_STEP!r} is missing"
     assert not violations, "watchdog transition email is not wired:\n" + "\n".join(violations)
 
 
@@ -1778,11 +1576,7 @@ def test_production_deploy_is_unreachable_with_deployed_false() -> None:
     if "deploy-throttle" not in needs:
         violations.append(f"  deploy-production does not declare deploy-throttle in needs (got {needs!r})")
     # The bypass must be ANDed with the gate, never able to stand alone.
-    if (
-        "skip_staging_e2e" in condition
-        and DEPLOYED_GATE in condition
-        and condition.index(DEPLOYED_GATE) > condition.index("skip_staging_e2e")
-    ):
+    if "skip_staging_e2e" in condition and DEPLOYED_GATE in condition and condition.index(DEPLOYED_GATE) > condition.index("skip_staging_e2e"):
         violations.append("  the skip_staging_e2e bypass is evaluated before the deployed gate")
     assert not violations, "a throttled run can reach the production deploy step:\n" + "\n".join(violations)
 
@@ -1900,11 +1694,7 @@ def test_production_deploy_waits_for_active_sandbox_runs_before_fly_swap() -> No
     production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
     names = [step.get("name") for step in production_steps if isinstance(step, dict)]
     assert "Wait for active sandbox runs to finish (production)" in names
-    wait_step = next(
-        step
-        for step in production_steps
-        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
-    )
+    wait_step = next(step for step in production_steps if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)")
     script = str(wait_step.get("run") or "")
     deploy_index = names.index("Deploy to app-modulo")
     wait_index = names.index("Wait for active sandbox runs to finish (production)")
@@ -1952,9 +1742,7 @@ def test_production_drain_clears_only_after_all_post_deploy_gates() -> None:
     assert "if" not in clear_step, "drain clear must use the default success gate, not always()/failure()"
     for name in required[:3]:
         step = next(step for step in production_steps if step.get("name") == name)
-        assert "if" not in step or "rolled_back == 'false'" in str(step.get("if")), (
-            f"{name} must remain gated against a rollback"
-        )
+        assert "if" not in step or "rolled_back == 'false'" in str(step.get("if")), f"{name} must remain gated against a rollback"
 
 
 def test_production_drain_bootstrap_does_not_deadlock_the_deploy() -> None:
@@ -2020,11 +1808,7 @@ def test_production_active_run_wait_requires_an_active_admission_freeze() -> Non
     active, while still failing closed when a real freeze is active.
     """
     production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
-    wait = next(
-        str(step.get("run") or "")
-        for step in production_steps
-        if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)"
-    )
+    wait = next(str(step.get("run") or "") for step in production_steps if isinstance(step, dict) and step.get("name") == "Wait for active sandbox runs to finish (production)")
     violations: list[str] = []
     if "deployment_drain" not in wait:
         violations.append("  the wait step no longer reads the live deployment_drain flag")
@@ -2100,23 +1884,8 @@ def test_interpolated_run_scripts_stay_under_the_expression_length_cap() -> None
                     continue
                 if len(run) > GITHUB_MAX_EXPRESSION_LENGTH:
                     label = step.get("name") or "step " + str(index)
-                    violations.append(
-                        "  "
-                        + path.name
-                        + ": job '"
-                        + str(job_id)
-                        + "' step '"
-                        + str(label)
-                        + "' run: is "
-                        + str(len(run))
-                        + " chars with ${{ }} interpolation (max "
-                        + str(GITHUB_MAX_EXPRESSION_LENGTH)
-                        + "); move the interpolated value into the step's env:"
-                    )
-    assert not violations, (
-        "workflow run: scripts exceed GitHub's 21,000-char expression cap, so "
-        "the workflow will fail to load and no CI job will run:\n" + "\n".join(violations)
-    )
+                    violations.append("  " + path.name + ": job '" + str(job_id) + "' step '" + str(label) + "' run: is " + str(len(run)) + " chars with ${{ }} interpolation (max " + str(GITHUB_MAX_EXPRESSION_LENGTH) + "); move the interpolated value into the step's env:")
+    assert not violations, "workflow run: scripts exceed GitHub's 21,000-char expression cap, so the workflow will fail to load and no CI job will run:\n" + "\n".join(violations)
 
 
 # --- FAR-2308: every product job is in every notifier's `needs` --------------
@@ -2138,10 +1907,7 @@ PR_ONLY_CONDITION = "github.event_name == 'pull_request'"
 NOTIFIER_NEEDS_EXEMPTIONS: dict[str, dict[str, str]] = {
     "notify-pr-failure": {},
     "notify-main-failure": {
-        "sonar-new-issues-gate": (
-            "PR-only (`if: github.event_name == 'pull_request'`) - it never runs, so it "
-            "cannot fail, on the push/workflow_dispatch events this notifier handles"
-        ),
+        "sonar-new-issues-gate": ("PR-only (`if: github.event_name == 'pull_request'`) - it never runs, so it cannot fail, on the push/workflow_dispatch events this notifier handles"),
     },
     "self-report-ci": {},
 }
@@ -2160,9 +1926,7 @@ def test_every_product_job_is_in_every_notifier_needs_list() -> None:
     jobs = workflow.get("jobs") or {}
     job_ids = set(jobs)
     assert job_ids, "ci.yml declares no jobs"
-    assert job_ids >= NOTIFIER_JOBS, "ci.yml no longer declares the expected notifier jobs: " + ", ".join(
-        sorted(NOTIFIER_JOBS - job_ids)
-    )
+    assert job_ids >= NOTIFIER_JOBS, "ci.yml no longer declares the expected notifier jobs: " + ", ".join(sorted(NOTIFIER_JOBS - job_ids))
     product_jobs = job_ids - NOTIFIER_JOBS
     assert product_jobs, "ci.yml declares no product jobs"
     violations: list[str] = []
@@ -2180,17 +1944,9 @@ def test_every_product_job_is_in_every_notifier_needs_list() -> None:
             violations.append(f"  {notifier}: needs: names job(s) that do not exist: {', '.join(unknown)}")
         nested_notifiers = sorted(needs_set & NOTIFIER_JOBS)
         if nested_notifiers:
-            violations.append(
-                f"  {notifier}: needs: lists notifier job(s) {', '.join(nested_notifiers)} — "
-                "a notifier's outcome must never gate another notifier"
-            )
+            violations.append(f"  {notifier}: needs: lists notifier job(s) {', '.join(nested_notifiers)} — a notifier's outcome must never gate another notifier")
         for exempted, reason in exemptions.items():
             condition = str((jobs.get(exempted) or {}).get("if") or "")
             if PR_ONLY_CONDITION not in condition:
-                violations.append(
-                    f"  {notifier}: exemption {exempted!r} is no longer PR-only "
-                    f"(`if:` = {condition!r}) — it must be listed in needs: ({reason})"
-                )
-    assert not violations, "ci.yml notifier `needs:` lists do not cover every product job (FAR-2308):\n" + "\n".join(
-        violations
-    )
+                violations.append(f"  {notifier}: exemption {exempted!r} is no longer PR-only (`if:` = {condition!r}) — it must be listed in needs: ({reason})")
+    assert not violations, "ci.yml notifier `needs:` lists do not cover every product job (FAR-2308):\n" + "\n".join(violations)

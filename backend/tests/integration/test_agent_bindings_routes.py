@@ -31,14 +31,9 @@ _VALID_32 = "a" * 32
 
 _INSERT_ORG_SQL = text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :n, :s, '{}'::json)")
 
-_INSERT_ACCOUNT_SQL = text(
-    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-    "VALUES (:id, :e, :n, 'h', 'local', true)"
-)
+_INSERT_ACCOUNT_SQL = text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'h', 'local', true)")
 
-_INSERT_MEMBERSHIP_SQL = text(
-    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-)
+_INSERT_MEMBERSHIP_SQL = text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')")
 
 _INSERT_AGENT_SQL = text(
     "INSERT INTO agents (id, organisation_id, name, prompt_template, account_id, "
@@ -56,11 +51,7 @@ _INSERT_MODEL_BACKEND_SQL = text(
     "'{}'::json, 'enabled', 'org', 'native')"
 )
 
-_INSERT_BINDING_SQL = text(
-    "INSERT INTO agent_runner_bindings (id, organisation_id, agent_id, model_backend_id, "
-    "target_env_var, source_field, account_id) "
-    "VALUES (:id, :oid, :aid, :bid, :target, :source, :uid)"
-)
+_INSERT_BINDING_SQL = text("INSERT INTO agent_runner_bindings (id, organisation_id, agent_id, model_backend_id, target_env_var, source_field, account_id) VALUES (:id, :oid, :aid, :bid, :target, :source, :uid)")
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -178,7 +169,7 @@ async def test_put_bindings_reserved_target_returns_422(
             "bindings": [
                 {
                     "model_backend_id": str(payload["backend_id"]),
-                    "target_env_var": "MODULO_API_KEY",
+                    "target_env_var": "FARNA_CONTROL_MODULO_API_KEY",
                     "source_field": "api_key",
                 }
             ]
@@ -187,7 +178,7 @@ async def test_put_bindings_reserved_target_returns_422(
     assert resp.status_code == 422, resp.text
     detail = resp.json().get("detail", "")
     assert "reserved" in detail
-    assert "MODULO_API_KEY" in detail
+    assert "FARNA_CONTROL_MODULO_API_KEY" in detail
 
 
 async def test_delete_cross_agent_binding_returns_404_and_no_audit_row(

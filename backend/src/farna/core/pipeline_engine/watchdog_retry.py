@@ -304,9 +304,7 @@ async def _attempt_count_if_retryable(
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    execution_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
-        org_id, run_id
-    )
+    execution_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(org_id, run_id)
     # FAR-2076: the ONE shared measure of executions already consumed — reused,
     # never re-derived, so every path that can grant an execution compares
     # against the same count.
@@ -567,9 +565,7 @@ async def watchdog_retry_after_policy(
         # re-dispatch — the row is left for the nodeless/age backstop.
         box.deferred = True
         _log.warning(
-            "pipeline.watchdog_retry_deferred_reset_timeout run=%s status=%s error_code=%s "
-            "attempt=%s budget=%s — the fenced pending-reset timed out; the row is left "
-            "running for the nodeless/age backstop (no terminal fail, no re-dispatch)",
+            "pipeline.watchdog_retry_deferred_reset_timeout run=%s status=%s error_code=%s attempt=%s budget=%s — the fenced pending-reset timed out; the row is left running for the nodeless/age backstop (no terminal fail, no re-dispatch)",
             run_id,
             final_status,
             error_code,
@@ -598,8 +594,7 @@ async def watchdog_retry_after_policy(
         error_code=error_code,
     )
     _log.warning(
-        "pipeline.watchdog_retry_redispatch run=%s status=%s error_code=%s attempt=%s budget=%s "
-        "sleep_seconds=%.3f schedule_state=%s",
+        "pipeline.watchdog_retry_redispatch run=%s status=%s error_code=%s attempt=%s budget=%s sleep_seconds=%.3f schedule_state=%s",
         run_id,
         final_status,
         error_code,

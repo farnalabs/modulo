@@ -88,7 +88,7 @@ def test_main_warns_when_system_url_derivation_fails(
         "postgresql+asyncpg://admin:pw@db.internal:5432/modulo",
     )
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/modulo")
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
 
     def _skip_bootstrap(coro) -> None:
         # Avoid the "coroutine was never awaited" RuntimeWarning (a CI error).
@@ -159,9 +159,7 @@ def test_fix_database_url_scheme_and_sslmode(
 def test_set_path_fixes_system_url_like_database_url(bootstrap_db) -> None:
     # MODULO_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
     set_url = "postgres://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require"
-    assert bootstrap_db.fix_database_url(set_url) == (
-        "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require"
-    )
+    assert bootstrap_db.fix_database_url(set_url) == ("postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require")
 
 
 def test_derivation_runs_on_the_fixed_database_url(bootstrap_db) -> None:

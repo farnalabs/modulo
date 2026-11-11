@@ -50,8 +50,7 @@ class EvalResult(OrgScoped):
         ),
         # ADR 066 §0: confidence provenance is a closed vocabulary.
         CheckConstraint(
-            "judge_confidence_kind IS NULL OR judge_confidence_kind IN "
-            "('vendor_claimed_calibrated', 'model_self_reported', 'unavailable')",
+            "judge_confidence_kind IS NULL OR judge_confidence_kind IN ('vendor_claimed_calibrated', 'model_self_reported', 'unavailable')",
             name="ck_eval_results_judge_confidence_kind",
         ),
         # FAR-2028: finding resolution vocabulary.
@@ -120,17 +119,13 @@ class EvalResult(OrgScoped):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str | None] = mapped_column(String(2000))
     observed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    evaluated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
     # Finding resolution (FAR-2028): accepted / dismissed / superseded / pending.
     # Applies to both eval and guardrail findings (guardrails are eval_type='guardrail').
     resolution: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending", default="pending")
     resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
 
     suite_run: Mapped["SuiteRun"] = relationship(back_populates="eval_results")
 
@@ -146,7 +141,4 @@ def _require_outcome_on_insert(mapper: Any, connection: Any, target: EvalResult)
     (the only production write path); STAGE 2 makes the database enforce it.
     """
     if target.outcome is None:
-        raise ValueError(
-            "EvalResult.outcome is required (FAR-2040 expand contract): set it on every "
-            "insert; stage 2 sets the database column NOT NULL."
-        )
+        raise ValueError("EvalResult.outcome is required (FAR-2040 expand contract): set it on every insert; stage 2 sets the database column NOT NULL.")

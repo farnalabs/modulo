@@ -607,10 +607,7 @@ class GitLabConnector(ConnectorBase):
         if not declared or required in declared:
             return
         raise ValueError(
-            f"GitLab write resource {resource!r} requires scope {required!r}; "
-            f"token declares: {', '.join(sorted(declared))}. "
-            "Grant the scope or use a token with the 'api' scope, which covers "
-            "all GitLab write operations.",
+            f"GitLab write resource {resource!r} requires scope {required!r}; token declares: {', '.join(sorted(declared))}. Grant the scope or use a token with the 'api' scope, which covers all GitLab write operations.",
         )
 
     @staticmethod
@@ -657,11 +654,7 @@ class GitLabConnector(ConnectorBase):
             return None
         return HealthResult(
             ok=False,
-            detail=(
-                "Missing scopes: "
-                + ", ".join(sorted(missing_scopes))
-                + f". Required: {', '.join(sorted(REQUIRED_SCOPES))}"
-            ),
+            detail=("Missing scopes: " + ", ".join(sorted(missing_scopes)) + f". Required: {', '.join(sorted(REQUIRED_SCOPES))}"),
         )
 
     async def _probe_instance_version(self, client: httpx.AsyncClient) -> str | None:
@@ -694,9 +687,7 @@ class GitLabConnector(ConnectorBase):
                 try:
                     user_info = r.json()
                 except json.JSONDecodeError:
-                    return HealthResult(
-                        ok=False, detail=self._redacted_detail(f"Invalid JSON in /user response: {r.text}")[:200]
-                    )
+                    return HealthResult(ok=False, detail=self._redacted_detail(f"Invalid JSON in /user response: {r.text}")[:200])
                 username = user_info.get("username", "")
 
                 projects_r = await client.get("/projects", params={"per_page": 1})

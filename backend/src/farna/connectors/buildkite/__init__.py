@@ -133,9 +133,7 @@ class BuildkiteConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=self._redacted_detail(f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text}")[
-                    :200
-                ],
+                detail=self._redacted_detail(f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Buildkite API timeout")
@@ -241,8 +239,7 @@ class BuildkiteConnector(ConnectorBase):
             # call rejects while the build already runs.
             if run.id.count("/") != 2:
                 raise ValueError(
-                    f"Buildkite accepted the build request for {pipeline_id!r} but the response "
-                    "did not yield a consumable run id — refusing to return an unusable run id",
+                    f"Buildkite accepted the build request for {pipeline_id!r} but the response did not yield a consumable run id — refusing to return an unusable run id",
                 )
             return run
 

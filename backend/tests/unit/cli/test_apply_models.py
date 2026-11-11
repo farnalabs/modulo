@@ -105,17 +105,13 @@ class TestSecretRefValidation:
         assert "sk-super-secret-literal" not in validator_msg
 
     def test_env_ref_var_extraction(self) -> None:
-        backend = ModelBackendEntity.model_validate(
-            {"name": "b", "display_name": "b", "provider": "openai", "model_id": "gpt", "api_key": "${env:SK_KEY}"}
-        )
+        backend = ModelBackendEntity.model_validate({"name": "b", "display_name": "b", "provider": "openai", "model_id": "gpt", "api_key": "${env:SK_KEY}"})
         assert backend.env_ref_var() == "SK_KEY"
         assert ENV_REF_PATTERN.fullmatch("${env:SK_KEY}") is not None
         assert ENV_REF_PATTERN.fullmatch("${env:lowercase_ok}") is not None
 
     def test_backend_secret_ref_not_resolved_by_model(self) -> None:
-        backend = ModelBackendEntity.model_validate(
-            {"name": "b", "display_name": "b", "provider": "openai", "model_id": "gpt", "api_key": "secretref://k"}
-        )
+        backend = ModelBackendEntity.model_validate({"name": "b", "display_name": "b", "provider": "openai", "model_id": "gpt", "api_key": "secretref://k"})
         assert backend.env_ref_var() is None
         assert SECRET_REF_PATTERN.fullmatch("secretref://k") is not None
 
@@ -142,16 +138,12 @@ class TestManagedViews:
         }
 
     def test_backend_managed_view_can_include_api_key(self) -> None:
-        backend = ModelBackendEntity.model_validate(
-            {"name": "b", "display_name": "B", "provider": "openai", "model_id": "gpt", "api_key": "${env:SK}"}
-        )
+        backend = ModelBackendEntity.model_validate({"name": "b", "display_name": "B", "provider": "openai", "model_id": "gpt", "api_key": "${env:SK}"})
         view = backend.managed_view(include_api_key=True)
         assert view["api_key"] == "${env:SK}"
 
     def test_schema_managed_view_excludes_name(self) -> None:
-        schema = ApplyConfig.model_validate(
-            {"api_version": "modulo.dev/v1", "entities": {"schemas": [{"name": "s"}]}}
-        ).entities.schemas[0]
+        schema = ApplyConfig.model_validate({"api_version": "modulo.dev/v1", "entities": {"schemas": [{"name": "s"}]}}).entities.schemas[0]
         view = schema.managed_view()
         assert view == {"description": None, "abstract_name": None, "versions": []}
 
@@ -168,12 +160,7 @@ class TestUniqueNames:
     def test_duplicate_backend_names_rejected(self) -> None:
         tx = {
             "api_version": "modulo.dev/v1",
-            "entities": {
-                "model_backends": [
-                    {"name": "b", "display_name": "b", "provider": "p", "model_id": "m", "api_key": "${env:V}"}
-                ]
-                * 2
-            },
+            "entities": {"model_backends": [{"name": "b", "display_name": "b", "provider": "p", "model_id": "m", "api_key": "${env:V}"}] * 2},
         }
         with pytest.raises(ValidationError):
             _config(tx)
@@ -370,9 +357,7 @@ class TestTriggerEntityContracts:
         assert [t.display_key() for t in config.entities.triggers] == ["a/hook", "b/hook"]
 
     def test_create_payload_carries_name(self) -> None:
-        entity = TriggerEntity.model_validate(
-            {"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"hmac_secret": "${env:HS}"}}
-        )
+        entity = TriggerEntity.model_validate({"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"hmac_secret": "${env:HS}"}})
         payload = entity.create_payload({"hmac_secret": "resolved"})
         assert payload["name"] == "hook"
         assert payload["config_json"]["hmac_secret"] == "resolved"
@@ -386,9 +371,7 @@ class TestTriggerEntityContracts:
     def test_with_resolved_config_hashes_resolved_literals(self) -> None:
         """FAR-681 QA (env-ref drift): the desired view must hash the RESOLVED
         config, not the raw ${env:VAR} strings."""
-        entity = TriggerEntity.model_validate(
-            {"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"url": "${env:URL}"}}
-        )
+        entity = TriggerEntity.model_validate({"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"url": "${env:URL}"}})
         resolved = entity.with_resolved_config({"url": "https://resolved.example"})
         current = {
             "trigger_type": "webhook",
@@ -405,9 +388,7 @@ class TestTriggerEntityContracts:
         assert decision.status == "unchanged"
 
     def test_managed_view_quantizes_spend_limit_to_4dp(self) -> None:
-        entity = TriggerEntity.model_validate(
-            {"pipeline": "p", "name": "hook", "trigger_type": "cron", "daily_spend_limit": 10.55555}
-        )
+        entity = TriggerEntity.model_validate({"pipeline": "p", "name": "hook", "trigger_type": "cron", "daily_spend_limit": 10.55555})
         assert entity.managed_view()["daily_spend_limit"] == pytest.approx(10.5556)
 
     def test_config_declares_secrets(self) -> None:
@@ -535,18 +516,14 @@ class TestPipelineEntityContracts:
     def test_runtime_limits_round_trip_into_managed_view(self) -> None:
         """FAR-1294: a declared node timeout / run duration cap is hashed into
         the managed view, so the generic plan diff reports drift on both."""
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200})
         assert entity.node_timeout_seconds == 600
         assert entity.max_duration_seconds == 7200
         assert entity.managed_view()["node_timeout_seconds"] == 600
         assert entity.managed_view()["max_duration_seconds"] == 7200
 
     def test_declared_runtime_limits_are_managed(self) -> None:
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200})
         assert entity.manages_node_timeout
         assert entity.manages_max_duration
 
@@ -586,9 +563,7 @@ class TestPipelineEntityContracts:
 
     @pytest.mark.parametrize("value", [1, 604800])
     def test_runtime_limits_bounds_accepted(self, value: int) -> None:
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "node_timeout_seconds": value, "max_duration_seconds": value}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": value, "max_duration_seconds": value})
         assert entity.node_timeout_seconds == value
         assert entity.max_duration_seconds == value
         assert entity.managed_view()["node_timeout_seconds"] == value
@@ -923,16 +898,13 @@ class TestSensitiveKeyTwin:
         assert is_sensitive_env_key is core_is_sensitive_env_key
 
         sample = {
-            "MODULO_USERS": "admin:pw",
+            "FARNA_CONTROL_MODULO_USERS": "admin:pw",
             "GITHUB_TOKEN": "ghp_00112233445566778899aabbccddeeff00112233",
             "LOG_LEVEL": "debug",
             "SCAN_INTERVAL": "60s",
         }
         cli_masked = _mask_graph_env_vars_for_hash(sample)
-        middleware_masked = {
-            k: (SENSITIVE_VALUE_MASK if middleware_is_sensitive_env_key(k) else mask_secret_values_in_text(v))
-            for k, v in sample.items()
-        }
+        middleware_masked = {k: (SENSITIVE_VALUE_MASK if middleware_is_sensitive_env_key(k) else mask_secret_values_in_text(v)) for k, v in sample.items()}
         assert cli_masked == middleware_masked
 
 
@@ -953,7 +925,7 @@ class TestPipelineGraphSecretParity:
                 "agent": "worker",
                 "position": {"x": 0, "y": 0},
                 "env_vars": {
-                    "MODULO_USERS": "admin:pw123",
+                    "FARNA_CONTROL_MODULO_USERS": "admin:pw123",
                     "LOG_LEVEL": "debug",
                     # Falsy declared secret: the server displays it unmasked.
                     "PYPI_TOKEN": "",
@@ -990,7 +962,7 @@ class TestPipelineGraphSecretParity:
 
         node = self.server_view()["nodes"][0]
         # env tier: sensitive key -> whole mask; other keys value-compiled.
-        assert node["env_vars"]["MODULO_USERS"] == SENSITIVE_VALUE_MASK
+        assert node["env_vars"]["FARNA_CONTROL_MODULO_USERS"] == SENSITIVE_VALUE_MASK
         assert node["env_vars"]["LOG_LEVEL"] == "debug"
         # falsy declared secret is displayed unmasked (mask_sensitive_value).
         assert not node["env_vars"]["PYPI_TOKEN"]
@@ -1090,7 +1062,7 @@ class TestPipelineGraphSecretParity:
         entity = PipelineEntity.model_validate({"name": "sample", "graph": self.DECLARED})
         view = entity.managed_view(graph=self.DECLARED)
         assert view["graph"] == strip_secret_shaped_graph(self.DECLARED)
-        assert view["graph"]["nodes"][0]["env_vars"]["MODULO_USERS"] == SENSITIVE_VALUE_MASK
+        assert view["graph"]["nodes"][0]["env_vars"]["FARNA_CONTROL_MODULO_USERS"] == SENSITIVE_VALUE_MASK
 
     def test_declares_secrets_per_field(self) -> None:
         from farna.cli.apply.models import graph_declares_secrets
@@ -1115,7 +1087,7 @@ class TestPipelineGraphSecretParity:
 
         node = strip_secret_shaped_graph(self.DECLARED)["nodes"][0]
         assert node["env_vars"] == {
-            "MODULO_USERS": SENSITIVE_VALUE_MASK,
+            "FARNA_CONTROL_MODULO_USERS": SENSITIVE_VALUE_MASK,
             "LOG_LEVEL": "debug",
             "PYPI_TOKEN": "",
         }
@@ -1145,9 +1117,7 @@ class TestGraphMaskHelpers:
         from farna.cli.apply.models import _mask_graph_context_files_for_hash
         from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
-        masked = _mask_graph_context_files_for_hash(
-            {"notes": "token ghp_00112233445566778899aabbccddeeff00112233", "binary": 42}
-        )
+        masked = _mask_graph_context_files_for_hash({"notes": "token ghp_00112233445566778899aabbccddeeff00112233", "binary": 42})
         assert masked["notes"] == f"token {SENSITIVE_VALUE_MASK}"
         assert masked["binary"] == 42
 
@@ -1256,12 +1226,8 @@ class TestGraphMaskHelpers:
                 "edges": [],
             }
         )
-        assert graph_declares_secrets(
-            {"nodes": [{"id": "n", "parameter_overrides": {"nested": {"api_key": "s3cr3t"}}}], "edges": []}
-        )
-        assert graph_declares_secrets(
-            {"nodes": [{"id": "n", "composite_parameter_values": {"password": "x"}}], "edges": []}
-        )
+        assert graph_declares_secrets({"nodes": [{"id": "n", "parameter_overrides": {"nested": {"api_key": "s3cr3t"}}}], "edges": []})
+        assert graph_declares_secrets({"nodes": [{"id": "n", "composite_parameter_values": {"password": "x"}}], "edges": []})
         # value-pattern leaf inside a list inside a deep field
         assert graph_declares_secrets(
             {
@@ -1280,14 +1246,9 @@ class TestGraphMaskHelpers:
 
         assert graph_declares_secrets({"nodes": ["raw", 42], "edges": []}) is False
         assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"REPLICAS": 3}}], "edges": []}) is False
-        assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"MODULO_USERS": ""}}], "edges": []}) is False
+        assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"FARNA_CONTROL_MODULO_USERS": ""}}], "edges": []}) is False
         assert graph_declares_secrets({"nodes": [{"id": "n", "context_files": {"a": 42}}], "edges": []}) is False
-        assert (
-            graph_declares_secrets(
-                {"nodes": [{"id": "n", "parameter_overrides": {"items": ["clean", 5]}}], "edges": []}
-            )
-            is False
-        )
+        assert graph_declares_secrets({"nodes": [{"id": "n", "parameter_overrides": {"items": ["clean", 5]}}], "edges": []}) is False
         assert graph_declares_secrets({"nodes": [{"id": "n", "context_files": {}}], "edges": []}) is False
 
 

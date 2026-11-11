@@ -61,10 +61,7 @@ _MIGRATE_ROLE = "modulo_migrate"
 _APP_ROLE = "modulo_app"
 
 _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
-_USER_SCOPE = (
-    "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid "
-    "AND account_id = nullif(current_setting('app.user_id', true), '')::uuid"
-)
+_USER_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid AND account_id = nullif(current_setting('app.user_id', true), '')::uuid"
 
 
 def _is_postgres(bind: sa.Connection) -> bool:
@@ -73,24 +70,14 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 def _assert_owner_is_migrate(bind: sa.Connection) -> None:
     """POST-CREATE ownership assertion — the 0066 ceremony (before RLS)."""
-    owner = bind.execute(
-        sa.text(
-            "SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.notification_preferences')"
-        )
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.notification_preferences')")).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            f"notification_preferences owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
-            "(the app role must NOT own notification_preferences — owner bypasses RLS)"
-        )
+        raise RuntimeError(f"notification_preferences owner is {owner!r}, expected '{_MIGRATE_ROLE}' (the app role must NOT own notification_preferences — owner bypasses RLS)")
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
     """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def upgrade() -> None:
@@ -135,16 +122,9 @@ def upgrade() -> None:
         op.execute("ALTER TABLE notification_preferences ENABLE ROW LEVEL SECURITY")
         op.execute("ALTER TABLE notification_preferences FORCE ROW LEVEL SECURITY")
         op.execute(f"CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING ({_ORG_SCOPE})")
-        op.execute(
-            f"CREATE POLICY rls_user_isolation_insert ON notification_preferences FOR INSERT WITH CHECK ({_USER_SCOPE})"
-        )
-        op.execute(
-            f"CREATE POLICY rls_user_isolation_update ON notification_preferences "
-            f"FOR UPDATE USING ({_USER_SCOPE}) WITH CHECK ({_USER_SCOPE})"
-        )
-        op.execute(
-            f"CREATE POLICY rls_user_isolation_delete ON notification_preferences FOR DELETE USING ({_USER_SCOPE})"
-        )
+        op.execute(f"CREATE POLICY rls_user_isolation_insert ON notification_preferences FOR INSERT WITH CHECK ({_USER_SCOPE})")
+        op.execute(f"CREATE POLICY rls_user_isolation_update ON notification_preferences FOR UPDATE USING ({_USER_SCOPE}) WITH CHECK ({_USER_SCOPE})")
+        op.execute(f"CREATE POLICY rls_user_isolation_delete ON notification_preferences FOR DELETE USING ({_USER_SCOPE})")
         if app_role:
             op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO {_APP_ROLE}")
 

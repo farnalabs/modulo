@@ -244,9 +244,7 @@ async def dispatch_deadline_notifications(
         # ``return`` out of ``_process_org_deadline`` exits this ``async
         # with`` normally.
         async with _bound_org(org_id):
-            all_notified.extend(
-                await _process_org_deadline(org_id, factory, grace_seconds, redis_client, notifier, resolved_now)
-            )
+            all_notified.extend(await _process_org_deadline(org_id, factory, grace_seconds, redis_client, notifier, resolved_now))
     return all_notified
 
 

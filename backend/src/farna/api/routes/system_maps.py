@@ -265,11 +265,7 @@ async def list_system_maps_endpoint(
             # Count total for pagination
             from sqlalchemy import func
 
-            count_stmt = (
-                select(func.count())
-                .select_from(SystemMap)
-                .where(SystemMap.organisation_id == principal.organisation_id)
-            )
+            count_stmt = select(func.count()).select_from(SystemMap).where(SystemMap.organisation_id == principal.organisation_id)
             count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None), SystemMap.published_revision_id.is_not(None))
             if visibility:
                 count_stmt = count_stmt.where(SystemMap.visibility == visibility)
@@ -313,9 +309,7 @@ async def list_system_maps_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("system_map_created", "system_map", principal_dep=get_current_tenant_user_or_api_key))
-    ],
+    dependencies=[Depends(audited("system_map_created", "system_map", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_EP_CREATE_SYSTEM_MAP)
 async def create_system_map_endpoint(
@@ -395,9 +389,7 @@ async def get_system_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if system_map is not None and system_map.published_revision_id is None:
                 system_map = None
     except ProgrammingError as exc:
@@ -430,9 +422,7 @@ async def get_system_map_endpoint(
 
 @router.put(
     "/{map_id}",
-    dependencies=[
-        Depends(audited("system_map_updated", "system_map", principal_dep=get_current_tenant_user_or_api_key))
-    ],
+    dependencies=[Depends(audited("system_map_updated", "system_map", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_EP_UPDATE_SYSTEM_MAP)
 async def update_system_map_endpoint(
@@ -454,9 +444,7 @@ async def update_system_map_endpoint(
 
             # Validate team transition if visibility or owner_team_id changes
             if "visibility" in updates or "owner_team_id" in updates:
-                current = await repository.get_map_by_id(
-                    session, organisation_id=principal.organisation_id, map_id=map_id
-                )
+                current = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
                 if current is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
                 from farna.api.team_scope import validate_team_transition_for_update
@@ -470,9 +458,7 @@ async def update_system_map_endpoint(
                     new_visibility=updates.get("visibility", current.visibility),
                 )
 
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
@@ -523,13 +509,7 @@ async def update_system_map_endpoint(
 @router.delete(
     "/{map_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            audited(
-                "system_map_deleted", "system_map", principal_dep=get_current_tenant_user_or_api_key, fail_closed=True
-            )
-        )
-    ],
+    dependencies=[Depends(audited("system_map_deleted", "system_map", principal_dep=get_current_tenant_user_or_api_key, fail_closed=True))],
 )
 @handle_db_errors(_EP_DELETE_SYSTEM_MAP)
 async def delete_system_map_endpoint(
@@ -611,15 +591,11 @@ async def get_revision_by_time_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            revision = await repository.get_revision_by_time(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at, published_only=True
-            )
+            revision = await repository.get_revision_by_time(session, organisation_id=principal.organisation_id, system_map_id=map_id, at=at, published_only=True)
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_BY_TIME)
         raise HTTPException(
@@ -674,15 +650,11 @@ async def get_current_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            revision = await repository.get_current_revision(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
-            )
+            revision = await repository.get_current_revision(session, organisation_id=principal.organisation_id, system_map_id=map_id)
     except ProgrammingError as exc:
         _log.exception(_EP_GET_CURRENT_REVISION)
         raise HTTPException(
@@ -734,15 +706,11 @@ async def get_revision_history_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            revisions = await repository.list_revisions_history(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id, published_only=True
-            )
+            revisions = await repository.list_revisions_history(session, organisation_id=principal.organisation_id, system_map_id=map_id, published_only=True)
     except ProgrammingError as exc:
         _log.exception(_EP_GET_REVISION_HISTORY)
         raise HTTPException(
@@ -801,21 +769,15 @@ async def get_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
-            )
+            revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id)
             if revision is not None and revision.status == "draft" and not internal_access:
                 revision = None
             if include_graph and revision is not None:
-                graph = await repository.get_full_revision_graph(
-                    session, organisation_id=principal.organisation_id, revision_id=rev_id
-                )
+                graph = await repository.get_full_revision_graph(session, organisation_id=principal.organisation_id, revision_id=rev_id)
     except ProgrammingError as exc:
         _log.exception(_EP_GET_SYSTEM_MAP_REVISION)
         raise HTTPException(
@@ -857,13 +819,7 @@ async def get_system_map_revision_endpoint(
 @router.post(
     "/{map_id}/revisions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            audited(
-                "system_map_revision_created", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key
-            )
-        )
-    ],
+    dependencies=[Depends(audited("system_map_revision_created", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_EP_CREATE_SYSTEM_MAP_REVISION)
 async def create_system_map_revision_endpoint(
@@ -880,9 +836,7 @@ async def create_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
@@ -1018,13 +972,7 @@ async def create_system_map_revision_endpoint(
 
 @router.post(
     "/{map_id}/revisions/{rev_id}/publish",
-    dependencies=[
-        Depends(
-            audited(
-                "system_map_revision_published", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key
-            )
-        )
-    ],
+    dependencies=[Depends(audited("system_map_revision_published", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_EP_PUBLISH_SYSTEM_MAP_REVISION)
 async def publish_system_map_revision_endpoint(
@@ -1043,16 +991,12 @@ async def publish_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             # Verify revision exists and belongs to map
-            revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
-            )
+            revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id)
             if not revision or revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
@@ -1067,10 +1011,7 @@ async def publish_system_map_revision_endpoint(
                 account_id=principal.account_id,
                 org_role=principal.org_role,
             )
-            validation_errors = [
-                {"code": "VALIDATION_ERROR", "message": err, "node_key": None, "relationship_id": None}
-                for err in errors
-            ]
+            validation_errors = [{"code": "VALIDATION_ERROR", "message": err, "node_key": None, "relationship_id": None} for err in errors]
 
             if not is_valid:
                 # Raise validation error so audited() records outcome="error"
@@ -1135,13 +1076,7 @@ async def publish_system_map_revision_endpoint(
 
 @router.post(
     "/{map_id}/revisions/{rev_id}/archive",
-    dependencies=[
-        Depends(
-            audited(
-                "system_map_revision_archived", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key
-            )
-        )
-    ],
+    dependencies=[Depends(audited("system_map_revision_archived", "system_map_revision", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_EP_ARCHIVE_SYSTEM_MAP_REVISION)
 async def archive_system_map_revision_endpoint(
@@ -1158,16 +1093,12 @@ async def archive_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             # Verify revision exists and belongs to map
-            revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
-            )
+            revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id)
             if not revision or revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
@@ -1239,9 +1170,7 @@ async def _resolve_diff_target_revision(
     draft-aware default.
     """
     if against_revision_id is not None:
-        target_revision = await repository.get_revision_by_id(
-            session, organisation_id=organisation_id, revision_id=against_revision_id
-        )
+        target_revision = await repository.get_revision_by_id(session, organisation_id=organisation_id, revision_id=against_revision_id)
         if not target_revision or target_revision.system_map_id != map_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         if not internal_access and target_revision.status == "draft":
@@ -1263,9 +1192,7 @@ async def _resolve_diff_target_revision(
             )
         return draft_revisions[0].id
 
-    published_revision = await repository.get_published_revision(
-        session, organisation_id=organisation_id, system_map_id=map_id
-    )
+    published_revision = await repository.get_published_revision(session, organisation_id=organisation_id, system_map_id=map_id)
     if not published_revision:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1299,16 +1226,12 @@ async def diff_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             # Verify base revision exists and belongs to map
-            base_revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
-            )
+            base_revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id)
             if not base_revision or base_revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
             if not internal_access and base_revision.status == "draft":
@@ -1384,16 +1307,12 @@ async def restore_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             # Verify source revision exists and belongs to map
-            source_revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True
-            )
+            source_revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True)
             if not source_revision or source_revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
@@ -1485,16 +1404,12 @@ async def delete_system_map_revision_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             # Verify revision exists and belongs to map
-            revision = await repository.get_revision_by_id(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True
-            )
+            revision = await repository.get_revision_by_id(session, organisation_id=principal.organisation_id, revision_id=rev_id, include_deleted=True)
             if not revision or revision.system_map_id != map_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
@@ -1555,9 +1470,7 @@ async def _resolve_overview_revision(
 ) -> SystemMapRevision:
     """Resolve which revision an overview request targets (FAR-2288)."""
     if revision_id:
-        revision = await repository.get_revision_by_id(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
+        revision = await repository.get_revision_by_id(session, organisation_id=organisation_id, revision_id=revision_id)
         if revision is not None and revision.status == "draft" and not internal_access:
             revision = None
         if not revision or revision.system_map_id != map_id:
@@ -1595,9 +1508,7 @@ async def _resolve_overview_revision(
 async def get_system_map_overview_endpoint(
     map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     revision_id: uuid.UUID | None = Query(default=None, description="Specific revision ID to get overview for"),
-    at: datetime | None = Query(
-        default=None, description="ISO8601 timestamp to get overview for the revision active at that time"
-    ),
+    at: datetime | None = Query(default=None, description="ISO8601 timestamp to get overview for the revision active at that time"),
     window_days: int = Query(
         default=OVERVIEW_WINDOW_DAYS,
         ge=OVERVIEW_WINDOW_MIN_DAYS,
@@ -1626,9 +1537,7 @@ async def get_system_map_overview_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
@@ -1643,9 +1552,7 @@ async def get_system_map_overview_endpoint(
             )
 
             # Get full graph for the target revision
-            graph = await repository.get_full_revision_graph(
-                session, organisation_id=principal.organisation_id, revision_id=target_revision.id
-            )
+            graph = await repository.get_full_revision_graph(session, organisation_id=principal.organisation_id, revision_id=target_revision.id)
             if not graph:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
@@ -1827,10 +1734,7 @@ async def _validate_attribution_binding_node(
     if node.node_type != expected_node_type:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                f"{req.binding_kind} bindings require a {expected_node_type} node; "
-                f"node {req.node_key} is {node.node_type}"
-            ),
+            detail=(f"{req.binding_kind} bindings require a {expected_node_type} node; node {req.node_key} is {node.node_type}"),
         )
     if req.binding_kind == "trigger" and node.pipeline_id != req.pipeline_id:
         raise HTTPException(
@@ -1942,15 +1846,11 @@ async def create_attribution_binding_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
-            published_revision = await repository.get_published_revision(
-                session, organisation_id=principal.organisation_id, system_map_id=map_id
-            )
+            published_revision = await repository.get_published_revision(session, organisation_id=principal.organisation_id, system_map_id=map_id)
             if published_revision is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System map has no published revision")
             await _validate_attribution_binding_node(
@@ -2039,9 +1939,7 @@ async def list_attribution_bindings_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
@@ -2107,9 +2005,7 @@ async def delete_attribution_binding_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Verify map exists
-            system_map = await repository.get_map_by_id(
-                session, organisation_id=principal.organisation_id, map_id=map_id
-            )
+            system_map = await repository.get_map_by_id(session, organisation_id=principal.organisation_id, map_id=map_id)
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
@@ -2500,13 +2396,7 @@ async def discover_system_map(
                 )
             ).scalars()
         )
-        folders = list(
-            (
-                await session.execute(
-                    select(PipelineFolder).where(PipelineFolder.organisation_id == principal.organisation_id)
-                )
-            ).scalars()
-        )
+        folders = list((await session.execute(select(PipelineFolder).where(PipelineFolder.organisation_id == principal.organisation_id))).scalars())
         sources = [
             *[
                 DiscoverySource(
@@ -2606,10 +2496,7 @@ async def discover_system_map(
         )
 
     return SystemMapDiscoveryReport(
-        sources_inspected=[
-            SystemMapDiscoverySource(kind=source.kind, identifier=source.identifier, name=source.name)
-            for source in sources
-        ],
+        sources_inspected=[SystemMapDiscoverySource(kind=source.kind, identifier=source.identifier, name=source.name) for source in sources],
         node_count=draft.node_count,
         edge_count=draft.edge_count,
         inferred_nodes=list(draft.nodes),

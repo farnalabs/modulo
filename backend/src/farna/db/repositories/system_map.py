@@ -898,11 +898,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapAttributionBinding.id == binding_id,
             SystemMapAttributionBinding.organisation_id == organisation_id,
         )
-        stmt = (
-            include_soft_deleted(stmt)
-            if include_deleted
-            else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
-        )
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -919,11 +915,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
     ) -> Sequence[SystemMapAttributionBinding]:
         """List attribution bindings with optional filters."""
         stmt = select(SystemMapAttributionBinding).where(SystemMapAttributionBinding.organisation_id == organisation_id)
-        stmt = (
-            include_soft_deleted(stmt)
-            if include_deleted
-            else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
-        )
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
         if pipeline_id:
             stmt = stmt.where(SystemMapAttributionBinding.pipeline_id == pipeline_id)
         if trigger_id:
@@ -983,9 +975,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         deleted_by: uuid.UUID | None = None,
     ) -> bool:
         """Soft-delete an attribution binding."""
-        binding = await self.get_attribution_binding_by_id(
-            session, organisation_id=organisation_id, binding_id=binding_id
-        )
+        binding = await self.get_attribution_binding_by_id(session, organisation_id=organisation_id, binding_id=binding_id)
         if not binding:
             return False
         binding.deleted_at = datetime.now(UTC)
@@ -1164,9 +1154,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapLoopReservation.id == reservation_id,
             SystemMapLoopReservation.organisation_id == organisation_id,
         )
-        stmt = (
-            include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapLoopReservation.deleted_at.is_(None))
-        )
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapLoopReservation.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -1286,9 +1274,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
         )
         pipelines = {item.id: item for item in result.scalars().all()}
-        errors.extend(
-            f"Pipeline {item} does not exist in this organisation" for item in pipeline_ids - pipelines.keys()
-        )
+        errors.extend(f"Pipeline {item} does not exist in this organisation" for item in pipeline_ids - pipelines.keys())
         for pipeline in pipelines.values():
             if pipeline.visibility == "team" and pipeline.owner_team_id:
                 error = await self._validate_team_binding(
@@ -1321,10 +1307,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
         )
         connectors = {item.id: item for item in result.scalars().all()}
-        errors.extend(
-            f"connector_instance_id {item} does not exist in this organisation"
-            for item in connector_ids - connectors.keys()
-        )
+        errors.extend(f"connector_instance_id {item} does not exist in this organisation" for item in connector_ids - connectors.keys())
         for connector in connectors.values():
             if connector.visibility == "team" and connector.owner_team_id:
                 error = await self._validate_team_binding(
@@ -1367,11 +1350,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
         )
         eval_pipelines = {item.id: item for item in pipeline_result.scalars().all()}
-        errors.extend(
-            f"Eval {evaluation_id} references a pipeline outside this organisation"
-            for evaluation_id, pipeline_id in evals.items()
-            if pipeline_id not in eval_pipelines
-        )
+        errors.extend(f"Eval {evaluation_id} references a pipeline outside this organisation" for evaluation_id, pipeline_id in evals.items() if pipeline_id not in eval_pipelines)
         for pipeline in eval_pipelines.values():
             if pipeline.visibility == "team" and pipeline.owner_team_id:
                 error = await self._validate_team_binding(
@@ -1434,9 +1413,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                     pipeline_ids=pipeline_ids,
                 )
             )
-        connector_ids = {
-            binding["connector_instance_id"] for binding in node_bindings if binding.get("connector_instance_id")
-        }
+        connector_ids = {binding["connector_instance_id"] for binding in node_bindings if binding.get("connector_instance_id")}
         if connector_ids:
             errors.extend(
                 await self._validate_connector_bindings(
@@ -1491,9 +1468,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         # 1. Resolve every relationship endpoint against this revision's live nodes.
         nodes = await self.list_nodes_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
         node_keys = {node.node_key for node in nodes}
-        relationships = await self.list_relationships_in_revision(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
+        relationships = await self.list_relationships_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
         flow_edges = [r for r in relationships if r.relationship_type == "flow"]
         errors.extend(self._validate_relationship_endpoints(relationships, node_keys))
         if not self._is_acyclic(flow_edges):
@@ -1501,9 +1476,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
 
         # 2. Loop config completeness
         loop_nodes = [n for n in nodes if n.node_type == "improvement_loop"]
-        loop_configs = await self.list_loop_configs_in_revision(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
+        loop_configs = await self.list_loop_configs_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
         errors.extend(
             await self._validate_loop_configs(
                 session,
@@ -1538,15 +1511,11 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         return len(errors) == 0, errors
 
     @staticmethod
-    def _validate_relationship_endpoints(
-        relationships: Sequence[SystemMapRelationship], node_keys: set[str]
-    ) -> list[str]:
+    def _validate_relationship_endpoints(relationships: Sequence[SystemMapRelationship], node_keys: set[str]) -> list[str]:
         """Report relationships whose endpoints do not resolve to live nodes."""
         errors: list[str] = []
         for relationship in relationships:
-            missing = sorted(
-                {key for key in (relationship.source_node_key, relationship.target_node_key) if key not in node_keys}
-            )
+            missing = sorted({key for key in (relationship.source_node_key, relationship.target_node_key) if key not in node_keys})
             if missing:
                 errors.append(f"Relationship {relationship.id} references missing node(s): {', '.join(missing)}")
         return errors
@@ -1574,9 +1543,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             elif node_types[loop_config.node_key] != "improvement_loop":
                 errors.append(f"Loop config '{loop_config.node_key}' does not target an improvement_loop node")
         for loop_node in loop_nodes:
-            node_loop_config: SystemMapLoopConfig | None = await self.get_loop_config_by_node_key(
-                session, organisation_id=organisation_id, revision_id=revision_id, node_key=loop_node.node_key
-            )
+            node_loop_config: SystemMapLoopConfig | None = await self.get_loop_config_by_node_key(session, organisation_id=organisation_id, revision_id=revision_id, node_key=loop_node.node_key)
             if not node_loop_config:
                 errors.append(f"Improvement loop node '{loop_node.node_key}' missing loop config")
             else:
@@ -1845,10 +1812,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             .group_by(RunDailyFact.run_id)
         )
-        return {
-            row[0]: (None if row[1] is None else Decimal(str(row[1])))
-            for row in (await session.execute(statement)).all()
-        }
+        return {row[0]: (None if row[1] is None else Decimal(str(row[1]))) for row in (await session.execute(statement)).all()}
 
     async def get_full_revision_graph(
         self,
@@ -1863,12 +1827,8 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             return None
 
         nodes = await self.list_nodes_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
-        relationships = await self.list_relationships_in_revision(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
-        loop_configs = await self.list_loop_configs_in_revision(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
+        relationships = await self.list_relationships_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
+        loop_configs = await self.list_loop_configs_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
 
         return {
             "revision": revision,
@@ -1888,12 +1848,8 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         target_revision_id: uuid.UUID,
     ) -> dict[str, Any] | None:
         """Diff two revisions and return the differences."""
-        base_graph = await self.get_full_revision_graph(
-            session, organisation_id=organisation_id, revision_id=base_revision_id
-        )
-        target_graph = await self.get_full_revision_graph(
-            session, organisation_id=organisation_id, revision_id=target_revision_id
-        )
+        base_graph = await self.get_full_revision_graph(session, organisation_id=organisation_id, revision_id=base_revision_id)
+        target_graph = await self.get_full_revision_graph(session, organisation_id=organisation_id, revision_id=target_revision_id)
 
         if not base_graph or not target_graph:
             return None
@@ -1924,23 +1880,14 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         )
 
         # Compare relationships by (source, target, type)
-        base_rels = {
-            (r.source_node_key, r.target_node_key, r.relationship_type): r for r in base_graph["relationships"]
-        }
-        target_rels = {
-            (r.source_node_key, r.target_node_key, r.relationship_type): r for r in target_graph["relationships"]
-        }
+        base_rels = {(r.source_node_key, r.target_node_key, r.relationship_type): r for r in base_graph["relationships"]}
+        target_rels = {(r.source_node_key, r.target_node_key, r.relationship_type): r for r in target_graph["relationships"]}
         base_rel_keys = set(base_rels.keys())
         target_rel_keys = set(target_rels.keys())
 
         relationships_added = sorted(f"{s}->{t}:{ty}" for s, t, ty in (target_rel_keys - base_rel_keys))
         relationships_removed = sorted(f"{s}->{t}:{ty}" for s, t, ty in (base_rel_keys - target_rel_keys))
-        relationships_modified = sorted(
-            f"{s}->{t}:{ty}"
-            for key in base_rel_keys & target_rel_keys
-            if base_rels[key].config_json != target_rels[key].config_json
-            for s, t, ty in [key]
-        )
+        relationships_modified = sorted(f"{s}->{t}:{ty}" for key in base_rel_keys & target_rel_keys if base_rels[key].config_json != target_rels[key].config_json for s, t, ty in [key])
 
         # Compare loop configs by node_key
         base_loops = {lc.node_key: lc for lc in base_graph["loop_configs"]}
@@ -1961,18 +1908,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             or base_loops[key].outcome_metric != target_loops[key].outcome_metric
         )
 
-        content_json_changed = bool(
-            base_revision.content_json != target_revision.content_json
-            or nodes_added
-            or nodes_removed
-            or nodes_modified
-            or relationships_added
-            or relationships_removed
-            or relationships_modified
-            or loop_configs_added
-            or loop_configs_removed
-            or loop_configs_modified
-        )
+        content_json_changed = bool(base_revision.content_json != target_revision.content_json or nodes_added or nodes_removed or nodes_modified or relationships_added or relationships_removed or relationships_modified or loop_configs_added or loop_configs_removed or loop_configs_modified)
 
         return {
             "base_revision_id": base_revision.id,
@@ -2002,9 +1938,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
     ) -> SystemMapRevision | None:
         """Create a new draft revision from an existing published/archived revision."""
         # Verify source revision exists and belongs to map
-        source_revision = await self.get_revision_by_id(
-            session, organisation_id=organisation_id, revision_id=source_revision_id, include_deleted=True
-        )
+        source_revision = await self.get_revision_by_id(session, organisation_id=organisation_id, revision_id=source_revision_id, include_deleted=True)
         if not source_revision or source_revision.system_map_id != system_map_id:
             return None
 
@@ -2022,9 +1956,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         next_revision_number = max((r.revision_number for r in existing_revisions), default=0) + 1
 
         # Get full graph of source revision
-        source_graph = await self.get_full_revision_graph(
-            session, organisation_id=organisation_id, revision_id=source_revision_id
-        )
+        source_graph = await self.get_full_revision_graph(session, organisation_id=organisation_id, revision_id=source_revision_id)
         if not source_graph:
             return None
 

@@ -33,9 +33,7 @@ def encode_ndjson(records: Iterable[Mapping[str, Any]]) -> bytes:
     encoder total for the rare non-native value in an audit payload, matching
     the tolerance of the chain hash function.
     """
-    lines = [
-        json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str) for record in records
-    ]
+    lines = [json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str) for record in records]
     if not lines:
         return b""
     return ("\n".join(lines) + "\n").encode("utf-8")

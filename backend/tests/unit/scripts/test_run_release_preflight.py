@@ -37,19 +37,14 @@ def _make_dummy_repo(tmp_path: Path) -> Path:
 
     (tmp_path / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".github" / "workflows" / "macos-installer.yml").write_text("name: macOS\n", encoding="utf-8")
-    (tmp_path / ".github" / "workflows" / "windows-installer.yml").write_text(
-        "name: Windows\n# Find-Iscc probe\n", encoding="utf-8"
-    )
+    (tmp_path / ".github" / "workflows" / "windows-installer.yml").write_text("name: Windows\n# Find-Iscc probe\n", encoding="utf-8")
     (tmp_path / ".github" / "workflows" / "release-unified.yml").write_text(
-        "outputs:\n  rc_tag: ${{ steps.rc-output.outputs.rc_tag }}\n"
-        "id: rc-output\nrc_tag: ${{ needs.release.outputs.rc_tag }}\n",
+        "outputs:\n  rc_tag: ${{ steps.rc-output.outputs.rc_tag }}\nid: rc-output\nrc_tag: ${{ needs.release.outputs.rc_tag }}\n",
         encoding="utf-8",
     )
 
     (tmp_path / "deploy" / "windows").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "deploy" / "windows" / "modulo.iss").write_text(
-        "[Setup]\nAppName=Modulo\nAppVersion=0.1.0\n", encoding="utf-8"
-    )
+    (tmp_path / "deploy" / "windows" / "modulo.iss").write_text("[Setup]\nAppName=Modulo\nAppVersion=0.1.0\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
     (tmp_path / "scripts" / "create-windows-launcher.ps1").write_text("# launcher\n", encoding="utf-8")
 
@@ -267,9 +262,7 @@ def test_schema_freshness_uses_a_green_run_when_latest_is_not_green(tmp_path: Pa
             return 0, json.dumps(jobs[_run_id_from_jobs_cmd(cmd)]), ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run)
     res = checker.check_schema_freshness()
     assert res.passed
     assert "run 99" in res.details
@@ -287,9 +280,7 @@ def test_schema_freshness_skips_runs_without_the_job(tmp_path: Path):
             return 0, json.dumps({"conclusion": "success", "status": "completed"}), ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run)
     res = checker.check_schema_freshness()
     assert res.passed
     assert "run 99" in res.details
@@ -305,9 +296,7 @@ def test_schema_freshness_fails_when_no_run_carries_the_job(tmp_path: Path):
             return 0, "", ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run)
     res = checker.check_schema_freshness()
     assert not res.passed
     assert "not found in any CI run" in res.details
@@ -323,9 +312,7 @@ def test_schema_freshness_fails_closed_when_job_payload_is_unparseable(tmp_path:
             return 0, "not-json", ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run)
     res = checker.check_schema_freshness()
     assert not res.passed
     assert "Could not parse the schema-freshness job" in res.details
@@ -341,9 +328,7 @@ def test_schema_freshness_fails_closed_when_jobs_query_errors(tmp_path: Path):
             return 1, "", "HTTP 403: Forbidden"
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=_schema_ci_env(), run_cmd=fake_run)
     res = checker.check_schema_freshness()
     assert not res.passed
     assert "Could not read the jobs of CI run 7" in res.details
@@ -559,15 +544,11 @@ def test_release_freeze_state_reports_the_freeze_flag(tmp_path: Path):
     def fake_run(cmd, **kwargs):
         return 2, "", ""
 
-    frozen = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", freeze=True, repo_root=repo, run_cmd=fake_run
-    ).check_release_freeze_state()
+    frozen = ReleasePreflightChecker(mode="cut", version="0.1.0", freeze=True, repo_root=repo, run_cmd=fake_run).check_release_freeze_state()
     assert frozen.passed
     assert "will be established" in frozen.details
 
-    unfrozen = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", freeze=False, repo_root=repo, run_cmd=fake_run
-    ).check_release_freeze_state()
+    unfrozen = ReleasePreflightChecker(mode="cut", version="0.1.0", freeze=False, repo_root=repo, run_cmd=fake_run).check_release_freeze_state()
     assert unfrozen.passed
     assert "will NOT be paused" in unfrozen.details
 
@@ -728,7 +709,7 @@ def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: P
 # -----------------------------------------------------------------------------
 _RELEASE_SECRETS_ENV = {
     "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
-    "MODULO_RELEASE_PR_TOKEN": "token-123",
+    "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN": "token-123",
 }
 _AZURE_SIGNING_ENV = {
     "AZURE_CLIENT_ID": "id-123",
@@ -765,12 +746,12 @@ def test_release_secrets_are_required_when_windows_not_included(tmp_path: Path):
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
-    assert "MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
     # Only the Azure secrets may be skipped - the release secrets must be named as missing.
     assert "AZURE_CLIENT_ID" not in res.details
 
 
-@pytest.mark.parametrize("missing_secret", ["BUNDLE_MANIFEST_SIGNING_KEY", "MODULO_RELEASE_PR_TOKEN"])
+@pytest.mark.parametrize("missing_secret", ["BUNDLE_MANIFEST_SIGNING_KEY", "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN"])
 def test_each_release_secret_is_required_when_windows_not_included(tmp_path: Path, missing_secret: str):
     repo = _make_dummy_repo(tmp_path)
     env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != missing_secret}
@@ -790,15 +771,13 @@ def test_azure_signing_secrets_cut_and_recut_fail_when_missing(tmp_path: Path, m
     assert "Missing required release secret(s)" in res.details
     assert "Missing required Azure Trusted Signing secret(s)" in res.details
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
-    assert "MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
 
 
 def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_path: Path):
     """An included cut needs the Azure Trusted Signing credentials the Windows sign job uses (FAR-2338)."""
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV)
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV))
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     # The check name is historical, so the failure text must name the KIND of
@@ -811,9 +790,7 @@ def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_pat
 def test_azure_signing_secrets_recut_fails_when_only_azure_secrets_missing(tmp_path: Path):
     """A recut is a full re-release: the Windows sign job runs and needs Azure credentials."""
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(
-        mode="recut", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV)
-    )
+    checker = ReleasePreflightChecker(mode="recut", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV))
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required Azure Trusted Signing secret(s)" in res.details
@@ -824,9 +801,7 @@ def test_azure_signing_secrets_recut_fails_when_only_azure_secrets_missing(tmp_p
 def test_azure_signing_secrets_promote_passes_without_azure_secrets(tmp_path: Path):
     """Promote does not build or sign a Windows installer, so Azure credentials are not required."""
     repo = _make_dummy_repo(tmp_path)
-    checker = ReleasePreflightChecker(
-        mode="promote", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV)
-    )
+    checker = ReleasePreflightChecker(mode="promote", version="0.1.0", include_windows=True, repo_root=repo, env=dict(_RELEASE_SECRETS_ENV))
     res = checker.check_azure_signing_secrets()
     assert res.passed
     assert "does not build or sign a Windows installer" in res.details
@@ -841,12 +816,12 @@ def test_release_pr_token_is_required_in_promote_without_windows(tmp_path: Path)
     and name the missing variable.
     """
     repo = _make_dummy_repo(tmp_path)
-    env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != "MODULO_RELEASE_PR_TOKEN"}
+    env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN"}
     checker = ReleasePreflightChecker(mode="promote", version="0.1.0", include_windows=False, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
-    assert "MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
     # The configured release secret is not reported, and Azure is not demanded.
     assert "BUNDLE_MANIFEST_SIGNING_KEY" not in res.details
     assert "AZURE_CLIENT_ID" not in res.details
@@ -914,9 +889,7 @@ def test_helm_chart_runs_helm_lint_when_available(tmp_path: Path, monkeypatch):
 def test_helm_chart_fails_when_helm_lint_fails(tmp_path: Path, monkeypatch):
     repo = _make_dummy_repo(tmp_path)
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/helm" if name == "helm" else None)
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, run_cmd=lambda *a, **k: (1, "", "Error: chart metadata is missing")
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=lambda *a, **k: (1, "", "Error: chart metadata is missing"))
     res = checker.check_helm_chart()
     assert not res.passed
     assert "helm lint failed" in res.details
@@ -981,8 +954,7 @@ def test_merge_conflicts_detected_via_write_tree(tmp_path: Path):
             # Tree OID, then conflicted paths, a blank line, then messages.
             return (
                 1,
-                "treeoid123\nbackend/pyproject.toml\n\nAuto-merging backend/pyproject.toml\n"
-                "CONFLICT (content): Merge conflict in backend/pyproject.toml\n",
+                "treeoid123\nbackend/pyproject.toml\n\nAuto-merging backend/pyproject.toml\nCONFLICT (content): Merge conflict in backend/pyproject.toml\n",
                 "",
             )
         return 0, "", ""
@@ -1136,7 +1108,7 @@ def test_run_all_checks_skips_windows_checks_by_default(tmp_path: Path, monkeypa
     # Windows is out of scope, and it does not demand the Azure secrets.
     assert not azure.passed
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in azure.details
-    assert "MODULO_RELEASE_PR_TOKEN" in azure.details
+    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in azure.details
     assert "AZURE_CLIENT_ID" not in azure.details
     assert not all(r.passed for r in results)
 
@@ -1157,9 +1129,7 @@ def test_run_all_checks_passes_for_alpha_when_release_secrets_present(tmp_path: 
             return 0, "treeoid123\n", ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", repo_root=repo, env=dict(_RELEASE_SECRETS_ENV), run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, env=dict(_RELEASE_SECRETS_ENV), run_cmd=fake_run)
     results = checker.run_all_checks()
 
     failed = [r for r in results if not r.passed]
@@ -1181,9 +1151,7 @@ def test_run_all_checks_fails_when_windows_included_without_prerequisites(tmp_pa
             return 0, "treeoid123\n", ""
         return 0, "", ""
 
-    checker = ReleasePreflightChecker(
-        mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env={}, run_cmd=fake_run
-    )
+    checker = ReleasePreflightChecker(mode="cut", version="0.1.0", include_windows=True, repo_root=repo, env={}, run_cmd=fake_run)
     results = checker.run_all_checks()
     by_name = {result.name: result for result in results}
 
@@ -1314,7 +1282,7 @@ _PREFLIGHT_SECRET_ENV_KEYS = (
     "AZURE_TENANT_ID",
     "AZURE_SUBSCRIPTION_ID",
     "BUNDLE_MANIFEST_SIGNING_KEY",
-    "MODULO_RELEASE_PR_TOKEN",
+    "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN",
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "GITHUB_ACTIONS",
@@ -1471,9 +1439,7 @@ def test_preflight_job_runs_the_aggregate_checker():
 
 
 def test_preflight_passes_include_windows_to_the_real_checker():
-    step = next(
-        s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", "")
-    )
+    step = next(s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", ""))
     # INCLUDE_WINDOWS — not RELEASE_INCLUDE_WINDOWS — is the name every step in
     # this workflow declares; the rehearsal gate enforces that contract.
     assert step["env"]["INCLUDE_WINDOWS"] == "${{ inputs.include_windows }}"
@@ -1491,16 +1457,14 @@ def test_include_windows_input_defaults_to_off():
 
 
 def test_preflight_passes_secrets_but_never_prints_them():
-    step = next(
-        s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", "")
-    )
+    step = next(s for s in _release_workflow()["jobs"]["preflight"]["steps"] if "run_release_preflight.py" in s.get("run", ""))
     env = step["env"]
     for secret_name in (
         "AZURE_CLIENT_ID",
         "AZURE_TENANT_ID",
         "AZURE_SUBSCRIPTION_ID",
         "BUNDLE_MANIFEST_SIGNING_KEY",
-        "MODULO_RELEASE_PR_TOKEN",
+        "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN",
     ):
         assert env[secret_name] == f"${{{{ secrets.{secret_name} }}}}"
     # The run block must reference the environment, never interpolate a secret.

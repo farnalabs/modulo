@@ -63,23 +63,13 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(
-            tbl=f"public.{table}"
-        )
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(tbl=f"public.{table}")).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
-            "(the app role must NOT own connector_profiles — the owner bypasses RLS)"
-        )
+        raise RuntimeError(f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' (the app role must NOT own connector_profiles — the owner bypasses RLS)")
 
 
 def upgrade() -> None:

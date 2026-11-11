@@ -356,9 +356,7 @@ def _require_pipeline(pipeline: Pipeline | None) -> Pipeline:
     return pipeline
 
 
-async def _get_pipeline_or_404(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-) -> Pipeline:
+async def _get_pipeline_or_404(session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline:
     """Fetch a pipeline (scoped to *organisation_id* when given), raising 404 when it does not exist."""
     return _require_pipeline(await get_pipeline(session, pipeline_id, organisation_id=organisation_id))
 
@@ -391,9 +389,7 @@ def _edge_to_data(edge: PipelineGraphEdge) -> GraphEdgeData:
         target_node_id=edge.target_node_id,
         edge_type=edge.edge_type,
         condition_expression=edge.condition_expression,
-        hitl_review_config=(
-            edge.hitl_review_config.model_dump(mode="json") if edge.hitl_review_config is not None else None
-        ),
+        hitl_review_config=(edge.hitl_review_config.model_dump(mode="json") if edge.hitl_review_config is not None else None),
         hitl_review_config_present="hitl_review_config" in edge.model_fields_set,
         source_port=edge.source_port,
         target_port=edge.target_port,
@@ -769,12 +765,7 @@ class PipelineCreate(TeamVisibilityMixin):
     default_autonomy_level: str = "manual_approval"
     max_autonomy_level: str | None = Field(
         None,
-        description=(
-            "Hard ceiling on the autonomy level any HITL-gate resolution may "
-            "reach. NULL = effective ceiling is default_autonomy_level (a "
-            "context-setter recommendation can then only LOWER autonomy). "
-            "Must be >= default_autonomy_level."
-        ),
+        description=("Hard ceiling on the autonomy level any HITL-gate resolution may reach. NULL = effective ceiling is default_autonomy_level (a context-setter recommendation can then only LOWER autonomy). Must be >= default_autonomy_level."),
     )
     max_duration_seconds: int = Field(3600, ge=1)
     stale_run_timeout_minutes: int = Field(
@@ -785,9 +776,7 @@ class PipelineCreate(TeamVisibilityMixin):
     folder_id: uuid.UUID | None = None
     rate_limit_config: dict[str, Any] | None = Field(
         None,
-        description=(
-            "Rate limit: {max_triggers: int, window_seconds: int, key_fields: [str], match_mode: 'exact'|'presence'}"
-        ),
+        description=("Rate limit: {max_triggers: int, window_seconds: int, key_fields: [str], match_mode: 'exact'|'presence'}"),
     )
     retry_policy: dict[str, Any] | None = Field(
         None,
@@ -829,19 +818,11 @@ class PipelineCreate(TeamVisibilityMixin):
     # owner_team_id when visibility='team') with a 422.
     business_owner_id: uuid.UUID | None = Field(
         None,
-        description=(
-            "Accountable business owner (FAR-1161). Must be an active member of this "
-            "organisation and, when visibility is 'team', a member of owner_team_id. "
-            "null = unassigned."
-        ),
+        description=("Accountable business owner (FAR-1161). Must be an active member of this organisation and, when visibility is 'team', a member of owner_team_id. null = unassigned."),
     )
     reliability_owner_id: uuid.UUID | None = Field(
         None,
-        description=(
-            "Accountable reliability/SRE owner (FAR-1161). Must be an active member of "
-            "this organisation and, when visibility is 'team', a member of owner_team_id. "
-            "null = unassigned."
-        ),
+        description=("Accountable reliability/SRE owner (FAR-1161). Must be an active member of this organisation and, when visibility is 'team', a member of owner_team_id. null = unassigned."),
     )
 
     @field_validator("circuit_breaker_threshold", mode="before")
@@ -900,10 +881,7 @@ class PipelineUpdate(TeamVisibilityMixin):
         None,
         ge=60,
         le=604800,
-        description=(
-            "Per-pipeline HITL review window override (60-604800s). Omit to leave "
-            "unchanged; null clears the override (inherit the org/instance default)."
-        ),
+        description=("Per-pipeline HITL review window override (60-604800s). Omit to leave unchanged; null clears the override (inherit the org/instance default)."),
     )
     queue_timeout_seconds: int | None = Field(
         None,
@@ -964,11 +942,7 @@ class PipelineUpdate(TeamVisibilityMixin):
     )
     stdout_retention_config: dict[str, Any] | None = Field(
         None,
-        description=(
-            "Pipeline-level default for sandbox stdout retention. "
-            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
-            "Set to {} to clear (no pipeline override)."
-        ),
+        description=('Pipeline-level default for sandbox stdout retention. Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. Set to {} to clear (no pipeline override).'),
     )
     benign_signatures: list[dict[str, Any]] | None = Field(
         None,
@@ -1011,17 +985,10 @@ class PipelineUpdate(TeamVisibilityMixin):
             raise ValueError("benign_signatures must be a list")
         for entry in v:
             if isinstance(entry, dict) and not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
-                raise ValueError(
-                    "benign_signatures entries accept ONLY the keys 'error_code' and "
-                    "'error_detail_contains' — an unknown key would silently widen the "
-                    "signature (an absent 'error_detail_contains' matches any detail)"
-                )
+                raise ValueError("benign_signatures entries accept ONLY the keys 'error_code' and 'error_detail_contains' — an unknown key would silently widen the signature (an absent 'error_detail_contains' matches any detail)")
         normalised = normalize_benign_signatures(v)
         if len(normalised) != len(v):
-            raise ValueError(
-                "benign_signatures entries must be objects with a non-empty string "
-                "'error_code' and an optional string 'error_detail_contains'"
-            )
+            raise ValueError("benign_signatures entries must be objects with a non-empty string 'error_code' and an optional string 'error_detail_contains'")
         return normalised
 
     circuit_breaker_threshold: float | None = Field(
@@ -1382,11 +1349,7 @@ def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]
     binding = node.get("connector_binding")
     if not isinstance(binding, dict):
         return node
-    cleaned = {
-        key: value
-        for key, value in binding.items()
-        if not (key in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and _is_unset_binding_input(value))
-    }
+    cleaned = {key: value for key, value in binding.items() if not (key in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and _is_unset_binding_input(value))}
     if len(cleaned) == len(binding):
         return node
     return {**node, "connector_binding": cleaned}
@@ -1429,13 +1392,11 @@ class CapabilityScope(BaseModel):
 
     allowed_connectors: list[str] | None = Field(
         default=None,
-        description="Connector instance-ids and/or connector types the node may "
-        "resolve. Absent/empty = UNRESTRICTED (Agent grants).",
+        description="Connector instance-ids and/or connector types the node may resolve. Absent/empty = UNRESTRICTED (Agent grants).",
     )
     allowed_tools: list[str] | None = Field(
         default=None,
-        description="MCP/runtime tools the node's agent may invoke. Absent = NOT "
-        "narrowed (additional role check still applies).",
+        description="MCP/runtime tools the node's agent may invoke. Absent = NOT narrowed (additional role check still applies).",
     )
     context_scope: list[str] | None = Field(
         default=None,
@@ -1515,8 +1476,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # that contains it — re-running would double-execute the side effect.
     idempotent: bool = Field(
         default=True,
-        description="Whether the node is logically safe to re-run. When false, "
-        "retries of any run containing this node are suppressed.",
+        description="Whether the node is logically safe to re-run. When false, retries of any run containing this node are suppressed.",
     )
     composite_ref: uuid.UUID | None = None
     composite_parameter_values: dict[str, Any] | None = None
@@ -1663,8 +1623,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # the node and compiled by the pipeline engine.
     router_config: dict[str, Any] | None = Field(
         default=None,
-        description="Router node config: {mode, rules:[{guard (JMESPath), target|target_port}|{default, target}]}. "
-        "Required for node_type='router'.",
+        description="Router node config: {mode, rules:[{guard (JMESPath), target|target_port}|{default, target}]}. Required for node_type='router'.",
     )
     hitl_config: dict[str, Any] | None = Field(
         default=None,
@@ -1680,8 +1639,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # never carry the gate. Absent = no gate declared on this node.
     policy_gate: PipelineGraphPolicyGate | None = Field(
         default=None,
-        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. "
-        "Absent means no gate is declared on this node.",
+        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. Absent means no gate is declared on this node.",
     )
     # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
     # sandbox_agent / composite node (NOT a new node_type). When set, the node
@@ -1704,13 +1662,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # ports enables compile-time fan-in safety + typed port validation.
     inputs: list[dict[str, Any]] | None = Field(
         default=None,
-        description="Input ports. Each entry: {port: str, schema_ref?: str}. "
-        "None => backfilled with a single default 'in' port at compile time.",
+        description="Input ports. Each entry: {port: str, schema_ref?: str}. None => backfilled with a single default 'in' port at compile time.",
     )
     outputs: list[dict[str, Any]] | None = Field(
         default=None,
-        description="Output ports. Each entry: {port: str, schema_ref?: str}. "
-        "None => backfilled with a single default 'out' port at compile time.",
+        description="Output ports. Each entry: {port: str, schema_ref?: str}. None => backfilled with a single default 'out' port at compile time.",
     )
     # FAR-792: per-node sandbox stdout/stderr retention. ``stdout_retention_mode``
     # selects "tail" (legacy 512KB bound, the default) or "full" (retain up to
@@ -1720,13 +1676,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # meaningful when mode=="full"; it is validated in ``_validate_stdout_retention``.
     stdout_retention_mode: Literal["tail", "full"] | None = Field(
         default=None,
-        description="Per-node stdout/stderr retention mode: 'tail' (legacy 512KB bound, default) "
-        "or 'full' (retain up to stdout_max_bytes). Only valid on sandbox_agent nodes.",
+        description="Per-node stdout/stderr retention mode: 'tail' (legacy 512KB bound, default) or 'full' (retain up to stdout_max_bytes). Only valid on sandbox_agent nodes.",
     )
     stdout_max_bytes: int | None = Field(
         default=None,
-        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. "
-        "Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
+        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
     )
     # FAR-802 (ADR 033): managed workspace inputs — checked-out repositories
     # provisioned inside the sandbox workspace at run time. Declared here so the
@@ -1737,9 +1691,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # in ``_validate_sandbox_agent_node`` so save-time and run-time agree.
     workspace_inputs: list[dict[str, Any]] | None = Field(
         default=None,
-        description="Managed workspace inputs: a list of repository input descriptors "
-        "(each with dest/ref/url) checked out into the sandbox workspace. Only valid "
-        "on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
+        description="Managed workspace inputs: a list of repository input descriptors (each with dest/ref/url) checked out into the sandbox workspace. Only valid on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
     )
     # FAR-1141 slice 2: dispatch wait semantics. Declared on the node (NOT folded
     # into connector_binding) so the API does not silently DROP them on save — a
@@ -1944,15 +1896,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Only sandbox_agent nodes can set stdout_max_bytes")
 
     def _validate_output_schema_pin_consistency(self) -> None:
-        if (
-            self.output_schema_pin is not None
-            and self.output_schema_id is not None
-            and self.output_schema_pin.schema_id != self.output_schema_id
-        ):
-            raise ValueError(
-                f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) "
-                f"does not match output_schema_id ({self.output_schema_id})"
-            )
+        if self.output_schema_pin is not None and self.output_schema_id is not None and self.output_schema_pin.schema_id != self.output_schema_id:
+            raise ValueError(f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) does not match output_schema_id ({self.output_schema_id})")
 
     def _validate_manual_node(self) -> None:
         if self.agent_id is not None:
@@ -2163,19 +2108,15 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             )
         if binding.operation != "dispatch":
             raise ValueError(
-                "Dispatch nodes require connector_binding.operation='dispatch' "
-                f"(got {binding.operation!r}) — a dispatch node that queries fires no job",
+                f"Dispatch nodes require connector_binding.operation='dispatch' (got {binding.operation!r}) — a dispatch node that queries fires no job",
             )
         if not connector_type_supports_dispatch(binding.type):
             raise ValueError(
-                f"connector type {binding.type!r} does not implement the CI-runner operations "
-                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch "
-                "binding requires — bind a CI connector instead",
+                f"connector type {binding.type!r} does not implement the CI-runner operations (trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires — bind a CI connector instead",
             )
         if self.await_completion and binding.dispatch_action != "trigger_run":
             raise ValueError(
-                "await_completion=True requires connector_binding.dispatch_action='trigger_run' "
-                f"(got {binding.dispatch_action!r}) — the wait only ever polls after a fired job",
+                f"await_completion=True requires connector_binding.dispatch_action='trigger_run' (got {binding.dispatch_action!r}) — the wait only ever polls after a fired job",
             )
         if self.wait_timeout is not None and not self.await_completion:
             raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
@@ -2220,21 +2161,16 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         """
         if self.connector_binding is None:
             raise ValueError(
-                "Connector nodes require a connector_binding - without one the node "
-                "cannot route to a connector and would run as an agent node",
+                "Connector nodes require a connector_binding - without one the node cannot route to a connector and would run as an agent node",
             )
         if self.agent_id is not None:
             raise ValueError(
-                "Connector nodes cannot reference an agent - a connector node has no LLM step, "
-                "so the agent_id would be dead configuration (the binding still routes, the agent "
-                "never runs); remove the agent_id",
+                "Connector nodes cannot reference an agent - a connector node has no LLM step, so the agent_id would be dead configuration (the binding still routes, the agent never runs); remove the agent_id",
             )
         binding = self.connector_binding
         if binding.operation != "dispatch" and not (binding.resource or "").strip():
             raise ValueError(
-                f"Connector nodes require a non-empty connector_binding.resource for a "
-                f"{binding.operation!r} operation - without one the connector is called with an "
-                "empty resource at run time",
+                f"Connector nodes require a non-empty connector_binding.resource for a {binding.operation!r} operation - without one the connector is called with an empty resource at run time",
             )
 
     def _validate_dispatch_binding_routing(self) -> None:
@@ -2269,9 +2205,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         if node_routes_binding_to_connector(probe):
             return
         raise ValueError(
-            f"{self.node_type} nodes do not route their connector_binding to a connector, so "
-            "operation='dispatch' would never fire while the run read as dispatched — use a "
-            "dispatch or connector node for the dispatch binding",
+            f"{self.node_type} nodes do not route their connector_binding to a connector, so operation='dispatch' would never fire while the run read as dispatched — use a dispatch or connector node for the dispatch binding",
         )
 
     def _validate_dispatch_binding_non_idempotent(self) -> None:
@@ -2325,19 +2259,14 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         for key in self.env_vars:
             for prefix in _RESERVED_ENV_PREFIXES:
                 if key.startswith(prefix):
-                    raise ValueError(
-                        f"Sandbox agent env var '{key}' uses reserved prefix '{prefix}'. "
-                        "System-reserved env vars are set automatically."
-                    )
+                    raise ValueError(f"Sandbox agent env var '{key}' uses reserved prefix '{prefix}'. System-reserved env vars are set automatically.")
 
     def _validate_sandbox_context_files(self) -> None:
         if not self.context_files:
             return
         for source_path in self.context_files:
             if not source_path.startswith("/"):
-                raise ValueError(
-                    f"Sandbox agent context_files source '{source_path}' must be an absolute path (starting with /)"
-                )
+                raise ValueError(f"Sandbox agent context_files source '{source_path}' must be an absolute path (starting with /)")
 
 
 class EvalCondition(BaseModel):
@@ -2353,9 +2282,7 @@ class EvalCondition(BaseModel):
     )
     operator: str = Field(
         pattern="^(lt|gt|lte|gte|eq|neq)$",
-        description="Comparison operator: lt (score < threshold), gt (score > threshold), "
-        "lte (score <= threshold), gte (score >= threshold), eq (score == threshold), "
-        "neq (score != threshold).",
+        description="Comparison operator: lt (score < threshold), gt (score > threshold), lte (score <= threshold), gte (score >= threshold), eq (score == threshold), neq (score != threshold).",
     )
 
 
@@ -2421,8 +2348,7 @@ class HitlReviewConfig(BaseModel):
     condition: str | None = Field(
         default=None,
         max_length=500,
-        description="JMESPath expression evaluated against the upstream node output. "
-        "If it returns true, gate activates. If false/empty/null, gate is skipped.",
+        description="JMESPath expression evaluated against the upstream node output. If it returns true, gate activates. If false/empty/null, gate is skipped.",
     )
     eval_condition: EvalCondition | None = Field(
         default=None,
@@ -2434,10 +2360,7 @@ class HitlReviewConfig(BaseModel):
     subject_path: str | None = Field(
         default=None,
         max_length=500,
-        description="JMESPath expression naming the field under review in the run "
-        "state.  Resolved against the same root the gate condition evaluates "
-        "against (the merged state dict).  The resolved value is bounded and "
-        "redacted identically to artifacts before persistence.",
+        description="JMESPath expression naming the field under review in the run state.  Resolved against the same root the gate condition evaluates against (the merged state dict).  The resolved value is bounded and redacted identically to artifacts before persistence.",
     )
     response_contract: HitlResponseContract | None = Field(
         default=None,
@@ -2483,10 +2406,7 @@ class HitlReviewConfig(BaseModel):
         if isinstance(info.context, dict) and info.context.get("legacy_read"):
             return v
         if len(v.strip()) < HITL_DESCRIPTION_MIN_LENGTH:
-            raise ValueError(
-                f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) "
-                "explaining why this gate exists"
-            )
+            raise ValueError(f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists")
         return v
 
 
@@ -2499,8 +2419,7 @@ class PipelineGraphEdge(BaseModel):
     condition_expression: str | None = Field(
         default=None,
         max_length=500,
-        description="JMESPath expression for conditional edge routing. "
-        "Evaluated against pipeline state; if truthy, routes to target.",
+        description="JMESPath expression for conditional edge routing. Evaluated against pipeline state; if truthy, routes to target.",
     )
     # FAR-416 (FAR-402 F1): port addressing. Defaults mirror the flat-state keys
     # used before ports existed, so legacy edges route identically.
@@ -2716,9 +2635,7 @@ def _validated_graph_node(
     # FAR-2283: the output-schema requirement moved out of the model into the
     # stored-graph-aware write guard, so surface a legacy schema-less manual
     # node as the same ``node_legacy_data`` warning the read path always gave.
-    if node_dict.get("node_type") == "manual" and not (
-        node.output_schema_id is not None or node.output_schema_pin is not None or node.output_schema_json is not None
-    ):
+    if node_dict.get("node_type") == "manual" and not (node.output_schema_id is not None or node.output_schema_pin is not None or node.output_schema_json is not None):
         issues.append(
             GraphValidationIssue(
                 severity="warning",
@@ -2753,9 +2670,7 @@ def _read_legacy_graph_node(
         GraphValidationIssue(
             severity="warning",
             code="node_legacy_data",
-            message=(
-                f"Node {node_id} has legacy data that passes lenient read validation but would fail write validation."
-            ),
+            message=(f"Node {node_id} has legacy data that passes lenient read validation but would fail write validation."),
             node_id=node_id,
         )
     )
@@ -2876,9 +2791,7 @@ def _construct_graph_edge(edge_dict: Any) -> PipelineGraphEdge:
     if isinstance(edge_dict, dict):
         fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
     else:
-        fallback_fields = {
-            name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)
-        }
+        fallback_fields = {name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)}
     raw_id = _edge_field(edge_dict, "id")
     fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
     fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))
@@ -3260,9 +3173,7 @@ async def _resolve_graph_references(
             # The bare ``scope.violation node=... blank_connector=''`` names
             # neither the field nor the fix; this is the one rejection whose
             # remedy is a literal edit the author can make, so spell it out.
-            detail += (
-                "; Allowed Connectors contains a blank entry — remove it, or leave the list empty for unrestricted"
-            )
+            detail += "; Allowed Connectors contains a blank entry — remove it, or leave the list empty for unrestricted"
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=detail,
@@ -3636,8 +3547,7 @@ class PipelineGraphNodePatch(BaseModel):
         default=None,
         ge=60,
         le=604800,
-        description="Stall window (seconds) before the idle watchdog treats the agent as stalled. "
-        "Validated against the MERGED node's timeout_seconds at save time.",
+        description="Stall window (seconds) before the idle watchdog treats the agent as stalled. Validated against the MERGED node's timeout_seconds at save time.",
     )
     enable_heartbeat: bool | None = Field(
         default=None,
@@ -3667,8 +3577,7 @@ class PipelineGraphNodePatch(BaseModel):
     # coupled pair must be patchable together.
     egress_allowlist: list[dict[str, Any]] | None = Field(
         default=None,
-        description="Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); "
-        "the whole list replaces the stored one.",
+        description="Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); the whole list replaces the stored one.",
     )
     wallclock_budget_seconds: int | None = Field(
         default=None,
@@ -3695,8 +3604,7 @@ class PipelineGraphNodePatch(BaseModel):
     # (FAR-488) holds for this route too.
     agent_commands: list[str] | None = Field(
         default=None,
-        description="sandbox_agent node command list; the whole list replaces the stored one and is "
-        "synced to the bound Agent row in the same transaction.",
+        description="sandbox_agent node command list; the whole list replaces the stored one and is synced to the bound Agent row in the same transaction.",
     )
     # script mode runs ``script_command`` VERBATIM straight off the node at run
     # time (``sandbox_mode``); no Agent row holds a copy of it, so there is
@@ -3790,8 +3698,7 @@ def _stored_node_model(raw: dict[str, Any]) -> PipelineGraphNode:
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
-                f"against the current node schema: {_joined_validation_detail(exc)}",
+                detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates against the current node schema: {_joined_validation_detail(exc)}",
             ) from exc
 
 
@@ -3811,8 +3718,7 @@ def _stored_edge_model(row: Any) -> PipelineGraphEdge:
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Stored pipeline edge {raw.get('id', 'unknown')} no longer validates "
-                f"against the current edge schema: {_joined_validation_detail(exc)}",
+                detail=f"Stored pipeline edge {raw.get('id', 'unknown')} no longer validates against the current edge schema: {_joined_validation_detail(exc)}",
             ) from exc
 
 
@@ -4203,11 +4109,7 @@ async def _assert_environment_profile_bindable(
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "environment_profile_id does not resolve to an environment profile in this "
-                "organisation (it may not exist, may have been deleted, or may belong to "
-                "another organisation)"
-            ),
+            detail=("environment_profile_id does not resolve to an environment profile in this organisation (it may not exist, may have been deleted, or may belong to another organisation)"),
         )
     # SHARED predicate (core.team_visibility) — the same rule the profile-side
     # scope-change guard applies, so the writers cannot drift. Org-visible
@@ -4224,10 +4126,7 @@ async def _assert_environment_profile_bindable(
         # per-route literal); profile-side detail stays on the
         # environment-profile surface (which enforces the mirror-image guard
         # when a profile's scope changes).
-        detail=(
-            f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the selected environment profile is "
-            "team-private and is not owned by this pipeline's owner team"
-        ),
+        detail=(f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the selected environment profile is team-private and is not owned by this pipeline's owner team"),
     )
 
 
@@ -4433,8 +4332,7 @@ def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
     """Raise the 409 for an ownership transfer blocked by active runs (PRD §9.3)."""
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
-        "cannot change ownership while any run is active",
+        detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; cannot change ownership while any run is active",
     ) from None
 
 
@@ -4682,9 +4580,7 @@ async def update_pipeline_endpoint(
     # here, BEFORE any denial/permission logic, and never reaches
     # `new <= previous`.
     threshold_change = "circuit_breaker_threshold" in updates
-    new_threshold: Decimal | None = (
-        normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
-    )
+    new_threshold: Decimal | None = normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
     try:
         pipeline, ownership_changed = await _apply_pipeline_update_payload(
             session=session,
@@ -4779,9 +4675,7 @@ def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
     return AutonomyLevel(pipeline.default_autonomy_level or AutonomyLevel.default().value)
 
 
-async def _assert_autonomy_admin_or_owner(
-    session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
-) -> None:
+async def _assert_autonomy_admin_or_owner(session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline) -> None:
     """Admin/owner gate for a manual autonomy change (ADR 062 §1).
 
     Promotion/demotion is a governance decision: org admins, and members of the
@@ -4792,9 +4686,7 @@ async def _assert_autonomy_admin_or_owner(
     if org_role_level(principal.org_role) >= _ADMIN_LEVEL:
         return
     owner_team_id = getattr(pipeline, "owner_team_id", None)
-    if owner_team_id is not None and await is_account_in_team(
-        session, account_id=principal.account_id, team_id=owner_team_id
-    ):
+    if owner_team_id is not None and await is_account_in_team(session, account_id=principal.account_id, team_id=owner_team_id):
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -4841,26 +4733,17 @@ async def _apply_manual_autonomy_change(
             if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        f"Promotion must raise autonomy above the current level "
-                        f"({current_level.value}): {target_level.value}"
-                    ),
+                    detail=(f"Promotion must raise autonomy above the current level ({current_level.value}): {target_level.value}"),
                 )
             if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        f"Promotion to {target_level.value} exceeds the pipeline's "
-                        f"max_autonomy_level ceiling ({ceiling.value})"
-                    ),
+                    detail=(f"Promotion to {target_level.value} exceeds the pipeline's max_autonomy_level ceiling ({ceiling.value})"),
                 )
         elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    f"Demotion must lower autonomy below the current level "
-                    f"({current_level.value}): {target_level.value}"
-                ),
+                detail=(f"Demotion must lower autonomy below the current level ({current_level.value}): {target_level.value}"),
             )
 
         updated = await set_earned_autonomy_level(
@@ -4957,9 +4840,7 @@ async def promote_pipeline_autonomy(
 @router.delete(
     "/{pipeline_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(audited("pipeline_deleted", "pipeline", principal_dep=get_current_tenant_user, fail_closed=True))
-    ],
+    dependencies=[Depends(audited("pipeline_deleted", "pipeline", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors("pipelines.delete")
 async def delete_pipeline_endpoint(
@@ -4972,9 +4853,7 @@ async def delete_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            deleted = await soft_delete_pipeline(
-                session, pipeline_id, deleted_by=principal.account_id, organisation_id=principal.organisation_id
-            )
+            deleted = await soft_delete_pipeline(session, pipeline_id, deleted_by=principal.account_id, organisation_id=principal.organisation_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -5050,9 +4929,7 @@ async def restore_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id, include_deleted=True)
-            existing = await get_pipeline(
-                session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id
-            )
+            existing = await get_pipeline(session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             # No in-txn session.refresh here (unlike archive/unarchive):
@@ -5186,10 +5063,7 @@ async def _set_pipeline_run_state(
             if resume and existing.circuit_breaker_tripped:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; "
-                        "reset the pipeline's spend circuit breaker first, then resume"
-                    ),
+                    detail=("pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; reset the pipeline's spend circuit breaker first, then resume"),
                 )
             toggle = resume_pipeline if resume else pause_pipeline
             pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
@@ -5524,9 +5398,7 @@ async def _detect_parameter_ports(
 @router.post(
     "/{pipeline_id}/save-as-composite",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipelines.save_as_composite")
 async def save_as_composite_endpoint(
@@ -5665,9 +5537,7 @@ async def _quality_report_recipient_urls(
 
 @router.post(
     "/{pipeline_id}/quality-report",
-    dependencies=[
-        Depends(audited("pipeline_quality_report_triggered", "pipeline", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_quality_report_triggered", "pipeline", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipelines.trigger_quality_report")
 async def trigger_quality_report(
@@ -6080,9 +5950,7 @@ async def get_snapshot_detail_endpoint(
 
 @router.patch(
     "/{pipeline_id}/snapshots/{snapshot_id}",
-    dependencies=[
-        Depends(audited("pipeline_snapshot_tagged", "pipeline_snapshot", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_snapshot_tagged", "pipeline_snapshot", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipelines.tag_snapshot")
 async def tag_snapshot_endpoint(
@@ -6677,9 +6545,7 @@ async def _finalize_locked_graph_save(
 # the gate body itself is single-sourced).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
-    dependencies=[
-        Depends(audited("pipeline_node_converted_to_agent", "pipeline", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_node_converted_to_agent", "pipeline", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipelines.convert_node_to_agent")
 async def convert_node_to_agent_endpoint(
@@ -6792,9 +6658,7 @@ async def convert_node_to_agent_endpoint(
 # above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
-    dependencies=[
-        Depends(audited("pipeline_node_reverted_to_manual", "pipeline", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_node_reverted_to_manual", "pipeline", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipelines.revert_node_to_manual")
 async def revert_node_to_manual_endpoint(
@@ -6913,9 +6777,7 @@ def _edge_to_dict(e: Any) -> dict[str, Any]:
         "target_node_id": str(e.target_node_id),
         "edge_type": e.edge_type,
         "condition_expression": getattr(e, "condition_expression", None),
-        "hitl_review_config": (
-            dict(e.hitl_review_config) if isinstance(e.hitl_review_config, dict) else e.hitl_review_config
-        ),
+        "hitl_review_config": (dict(e.hitl_review_config) if isinstance(e.hitl_review_config, dict) else e.hitl_review_config),
         "hitl_review_config_present": True,
         "source_port": getattr(e, "source_port", "out"),
         "target_port": getattr(e, "target_port", "in"),

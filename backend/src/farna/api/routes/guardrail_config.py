@@ -548,9 +548,7 @@ async def propose_guardrail_config(
     "/apply",
     dependencies=[
         Depends(
-            audited(
-                "guardrail_config_applied", "guardrail_config", principal_dep=get_current_tenant_user, fail_closed=True
-            ),
+            audited("guardrail_config_applied", "guardrail_config", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
@@ -609,11 +607,7 @@ async def apply_guardrail_config(
                 "guardrail_config.apply_conflict",
                 {"colliding_ids": sorted(colliding)},
             )
-            conflict_detail = (
-                "Cannot apply guardrail config: id(s) collide with node-bound guardrails: "
-                + ", ".join(sorted(colliding))
-                + ". Rename the colliding config id(s) and re-propose."
-            )
+            conflict_detail = "Cannot apply guardrail config: id(s) collide with node-bound guardrails: " + ", ".join(sorted(colliding)) + ". Rename the colliding config id(s) and re-propose."
         else:
             conflict_detail = None
             applied_hash = pin.proposed_hash or hash_config_set(proposed)
@@ -764,11 +758,7 @@ async def import_guardrail_config(
                 "guardrail_config.import_conflict",
                 {"colliding_ids": sorted(colliding)},
             )
-            conflict_detail = (
-                "Cannot import guardrail config: id(s) collide with node-bound guardrails: "
-                + ", ".join(sorted(colliding))
-                + ". Rename the colliding config id(s) and re-import."
-            )
+            conflict_detail = "Cannot import guardrail config: id(s) collide with node-bound guardrails: " + ", ".join(sorted(colliding)) + ". Rename the colliding config id(s) and re-import."
         else:
             conflict_detail = None
             new_pin = GuardrailPin(

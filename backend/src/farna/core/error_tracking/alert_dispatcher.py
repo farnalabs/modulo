@@ -133,9 +133,7 @@ async def _dispatch_email(
 
         stored_raw = email_cfg.get("smtp_password", settings.smtp_password)
         try:
-            stored_smtp_password = await decode_stored_secret_scoped(
-                session, stored_raw, settings.fernet_key, org_id=org_id
-            )
+            stored_smtp_password = await decode_stored_secret_scoped(session, stored_raw, settings.fernet_key, org_id=org_id)
         except Exception as exc:
             _log.exception("alert.email_smtp_password_decrypt_failed")
             stored_smtp_password = _plaintext_password_or_raise(stored_raw, exc)
@@ -207,16 +205,7 @@ async def _dispatch_email(
             "</body></html>"
         )
 
-        body_text = (
-            f"Modulo Alert: {alert.rule_name}\n"
-            f"Level: {alert.level}\n"
-            f"Rule: {alert.rule_name}\n"
-            f"Message: {sample_message[:500]}\n"
-            f"Count: {alert.count}\n"
-            f"Fingerprint: {alert.fingerprint}\n"
-            f"Environment: {alert.environment or 'N/A'}\n"
-            f"View: {admin_url}"
-        )
+        body_text = f"Modulo Alert: {alert.rule_name}\nLevel: {alert.level}\nRule: {alert.rule_name}\nMessage: {sample_message[:500]}\nCount: {alert.count}\nFingerprint: {alert.fingerprint}\nEnvironment: {alert.environment or 'N/A'}\nView: {admin_url}"
 
         try:
             success = await asyncio.to_thread(
@@ -264,9 +253,7 @@ def _plaintext_password_or_raise(stored_raw: str, exc: Exception) -> str:
     that function's cognitive complexity well below the Sonar limit.
     """
     if _is_encrypted_token(stored_raw):
-        raise SmtpPasswordDecryptError(
-            "stored SMTP password could not be decrypted; refusing to use the ciphertext as the password"
-        ) from exc
+        raise SmtpPasswordDecryptError("stored SMTP password could not be decrypted; refusing to use the ciphertext as the password") from exc
     return stored_raw
 
 
@@ -416,13 +403,7 @@ async def dispatch_alert_resolved(
 
 def _format_slack_payload(payload: dict[str, Any], emoji: str) -> dict[str, Any]:
     return {
-        "text": f"{emoji} *Error Alert: {payload['rule']}*\n"
-        f"• Group: `{payload['group_id']}`\n"
-        f"• Level: {payload['level']}\n"
-        f"• Count: {payload['count']}\n"
-        f"• Message: {payload['message'][:500]}\n"
-        f"• Environment: {payload['environment']}\n"
-        f"• <{payload['url']}|View in Modulo>",
+        "text": f"{emoji} *Error Alert: {payload['rule']}*\n• Group: `{payload['group_id']}`\n• Level: {payload['level']}\n• Count: {payload['count']}\n• Message: {payload['message'][:500]}\n• Environment: {payload['environment']}\n• <{payload['url']}|View in Modulo>",
     }
 
 

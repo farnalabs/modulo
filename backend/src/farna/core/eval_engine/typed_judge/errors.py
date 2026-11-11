@@ -74,10 +74,7 @@ def reject_credential_keys(obj: Any, where: str) -> None:
     if isinstance(obj, dict):
         for key, value in obj.items():
             if isinstance(key, str) and CREDENTIAL_KEY_PATTERN.search(key):
-                raise invalid(
-                    f"{where} carries a credential-like key {key!r}; credentials belong in the "
-                    "model backend / vault, never in config_json (ADR 066 D16)"
-                )
+                raise invalid(f"{where} carries a credential-like key {key!r}; credentials belong in the model backend / vault, never in config_json (ADR 066 D16)")
             reject_credential_keys(value, f"{where}.{key}")
     elif isinstance(obj, list):
         for index, value in enumerate(obj):

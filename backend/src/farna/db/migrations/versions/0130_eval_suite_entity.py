@@ -57,10 +57,7 @@ _ORG_ISOLATION_POLICY = "organisation_id = nullif(current_setting('app.organisat
 
 # Ownership is transferred to the migration role after DDL so the runtime
 # modulo_app role (non-owner) is filtered by RLS. Guarded on the role existing.
-_OWNER_TRANSFER_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
-    "THEN ALTER TABLE public.eval_suites OWNER TO modulo_migrate; END IF; END $$;"
-)
+_OWNER_TRANSFER_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') THEN ALTER TABLE public.eval_suites OWNER TO modulo_migrate; END IF; END $$;"
 
 
 def _transfer_ownership() -> None:
@@ -209,15 +206,7 @@ def upgrade() -> None:
     # 2. Add the FK column + constraint on eval_definitions.
     op.execute(text("ALTER TABLE eval_definitions ADD COLUMN IF NOT EXISTS eval_suite_id UUID"))
     op.execute(
-        text(
-            "DO $$ BEGIN "
-            "IF NOT EXISTS (SELECT 1 FROM pg_constraint "
-            "WHERE conname = 'fk_eval_definitions_eval_suite_id') THEN "
-            "ALTER TABLE eval_definitions "
-            "ADD CONSTRAINT fk_eval_definitions_eval_suite_id "
-            "FOREIGN KEY (eval_suite_id) REFERENCES eval_suites(id) ON DELETE SET NULL; "
-            "END IF; END $$;"
-        )
+        text("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_eval_definitions_eval_suite_id') THEN ALTER TABLE eval_definitions ADD CONSTRAINT fk_eval_definitions_eval_suite_id FOREIGN KEY (eval_suite_id) REFERENCES eval_suites(id) ON DELETE SET NULL; END IF; END $$;")
     )
 
     # 3. Idempotent backfill (bounded per organisation; touches only
@@ -239,14 +228,6 @@ def downgrade() -> None:
         return
 
     op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON "eval_suites"'))
-    op.execute(
-        text(
-            "DO $$ BEGIN "
-            "IF EXISTS (SELECT 1 FROM pg_constraint "
-            "WHERE conname = 'fk_eval_definitions_eval_suite_id') THEN "
-            "ALTER TABLE eval_definitions DROP CONSTRAINT fk_eval_definitions_eval_suite_id; "
-            "END IF; END $$;"
-        )
-    )
+    op.execute(text("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_eval_definitions_eval_suite_id') THEN ALTER TABLE eval_definitions DROP CONSTRAINT fk_eval_definitions_eval_suite_id; END IF; END $$;"))
     op.execute(text("ALTER TABLE eval_definitions DROP COLUMN IF EXISTS eval_suite_id"))
     op.execute(text("DROP TABLE IF EXISTS eval_suites"))

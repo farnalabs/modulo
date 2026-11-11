@@ -546,7 +546,7 @@ def write_schema_contract(
 # Schema file readers (for host-side validation)
 # ---------------------------------------------------------------------------
 
-SCHEMA_DIR_ENV_VAR = "MODULO_SCHEMA_DIR"
+SCHEMA_DIR_ENV_VAR = "FARNA_CONTROL_MODULO_SCHEMA_DIR"
 """Environment variable pointing to the ``schemas/`` directory inside the sandbox."""
 
 

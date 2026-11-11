@@ -52,9 +52,7 @@ async def _guard_self_rating(session: AsyncSession, primitive_id: uuid.UUID, acc
         raise SelfRatingError("You cannot rate your own primitive")
 
 
-async def _guard_cooldown(
-    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
-) -> None:
+async def _guard_cooldown(session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None) -> None:
     """Enforce 10-min cooldown between ratings from the same user on the same primitive."""
     if account_id is None:
         return
@@ -74,9 +72,7 @@ async def _guard_cooldown(
         raise RatingCooldownError(f"Please wait {_COOLDOWN_MINUTES} minutes before rating this primitive again")
 
 
-async def _guard_copy_to_adapt(
-    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
-) -> None:
+async def _guard_copy_to_adapt(session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None) -> None:
     """Require that the user has copied the primitive before rating it."""
     if account_id is None:
         return
@@ -99,9 +95,7 @@ async def _guard_copy_to_adapt(
 # ---------------------------------------------------------------------------
 
 
-async def _guard_duplicate_rating(
-    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
-) -> None:
+async def _guard_duplicate_rating(session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None) -> None:
     """Block duplicate ratings: a user cannot rate the same primitive twice."""
     if account_id is None:
         return
@@ -155,9 +149,7 @@ async def get_rating_aggregate(
     Average is computed as thumbs_up_ratio * 5, yielding a 1-5 weighted score.
     """
     try:
-        count_stmt = (
-            select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
-        )
+        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
         total_count = (await session.execute(count_stmt)).scalar_one()
 
         if total_count == 0:
@@ -204,17 +196,9 @@ async def list_ratings_for_primitive(
     """List ratings for a primitive, newest first."""
     offset = (page - 1) * page_size
     try:
-        count_stmt = (
-            select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
-        )
+        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
         total = (await session.execute(count_stmt)).scalar_one()
-        stmt = (
-            select(PrimitiveRating)
-            .where(PrimitiveRating.primitive_id == primitive_id)
-            .order_by(PrimitiveRating.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
-        )
+        stmt = select(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id).order_by(PrimitiveRating.created_at.desc()).offset(offset).limit(page_size)
         result = await session.execute(stmt)
         items = list(result.scalars())
     except ProgrammingError:
@@ -269,13 +253,7 @@ async def list_abuse_reports(
         count_stmt = select(func.count()).select_from(PrimitiveAbuseReport).where(*conditions)
         total = (await session.execute(count_stmt)).scalar_one()
 
-        stmt = (
-            select(PrimitiveAbuseReport)
-            .where(*conditions)
-            .order_by(PrimitiveAbuseReport.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
-        )
+        stmt = select(PrimitiveAbuseReport).where(*conditions).order_by(PrimitiveAbuseReport.created_at.desc()).offset(offset).limit(page_size)
         result = await session.execute(stmt)
         items = list(result.scalars())
     except ProgrammingError:

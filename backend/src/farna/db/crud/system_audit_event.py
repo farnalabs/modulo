@@ -86,10 +86,6 @@ async def list_system_audit_events(
     count_result = await session.execute(select(func.count()).select_from(filtered.subquery()))
     total = count_result.scalar_one_or_none() or 0
 
-    stmt = (
-        filtered.order_by(SystemAuditEvent.created_at.desc(), SystemAuditEvent.id.desc())
-        .offset((safe_page - 1) * safe_page_size)
-        .limit(safe_page_size)
-    )
+    stmt = filtered.order_by(SystemAuditEvent.created_at.desc(), SystemAuditEvent.id.desc()).offset((safe_page - 1) * safe_page_size).limit(safe_page_size)
     result = await session.execute(stmt)
     return list(result.scalars().all()), total

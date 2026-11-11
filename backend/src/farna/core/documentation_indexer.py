@@ -43,12 +43,7 @@ class DocumentationIndex:
         if not query_words:
             return []
 
-        return [
-            entry
-            for entry in self.entries
-            if (section is None or entry.heading_path.lower().startswith(section.lower()))
-            and all(w in (entry.heading + " " + entry.first_paragraph).lower() for w in query_words)
-        ]
+        return [entry for entry in self.entries if (section is None or entry.heading_path.lower().startswith(section.lower())) and all(w in (entry.heading + " " + entry.first_paragraph).lower() for w in query_words)]
 
     @staticmethod
     def format_results(results: list[DocEntry]) -> str:

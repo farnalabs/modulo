@@ -42,11 +42,7 @@ _ORPHAN_ORG_SLUG = "orphan-unattributed-errors"
 # below (an ON CONFLICT clause cannot target a partial index, so a slug
 # collision there would otherwise abort the migration with a raw
 # IntegrityError — or, with no target, silently no-op past it).
-_INSERT_ORPHAN_ORG = (
-    "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-    "VALUES (:id, :name, :slug, '{}', '{}') "
-    "ON CONFLICT (id) DO NOTHING"
-)
+_INSERT_ORPHAN_ORG = "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}', '{}') ON CONFLICT (id) DO NOTHING"
 
 
 def upgrade() -> None:
@@ -62,11 +58,7 @@ def upgrade() -> None:
         {"slug": _ORPHAN_ORG_SLUG, "id": _ORPHAN_ORG_ID},
     ).scalar_one_or_none()
     if slug_holder is not None:
-        raise RuntimeError(
-            f"Migration {revision}: cannot seed the orphan organisation — slug "
-            f"'{_ORPHAN_ORG_SLUG}' is held by organisation {slug_holder}. "
-            "Free the slug (rename or soft-delete the conflicting org) and re-run."
-        )
+        raise RuntimeError(f"Migration {revision}: cannot seed the orphan organisation — slug '{_ORPHAN_ORG_SLUG}' is held by organisation {slug_holder}. Free the slug (rename or soft-delete the conflicting org) and re-run.")
 
     bind.execute(
         sa.text(_INSERT_ORPHAN_ORG),
@@ -86,10 +78,7 @@ def upgrade() -> None:
         {"id": _ORPHAN_ORG_ID},
     ).scalar_one_or_none()
     if seeded is None:
-        raise RuntimeError(
-            f"Migration {revision}: orphan organisation {_ORPHAN_ORG_ID} missing "
-            "after INSERT — the public error-ingest FK target would not exist."
-        )
+        raise RuntimeError(f"Migration {revision}: orphan organisation {_ORPHAN_ORG_ID} missing after INSERT — the public error-ingest FK target would not exist.")
 
 
 def downgrade() -> None:

@@ -163,17 +163,9 @@ def assert_not_held(data_dir: Path) -> None:
     if sys.platform == "win32":
         # Deferred P3: holder liveness must be verified with the Windows lock
         # primitive before any destructive step can run unguarded.
-        raise UpgradeError(
-            f"The data-dir lock record exists (holder PID {holder.pid}, mode {holder.mode!r}) and "
-            "holder liveness cannot be verified on Windows yet (TODO(P3)). Stop the launcher, "
-            "clear the stale lock record only if the holder process is confirmed dead, then retry."
-        )
+        raise UpgradeError(f"The data-dir lock record exists (holder PID {holder.pid}, mode {holder.mode!r}) and holder liveness cannot be verified on Windows yet (TODO(P3)). Stop the launcher, clear the stale lock record only if the holder process is confirmed dead, then retry.")
     if _pid_alive(holder.pid):
-        raise UpgradeError(
-            f"Refusing: data dir {data_dir} is locked by another launcher (holder PID {holder.pid}, "
-            f"mode {holder.mode!r}). Stop that launcher first ('modulo stop'), then re-run — "
-            "the snapshot survives; pass --skip-backup on the re-run."
-        )
+        raise UpgradeError(f"Refusing: data dir {data_dir} is locked by another launcher (holder PID {holder.pid}, mode {holder.mode!r}). Stop that launcher first ('modulo stop'), then re-run — the snapshot survives; pass --skip-backup on the re-run.")
     _log.info("upgrade.stale_lock_record_ignored holder_pid=%s (process is gone)", holder.pid)
 
 
@@ -223,17 +215,13 @@ def pre_upgrade_dump(
     try:
         secrets = _load_existing(secrets_path)
     except SecretsFileError as exc:
-        raise UpgradeError(
-            f"secrets file cannot be READ for the pre-upgrade dump (never generated here): {exc}"
-        ) from exc
+        raise UpgradeError(f"secrets file cannot be READ for the pre-upgrade dump (never generated here): {exc}") from exc
     try:
         state = load_state(state_path, secrets.state_hmac_key)
     except Exception as exc:
         raise UpgradeError(f"state.json at {state_path} cannot be verified: {exc}") from exc
 
-    url_with_password = (
-        f"postgresql://modulo:{secrets.postgres_password}@{_POSTGRES_HOST}:{state.postgres_port}/{_APP_DB_NAME}"
-    )
+    url_with_password = f"postgresql://modulo:{secrets.postgres_password}@{_POSTGRES_HOST}:{state.postgres_port}/{_APP_DB_NAME}"
     dump_url, postgres_password = _decredential_url(url_with_password)
 
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -274,9 +262,7 @@ def pre_upgrade_dump(
     size = dump_path.stat().st_size
     if size <= 0:
         shutil.rmtree(snapshot_dir, ignore_errors=True)
-        raise UpgradeError(
-            "pre-upgrade dump produced an EMPTY file — upgrade ABORTED; refusing to swap binaries over no snapshot"
-        )
+        raise UpgradeError("pre-upgrade dump produced an EMPTY file — upgrade ABORTED; refusing to swap binaries over no snapshot")
 
     created_at = datetime.now(UTC).isoformat()
     manifest = {
@@ -314,7 +300,7 @@ def _resolve_pg_bin_dir(bin_dir: Path | None) -> Path:
     """Resolve the bundled pg/ binaries directory (param > env > install default)."""
     if bin_dir is not None:
         return bin_dir
-    from_env = os.environ.get("MODULO_BUNDLED_BIN_DIR")
+    from_env = os.environ.get("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR")
     if from_env:
         return Path(from_env)
     return Path(sys.prefix) / "bundled" / "bin"
@@ -446,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
 #      a state.json-referenced dir; repair a dangling `current` symlink.
 # ---------------------------------------------------------------------------
 
-INSTALL_ROOT_ENV = "MODULO_INSTALL_ROOT"
+INSTALL_ROOT_ENV = "FARNA_CONTROL_MODULO_INSTALL_ROOT"
 UPGRADE_MARKER_FILENAME = "upgrade.json"
 UPGRADE_MARKER_SCHEMA_VERSION = 1
 _RETAINED_VERSIONS = 2
@@ -582,11 +568,7 @@ def restore_guidance(
     at ``versions/<v>.prev-<ts>``, so the link target names THAT dir and
     never the fresh copy sitting at ``versions/<v>``.
     """
-    head = (
-        "Manual restore - this restores BOTH the binary AND the data. The attempted upgrade's\n"
-        "boot may have forward-migrated the database schema past the old bundle's migration\n"
-        "head, so restoring the old binary ALONE is not sufficient."
-    )
+    head = "Manual restore - this restores BOTH the binary AND the data. The attempted upgrade's\nboot may have forward-migrated the database schema past the old bundle's migration\nhead, so restoring the old binary ALONE is not sufficient."
     fault = "NO automatic restore ran (none exists in v1; the fast-follow design is recorded in\nADR 031 Decision 7)."
     link_version = prior_link_target if prior_link_target is not None else previous_version
     if snapshot is None:
@@ -671,9 +653,7 @@ def atomic_symlink_swap(link_path: Path, target_value: str) -> None:
     seam substitutes for the POSIX symlink swap here.
     """
     if sys.platform == "win32":
-        raise UpgradeError(
-            "the `current` symlink swap is POSIX-only (TODO(P3): the Windows seam swaps over a junction via rename)"
-        )
+        raise UpgradeError("the `current` symlink swap is POSIX-only (TODO(P3): the Windows seam swaps over a junction via rename)")
     sweep_symlink_temps(link_path)
     temp_link = link_path.parent / f".{link_path.name}.new.{os.getpid()}"
     with contextlib.suppress(OSError):
@@ -718,17 +698,10 @@ def no_live_process_inside(target_root: Path) -> None:
         if pid == own_pid or os.path.realpath(str(exe)) == own_exe:
             continue
         cwd_real = os.path.realpath(str(cwd))
-        if (
-            exe == resolved_root
-            or exe.startswith(resolved_root + os.sep)
-            or cwd_real == resolved_root
-            or cwd_real.startswith(resolved_root + os.sep)
-        ):
+        if exe == resolved_root or exe.startswith(resolved_root + os.sep) or cwd_real == resolved_root or cwd_real.startswith(resolved_root + os.sep):
             offenders.append(f"pid {proc_entry.name} (cwd={cwd}, exe={exe})")
     if offenders:
-        raise UpgradeError(
-            f"Refusing: live processes remain inside {resolved_root} - stop them first:\n  " + "\n  ".join(offenders)
-        )
+        raise UpgradeError(f"Refusing: live processes remain inside {resolved_root} - stop them first:\n  " + "\n  ".join(offenders))
 
 
 def repair_current_symlink(install_root: Path) -> str | None:
@@ -791,11 +764,7 @@ def prune_versions(
             if resolved_now.is_dir():
                 protected.add(resolved_now.resolve())
     entries = sorted(
-        (
-            entry
-            for entry in versioned_root.iterdir()
-            if entry.is_dir() and not entry.name.startswith(".") and ".prev-" not in entry.name
-        ),
+        (entry for entry in versioned_root.iterdir() if entry.is_dir() and not entry.name.startswith(".") and ".prev-" not in entry.name),
         key=lambda entry: _version_sort_key(entry.name),
         reverse=True,
     )
@@ -835,9 +804,7 @@ def _host_arch() -> str:
             "arm64": "arm64",
         }[machine]
     except KeyError as exc:
-        raise UpgradeError(
-            f"unsupported host architecture '{machine}'; supported architectures are x86_64/amd64 and aarch64/arm64"
-        ) from exc
+        raise UpgradeError(f"unsupported host architecture '{machine}'; supported architectures are x86_64/amd64 and aarch64/arm64") from exc
 
 
 def _urllib_fetch(url: str, target: Path) -> None:
@@ -895,13 +862,7 @@ def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
     canonical_name = name.removeprefix("./")
     path = Path(canonical_name)
     raw_components = canonical_name.split("/")
-    if (
-        path.is_absolute()
-        or PureWindowsPath(name).is_absolute()
-        or _WINDOWS_DRIVE_PATH.match(name)
-        or "\\" in name
-        or any(component in {"", ".", ".."} for component in raw_components)
-    ):
+    if path.is_absolute() or PureWindowsPath(name).is_absolute() or _WINDOWS_DRIVE_PATH.match(name) or "\\" in name or any(component in {"", ".", ".."} for component in raw_components):
         raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}")
 
     current = bundle_dir
@@ -939,16 +900,11 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         raise UpgradeError(f"could not extract {tarball.name}: {exc}") from exc
     top_levels = list(staging_dir.iterdir())
     if len(top_levels) != 1 or not top_levels[0].is_dir() or top_levels[0].is_symlink():
-        raise UpgradeError(
-            f"unexpected archive layout: expected exactly one non-symlink top-level directory in "
-            f"{tarball.name}, found {len(top_levels)}"
-        )
+        raise UpgradeError(f"unexpected archive layout: expected exactly one non-symlink top-level directory in {tarball.name}, found {len(top_levels)}")
     bundle_dir = top_levels[0]
     expected_prefix = tarball.name.removesuffix(".tar.gz")
     if bundle_dir.name != expected_prefix:
-        raise UpgradeError(
-            f"archive top-level directory '{bundle_dir.name}' does not match archive identity '{expected_prefix}'"
-        )
+        raise UpgradeError(f"archive top-level directory '{bundle_dir.name}' does not match archive identity '{expected_prefix}'")
     sums_path = bundle_dir / "SHA256SUMS"
     if not sums_path.is_file():
         raise UpgradeError(f"malformed bundle: SHA256SUMS missing from {tarball.name}")
@@ -962,10 +918,7 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         artifact = _checksum_artifact(bundle_dir, name)
         actual = _sha256_file(artifact)
         if actual != expected:
-            raise UpgradeError(
-                f"bundle integrity check FAILED for {name}: expected {expected}, got {actual} - "
-                "do not use this download; report it at https://github.com/farnalabs/modulo/issues"
-            )
+            raise UpgradeError(f"bundle integrity check FAILED for {name}: expected {expected}, got {actual} - do not use this download; report it at https://github.com/farnalabs/modulo/issues")
     _log.info("upgrade.bundle_internal_checksums_verified dir=%s", bundle_dir.name)
     return bundle_dir
 
@@ -998,10 +951,7 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
     if holder is not None and _pid_alive(holder.pid):
         _restart_unit_best_effort(why="post-stop abort: restoring the stopped service")
-        raise UpgradeError(
-            f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID "
-            f"{holder.pid}) - stop it first: modulo stop"
-        )
+        raise UpgradeError(f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID {holder.pid}) - stop it first: modulo stop")
 
 
 def _restart_unit_best_effort(*, why: str) -> None:
@@ -1067,10 +1017,7 @@ def check_no_downgrade(
         db_heads = _snapshot_schema_versions(snapshot_dir)
     unknown = [head for head in db_heads if head == "unknown"]
     if not db_heads or len(unknown) == len(db_heads):
-        raise UpgradeError(
-            "cannot verify the database's migration revision(s): neither the live probe nor "
-            "the pre-upgrade snapshot recorded them - refusing the downgrade check blind"
-        )
+        raise UpgradeError("cannot verify the database's migration revision(s): neither the live probe nor the pre-upgrade snapshot recorded them - refusing the downgrade check blind")
     unknown_to_target = [head for head in db_heads if head not in target_heads and head != "unknown"]
     if unknown_to_target:
         raise UpgradeError(
@@ -1094,17 +1041,11 @@ def _check_pg_major(components: dict[str, str], data_dir: Path) -> None:
     """
     pg_version = str(components.get("postgres", "")).strip()
     if not pg_version or not re.fullmatch(r"\d+(?:\.\d+)*", pg_version):
-        raise UpgradeError(
-            f"the release manifest's 'components' carry no USABLE postgres version ({pg_version!r}) "
-            "- refusing the upgrade (a version the pg-major gate cannot compare is never guessed)"
-        )
+        raise UpgradeError(f"the release manifest's 'components' carry no USABLE postgres version ({pg_version!r}) - refusing the upgrade (a version the pg-major gate cannot compare is never guessed)")
     target_major = int(pg_version.split(".")[0])
     version_file = data_dir / _PGDATA_DIRNAME / _PG_VERSION_FILE
     if not version_file.exists():
-        raise UpgradeError(
-            f"no initialised bundled cluster at {data_dir / _PGDATA_DIRNAME} - refusing the "
-            "upgrade (never auto-initdb over a data dir)"
-        )
+        raise UpgradeError(f"no initialised bundled cluster at {data_dir / _PGDATA_DIRNAME} - refusing the upgrade (never auto-initdb over a data dir)")
     try:
         data_major = int(version_file.read_text(encoding="utf-8").strip().split(".")[0])
     except (OSError, ValueError) as exc:
@@ -1132,10 +1073,7 @@ def _bundled_boot_argv(install_root: Path, data_dir: Path) -> list[str]:
     """
     launcher = install_root / "current" / _LAUNCHER_NAME
     if not launcher.is_file():
-        raise UpgradeError(
-            f"the NEW bundle carries no launcher hook ({launcher}) - refusing to boot "
-            "(the FAR-671 bundle layout is in place, but the launcher hook is absent)"
-        )
+        raise UpgradeError(f"the NEW bundle carries no launcher hook ({launcher}) - refusing to boot (the FAR-671 bundle layout is in place, but the launcher hook is absent)")
     return [str(launcher), "start", "--data-dir", str(data_dir)]
 
 
@@ -1207,10 +1145,7 @@ def run_boot(
         stderr_text = stderr_file.read(stderr_allowance).decode("utf-8", errors="replace").strip()
         stderr_file.close()
     if not healthy:
-        raise UpgradeError(
-            f"the NEW bundle's boot did not reach a healthy /healthz (child exit code "
-            f"{process.returncode}): {stderr_text[-400:] if stderr_text else '(no stderr)'}"
-        )
+        raise UpgradeError(f"the NEW bundle's boot did not reach a healthy /healthz (child exit code {process.returncode}): {stderr_text[-400:] if stderr_text else '(no stderr)'}")
     return int(process.returncode or 0)
 
 
@@ -1264,11 +1199,7 @@ def _quantified_disk_preflight(tarball: Path, data_dir: Path) -> None:
     required = 2 * tarball_bytes + 2 * pgdata_bytes
     free = shutil.disk_usage(str(data_dir)).free
     if free < required:
-        raise UpgradeError(
-            f"Insufficient disk: {required} bytes required "
-            f"({2 * tarball_bytes} bundle staging + {2 * pgdata_bytes} dump headroom), "
-            f"{free} bytes free on the volume holding {data_dir}"
-        )
+        raise UpgradeError(f"Insufficient disk: {required} bytes required ({2 * tarball_bytes} bundle staging + {2 * pgdata_bytes} dump headroom), {free} bytes free on the volume holding {data_dir}")
 
 
 def _move_into_place(bundle_dir: Path, install_root: Path, version: str) -> tuple[Path, Path | None]:
@@ -1318,19 +1249,13 @@ def _resolve_current_target(install_root: Path) -> Path:
     """
     current_link = install_root / "current"
     if not current_link.is_symlink():
-        raise UpgradeError(
-            f"no native install to upgrade under {install_root} (no resolvable `current`) - "
-            "install.sh sets one up; a populated data dir alone is not an install"
-        )
+        raise UpgradeError(f"no native install to upgrade under {install_root} (no resolvable `current`) - install.sh sets one up; a populated data dir alone is not an install")
     try:
         resolved_target = current_link.resolve(strict=True)
     except OSError:
         repair_state = repair_current_symlink(install_root)
         if repair_state is None:
-            raise UpgradeError(
-                f"the `current` symlink under {install_root} is DANGLING and could not be repaired "
-                "(no version dir survives) - reinstall:  bash scripts/install.sh"
-            ) from None
+            raise UpgradeError(f"the `current` symlink under {install_root} is DANGLING and could not be repaired (no version dir survives) - reinstall:  bash scripts/install.sh") from None
         _log.info("upgrade.current_symlink_repaired version=%s", repair_state)
         try:
             resolved_target = current_link.resolve(strict=True)
@@ -1343,15 +1268,9 @@ def _resolve_current_target(install_root: Path) -> Path:
 
 def assert_upgrade_platform() -> None:
     if sys.platform == "darwin":
-        raise UpgradeError(
-            "macOS native artifact is not yet published; the macOS service/data/launcher seam exists, "
-            "but no complete signed and notarized Darwin bundle is available for upgrade"
-        )
+        raise UpgradeError("macOS native artifact is not yet published; the macOS service/data/launcher seam exists, but no complete signed and notarized Darwin bundle is available for upgrade")
     if sys.platform == "win32":
-        raise UpgradeError(
-            "the full modulo upgrade flow is not implemented on Windows yet (TODO(P3)): "
-            "the versioned-dir/current-symlink swap is a POSIX symlink primitive today"
-        )
+        raise UpgradeError("the full modulo upgrade flow is not implemented on Windows yet (TODO(P3)): the versioned-dir/current-symlink swap is a POSIX symlink primitive today")
 
 
 def _service_unit_path() -> Path:
@@ -1418,9 +1337,7 @@ def _resolve_upgrade_assets(
         tarball.name,
     )
     if match is None:
-        raise UpgradeError(
-            "--from-file archive name is malformed: expected exactly modulo-<version>-<os>-<arch>.tar.gz"
-        )
+        raise UpgradeError("--from-file archive name is malformed: expected exactly modulo-<version>-<os>-<arch>.tar.gz")
     os_token = _host_os()
     archive_os = match.group("os")
     if archive_os != os_token:
@@ -1428,19 +1345,12 @@ def _resolve_upgrade_assets(
     host_arch = _host_arch()
     archive_arch = match.group("arch")
     if archive_arch != host_arch:
-        raise UpgradeError(
-            f"--from-file archive architecture '{archive_arch}' does not match the detected host architecture "
-            f"'{host_arch}': {tarball.name}"
-        )
+        raise UpgradeError(f"--from-file archive architecture '{archive_arch}' does not match the detected host architecture '{host_arch}': {tarball.name}")
     version = _validate_version_segment(match.group("version"))
     manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
     signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"
     if not (manifest_file.is_file() and signature_file.is_file()):
-        raise UpgradeError(
-            "--from-file requires the SIGNED manifest beside the tarball: "
-            f"{manifest_file} (+ .sig) - the offline escape hatch verifies against "
-            "the SAME embedded trust store (ADR 031 Decision 3)"
-        )
+        raise UpgradeError(f"--from-file requires the SIGNED manifest beside the tarball: {manifest_file} (+ .sig) - the offline escape hatch verifies against the SAME embedded trust store (ADR 031 Decision 3)")
     return tarball, version, manifest_file, signature_file
 
 
@@ -1610,24 +1520,15 @@ def _verify_release_stage(manifest_file: Path, signature_file: Path, tarball: Pa
     """
     expected_release = f"bundle-v{version}"
     try:
-        release_manifest = manifest_module.verify_manifest(
-            manifest_file.read_bytes(), manifest_module.read_signature_file(signature_file)
-        )
+        release_manifest = manifest_module.verify_manifest(manifest_file.read_bytes(), manifest_module.read_signature_file(signature_file))
         expected_tarball_sha = release_manifest.checksum_for(tarball.name)
         if release_manifest.release != expected_release:
-            raise UpgradeError(
-                f"the signed release manifest describes '{release_manifest.release}', not the "
-                f"requested bundle {expected_release} - refusing the cross-version mismatch"
-            )
+            raise UpgradeError(f"the signed release manifest describes '{release_manifest.release}', not the requested bundle {expected_release} - refusing the cross-version mismatch")
         tarball_sha = _sha256_file(tarball)
     except ManifestSecurityError as exc:
         raise UpgradeError(f"release manifest verification FAILED: {exc}") from exc
     if tarball_sha != expected_tarball_sha:
-        raise UpgradeError(
-            f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected "
-            f"{expected_tarball_sha}, got {tarball_sha} - do not use this download; report "
-            "it at https://github.com/farnalabs/modulo/issues"
-        )
+        raise UpgradeError(f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected {expected_tarball_sha}, got {tarball_sha} - do not use this download; report it at https://github.com/farnalabs/modulo/issues")
     return release_manifest
 
 
@@ -1642,9 +1543,7 @@ def _verify_extracted_bundle_artifacts(bundle_dir: Path, release_manifest: Relea
     try:
         bundle_side_manifest = replace(
             release_manifest,
-            artifact_checksums={
-                name: entry for name, entry in release_manifest.artifact_checksums.items() if name != tarball_name
-            },
+            artifact_checksums={name: entry for name, entry in release_manifest.artifact_checksums.items() if name != tarball_name},
         )
         manifest_module.verify_artifacts(bundle_dir, bundle_side_manifest)
     except manifest_module.ManifestSecurityError as exc:

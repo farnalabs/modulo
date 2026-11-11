@@ -49,10 +49,7 @@ depends_on: tuple[str, ...] | None = None
 # ordering path) + pipeline_id as a non-key INCLUDE column so the count can
 # be served index-only. Active-run counts (org/pipeline + status IN (...))
 # are already served by 0155's hot-query indexes — see the module docstring.
-_CREATE_LIST_COUNT_INDEX = (
-    "CREATE INDEX IF NOT EXISTS ix_runs_org_created_pipeline "
-    'ON public."runs" (organisation_id, created_at) INCLUDE (pipeline_id);'
-)
+_CREATE_LIST_COUNT_INDEX = 'CREATE INDEX IF NOT EXISTS ix_runs_org_created_pipeline ON public."runs" (organisation_id, created_at) INCLUDE (pipeline_id);'
 
 
 def upgrade() -> None:

@@ -55,10 +55,7 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def upgrade() -> None:

@@ -310,8 +310,7 @@ def check_data_dir(data_dir: Path, _state: Any, probes: DoctorProbes) -> CheckRe
         return CheckResult(
             "data-dir",
             False,
-            f"only {free / MB:.0f} MiB free below {data_dir!s} (floor {MIN_FREE_DISK_BYTES // MB} MiB) — "
-            "free space before upgrading or rebuilding the bundled Postgres",
+            f"only {free / MB:.0f} MiB free below {data_dir!s} (floor {MIN_FREE_DISK_BYTES // MB} MiB) — free space before upgrading or rebuilding the bundled Postgres",
         )
     try:
         probes.assert_writable(data_dir)
@@ -350,8 +349,7 @@ def check_ports(data_dir: Path, state: Any, probes: DoctorProbes) -> CheckResult
     return CheckResult(
         "ports",
         True,
-        f"postgres/redis/api listening on loopback ports "
-        f"{state.postgres_port}/{state.redis_port}/{state.api_port} as configured",
+        f"postgres/redis/api listening on loopback ports {state.postgres_port}/{state.redis_port}/{state.api_port} as configured",
     )
 
 
@@ -382,8 +380,7 @@ def check_postgres(_data_dir: Path, state: Any, probes: DoctorProbes) -> CheckRe
     return CheckResult(
         "postgres",
         True,
-        f"reachable on 127.0.0.1:{state.postgres_port}; role posture holds "
-        "(modulo_app NOBYPASSRLS/superuser=false, modulo_system BYPASSRLS)",
+        f"reachable on 127.0.0.1:{state.postgres_port}; role posture holds (modulo_app NOBYPASSRLS/superuser=false, modulo_system BYPASSRLS)",
     )
 
 
@@ -437,14 +434,12 @@ def check_cwd_env_influence(_data_dir: Path, _state: Any, probes: DoctorProbes) 
         return CheckResult(
             "env-influence",
             True,
-            f"{env_file} carries {', '.join(ambient)} but the launcher pinned its config — "
-            "the CWD .env cannot influence Settings",
+            f"{env_file} carries {', '.join(ambient)} but the launcher pinned its config — the CWD .env cannot influence Settings",
         )
     return CheckResult(
         "env-influence",
         False,
-        f"{', '.join(ambient)} in {env_file} would influence Settings (no pinned "
-        "launcher config) — rename/remove the file, or start with `modulo start`",
+        f"{', '.join(ambient)} in {env_file} would influence Settings (no pinned launcher config) — rename/remove the file, or start with `modulo start`",
     )
 
 
@@ -457,8 +452,7 @@ def check_privileges(data_dir: Path, _state: Any, probes: DoctorProbes) -> Check
         return CheckResult(
             "privileges",
             False,
-            "running as root/sudo — the bundled postgres refuses a root-owned data dir; "
-            "start `modulo start` as an unprivileged user",
+            "running as root/sudo — the bundled postgres refuses a root-owned data dir; start `modulo start` as an unprivileged user",
         )
     me = probes.username_of_uid(uid)
     owner = probes.file_owner(data_dir)
@@ -466,8 +460,7 @@ def check_privileges(data_dir: Path, _state: Any, probes: DoctorProbes) -> Check
         return CheckResult(
             "privileges",
             False,
-            f"data dir {data_dir} is owned by '{owner}' but the launcher runs as '{me}' — "
-            f"chown -R {me} {data_dir} (an ownership flip bricks the bundled Postgres on restart)",
+            f"data dir {data_dir} is owned by '{owner}' but the launcher runs as '{me}' — chown -R {me} {data_dir} (an ownership flip bricks the bundled Postgres on restart)",
         )
     who = f"'{me}'" if me is not None else f"uid {uid}"
     return CheckResult("privileges", True, f"running unprivileged as {who}; data-dir ownership consistent")
@@ -497,8 +490,7 @@ def check_secrets_permissions(data_dir: Path, _state: Any, probes: DoctorProbes)
         return CheckResult(
             "secrets-permissions",
             False,
-            f"secrets.json permissions are {oct(mode)} — the launcher credentials must be owner-only: "
-            f"chmod 600 {secrets_path}",
+            f"secrets.json permissions are {oct(mode)} — the launcher credentials must be owner-only: chmod 600 {secrets_path}",
         )
     return CheckResult("secrets-permissions", True, "secrets.json is 0600 owner-only")
 
@@ -514,8 +506,7 @@ def check_ambient_pg_env(_data_dir: Path, _state: Any, probes: DoctorProbes) -> 
     return CheckResult(
         "ambient-pg-env",
         True,
-        f"{', '.join(sorted(names))} present in the inherited environment — the launcher scrubs them at "
-        "boot (they would otherwise hijack bundled-binary invocations); find and unset the sources",
+        f"{', '.join(sorted(names))} present in the inherited environment — the launcher scrubs them at boot (they would otherwise hijack bundled-binary invocations); find and unset the sources",
         warning=True,
     )
 
@@ -523,24 +514,17 @@ def check_ambient_pg_env(_data_dir: Path, _state: Any, probes: DoctorProbes) -> 
 def check_settings_source(_data_dir: Path, state: Any, probes: DoctorProbes) -> CheckResult:
     """Check 11 — MODULO_DB named check + env-vs-state.json conflict."""
     try:
-        moduledb = probes.env_value("MODULO_DB")
+        moduledb = probes.env_value("FARNA_CONTROL_MODULO_DB")
         db_url = probes.env_value("DATABASE_URL")
     except Exception as exc:
         return CheckResult("settings-source", False, f"env probe failed: {exc}")
     problems: list[str] = []
     if moduledb is not None and moduledb.strip().lower() != "postgres":
-        problems.append(
-            f"MODULO_DB={moduledb!r} would route Settings away from the bundled postgres — "
-            "unset it (or use the Docker Compose path for non-postgres databases)"
-        )
+        problems.append(f"MODULO_DB={moduledb!r} would route Settings away from the bundled postgres — unset it (or use the Docker Compose path for non-postgres databases)")
     if db_url is not None and state is not None:
         host, port = _host_port_from_database_url(db_url)
         if port is not None and port != state.postgres_port:
-            problems.append(
-                f"ambient DATABASE_URL points at {host}:{port} but state.json pins postgres port "
-                f"{state.postgres_port} — an explicit env URL overrides the pinned launcher config; "
-                "unset DATABASE_URL unless you intend the documented override"
-            )
+            problems.append(f"ambient DATABASE_URL points at {host}:{port} but state.json pins postgres port {state.postgres_port} — an explicit env URL overrides the pinned launcher config; unset DATABASE_URL unless you intend the documented override")
     if problems:
         return CheckResult("settings-source", True, "; ".join(problems), warning=True)
     return CheckResult(
@@ -581,8 +565,7 @@ def check_cloud_sync_root(data_dir: Path, _state: Any, probes: DoctorProbes) -> 
     return CheckResult(
         "cloud-sync-root",
         True,
-        f"data dir sits under {hit} — cloud-syncing a live Postgres data dir corrupts the cluster; "
-        "stop the launcher, move the data dir outside the synced tree, and restore from backup",
+        f"data dir sits under {hit} — cloud-syncing a live Postgres data dir corrupts the cluster; stop the launcher, move the data dir outside the synced tree, and restore from backup",
         warning=True,
     )
 
@@ -594,8 +577,7 @@ def check_service_identity(_data_dir: Path, _state: Any, probes: DoctorProbes) -
             return CheckResult(
                 "service",
                 True,
-                "launcher not installed as a service (no unit/linger requirement) — "
-                "service registration ships with FAR-674",
+                "launcher not installed as a service (no unit/linger requirement) — service registration ships with FAR-674",
             )
         enabled = probes.service_enabled()
         linger = probes.service_linger()
@@ -624,15 +606,13 @@ def check_memory_headroom(_data_dir: Path, _state: Any, probes: DoctorProbes) ->
         return CheckResult(
             "memory",
             False,
-            f"only {mib:.0f} MiB available (floor {MIN_AVAILABLE_MEMORY_BYTES // MB} MiB) — "
-            "the bundled Postgres + Redis + API + workers cannot run",
+            f"only {mib:.0f} MiB available (floor {MIN_AVAILABLE_MEMORY_BYTES // MB} MiB) — the bundled Postgres + Redis + API + workers cannot run",
         )
     if available < COMFORT_MEMORY_BYTES:
         return CheckResult(
             "memory",
             True,
-            f"{mib:.0f} MiB available — within the floor but below the "
-            f"{COMFORT_MEMORY_BYTES // MB} MiB comfortable envelope; expect pressure under load",
+            f"{mib:.0f} MiB available — within the floor but below the {COMFORT_MEMORY_BYTES // MB} MiB comfortable envelope; expect pressure under load",
             warning=True,
         )
     return CheckResult("memory", True, f"{mib / 1024:.1f} GiB available (comfortable envelope met)")
@@ -679,24 +659,20 @@ def check_bundle_versions(_data_dir: Path, state: Any, probes: DoctorProbes) -> 
         return CheckResult(
             "bundle-version",
             False,
-            f"bundled postgres is {bundle_version} but the data-dir cluster was inited at {data_version} "
-            "(bundle-minor/major drift) — match the binaries before upgrading or rebuilding the data dir",
+            f"bundled postgres is {bundle_version} but the data-dir cluster was inited at {data_version} (bundle-minor/major drift) — match the binaries before upgrading or rebuilding the data dir",
         )
     if installed_tuple := _version_tuple(installed_version or ""):
         if installed_tuple > bundle_tuple:
             return CheckResult(
                 "bundle-version",
                 False,
-                f"the bundled binary is OLDER than the cluster's last-run version "
-                f"({bundle_version} < {installed_version}) — a downgrade must be refused: restore the "
-                "matching binaries",
+                f"the bundled binary is OLDER than the cluster's last-run version ({bundle_version} < {installed_version}) — a downgrade must be refused: restore the matching binaries",
             )
         if installed_tuple < bundle_tuple:
             return CheckResult(
                 "bundle-version",
                 True,
-                f"available upgrade: data dir last ran {installed_version}, the bundle now ships "
-                f"{bundle_version} — restart `modulo start` to upgrade",
+                f"available upgrade: data dir last ran {installed_version}, the bundle now ships {bundle_version} — restart `modulo start` to upgrade",
                 warning=True,
             )
     return CheckResult(
@@ -751,10 +727,7 @@ def check_port_collisions(_data_dir: Path, state: Any, probes: DoctorProbes) -> 
         except Exception as exc:
             return CheckResult("port-collisions", False, f"port-owner probe failed: {exc}")
         if description is not None:
-            problems.append(
-                f"{name}'s configured port {port} is ALSO used by {description} — port collision when the "
-                "launcher boots: free the port or reassign state.json (documented state.json port edit)"
-            )
+            problems.append(f"{name}'s configured port {port} is ALSO used by {description} — port collision when the launcher boots: free the port or reassign state.json (documented state.json port edit)")
     if problems:
         return CheckResult("port-collisions", False, "; ".join(problems))
     return CheckResult(
@@ -774,10 +747,7 @@ def check_install_shadows(data_dir: Path, _state: Any, probes: DoctorProbes) -> 
         return CheckResult("install-shadows", False, f"install-shadow probe failed: {exc}")
     problems: list[str] = []
     if on_path is not None and root is not None and Path(on_path).resolve().parent != Path(root).resolve():
-        problems.append(
-            f"the first 'modulo' on PATH is {on_path} but this install lives in {root} — "
-            "PATH shadowing can run a different install against this data dir"
-        )
+        problems.append(f"the first 'modulo' on PATH is {on_path} but this install lives in {root} — PATH shadowing can run a different install against this data dir")
     if hint is not None:
         problems.append(hint)
     if problems:
@@ -805,8 +775,7 @@ def check_degraded(_data_dir: Path, _state: Any, probes: DoctorProbes) -> CheckR
     return CheckResult(
         "degraded",
         False,
-        f"the supervisor tripped its terminal degraded state: {reason} — inspect `modulo status` and the "
-        "app log (`modulo logs`), clear the underlying fault, then restart `modulo start`",
+        f"the supervisor tripped its terminal degraded state: {reason} — inspect `modulo status` and the app log (`modulo logs`), clear the underlying fault, then restart `modulo start`",
     )
 
 
@@ -820,8 +789,7 @@ def check_tls_expiry(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Chec
         return CheckResult(
             "tls",
             True,
-            "no TLS keypair in the data dir — expiry check skipped (modulo does not ship a "
-            "TLS keypair generator yet; wire tls_expiry to surface a real near-expiry WARNING once one lands)",
+            "no TLS keypair in the data dir — expiry check skipped (modulo does not ship a TLS keypair generator yet; wire tls_expiry to surface a real near-expiry WARNING once one lands)",
         )
     now = time.time()
     remaining = expiry - now
@@ -835,8 +803,7 @@ def check_tls_expiry(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Chec
         return CheckResult(
             "tls",
             True,
-            f"TLS keypair expires in {remaining / 86400:.0f} days (< {TLS_NEAR_EXPIRY_SECONDS // 86400}d) "
-            "— schedule regeneration",
+            f"TLS keypair expires in {remaining / 86400:.0f} days (< {TLS_NEAR_EXPIRY_SECONDS // 86400}d) — schedule regeneration",
             warning=True,
         )
     return CheckResult("tls", True, f"TLS keypair valid for {remaining / 86400:.0f} more days")
@@ -859,8 +826,7 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
         return CheckResult(
             "stale-backup",
             True,
-            f"the last recorded backup is {age / 86400:.0f} days old (> {STALE_BACKUP_SECONDS // 86400}d) — "
-            "run `modulo backup` and point it at the fixed data dir to refresh",
+            f"the last recorded backup is {age / 86400:.0f} days old (> {STALE_BACKUP_SECONDS // 86400}d) — run `modulo backup` and point it at the fixed data dir to refresh",
             warning=True,
         )
     return CheckResult("stale-backup", True, f"last recorded backup is {age / 86400:.0f} days old")
@@ -1041,11 +1007,7 @@ async def _probe_provider_reachability(data_dir: Path, state: Any) -> list[dict[
             # ``organisations`` is not RLS-scoped, so it can be read before an
             # org context exists; the reserved instance orgs own no backends.
             org_rows = await session.execute(
-                text(
-                    "SELECT id FROM organisations "
-                    "WHERE deleted_at IS NULL AND id NOT IN (:system, :registry) "
-                    "ORDER BY created_at ASC"
-                ),
+                text("SELECT id FROM organisations WHERE deleted_at IS NULL AND id NOT IN (:system, :registry) ORDER BY created_at ASC"),
                 {"system": str(SYSTEM_ORG_ID), "registry": str(MODULO_REGISTRY_ORG_ID)},
             )
             org_ids = [row[0] for row in org_rows]
@@ -1512,20 +1474,10 @@ def _probe_install_root(_data_dir: Path) -> str | None:
 
 
 def _probe_second_install_hint(data_dir: Path) -> str | None:
-    siblings = [
-        sibling
-        for sibling in data_dir.parent.iterdir()
-        if sibling.is_dir()
-        and sibling != data_dir
-        and (sibling / "state.json").is_file()
-        and (sibling / _SECRETS_FILENAME).is_file()
-    ]
+    siblings = [sibling for sibling in data_dir.parent.iterdir() if sibling.is_dir() and sibling != data_dir and (sibling / "state.json").is_file() and (sibling / _SECRETS_FILENAME).is_file()]
     if not siblings:
         return None
-    return (
-        f"a second native install lives at {siblings[0]} — two launcher data dirs can shadow each "
-        "other's state; confirm which install you are operating"
-    )
+    return f"a second native install lives at {siblings[0]} — two launcher data dirs can shadow each other's state; confirm which install you are operating"
 
 
 @lru_cache(maxsize=1)
@@ -1948,19 +1900,13 @@ def apply_fixes(data_dir: Path) -> list[str]:
     try:
         action = reconcile_orphans(pgdata)
     except LauncherError as exc:
-        raise RuntimeError(
-            f"refused: {exc}; stop the postgres that owns the pidfile (via its owner first), "
-            "then re-run `modulo doctor --fix`"
-        ) from exc
+        raise RuntimeError(f"refused: {exc}; stop the postgres that owns the pidfile (via its owner first), then re-run `modulo doctor --fix`") from exc
     if action is None:
         actions.append("no orphan debris found (nothing swept)")
     else:
         actions.append(f"orphan cleanup: {action}")
     if (data_dir / "state.json").exists():
-        actions.append(
-            "port re-assignment: colliding ports are launcher-owned state — free the colliding user, "
-            "or hand-edit state.json's *_port fields (documented edit) while the launcher is stopped"
-        )
+        actions.append("port re-assignment: colliding ports are launcher-owned state — free the colliding user, or hand-edit state.json's *_port fields (documented edit) while the launcher is stopped")
     return actions
 
 
@@ -2020,15 +1966,9 @@ def run_doctor(
 def _state_integrity_detail(state_error: str, kind: str | None) -> str:
     """Distinct corrupt vs HMAC-mismatch language for the state-integrity check."""
     if kind == "hmac-mismatch":
-        return (
-            "state.json fails HMAC verification (tampered, truncated, or written by a different "
-            f"install's secrets key) — restore the secrets file, or reset the data dir. {state_error}"
-        )
+        return f"state.json fails HMAC verification (tampered, truncated, or written by a different install's secrets key) — restore the secrets file, or reset the data dir. {state_error}"
     if kind == "corrupt":
-        return (
-            "state.json is CORRUPT (torn write or not an HMAC envelope) — restore from backup or "
-            f"reset the data dir. {state_error}"
-        )
+        return f"state.json is CORRUPT (torn write or not an HMAC envelope) — restore from backup or reset the data dir. {state_error}"
     return state_error
 
 
@@ -2057,10 +1997,7 @@ def _payload_json(data_dir: Path, healthy: bool, results: list[CheckResult], exi
         "data_dir": str(data_dir),
         "healthy": healthy,
         "exit_code": exit_code,
-        "checks": [
-            {"name": result.name, "ok": result.ok, "warning": result.warning, "detail": result.detail}
-            for result in results
-        ],
+        "checks": [{"name": result.name, "ok": result.ok, "warning": result.warning, "detail": result.detail} for result in results],
     }
 
 

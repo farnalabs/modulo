@@ -120,9 +120,7 @@ class AzureReposConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=self._redacted_detail(f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text}")[
-                    :200
-                ],
+                detail=self._redacted_detail(f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Repos API timeout")

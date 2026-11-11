@@ -145,17 +145,13 @@ async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
     # run's pipeline may have been soft-deleted after dispatch.  Returning
     # True (deferred) here causes an infinite re-dispatch loop because the
     # run is never enqueued.
-    pipeline = (
-        await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
-    ).scalar_one_or_none()
+    pipeline = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))).scalar_one_or_none()
     if pipeline is None:
         return True
     max_concurrent = pipeline.max_concurrent_runs
     if max_concurrent <= 0:
         return False
-    active = await count_active_runs_for_pipeline(
-        session, run.pipeline_id, include_pending=False, exclude_run_id=run_id
-    )
+    active = await count_active_runs_for_pipeline(session, run.pipeline_id, include_pending=False, exclude_run_id=run_id)
     return active >= max_concurrent
 
 
@@ -190,17 +186,13 @@ async def _slot_saturated(session: AsyncSession, run_id: uuid.UUID) -> bool:
         # run's pipeline may have been soft-deleted.  Fail-open: missing
         # pipeline admits the run (backpressure is an overload guard, never
         # an admission authority).
-        pipeline = (
-            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
-        ).scalar_one_or_none()
+        pipeline = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))).scalar_one_or_none()
         if pipeline is None:
             return False
         max_concurrent = pipeline.max_concurrent_runs
         if max_concurrent <= 0:
             return False
-        active = await count_active_runs_for_pipeline(
-            session, run.pipeline_id, include_pending=False, exclude_run_id=run_id
-        )
+        active = await count_active_runs_for_pipeline(session, run.pipeline_id, include_pending=False, exclude_run_id=run_id)
         saturation = active / max_concurrent
         if saturation >= _SLOT_SATURATION_THRESHOLD:
             _log.info(
@@ -360,9 +352,7 @@ async def _saq_retries_for_run(run_id: uuid.UUID, *, org_id: uuid.UUID, job_type
                 return configured
             # FAR-1025 parity with the capacity checks: an in-flight run's
             # pipeline may be soft-deleted after dispatch.
-            pipeline = (
-                await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
-            ).scalar_one_or_none()
+            pipeline = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))).scalar_one_or_none()
             policy = getattr(pipeline, "retry_policy", None) if pipeline is not None else None
             return clamp_saq_retries(
                 policy,
@@ -373,8 +363,7 @@ async def _saq_retries_for_run(run_id: uuid.UUID, *, org_id: uuid.UUID, job_type
         raise
     except Exception:
         _log.warning(
-            "dispatch_run: could not resolve the retry-policy budget for run %s — "
-            "using the configured SAQ retries (%d)",
+            "dispatch_run: could not resolve the retry-policy budget for run %s — using the configured SAQ retries (%d)",
             run_id,
             configured,
             exc_info=True,
@@ -434,11 +423,7 @@ async def _record_saq_job(session: AsyncSession, run_id: uuid.UUID, job_id: str,
 
     await set_mutation_row_lock_timeout(session)
     await session.execute(
-        text(
-            "UPDATE runs SET dispatcher='saq', saq_job_id=:jid, enqueue_failed_at=NULL, "
-            "claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END "
-            "WHERE id=:rid"
-        ),
+        text("UPDATE runs SET dispatcher='saq', saq_job_id=:jid, enqueue_failed_at=NULL, claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END WHERE id=:rid"),
         {"rid": run_id, "jid": job_id, "tok": claim_token},
     )
 
@@ -477,12 +462,7 @@ async def _expire_webhook_dedup(session: AsyncSession, run_id: uuid.UUID) -> Non
     from farna.db.models.trigger_event import TriggerEvent
     from farna.db.models.webhook import WebhookDedupHash
 
-    ev = await session.execute(
-        select(TriggerEvent.trigger_id, TriggerEvent.raw_payload_hash)
-        .where(TriggerEvent.run_id == run_id)
-        .order_by(TriggerEvent.received_at.desc())
-        .limit(1)
-    )
+    ev = await session.execute(select(TriggerEvent.trigger_id, TriggerEvent.raw_payload_hash).where(TriggerEvent.run_id == run_id).order_by(TriggerEvent.received_at.desc()).limit(1))
     row = ev.first()
     if row is None:
         return
@@ -518,8 +498,7 @@ async def _apply_queued_ttl(redis_client: AsyncRedis, job_id: str) -> None:
         raise
     except Exception:
         _log.warning(
-            "dispatch_run: could not apply the %ss queued-job TTL to %s — job already enqueued, "
-            "dispatch proceeds; the Redis maxmemory bound remains the backstop",
+            "dispatch_run: could not apply the %ss queued-job TTL to %s — job already enqueued, dispatch proceeds; the Redis maxmemory bound remains the backstop",
             SAQ_QUEUED_JOB_TTL,
             job_id,
             exc_info=True,
@@ -610,10 +589,7 @@ async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> 
         if not is_row_lock_timeout(exc):
             raise
         _log.warning(
-            "dispatch_run: row-lock timeout (SQLSTATE 55P03) stamping "
-            "enqueue_failed_at for run %s — marker write and webhook-dedup expiry "
-            "rolled back; the enqueue already failed and the run is left pending "
-            "for the next dispatcher_reconcile tick",
+            "dispatch_run: row-lock timeout (SQLSTATE 55P03) stamping enqueue_failed_at for run %s — marker write and webhook-dedup expiry rolled back; the enqueue already failed and the run is left pending for the next dispatcher_reconcile tick",
             run_id,
             exc_info=True,
         )
@@ -647,10 +623,7 @@ async def _record_saq_job_session(run_id: uuid.UUID, org_id: uuid.UUID, job_id: 
         if not is_row_lock_timeout(exc):
             raise
         _log.warning(
-            "dispatch_run: row-lock timeout (SQLSTATE 55P03) recording "
-            "dispatcher='saq' for run %s (job %s already enqueued) — bookkeeping "
-            "skipped; dispatcher_reconcile's zombie branch re-covers the row and "
-            "the atomic claim keeps execution at-most-once",
+            "dispatch_run: row-lock timeout (SQLSTATE 55P03) recording dispatcher='saq' for run %s (job %s already enqueued) — bookkeeping skipped; dispatcher_reconcile's zombie branch re-covers the row and the atomic claim keeps execution at-most-once",
             run_id,
             job_id,
             exc_info=True,
@@ -680,9 +653,7 @@ async def _enqueue_with_retry(
     retry loop.
     """
     try:
-        job_id, deduped = await _enqueue_saq(
-            str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
-        )
+        job_id, deduped = await _enqueue_saq(str(run_id), str(org_id), queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -691,9 +662,7 @@ async def _enqueue_with_retry(
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", run_id, exc)
-        retried = await _retry_enqueue_saq(
-            run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries
-        )
+        retried = await _retry_enqueue_saq(run_id, org_id, queue_name, job_type, resume_data, key_suffix=key_suffix, retries=retries)
         if retried is None:
             await _mark_enqueue_failed_session(run_id, org_id)
             return ("enqueue_failed", None)
@@ -857,9 +826,7 @@ async def dispatch_run(
         # caller already treats ``deferred`` as "not dispatched, recovered by
         # reconcile".
         _log.warning(
-            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) during the "
-            "dispatch admission transaction — bounded by mutation_row_lock_timeout_ms; "
-            "left pending with no enqueue for the next dispatcher_reconcile tick",
+            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) during the dispatch admission transaction — bounded by mutation_row_lock_timeout_ms; left pending with no enqueue for the next dispatcher_reconcile tick",
             rid,
             exc_info=True,
         )
@@ -889,10 +856,7 @@ async def dispatch_run(
         # no-op; ``deferred`` is the truthful outcome every caller already
         # handles as "not dispatched, recovered by reconcile".
         _log.warning(
-            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) writing "
-            "dispatched_at — bounded by mutation_row_lock_timeout_ms; dispatched_at "
-            "NOT written (transaction rolled back), run left pending for the next "
-            "dispatcher_reconcile tick",
+            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) writing dispatched_at — bounded by mutation_row_lock_timeout_ms; dispatched_at NOT written (transaction rolled back), run left pending for the next dispatcher_reconcile tick",
             rid,
             exc_info=True,
         )
@@ -900,6 +864,4 @@ async def dispatch_run(
     finally:
         await session.close()
 
-    return await _enqueue_with_retry(
-        rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast, retries=saq_retries
-    )
+    return await _enqueue_with_retry(rid, oid, queue_name, job_type, resume_data, key_suffix, fail_fast, retries=saq_retries)

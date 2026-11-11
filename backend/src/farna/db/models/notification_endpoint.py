@@ -19,7 +19,5 @@ class NotificationEndpoint(SoftDeleteMixin, OrgScoped):
     consecutive_dead_letter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     auto_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)

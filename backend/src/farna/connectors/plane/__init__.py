@@ -321,9 +321,7 @@ class PlaneConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "projects":
-                return self._page_result(
-                    await self._request("GET", self._ws_path("projects"), params=self._list_params(q))
-                )
+                return self._page_result(await self._request("GET", self._ws_path("projects"), params=self._list_params(q)))
             case "project":
                 project_id = self._require_filter(q, "project_id")
                 body = await self._request("GET", self._ws_path("projects", project_id))

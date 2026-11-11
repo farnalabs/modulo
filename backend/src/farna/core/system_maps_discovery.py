@@ -109,9 +109,7 @@ def _trigger_relationships(
         if target not in by_key:
             skipped.append({"source": trigger.identifier, "reason": "trigger pipeline is not in inventory"})
             continue
-        relationships.append(
-            _relationship(_node_key(trigger), target, "trigger", "trigger explicitly targets pipeline")
-        )
+        relationships.append(_relationship(_node_key(trigger), target, "trigger", "trigger explicitly targets pipeline"))
     return relationships
 
 
@@ -129,9 +127,7 @@ def _folder_relationships(
         if pipeline.folder_id not in folder_ids:
             skipped.append({"source": pipeline.identifier, "reason": "pipeline folder is not in inventory"})
             continue
-        relationships.append(
-            _relationship(target, _node_key(pipeline), "flow", "pipeline explicitly belongs to folder")
-        )
+        relationships.append(_relationship(target, _node_key(pipeline), "flow", "pipeline explicitly belongs to folder"))
     return relationships
 
 
@@ -187,9 +183,7 @@ def discover_draft(sources: Iterable[DiscoverySource]) -> DiscoveryDraft:
     if not nodes:
         warnings.append("No supported organisation sources were available for discovery")
     if skipped:
-        warnings.append(
-            "Some organisation sources were skipped because their relationship was unsupported or ambiguous"
-        )
+        warnings.append("Some organisation sources were skipped because their relationship was unsupported or ambiguous")
     return DiscoveryDraft(
         nodes=tuple(nodes),
         relationships=_dedupe_relationships(relationships),

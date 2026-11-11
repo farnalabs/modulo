@@ -264,9 +264,7 @@ async def detect_regressions(
     # legacy clock-window path (below) which for example call sites must remain
     # byte-identical.
     if group_by == "suite_id":
-        return await _detect_regressions_grouped(
-            session, org_id, threshold, trend, current_run_ids, baseline_run_ids, eval_type, relative_threshold
-        )
+        return await _detect_regressions_grouped(session, org_id, threshold, trend, current_run_ids, baseline_run_ids, eval_type, relative_threshold)
 
     baseline_start, recent_start = _regression_window_bounds(days, recent_window_ratio)
     rows = await _fetch_regression_rows(session, org_id, days, baseline_start, recent_start, pipeline_id)

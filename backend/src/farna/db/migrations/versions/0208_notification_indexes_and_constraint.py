@@ -64,18 +64,8 @@ def upgrade() -> None:
 
     # --- CHECK constraint format alignment ---
 
-    op.execute(
-        sa.text(
-            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
-        )
-    )
-    op.execute(
-        sa.text(
-            "ALTER TABLE public.notification_delivery_log "
-            "ADD CONSTRAINT ck_notification_delivery_log_status "
-            "CHECK (status IN ('delivered', 'failed', 'dead_lettered', 'in_app'))"
-        )
-    )
+    op.execute(sa.text("ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"))
+    op.execute(sa.text("ALTER TABLE public.notification_delivery_log ADD CONSTRAINT ck_notification_delivery_log_status CHECK (status IN ('delivered', 'failed', 'dead_lettered', 'in_app'))"))
 
 
 def downgrade() -> None:
@@ -85,20 +75,5 @@ def downgrade() -> None:
     op.drop_index("ix_notifications_org_level", table_name="notifications")
 
     # Restore the original ARRAY-form CHECK constraint from migration 0144
-    op.execute(
-        sa.text(
-            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
-        )
-    )
-    op.execute(
-        sa.text(
-            "ALTER TABLE public.notification_delivery_log "
-            "ADD CONSTRAINT ck_notification_delivery_log_status "
-            "CHECK (status::text = ANY (ARRAY["
-            "'delivered'::character varying, "
-            "'failed'::character varying, "
-            "'dead_lettered'::character varying, "
-            "'in_app'::character varying"
-            "]::text[]))"
-        )
-    )
+    op.execute(sa.text("ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"))
+    op.execute(sa.text("ALTER TABLE public.notification_delivery_log ADD CONSTRAINT ck_notification_delivery_log_status CHECK (status::text = ANY (ARRAY['delivered'::character varying, 'failed'::character varying, 'dead_lettered'::character varying, 'in_app'::character varying]::text[]))"))

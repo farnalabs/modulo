@@ -81,9 +81,7 @@ def assert_write_authorisation(producer_type: str, key: str) -> None:
     if allowed is None:
         raise EvidenceWriteAuthorisationError(f"Unknown producer type: {producer_type}")
     if not any(key.startswith(prefix) for prefix in allowed):
-        raise EvidenceWriteAuthorisationError(
-            f"Producer '{producer_type}' is not authorised to write key '{key}'. Allowed prefixes: {allowed}"
-        )
+        raise EvidenceWriteAuthorisationError(f"Producer '{producer_type}' is not authorised to write key '{key}'. Allowed prefixes: {allowed}")
 
 
 # ---------------------------------------------------------------------------
@@ -183,19 +181,10 @@ async def fetch(
     is_postgres = str(getattr(bind.dialect, "name", "")).startswith("postgres")
 
     if is_postgres:
-        stmt = (
-            select(Evidence)
-            .where(*subject_filter)
-            .order_by(Evidence.organisation_id, Evidence.subject_type, Evidence.subject_id, Evidence.key, *order_by)
-            .ext(postgresql.distinct_on(*partition_by))
-        )
+        stmt = select(Evidence).where(*subject_filter).order_by(Evidence.organisation_id, Evidence.subject_type, Evidence.subject_id, Evidence.key, *order_by).ext(postgresql.distinct_on(*partition_by))
     else:
         # Portable fallback: rank rows per key by recency, keep rn = 1.
-        ranked = (
-            select(Evidence, func.row_number().over(partition_by=partition_by, order_by=order_by).label("rn"))
-            .where(*subject_filter)
-            .subquery()
-        )
+        ranked = select(Evidence, func.row_number().over(partition_by=partition_by, order_by=order_by).label("rn")).where(*subject_filter).subquery()
         ranked_alias = aliased(Evidence, ranked)
         stmt = select(ranked_alias).where(ranked.c.rn == 1)
 

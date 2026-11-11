@@ -758,9 +758,7 @@ async def seed_default_alert_rules(factory: Any) -> int:
     on the next boot.
     """
     async with factory() as session, session.begin():
-        marker_result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY)
-        )
+        marker_result = await session.execute(select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY))
         marker = marker_result.scalar_one_or_none()
         if marker is not None:
             try:
@@ -783,9 +781,7 @@ async def seed_default_alert_rules(factory: Any) -> int:
             _log.exception("error_tracking.seed_defaults_org_failed org=%s", org_id)
 
     async with factory() as session, session.begin():
-        marker_result = await session.execute(
-            select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY)
-        )
+        marker_result = await session.execute(select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY))
         marker = marker_result.scalar_one_or_none()
         if marker is None:
             session.add(SystemConfig(key=SEEDED_DEFAULTS_VERSION_KEY, value=SEEDED_DEFAULTS_VERSION))
@@ -891,7 +887,7 @@ async def emit_saq_retry_storm_alert(
                 message=message,
                 source="saq",
                 context_json={"run_id": str(run_id), "claim_count": claim_count},
-                environment=os.environ.get("MODULO_ENV", "development"),
+                environment=os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
             )
     except asyncio.CancelledError:
         raise
@@ -1022,9 +1018,7 @@ def _row_missed_period(row: Any, now: datetime, grace_seconds: int) -> int | Non
         return None
     if row.last_fired_at is not None and row.last_fired_at >= now - timedelta(seconds=period + grace_seconds):
         return None
-    if row.last_fired_at is None and (
-        row.created_at is None or row.created_at >= now - timedelta(seconds=period + grace_seconds)
-    ):
+    if row.last_fired_at is None and (row.created_at is None or row.created_at >= now - timedelta(seconds=period + grace_seconds)):
         # A brand-new trigger that has not yet had its first scheduled
         # fire is not "missed" — only probe it once it is old enough.
         return None
@@ -1057,7 +1051,7 @@ async def _emit_missed_fire_alert(
                 "trigger_type": row.trigger_type,
                 "period_seconds": period,
             },
-            environment=os.environ.get("MODULO_ENV", "development"),
+            environment=os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
         )
 
 

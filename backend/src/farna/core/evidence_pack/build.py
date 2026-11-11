@@ -72,9 +72,7 @@ def build_evidence_pack(
             raise TypeError(f"bundle file {path!r} content must be bytes, got {type(content).__name__}")
         payloads[path] = content
 
-    file_entries = [
-        EvidenceFile(path=path, sha256=sha256_hex(content), size=len(content)) for path, content in payloads.items()
-    ]
+    file_entries = [EvidenceFile(path=path, sha256=sha256_hex(content), size=len(content)) for path, content in payloads.items()]
     audit_chain = recompute_chain(events, organisation_id, truncated=truncated)
     manifest = build_manifest(
         organisation_id=organisation_id,
@@ -93,7 +91,5 @@ def build_evidence_pack(
             "algorithm": "ed25519",
             "public_key_pem": public_key_pem_from_private(resolved_key),
         },
-        "files": {
-            path: {"content_b64": base64.b64encode(content).decode("ascii")} for path, content in payloads.items()
-        },
+        "files": {path: {"content_b64": base64.b64encode(content).decode("ascii")} for path, content in payloads.items()},
     }

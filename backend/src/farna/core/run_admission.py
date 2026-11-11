@@ -366,12 +366,7 @@ _DEFAULT_RUN_HEARTBEAT_SECONDS = 30
 #: re-dispatch (a started node may already have executed side effects —
 #: FAR-1649), so an operator reading the row alone cannot mistake it for a
 #: pipeline code failure.
-_DEAD_HEARTBEAT_REAP_DETAIL = (
-    "Slot reconciliation: node started (dispatch_phase=first_node_dispatched) but its "
-    "executor stopped heartbeating past the dead-heartbeat bound; run terminal-failed "
-    "without re-dispatch (a started node may already have executed side effects — "
-    "FAR-1649; FAR-2005)."
-)
+_DEAD_HEARTBEAT_REAP_DETAIL = "Slot reconciliation: node started (dispatch_phase=first_node_dispatched) but its executor stopped heartbeating past the dead-heartbeat bound; run terminal-failed without re-dispatch (a started node may already have executed side effects — FAR-1649; FAR-2005)."
 
 # FAR-2005 — the terminal-fail-ONLY arm split out of ``_RECONCILE_RUNS_SQL``.
 #
@@ -594,11 +589,7 @@ async def _park_one_org(
         # chain with the org and window so it is observable, never a silent
         # no-op. Other SQLSTATEs re-raise into the HitlParkError contract.
         _log.warning(
-            "hitl_park.org_lock_timeout org=%s grace_seconds=%d "
-            "park_margin_seconds=%d (SQLSTATE 55P03 from the bounded "
-            "mutation_row_lock_timeout_ms wait) — org transaction "
-            "rolled back with NO rows parked; the expired runs stay "
-            "awaiting_human and are re-parked by the next sweep tick",
+            "hitl_park.org_lock_timeout org=%s grace_seconds=%d park_margin_seconds=%d (SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — org transaction rolled back with NO rows parked; the expired runs stay awaiting_human and are re-parked by the next sweep tick",
             org_id,
             window,
             park_margin,
@@ -786,9 +777,7 @@ async def _reconcile_one_org(
             # RETURNING only ever yields node-started rows; this re-check
             # keeps a row source that omits the phase (test doubles) out of
             # the reap count rather than silently mislabelling it.
-            reaped.extend(
-                row for row in reap_result.all() if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED
-            )
+            reaped.extend(row for row in reap_result.all() if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED)
             result = await conn.execute(
                 _RECONCILE_RUNS_SQL,
                 {
@@ -818,11 +807,7 @@ async def _reconcile_one_org(
         # never a silent no-op. Other SQLSTATEs are not lock timeouts and
         # re-raise into the failure contract above.
         _log.warning(
-            "slot_reconciliation.org_lock_timeout org=%s stale_seconds=%d "
-            "retry_budget=%d (SQLSTATE 55P03 from the bounded "
-            "mutation_row_lock_timeout_ms wait) — org transaction rolled "
-            "back with NO rows swept; the heartbeat-stale runs stay "
-            "``running`` and are re-processed by the next sweep tick",
+            "slot_reconciliation.org_lock_timeout org=%s stale_seconds=%d retry_budget=%d (SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — org transaction rolled back with NO rows swept; the heartbeat-stale runs stay ``running`` and are re-processed by the next sweep tick",
             org_id,
             window,
             retry_budget,
@@ -849,8 +834,7 @@ async def _finalise_reconciled_runs(
     for row in released:
         per_pipeline[str(row.pipeline_id)] += 1
         _log.info(
-            "slot_reconciliation.released run=%s pipeline=%s org=%s "
-            "(heartbeat stale past %ss, claim_count=%d exceeded budget %d)",
+            "slot_reconciliation.released run=%s pipeline=%s org=%s (heartbeat stale past %ss, claim_count=%d exceeded budget %d)",
             row.id,
             row.pipeline_id,
             row.organisation_id,
@@ -866,9 +850,7 @@ async def _finalise_reconciled_runs(
     for row in reaped:
         per_pipeline[str(row.pipeline_id)] += 1
         _log.info(
-            "slot_reconciliation.dead_heartbeat_reaped run=%s pipeline=%s org=%s "
-            "(node-started run, heartbeat stale past %ss, claim_count=%d — "
-            "terminal-failed without re-dispatch)",
+            "slot_reconciliation.dead_heartbeat_reaped run=%s pipeline=%s org=%s (node-started run, heartbeat stale past %ss, claim_count=%d — terminal-failed without re-dispatch)",
             row.id,
             row.pipeline_id,
             row.organisation_id,
@@ -879,9 +861,7 @@ async def _finalise_reconciled_runs(
     for row in retried:
         per_pipeline[str(row.pipeline_id)] += 1
         _log.warning(
-            "slot_reconciliation.retried run=%s pipeline=%s org=%s "
-            "(heartbeat stale past %ss, claim_count=%d <= budget %d"
-            " — reset to pending for re-dispatch)",
+            "slot_reconciliation.retried run=%s pipeline=%s org=%s (heartbeat stale past %ss, claim_count=%d <= budget %d — reset to pending for re-dispatch)",
             row.id,
             row.pipeline_id,
             row.organisation_id,
@@ -1212,9 +1192,7 @@ async def has_in_flight_ci_failure_run(
         ).all()
     except Exception:
         _log.warning(
-            "ci_failure_coalesce.inflight_check_failed pipeline=%s key=%s "
-            "(falling through to the age-based window; a dispatch is not blocked "
-            "on an unreadable query)",
+            "ci_failure_coalesce.inflight_check_failed pipeline=%s key=%s (falling through to the age-based window; a dispatch is not blocked on an unreadable query)",
             pipeline_id,
             coalesce_key,
             exc_info=True,
@@ -1350,9 +1328,7 @@ async def evaluate_backpressure(
                 # than the unfiltered one, so this second read is needed only
                 # when the unfiltered signal is already over the limit.
                 actionable_oldest = await _oldest_non_org_capacity_pending_created_at(session, pipeline_id)
-                actionable_age = (
-                    (datetime.now(UTC) - actionable_oldest).total_seconds() if actionable_oldest is not None else 0.0
-                )
+                actionable_age = (datetime.now(UTC) - actionable_oldest).total_seconds() if actionable_oldest is not None else 0.0
                 if actionable_age > oldest_age_seconds:
                     _log.info(
                         "backpressure.oldest_age pipeline=%s oldest_age_s=%.0f limit=%d — refusing new runs",
@@ -1362,8 +1338,7 @@ async def evaluate_backpressure(
                     )
                     return True, f"oldest_age={int(actionable_age)}s limit={oldest_age_seconds}s"
                 _log.info(
-                    "backpressure.oldest_age_capacity_excluded pipeline=%s "
-                    "unfiltered_age_s=%.0f actionable_age_s=%.0f limit=%d — admitting",
+                    "backpressure.oldest_age_capacity_excluded pipeline=%s unfiltered_age_s=%.0f actionable_age_s=%.0f limit=%d — admitting",
                     pipeline_id,
                     age,
                     actionable_age,

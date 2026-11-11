@@ -155,10 +155,7 @@ def _integrity_error_entry(exc: IntegrityError, entity_type: str, eid: str) -> d
         return {
             "id": eid,
             "entity_type": entity_type,
-            "error": (
-                f"Cannot delete {entity_type} {eid}: governance decision records present"
-                " — archive or purge policy_gate_decisions first"
-            ),
+            "error": (f"Cannot delete {entity_type} {eid}: governance decision records present — archive or purge policy_gate_decisions first"),
             "blocked_by": "policy_gate_decisions",
         }
     return {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}

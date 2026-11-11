@@ -180,9 +180,7 @@ _guardrail_override_rate_limiter = TokenBucketRegistry(
 _RETRY_TRANSIENT = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception(
-        lambda e: isinstance(e, (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError))
-    ),
+    retry=retry_if_exception(lambda e: isinstance(e, (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError))),
     reraise=True,
     before_sleep=before_sleep_log(_log, logging.WARNING),
 )
@@ -247,11 +245,7 @@ async def _run_with_retry[R](
 
 def _run_detail_statement(principal: TenantPrincipal, run_id: uuid.UUID) -> Select[Run]:
     """The org-scoped run SELECT shared by the detail/with-gate loaders."""
-    return (
-        select(Run)
-        .options(selectinload(Run.pipeline))
-        .where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
-    )
+    return select(Run).options(selectinload(Run.pipeline)).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
 
 
 async def _do_get_run(
@@ -292,13 +286,7 @@ async def _do_get_run_with_gate(
         # lazy load (the factory runs autobegin=False). Applied HERE rather
         # than on the shared `_run_detail_statement` so the events /
         # schema-enforcement readers of `_do_get_run` do not pay for it.
-        run = (
-            await session.execute(
-                _run_detail_statement(principal, run_id).options(
-                    selectinload(Run.snapshot).load_only(PipelineSnapshot.snapshot_version)
-                )
-            )
-        ).scalar_one_or_none()
+        run = (await session.execute(_run_detail_statement(principal, run_id).options(selectinload(Run.snapshot).load_only(PipelineSnapshot.snapshot_version)))).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
         return run, await _run_gate_fired(session, run)
@@ -642,12 +630,7 @@ async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) 
 
 async def _resolve_child_runs(session: AsyncSession, run: Run) -> list[dict[str, Any]]:
     """Resolve the direct child runs of a run (parent_run_id == run.id)."""
-    child_result = await session.execute(
-        select(Run, Pipeline.name)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id)
-        .where(Run.parent_run_id == run.id)
-        .order_by(Run.created_at)
-    )
+    child_result = await session.execute(select(Run, Pipeline.name).join(Pipeline, Run.pipeline_id == Pipeline.id).where(Run.parent_run_id == run.id).order_by(Run.created_at))
     children = []
     for child_run, pipeline_name in child_result.all():
         children.append(
@@ -803,9 +786,7 @@ async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dic
                 continue
     if not snapshot_ids:
         return {}
-    result = await session.execute(
-        select(PipelineSnapshot.id, PipelineSnapshot.snapshot_version).where(PipelineSnapshot.id.in_(snapshot_ids))
-    )
+    result = await session.execute(select(PipelineSnapshot.id, PipelineSnapshot.snapshot_version).where(PipelineSnapshot.id.in_(snapshot_ids)))
     versions: dict[str, int] = {}
     for snapshot_id, version in result.all():
         coerced = _coerce_snapshot_version(version)
@@ -957,10 +938,7 @@ async def _do_list_runs(
         warnings_count: dict[uuid.UUID, int] = {}
         if run_ids:
             breakdowns = await get_run_cost_breakdowns(session, run_ids)
-            warnings_count = {
-                uuid.UUID(str(run_id)): compute_run_warnings_count(breakdown)
-                for run_id, breakdown in breakdowns.items()
-            }
+            warnings_count = {uuid.UUID(str(run_id)): compute_run_warnings_count(breakdown) for run_id, breakdown in breakdowns.items()}
 
         # FAR-1838: snapshot version numbers for the whole page, loaded via ONE
         # ``WHERE id IN (...)`` over the page's DISTINCT snapshot ids — never a
@@ -1095,9 +1073,7 @@ def _clamped_union_node_cost(node: dict[str, Any]) -> dict[str, Any]:
         d = Decimal(str(raw))
     except (TypeError, ValueError, ArithmeticError):
         return entry
-    entry["model_cost_raw_usd"] = (
-        float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
-    )
+    entry["model_cost_raw_usd"] = float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
     return entry
 
 
@@ -1463,10 +1439,7 @@ def _build_run_response(
     # match_known_fixes is fail-safe (never raises); serialise defensively so a
     # malformed entry can never 500 the run detail endpoint.
     try:
-        known_fixes = [
-            {"fix_id": fix.fix_id, "title": fix.title, "body": fix.body, "link": fix.link}
-            for fix in match_known_fixes(error_detail)
-        ]
+        known_fixes = [{"fix_id": fix.fix_id, "title": fix.title, "body": fix.body, "link": fix.link} for fix in match_known_fixes(error_detail)]
     except Exception:
         _log.warning("runs.known_fixes_serialise_failed", extra={"run_id": str(getattr(run, "id", ""))}, exc_info=True)
         known_fixes = []
@@ -1496,9 +1469,7 @@ def _build_run_response(
     # defensive coercion as run_classification/snapshot_id above: a non-dict
     # column value (or a MagicMock in test fakes) degrades to None, never a 500.
     _raw_input_payload = getattr(run, "input_payload", None)
-    input_payload = (
-        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
-    )
+    input_payload = _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
 
     return RunResponse(
         run_id=run.id,
@@ -1643,9 +1614,7 @@ async def _enforce_trigger_rate_limit(
     if not rl or not rl.get("max_triggers"):
         return None
     key = TriggerEngine._compute_rate_limit_key(input_payload, rl)
-    recent_count = await TriggerEngine._count_recent_rate_limited(
-        session, pipeline.id, key, int(rl.get("window_seconds", 3600))
-    )
+    recent_count = await TriggerEngine._count_recent_rate_limited(session, pipeline.id, key, int(rl.get("window_seconds", 3600)))
     if recent_count >= int(rl["max_triggers"]):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1888,9 +1857,7 @@ async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, s
     if source_run.status not in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Run is not in a terminal status: {source_run.status} - only completed or failed runs can be re-run"
-            ),
+            detail=(f"Run is not in a terminal status: {source_run.status} - only completed or failed runs can be re-run"),
         )
 
     # Defence-in-depth: the column is NOT NULL, but a defensive 409 beats a
@@ -1908,9 +1875,7 @@ async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, s
             detail=f"Pipeline {source_run.pipeline_id} not found",
         )
 
-    snapshot_result = await session.execute(
-        select(PipelineSnapshot).where(PipelineSnapshot.id == source_run.snapshot_id)
-    )
+    snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == source_run.snapshot_id))
     snapshot = snapshot_result.scalar_one_or_none()
     if snapshot is None:
         raise HTTPException(
@@ -2158,9 +2123,7 @@ async def get_run_status(
         run, gate_fired = await _run_with_retry(lambda: _do_get_run_with_gate(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
         otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
-        trigger_actor, capacity, child_runs = await _run_with_retry(
-            lambda: _do_get_run_observability(factory, principal, run)
-        )
+        trigger_actor, capacity, child_runs = await _run_with_retry(lambda: _do_get_run_observability(factory, principal, run))
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
         deadline_triage = await _run_with_retry(
             lambda: _do_get_deadline_triage(
@@ -2330,10 +2293,7 @@ async def cancel_run(
             _log.warning("runs.cancel_run.lock_timeout")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Timed out waiting for a lock while cancelling this run; another change is in progress. "
-                    "Re-issue the cancel once the other change completes."
-                ),
+                detail=("Timed out waiting for a lock while cancelling this run; another change is in progress. Re-issue the cancel once the other change completes."),
             ) from None
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
@@ -2383,9 +2343,7 @@ class RunIOResponse(BaseModel):
 
 def _is_per_node_output_shape(resolved_out: Any) -> bool:
     """True when outputs are structured per-node (each value has ``input``/``output``)."""
-    return isinstance(resolved_out, dict) and any(
-        isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values()
-    )
+    return isinstance(resolved_out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values())
 
 
 def _build_per_node_fixture(resolved_out: dict[str, Any], inp: dict[str, Any]) -> dict[str, str]:
@@ -2582,11 +2540,7 @@ async def get_run_io_endpoint(
             snapshot = await _load_snapshot_for_run(session, run)
             # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
             # (one batched repo query + the legacy fallback SELECT).
-            blobs = (
-                None
-                if run is None
-                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
-            )
+            blobs = None if run is None else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
         raise HTTPException(
@@ -2816,9 +2770,7 @@ async def get_run_workspace_lease(
     )
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
-        detail=(
-            "The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."
-        ),
+        detail=("The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."),
     )
 
 
@@ -3031,14 +2983,7 @@ def _mask_output_value(value: Any, *, _depth: int = 0) -> Any:
     if isinstance(value, str):
         return mask_secret_values_in_text(value)
     if isinstance(value, dict):
-        return {
-            k: (
-                mask_sensitive_value(v)
-                if isinstance(v, str) and is_sensitive_key(k)
-                else _mask_output_value(v, _depth=_depth + 1)
-            )
-            for k, v in value.items()
-        }
+        return {k: (mask_sensitive_value(v) if isinstance(v, str) and is_sensitive_key(k) else _mask_output_value(v, _depth=_depth + 1)) for k, v in value.items()}
     if isinstance(value, list):
         return [_mask_output_value(item, _depth=_depth + 1) for item in value]
     return value
@@ -3085,11 +3030,7 @@ async def get_run_node_output(
             run = await get_run(session, run_id, organisation_id=principal.organisation_id)
             # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
             # (one batched repo query + the legacy fallback SELECT).
-            blobs = (
-                None
-                if run is None
-                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
-            )
+            blobs = None if run is None else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
         raise HTTPException(
@@ -4413,16 +4354,8 @@ async def diff_node_output(
             # FAR-583 read-switch: reassemble BOTH runs' blobs INSIDE the
             # transaction (one batched repo query per run + the legacy
             # fallback SELECT); the response body is built after the tx closes.
-            blobs_a = (
-                None
-                if run_a is None
-                else await read_run_blobs(session, run_id=req.run_id_a, organisation_id=principal.organisation_id)
-            )
-            blobs_b = (
-                None
-                if run_b is None
-                else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
-            )
+            blobs_a = None if run_a is None else await read_run_blobs(session, run_id=req.run_id_a, organisation_id=principal.organisation_id)
+            blobs_b = None if run_b is None else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
         raise HTTPException(

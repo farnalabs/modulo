@@ -27,9 +27,7 @@ from farna.core.library_service import (
 )
 from farna.db.rls import set_rls_org, set_rls_user_context
 
-_MSG_CONTRIBUTION_FEATURE_TEMPORARILY_UNAVAILABLE = (
-    "The contribution feature is temporarily unavailable due to a database issue. Please retry."
-)
+_MSG_CONTRIBUTION_FEATURE_TEMPORARILY_UNAVAILABLE = "The contribution feature is temporarily unavailable due to a database issue. Please retry."
 _MSG_CONTRIBUTION_NOT_FOUND = "Contribution not found"
 
 
@@ -256,9 +254,7 @@ class VersionListResponse(BaseModel):
 @router.post(
     "/{primitive_id}/versions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("contribution_version_created", "contribution", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("contribution_version_created", "contribution", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("contributions.submit_contribution_version_endpoint")
 async def submit_contribution_version_endpoint(

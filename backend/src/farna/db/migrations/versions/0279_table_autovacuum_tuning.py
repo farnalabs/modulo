@@ -189,12 +189,7 @@ depends_on: tuple[str, ...] | None = None
 # always exists when this revision runs. autovacuum_enabled=true is restated
 # alongside the tuning so the statement is correct under either SET
 # semantics (merge or replace).
-_RUNS_SET = (
-    'ALTER TABLE public."runs" SET ('
-    "autovacuum_enabled = true, "
-    "autovacuum_vacuum_scale_factor = 0.05, "
-    "autovacuum_analyze_scale_factor = 0.02);"
-)
+_RUNS_SET = 'ALTER TABLE public."runs" SET (autovacuum_enabled = true, autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);'
 _RUNS_RESET = 'ALTER TABLE public."runs" RESET (autovacuum_vacuum_scale_factor, autovacuum_analyze_scale_factor);'
 
 
@@ -222,15 +217,7 @@ def _checkpoint_set(table: str) -> str:
 
 def _checkpoint_reset(table: str) -> str:
     """Mirror of :func:`_checkpoint_set`: drop only what the upgrade added."""
-    return (
-        "DO $$ BEGIN "
-        f"IF to_regclass('public.{table}') IS NOT NULL THEN "
-        f'ALTER TABLE public."{table}" RESET ('
-        "autovacuum_vacuum_scale_factor, "
-        "autovacuum_analyze_scale_factor, "
-        "autovacuum_vacuum_cost_limit); "
-        "END IF; END $$;"
-    )
+    return f"DO $$ BEGIN IF to_regclass('public.{table}') IS NOT NULL THEN ALTER TABLE public.\"{table}\" RESET (autovacuum_vacuum_scale_factor, autovacuum_analyze_scale_factor, autovacuum_vacuum_cost_limit); END IF; END $$;"
 
 
 # Checkpoint tables, in a fixed order so the migration log is deterministic.

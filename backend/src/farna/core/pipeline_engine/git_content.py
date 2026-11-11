@@ -259,25 +259,16 @@ def _validate_repo_url(repo_url: str, original: str) -> None:
         msg = f"git content ref repository URL must not contain whitespace (got {original!r})"
         raise GitContentRefError(msg)
     if not repo_url.startswith(_SUPPORTED_URL_SCHEMES):
-        msg = (
-            f"git content ref repository URL uses an unsupported scheme (got {original!r}) — "
-            f"supported schemes are {sorted(_SUPPORTED_URL_SCHEMES)}"
-        )
+        msg = f"git content ref repository URL uses an unsupported scheme (got {original!r}) — supported schemes are {sorted(_SUPPORTED_URL_SCHEMES)}"
         raise GitContentRefError(msg)
     if repo_url.startswith("git@"):
         if not _SCP_URL_RE.match(repo_url):
-            msg = (
-                f"git content ref SCP-style repository URL must be git@host:path with no further "
-                f"'@' (got {original!r}) — credentials are forbidden in git content refs"
-            )
+            msg = f"git content ref SCP-style repository URL must be git@host:path with no further '@' (got {original!r}) — credentials are forbidden in git content refs"
             raise GitContentRefError(msg)
         return
     parsed = urlsplit(repo_url)
     if "@" in repo_url:
-        msg = (
-            f"git content ref repository URL must not embed credentials (got {original!r}) — "
-            "'@' after the repository is reserved for the @<ref> separator"
-        )
+        msg = f"git content ref repository URL must not embed credentials (got {original!r}) — '@' after the repository is reserved for the @<ref> separator"
         raise GitContentRefError(msg)
     if not parsed.netloc or not parsed.path.strip("/"):
         msg = f"git content ref repository URL is malformed (got {original!r})"
@@ -310,10 +301,7 @@ def resolve_against_ls_remote(ref: GitContentRef, refs: dict[str, str]) -> str:
         sha = refs.get(prefix + ref.ref)
         if sha is not None:
             return _require_sha(sha, f"{prefix + ref.ref} of {ref.repo_url!r}")
-    msg = (
-        f"ref {ref.ref!r} of {ref.repo_url!r} not found "
-        "(looked up refs/heads/<ref> and refs/tags/<ref> in git ls-remote output)"
-    )
+    msg = f"ref {ref.ref!r} of {ref.repo_url!r} not found (looked up refs/heads/<ref> and refs/tags/<ref> in git ls-remote output)"
     raise GitContentRefError(msg)
 
 
@@ -473,9 +461,7 @@ async def fetch_git_content(
             return cached
     workdir = tempfile.mkdtemp(prefix="modulo-git-content-")
     try:
-        await _git(
-            ("init", "--quiet", "."), cwd=workdir, timeout_seconds=timeout_seconds, what="init", repo_url=repo_url
-        )
+        await _git(("init", "--quiet", "."), cwd=workdir, timeout_seconds=timeout_seconds, what="init", repo_url=repo_url)
         await _git(
             ("remote", "add", "origin", repo_url),
             cwd=workdir,
@@ -535,10 +521,7 @@ async def _bounded_fetch_attempts(
                 extra={"attempt": label, "repo_url": repo_url, "error": str(exc)[:200]},
             )
             failures.append(f"{label}: {exc}")
-    msg = (
-        f"could not fetch commit {sha} of {repo_url!r} — every bounded fetch strategy failed "
-        "(shallow+blobless, shallow, full): " + " | ".join(failures)
-    )
+    msg = f"could not fetch commit {sha} of {repo_url!r} — every bounded fetch strategy failed (shallow+blobless, shallow, full): " + " | ".join(failures)
     raise GitContentFetchError(msg)
 
 
@@ -550,10 +533,7 @@ def _assert_clone_size_bounded(workdir: str, max_clone_bytes: int, repo_url: str
             with contextlib.suppress(OSError):
                 total += (Path(root) / name).stat().st_size
     if total > max_clone_bytes:
-        msg = (
-            f"fetched clone of {repo_url!r} is {total} bytes, exceeding the {max_clone_bytes}-byte "
-            "clone size cap — refusing to render git content from it"
-        )
+        msg = f"fetched clone of {repo_url!r} is {total} bytes, exceeding the {max_clone_bytes}-byte clone size cap — refusing to render git content from it"
         raise GitContentFetchError(msg)
 
 
@@ -589,14 +569,7 @@ def _cache_get(
         data = json.loads(entry.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not (
-        isinstance(data, dict)
-        and data.get("repo_url") == repo_url
-        and data.get("sha") == sha.lower()
-        and data.get("path") == path
-        and isinstance(data.get("content"), str)
-        and isinstance(data.get("fetched_at"), (int, float))
-    ):
+    if not (isinstance(data, dict) and data.get("repo_url") == repo_url and data.get("sha") == sha.lower() and data.get("path") == path and isinstance(data.get("content"), str) and isinstance(data.get("fetched_at"), (int, float))):
         # Key-binding mismatch or malformed entry: treat as a miss AND drop it.
         entry.unlink(missing_ok=True)
         return None
@@ -627,9 +600,7 @@ def _cache_put(
         target = directory / f"{_cache_key(repo_url, sha, path)}.json"
         tmp = directory / f".tmp-{uuid.uuid4().hex}"
         tmp.write_text(
-            json.dumps(
-                {"repo_url": repo_url, "sha": sha.lower(), "path": path, "fetched_at": time.time(), "content": content}
-            ),
+            json.dumps({"repo_url": repo_url, "sha": sha.lower(), "path": path, "fetched_at": time.time(), "content": content}),
             encoding="utf-8",
         )
         tmp.replace(target)
@@ -789,16 +760,8 @@ def validate_agent_git_content_values(
     * ``git+`` values must parse;
     * parsed refs must be pinned to a 40-hex SHA.
     """
-    if (
-        agent_commands is not None
-        and len(agent_commands) > 1
-        and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands)
-    ):
-        raise GitContentRefError(
-            "agent_commands contains a git+ token among several commands — a git content "
-            "ref must be the whole field, not one command of several (use a single-item "
-            "agent_commands list whose only entry is the ref, or inline the content)"
-        )
+    if agent_commands is not None and len(agent_commands) > 1 and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands):
+        raise GitContentRefError("agent_commands contains a git+ token among several commands — a git content ref must be the whole field, not one command of several (use a single-item agent_commands list whose only entry is the ref, or inline the content)")
 
     values: list[tuple[str, str]] = []
     if isinstance(prompt_template, str):
@@ -813,12 +776,7 @@ def validate_agent_git_content_values(
         except GitContentRefError as exc:
             raise GitContentRefError(f"{label} has an invalid git content ref: {exc}") from None
         if not ref.is_pinned:
-            raise GitContentRefError(
-                f"{label} git content ref {value.strip()!r} is not pinned to a commit SHA — "
-                "Agent prompts and commands must use git+<repo>@<40-hex-sha>#<path> so runs "
-                "carry the resolved SHA for audit ('modulo apply' resolves and pins movable "
-                "refs automatically)"
-            )
+            raise GitContentRefError(f"{label} git content ref {value.strip()!r} is not pinned to a commit SHA — Agent prompts and commands must use git+<repo>@<40-hex-sha>#<path> so runs carry the resolved SHA for audit ('modulo apply' resolves and pins movable refs automatically)")
 
 
 def pin_git_content_node_fields(

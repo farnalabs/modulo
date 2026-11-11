@@ -65,12 +65,7 @@ def upgrade() -> None:
     )
 
     if pg:
-        app_role_exists = (
-            bind.execute(
-                sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": _APP_ROLE}
-            ).scalar_one_or_none()
-            is not None
-        )
+        app_role_exists = bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": _APP_ROLE}).scalar_one_or_none() is not None
         if app_role_exists:
             op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON public.library_sync_state TO {_APP_ROLE}")
 

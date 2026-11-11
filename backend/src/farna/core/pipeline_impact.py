@@ -353,10 +353,7 @@ def _check_edge_repoint_breaking(
                 "direction": direction,
                 "port": new_port,
                 "edge": {"source": src, "target": tgt},
-                "reason": (
-                    f"edge {src} -> {tgt} reads {direction} port '{new_port}' of node "
-                    f"{node_id}, which the new graph does not declare — the data read is dropped"
-                ),
+                "reason": (f"edge {src} -> {tgt} reads {direction} port '{new_port}' of node {node_id}, which the new graph does not declare — the data read is dropped"),
             }
         )
     elif old_port is not None and old_port in declared and declared[old_port] != declared[new_port]:
@@ -367,10 +364,7 @@ def _check_edge_repoint_breaking(
                 "direction": direction,
                 "port": new_port,
                 "edge": {"source": src, "target": tgt},
-                "reason": (
-                    f"edge {src} -> {tgt} changed the {direction} port it reads from "
-                    f"'{old_port}' to '{new_port}'; the schema-ref differs — the data read may alter"
-                ),
+                "reason": (f"edge {src} -> {tgt} changed the {direction} port it reads from '{old_port}' to '{new_port}'; the schema-ref differs — the data read may alter"),
             }
         )
     return findings
@@ -440,10 +434,7 @@ def _check_edge_port_breaking(
                     port,
                     src,
                     tgt,
-                    (
-                        f"edge {src} -> {tgt} reads the default {direction} of node "
-                        f"{node_id}, which no longer declares any {direction} port"
-                    ),
+                    (f"edge {src} -> {tgt} reads the default {direction} of node {node_id}, which no longer declares any {direction} port"),
                 )
             ]
         return []
@@ -458,10 +449,7 @@ def _check_edge_port_breaking(
                 port,
                 src,
                 tgt,
-                (
-                    f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
-                    f"{node_id}, which the new node no longer declares"
-                ),
+                (f"edge {src} -> {tgt} reads {direction} port '{ref}' of node {node_id}, which the new node no longer declares"),
             )
         ]
     if change == "modified":
@@ -473,10 +461,7 @@ def _check_edge_port_breaking(
                 port,
                 src,
                 tgt,
-                (
-                    f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
-                    f"{node_id}, whose schema-ref changed — the data read may alter"
-                ),
+                (f"edge {src} -> {tgt} reads {direction} port '{ref}' of node {node_id}, whose schema-ref changed — the data read may alter"),
             )
         ]
     return []

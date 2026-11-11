@@ -496,9 +496,7 @@ class SandboxCapacityExceededError(Exception):
 
     def __init__(self, org_id: uuid.UUID) -> None:
         self.org_id = org_id
-        super().__init__(
-            f"Sandbox concurrency limit reached for org {org_id}; gate left undecided. Retry when capacity frees up."
-        )
+        super().__init__(f"Sandbox concurrency limit reached for org {org_id}; gate left undecided. Retry when capacity frees up.")
 
 
 # The outcome of the fenced pending-reset that follows a two-timeout admission
@@ -562,23 +560,11 @@ class AdmissionLockTimeoutError(Exception):
         self.reset_state = reset_state
         resting_state = {
             "confirmed": "the fenced pending-reset was CONFIRMED, so the run was left pending for dispatcher_reconcile",
-            "fence_lost": (
-                "the fenced pending-reset matched no row (fence lost), so the run is owned by a successor or has "
-                "already left running and was left untouched"
-            ),
-            "timeout": (
-                "the fenced pending-reset ALSO timed out, so the run was NOT reset and is left for the "
-                "nodeless/age backstop"
-            ),
-            "unknown": (
-                "the fenced pending-reset raised, so whether it landed could not be determined: if it did, the "
-                "row is pending and dispatcher_reconcile will re-dispatch it; if it did not, the row is still "
-                "running and falls to the nodeless/age backstop"
-            ),
+            "fence_lost": ("the fenced pending-reset matched no row (fence lost), so the run is owned by a successor or has already left running and was left untouched"),
+            "timeout": ("the fenced pending-reset ALSO timed out, so the run was NOT reset and is left for the nodeless/age backstop"),
+            "unknown": ("the fenced pending-reset raised, so whether it landed could not be determined: if it did, the row is pending and dispatcher_reconcile will re-dispatch it; if it did not, the row is still running and falls to the nodeless/age backstop"),
         }[reset_state]
-        super().__init__(
-            f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; {resting_state}"
-        )
+        super().__init__(f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; {resting_state}")
 
 
 class RetryBudgetGateRefusedError(Exception):
@@ -600,10 +586,7 @@ class RetryBudgetGateRefusedError(Exception):
     def __init__(self, run_id: uuid.UUID, *, reason: str) -> None:
         self.run_id = run_id
         self.reason = reason
-        super().__init__(
-            f"Admission refused for run {run_id}: the retry-budget gate's terminal write lost the fence "
-            f"and the row is still running ({reason}); the graph was not executed"
-        )
+        super().__init__(f"Admission refused for run {run_id}: the retry-budget gate's terminal write lost the fence and the row is still running ({reason}); the graph was not executed")
 
 
 async def _teardown_hub(hub: Any) -> None:
@@ -890,13 +873,8 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
     """
     if not isinstance(graph_json, dict):
         return True
-    any_interactive_node = any(
-        isinstance(node, dict) and str(node.get("node_type", "")).strip() in _INTERACTIVE_NODE_TYPES
-        for node in graph_json.get("nodes", []) or []
-    )
-    any_hitl_review_edge = any(
-        isinstance(edge, dict) and edge.get("hitl_review_config") for edge in graph_json.get("edges", []) or []
-    )
+    any_interactive_node = any(isinstance(node, dict) and str(node.get("node_type", "")).strip() in _INTERACTIVE_NODE_TYPES for node in graph_json.get("nodes", []) or [])
+    any_hitl_review_edge = any(isinstance(edge, dict) and edge.get("hitl_review_config") for edge in graph_json.get("edges", []) or [])
     return any_interactive_node or any_hitl_review_edge
 
 
@@ -961,10 +939,7 @@ async def _script_lease_probe_ok(
             await set_rls_execution_context(session)
             row = (
                 await session.execute(
-                    _sql_text(
-                        "SELECT sandbox_dispatch_state FROM runs WHERE id=:rid "
-                        "AND organisation_id=:oid AND claim_token=:tok"
-                    ),
+                    _sql_text("SELECT sandbox_dispatch_state FROM runs WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"),
                     {"rid": run_id, "oid": str(org_uuid), "tok": claim_token},
                 )
             ).fetchone()
@@ -1161,9 +1136,7 @@ def _node_output_connector_failure(
     marked = node_output.get("connector_failure") is True
     if not marked and node_type not in {"connector", "dispatch"}:
         return None
-    return _connector_failure_artifact_reason(node_output, expected_node_id=expected_node_id) or (
-        "Connector reported failure" if marked else None
-    )
+    return _connector_failure_artifact_reason(node_output, expected_node_id=expected_node_id) or ("Connector reported failure" if marked else None)
 
 
 def _connector_failure_views(
@@ -1489,9 +1462,7 @@ async def org_sandbox_capacity_free(
         run = await get_run(session, run_id)
         if run is None or run.snapshot_id is None:
             return True
-        snap_result = await session.execute(
-            select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
-        )
+        snap_result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id))
         graph_json = snap_result.scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
             return True
@@ -1560,13 +1531,7 @@ def _is_terminating_rejection_output(name: str, output: Any) -> bool:
     artifacts = output.get("artifacts")
     if not isinstance(artifacts, list):
         return False
-    return any(
-        isinstance(a, dict)
-        and a.get("node_id") == name
-        and a.get("result") == "rejected"
-        and a.get("reject_disposition") == "terminate"
-        for a in artifacts
-    )
+    return any(isinstance(a, dict) and a.get("node_id") == name and a.get("result") == "rejected" and a.get("reject_disposition") == "terminate" for a in artifacts)
 
 
 def _record_chain_end_output(
@@ -2239,9 +2204,7 @@ class PipelineExecutor:
         ``unknown``, worded as both possibilities. Either way the next
         admission counts the attempt.
         """
-        org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
-            org_id, graph_json, snapshot_id
-        )
+        org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(org_id, graph_json, snapshot_id)
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
         # The admission transaction ALSO spends one execution against
@@ -2274,9 +2237,7 @@ class PipelineExecutor:
         if run is not None:
             return run
         _log.warning(
-            "pipeline.capacity_check_lock_timeout run=%s — bounded "
-            "mutation_row_lock_timeout_ms wait expired on the claim-time "
-            "write; retrying the admission+bump transaction once",
+            "pipeline.capacity_check_lock_timeout run=%s — bounded mutation_row_lock_timeout_ms wait expired on the claim-time write; retrying the admission+bump transaction once",
             run_id,
             exc_info=first_timeout,
         )
@@ -2341,9 +2302,7 @@ class PipelineExecutor:
             # re-read: opening a session just to look at the row is more surface
             # than this ambiguity warrants.
             _log.warning(
-                "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
-                "raised after the second admission timeout, so whether it landed is "
-                "unknown; the deferral names both possible sweeps",
+                "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset raised after the second admission timeout, so whether it landed is unknown; the deferral names both possible sweeps",
                 run_id,
                 exc_info=True,
             )
@@ -2480,10 +2439,7 @@ class PipelineExecutor:
                 # makes is itself token-fenced (a successor that took the
                 # run spent its own attempt in its own admission).
                 _log.warning(
-                    "pipeline.execution_attempt_not_counted run=%s org=%s — the "
-                    "claim-token/status fence rejected the execution-budget bump; "
-                    "the attempt proceeds against a superseded or no-longer-running "
-                    "row (its writes remain fenced)",
+                    "pipeline.execution_attempt_not_counted run=%s org=%s — the claim-token/status fence rejected the execution-budget bump; the attempt proceeds against a superseded or no-longer-running row (its writes remain fenced)",
                     run_id,
                     org_id,
                 )
@@ -2511,9 +2467,7 @@ class PipelineExecutor:
                     raise
                 except Exception:
                     _log.warning(
-                        "pipeline.execution_attempt_row_failed run=%s org=%s — the "
-                        "per-attempt history row could not be written; the execution "
-                        "proceeds (attempt history is diagnostics, never a gate)",
+                        "pipeline.execution_attempt_row_failed run=%s org=%s — the per-attempt history row could not be written; the execution proceeds (attempt history is diagnostics, never a gate)",
                         run_id,
                         org_id,
                         exc_info=True,
@@ -2537,9 +2491,7 @@ class PipelineExecutor:
         pipeline_ok = True
         active_count = 0
         if max_concurrent > 0:
-            active_count = await count_active_runs_for_pipeline(
-                session, pipeline_id, include_pending=False, exclude_run_id=run_id
-            )
+            active_count = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=False, exclude_run_id=run_id)
             pipeline_ok = active_count < max_concurrent
 
         sandbox_count = 0
@@ -2587,9 +2539,7 @@ class PipelineExecutor:
         """
         from farna.db.soft_delete import include_soft_deleted
 
-        pipeline_row = (
-            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
-        ).scalar_one_or_none()
+        pipeline_row = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))).scalar_one_or_none()
         retry_policy = getattr(pipeline_row, "retry_policy", None)
         ceiling = retry_max_executions(retry_policy)
         consumed = retry_executions_consumed(execution_attempt_count=getattr(run, "execution_attempt_count", 0))
@@ -2600,11 +2550,7 @@ class PipelineExecutor:
             run_id,
             "failed",
             error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
-            error_detail=(
-                "Run not admitted: its retry_policy budget is exhausted "
-                f"(execution_attempt_count={consumed} >= ceiling {ceiling}); "
-                "the graph was not executed."
-            ),
+            error_detail=(f"Run not admitted: its retry_policy budget is exhausted (execution_attempt_count={consumed} >= ceiling {ceiling}); the graph was not executed."),
             claim_token=self._claim_token,
             from_status="running",
         )
@@ -2624,9 +2570,7 @@ class PipelineExecutor:
             if terminal_run is None:
                 raise RunNotFoundError(run_id)
             _log.warning(
-                "pipeline.retry_budget_gate_fence_lost run=%s org=%s status=%s — "
-                "the terminal write was rejected; re-read the row instead of "
-                "admitting the execution",
+                "pipeline.retry_budget_gate_fence_lost run=%s org=%s status=%s — the terminal write was rejected; re-read the row instead of admitting the execution",
                 run_id,
                 org_id,
                 terminal_run.status,
@@ -2646,9 +2590,7 @@ class PipelineExecutor:
                 raise RetryBudgetGateRefusedError(run_id, reason="fence lost")
             return terminal_run
         _log.warning(
-            "pipeline.retry_budget_exhausted_at_admission run=%s org=%s "
-            "execution_attempts=%s ceiling=%s — refused to execute past the "
-            "retry_policy budget",
+            "pipeline.retry_budget_exhausted_at_admission run=%s org=%s execution_attempts=%s ceiling=%s — refused to execute past the retry_policy budget",
             run_id,
             org_id,
             consumed,
@@ -2749,9 +2691,7 @@ class PipelineExecutor:
                 # ceiling gate returns None and the run proceeds unchecked.
                 from farna.db.soft_delete import include_soft_deleted
 
-                org = (
-                    await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))
-                ).scalar_one_or_none()
+                org = (await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id)))).scalar_one_or_none()
                 if org is None:
                     return None
                 # The ceiling/cumulative live on the per-org cost-state
@@ -2951,9 +2891,7 @@ class PipelineExecutor:
             if population == "marker":
                 from farna.core.runner_capacity import count_active_runner_dispatches_for_decision
 
-                return await count_active_runner_dispatches_for_decision(
-                    session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
-                )
+                return await count_active_runner_dispatches_for_decision(session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only)
             return await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
         except asyncio.CancelledError:
             raise
@@ -3140,9 +3078,7 @@ class PipelineExecutor:
             select(Eval, PolicyGate)
             .outerjoin(
                 PolicyGate,
-                (PolicyGate.eval_id == Eval.id)
-                & (PolicyGate.organisation_id == Eval.organisation_id)
-                & (PolicyGate.deleted_at.is_(None)),
+                (PolicyGate.eval_id == Eval.id) & (PolicyGate.organisation_id == Eval.organisation_id) & (PolicyGate.deleted_at.is_(None)),
             )
             .where(
                 Eval.pipeline_id == pipeline_id,
@@ -3470,14 +3406,12 @@ class PipelineExecutor:
         node_key = str(eval_row.node_id) if eval_row.node_id else ""
         if not node_key:
             return
-        failure_behaviour, gate_id, gate_version, gate_node_id, evaluation_mode = (
-            PipelineExecutor._resolve_governed_gate(
-                eval_row,
-                policy_gate,
-                pin,
-                pinned_universe=pinned_universe,
-                pipeline_id=pipeline_id,
-            )
+        failure_behaviour, gate_id, gate_version, gate_node_id, evaluation_mode = PipelineExecutor._resolve_governed_gate(
+            eval_row,
+            policy_gate,
+            pin,
+            pinned_universe=pinned_universe,
+            pipeline_id=pipeline_id,
         )
         definitions.setdefault(node_key, []).append(
             EvalDefDTO(
@@ -3687,9 +3621,7 @@ class PipelineExecutor:
             )
         except GuardrailRedactionMechanismError as exc:
             _log.exception("guardrails.output_destroy_mechanism_error")
-            raise GuardrailBlockedError(
-                node_id, f"guardrail output mechanism error (destroy redaction failed closed): {exc}"
-            ) from exc
+            raise GuardrailBlockedError(node_id, f"guardrail output mechanism error (destroy redaction failed closed): {exc}") from exc
         except Exception as exc:
             # Defect path guard: any unexpected pass failure with a guarding
             # guardrail must not pass through unredacted — block. The shared
@@ -3751,9 +3683,7 @@ class PipelineExecutor:
         # Non-output defs (other eval types AND input-point guardrails) keep
         # flowing in the eval-shaped path — an output-point one is the only
         # def owned by THIS seam.
-        eval_defs = [
-            d for d in node_defs if not (str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d))
-        ]
+        eval_defs = [d for d in node_defs if not (str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d))]
         if eval_defs:
             await self._run_post_node_evals(
                 name,
@@ -3830,26 +3760,12 @@ class PipelineExecutor:
         community_gated: set[str] = set()
         if not agent_ids:
             return grants, community_gated
-        agent_rows = (
-            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == org_id)))
-            .scalars()
-            .all()
-        )
-        install_ids = {
-            cid for agent in agent_rows if (cid := getattr(agent, "collection_install_id", None)) is not None
-        }
+        agent_rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == org_id))).scalars().all()
+        install_ids = {cid for agent in agent_rows if (cid := getattr(agent, "collection_install_id", None)) is not None}
         install_rows = []
         if install_ids:
-            install_rows = (
-                (await session.execute(select(CollectionInstall).where(CollectionInstall.install_id.in_(install_ids))))
-                .scalars()
-                .all()
-            )
-        gated_installs = {
-            str(ci.install_id)
-            for ci in install_rows
-            if ci.community_sourced and (not ci.agents_granted or not community_objects_on)
-        }
+            install_rows = (await session.execute(select(CollectionInstall).where(CollectionInstall.install_id.in_(install_ids)))).scalars().all()
+        gated_installs = {str(ci.install_id) for ci in install_rows if ci.community_sourced and (not ci.agents_granted or not community_objects_on)}
         for agent in agent_rows:
             agent_key = str(agent.id)
             grants[agent_key] = agent_granted_connector_types(agent.connector_type_refs)
@@ -4465,9 +4381,7 @@ class PipelineExecutor:
             runner_capacity_lock_keys,
         )
 
-        graph_json = (
-            await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-        ).scalar_one_or_none()
+        graph_json = (await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))).scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
             return
         from farna.settings import get_settings
@@ -4498,9 +4412,7 @@ class PipelineExecutor:
                     text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
                     {"k1": k1, "k2": k2},
                 )
-                active = await count_active_runner_dispatches_for_decision(
-                    session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
-                )
+                active = await count_active_runner_dispatches_for_decision(session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -4730,9 +4642,7 @@ class PipelineExecutor:
         await set_rls_execution_context(session)
         from farna.db.soft_delete import include_soft_deleted
 
-        pipeline_result = await session.execute(
-            include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id))
-        )
+        pipeline_result = await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
         pipeline = pipeline_result.scalar_one_or_none()
         if pipeline is None:
             raise RunNotFoundError(run_id)
@@ -5124,8 +5034,7 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN
             error_detail = _sanitize_detail(
-                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-                "not retried — needs human review.",
+                "Script-mode sandbox has an unresolved execution claim (side effect unknown); not retried — needs human review.",
                 limit=5000,
             )
         return retry_decision, final_status, error_code, error_detail
@@ -5326,9 +5235,7 @@ class PipelineExecutor:
         # Phase 5: Stream and handle errors
         config = {"configurable": {"thread_id": thread_id}}
         node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
-        node_token_budgets = {
-            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
-        }
+        node_token_budgets = {str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None}
         # One shared instance threaded into BOTH the stream phase and finalize:
         # ``_stream_graph`` mutates it IN PLACE, so a fresh dict at finalize
         # would lose the resumed segment's outputs (FAR-505 regression).
@@ -5512,11 +5419,7 @@ class PipelineExecutor:
         if not observed:
             return final_status, error_code, error_detail
         details = sorted({reason for reason, _ in observed})
-        chosen_code = (
-            _CODE_CONNECTOR_UNKNOWN
-            if any(code == _CODE_CONNECTOR_UNKNOWN for _, code in observed)
-            else _CODE_CONNECTOR_FAILED
-        )
+        chosen_code = _CODE_CONNECTOR_UNKNOWN if any(code == _CODE_CONNECTOR_UNKNOWN for _, code in observed) else _CODE_CONNECTOR_FAILED
         return "failed", chosen_code, "; ".join(details)
 
     def _downgrade_masked_sandbox_failures(
@@ -5581,9 +5484,7 @@ class PipelineExecutor:
         )
         return "failed", _CODE_SANDBOX_AGENT_FAILED, "Sandbox agent node(s) failed: " + ", ".join(sorted(found))
 
-    async def _load_stored_node_columns(
-        self, *, run_id: uuid.UUID, org_id: uuid.UUID
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    async def _load_stored_node_columns(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> tuple[dict[str, Any], dict[str, Any]]:
         """FAR-510 — the run's STORED cumulative per-node columns.
 
         Returns ``(outputs_json, node_telemetry_json)``. A HITL resume only
@@ -5845,9 +5746,7 @@ class PipelineExecutor:
                 error_detail=error_detail,
             )
         if final_status == "complete":
-            stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(
-                run_id=run_id, org_id=org_id
-            )
+            stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(run_id=run_id, org_id=org_id)
         final_status, error_code, error_detail = self._downgrade_connector_failures(
             final_status=final_status,
             error_code=error_code,
@@ -6468,9 +6367,7 @@ class PipelineExecutor:
                 # only accepts ``pending`` or a STALE running row, and this row
                 # was just heartbeating under our token. Never terminalise it.
                 _log.warning(
-                    "pipeline.transient_requeue_reset_timed_out run=%s — the fenced pending-reset "
-                    "timed out; the row is left running for the nodeless/age backstop (the "
-                    "re-raised retry cannot claim a fresh running row)",
+                    "pipeline.transient_requeue_reset_timed_out run=%s — the fenced pending-reset timed out; the row is left running for the nodeless/age backstop (the re-raised retry cannot claim a fresh running row)",
                     run_id,
                 )
             elif reset_rowcount:
@@ -6489,9 +6386,7 @@ class PipelineExecutor:
             # post-stream try/finally, so run its cleanup here: clear the
             # cancellation check + hubs and close the run's broker so the
             # retry re-entry gets a fresh broker and no stale contextvars.
-            await self._cleanup_run_resources(
-                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
-            )
+            await self._cleanup_run_resources(model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id)
             return {"decision": "requeue"}
         if superseded or stalled:
             # Superseded or watchdog-stalled: the run is owned by a
@@ -6499,9 +6394,7 @@ class PipelineExecutor:
             # watchdog — never reset it to pending and never terminal-fail
             # it here. Clean up so the SAQ job retry re-entry gets a fresh
             # broker and no stale contextvars (the caller re-raises).
-            await self._cleanup_run_resources(
-                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
-            )
+            await self._cleanup_run_resources(model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id)
             return {"decision": "superseded"}
         # Retries exhausted — or (FAR-1800) requeue was REFUSED because the
         # failure class is non-retryable, so no retry was attempted at all.
@@ -6555,9 +6448,7 @@ class PipelineExecutor:
             # — fall through to the existing finalization with
             # final_status="complete". FAR-1534: run_completed is published
             # post-finalize (by ``_finalize_then_publish_completed``), not here.
-            completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(
-                transient["gated_node_id"]
-            )
+            completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(transient["gated_node_id"])
             return True, transient["final_status"], transient["error_code"], transient["error_detail"]
         if transient["decision"] in ("requeue", "superseded"):
             raise
@@ -6590,13 +6481,9 @@ class PipelineExecutor:
             # be loadable for graph construction.
             from farna.db.soft_delete import include_soft_deleted
 
-            pipeline_result = await session.execute(
-                include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id))
-            )
+            pipeline_result = await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
             pipeline = pipeline_result.scalar_one()
-            snapshot_result = await session.execute(
-                select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-            )
+            snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
             snapshot = snapshot_result.scalar_one()
             graph_json: dict[str, Any] = snapshot.graph_json
 
@@ -6730,9 +6617,7 @@ class PipelineExecutor:
         # FAR-228: the idempotency gate is inert on multi-node graphs — it only
         # fires for a SINGLE sandbox_agent node (guard A in the node body and
         # guard B below both require this).
-        single_sandbox_node: bool = (
-            sum(1 for n in graph_json.get("nodes", []) if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
-        )
+        single_sandbox_node: bool = sum(1 for n in graph_json.get("nodes", []) if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
         return model_backend_hub, connector_hub, broker, single_sandbox_node
 
     async def _prepare_and_stream(
@@ -6824,11 +6709,7 @@ class PipelineExecutor:
         # pipeline-level default (see ``_resolved_node_timeouts``).
         self._node_timeouts.clear()
         self._node_timeouts.update(_resolved_node_timeouts(config.graph_json, config.pipeline_node_timeout_seconds))
-        node_token_budgets: dict[str, int] = {
-            str(n["id"]): n["token_budget"]
-            for n in config.graph_json.get("nodes", [])
-            if n.get("token_budget") is not None
-        }
+        node_token_budgets: dict[str, int] = {str(n["id"]): n["token_budget"] for n in config.graph_json.get("nodes", []) if n.get("token_budget") is not None}
 
         # FAR-215: seed the run-scoped conformance context so every node
         # re-validates its bound guardrail conformance at node start. The
@@ -6921,9 +6802,7 @@ class PipelineExecutor:
             )
         return final_status, error_code, error_detail, node_token_usage
 
-    async def _load_transient_state(
-        self, *, run_id: uuid.UUID, org_id: uuid.UUID
-    ) -> tuple[int, str | None, dict[str, Any] | None, bool, str | None]:
+    async def _load_transient_state(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> tuple[int, str | None, dict[str, Any] | None, bool, str | None]:
         """Reload the run's attempt markers + claim + cancellation state.
 
         Returns ``(execution_attempt_count, current_token, run_markers,
@@ -7033,14 +6912,7 @@ class PipelineExecutor:
                     index=index,
                     payload=payload,
                 )
-            gate_ok = (
-                (delivered or replay_suppressed)
-                and not superseded
-                and not stalled
-                and not cancellation_requested
-                and getattr(get_settings(), "modulo_idempotency_gate_enabled", True)
-                and single_sandbox_node
-            )
+            gate_ok = (delivered or replay_suppressed) and not superseded and not stalled and not cancellation_requested and getattr(get_settings(), "modulo_idempotency_gate_enabled", True) and single_sandbox_node
         except Exception:
             _log.warning("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)}, exc_info=True)
             gate_ok = False
@@ -7056,9 +6928,7 @@ class PipelineExecutor:
         script_lease_ok = True
         if _graph_has_script_mode(graph_json):
             try:
-                script_lease_ok = await _script_lease_probe_ok(
-                    self._session_factory, str(run_id), org_id, self._claim_token
-                )
+                script_lease_ok = await _script_lease_probe_ok(self._session_factory, str(run_id), org_id, self._claim_token)
             except Exception:
                 _log.warning(
                     "script.lease_probe_eval_failed",
@@ -7135,11 +7005,7 @@ class PipelineExecutor:
                 # (FAR-1610 recipe; the UPDATE below is that first lock).
                 await set_mutation_row_lock_timeout(session)
                 result = await session.execute(
-                    text(
-                        "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
-                        "WHERE id=:rid AND claim_token=:tok AND status='running' "
-                        "AND cancellation_requested = false"
-                    ),
+                    text("UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL WHERE id=:rid AND claim_token=:tok AND status='running' AND cancellation_requested = false"),
                     {"rid": str(run_id), "tok": self._claim_token},
                 )
                 return int(getattr(result, "rowcount", 0) or 0)
@@ -7149,9 +7015,7 @@ class PipelineExecutor:
             if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
                 raise
             _log.warning(
-                "pipeline.fenced_pending_reset_lock_timeout run=%s org=%s — bounded "
-                "mutation_row_lock_timeout_ms wait expired on the reset write; the row is "
-                "left as-is for the nodeless/age backstop (no confirmed reset)",
+                "pipeline.fenced_pending_reset_lock_timeout run=%s org=%s — bounded mutation_row_lock_timeout_ms wait expired on the reset write; the row is left as-is for the nodeless/age backstop (no confirmed reset)",
                 run_id,
                 org_id,
                 exc_info=True,
@@ -7241,8 +7105,7 @@ class PipelineExecutor:
             # state is unknown. Terminal (never retried) with the
             # needs-human ``script.side_effect_unknown`` code.
             return _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, _sanitize_detail(
-                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-                "not retried — needs human review: " + str(exc),
+                "Script-mode sandbox has an unresolved execution claim (side effect unknown); not retried — needs human review: " + str(exc),
                 limit=5000,
             )
         if non_retryable_code is not None:
@@ -7253,9 +7116,7 @@ class PipelineExecutor:
             # attempted); with the budget already exhausted, claiming "not
             # retried" would be false — the retries DID run, and the last
             # failure happens to be non-retryable.
-            return non_retryable_code, _non_retryable_failure_detail(
-                non_retryable_code, exc, execution_attempt_count, retries
-            )
+            return non_retryable_code, _non_retryable_failure_detail(non_retryable_code, exc, execution_attempt_count, retries)
         error_code = "node_cancelled"
         if not graph_idempotent and execution_attempt_count < retries:
             # FAR-295: the run was NOT retried because a node in the
@@ -7265,15 +7126,11 @@ class PipelineExecutor:
             # detail readout explains WHY it terminal-failed on the
             # first attempt.
             error_detail = _sanitize_detail(
-                "Sandbox node failed (transient); retry suppressed because a node in the "
-                "graph is non-idempotent (idempotent=false) and re-running could double-execute "
-                "a side effect: " + str(exc),
+                "Sandbox node failed (transient); retry suppressed because a node in the graph is non-idempotent (idempotent=false) and re-running could double-execute a side effect: " + str(exc),
                 limit=5000,
             )
         elif isinstance(exc, NodeCancelledError):
-            error_detail = _sanitize_detail(
-                "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
-            )
+            error_detail = _sanitize_detail("Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000)
         else:
             # SandboxNodeFailedError: the FAR-197 no-output diagnostic
             # is a fully bounded message designed to survive this
@@ -7281,9 +7138,7 @@ class PipelineExecutor:
             # cap (5000), not the 500 used for the short
             # NodeCancelledError string, or the kill-reason log tail
             # would be the first thing truncated (FAR-197 review).
-            error_detail = _sanitize_detail(
-                "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-            )
+            error_detail = _sanitize_detail("Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000)
             # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
             # drop) used to terminal-fail under the GENERIC
             # ``node_cancelled`` code — whose registry guidance reads "Node
@@ -7746,10 +7601,7 @@ class PipelineExecutor:
                 frozen_gated_eval_modes=frozen_gated_eval_modes,
             )
             if coalesce_reused:
-                detail = (
-                    "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
-                    f"(unchanged payload hash); the existing gate decides. run={run_id} gate={review_id}"
-                )
+                detail = f"HITL gate coalesced (FAR-604 D4): an open gate already covers this work item (unchanged payload hash); the existing gate decides. run={run_id} gate={review_id}"
                 _log.info(
                     "pipeline.gate_coalesced",
                     extra={"run_id": str(run_id), "review_id": review_id, "pipeline_id": str(pipeline_id)},

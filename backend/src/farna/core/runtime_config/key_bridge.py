@@ -102,7 +102,7 @@ def get_public_url(settings: Settings) -> str:
     that inject a Settings instance keep working, and an admin override
     (``PUT /api/v1/admin/runtime-config``) wins only when one is set.
     """
-    return override_or("MODULO_PUBLIC_URL", settings.modulo_public_url)
+    return override_or("FARNA_CONTROL_MODULO_PUBLIC_URL", settings.modulo_public_url)
 
 
 #: The Settings/runtime-store default for ``MODULO_PUBLIC_URL``. It is a
@@ -137,7 +137,7 @@ def get_e2b_api_key() -> str | None:
     the env value. Callers that historically also accept the legacy
     ``E2B_API_KEY`` env var layer it themselves.
     """
-    return override_or("MODULO_E2B_API_KEY", os.environ.get("MODULO_E2B_API_KEY") or "") or None
+    return override_or("FARNA_CONTROL_MODULO_E2B_API_KEY", os.environ.get("FARNA_CONTROL_MODULO_E2B_API_KEY") or "") or None
 
 
 # ── apply-on-write hooks ────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def apply_log_level() -> None:
     global _BOOT_LOG_LEVEL
 
     root = logging.getLogger()
-    override = get_override("MODULO_LOG_LEVEL")
+    override = get_override("FARNA_CONTROL_MODULO_LOG_LEVEL")
     if override is None:
         if _BOOT_LOG_LEVEL is not None:
             root.setLevel(_BOOT_LOG_LEVEL)
@@ -177,5 +177,5 @@ def apply_log_level() -> None:
 
 
 APPLY_HOOKS: dict[str, Callable[[], None]] = {
-    "MODULO_LOG_LEVEL": apply_log_level,
+    "FARNA_CONTROL_MODULO_LOG_LEVEL": apply_log_level,
 }

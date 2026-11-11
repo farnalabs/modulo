@@ -198,11 +198,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     # ── Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855) ──
     FeatureFlag(
         name="sso_unrestricted_provisioning",
-        description=(
-            "Allow SSO providers to auto-provision ANY authenticated identity into the "
-            "organisation (auto_provision=true with no allowed_domains). DANGEROUS: "
-            "self-service org join for every IdP account. Intentionally not plan-tier gated."
-        ),
+        description=("Allow SSO providers to auto-provision ANY authenticated identity into the organisation (auto_provision=true with no allowed_domains). DANGEROUS: self-service org join for every IdP account. Intentionally not plan-tier gated."),
         tier="community",
     ),
     # Retained in the registry only so persisted/catalogued organisations can
@@ -241,11 +237,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     # ── Community tier — evidence-driven autonomy gating (FAR-1175, default OFF) ──
     FeatureFlag(
         name="autonomy_gating",
-        description=(
-            "Evidence-driven autonomy gating — a pipeline's HITL gates resolve "
-            "against its runtime earned autonomy level (demotion bites in-flight "
-            "runs at the next gate; promotion applies only to new runs)"
-        ),
+        description=("Evidence-driven autonomy gating — a pipeline's HITL gates resolve against its runtime earned autonomy level (demotion bites in-flight runs at the next gate; promotion applies only to new runs)"),
         tier="community",
         org_admin_settable=True,
     ),
@@ -383,10 +375,7 @@ class LicenseKeyTier:
 
     def list_all_features(self) -> list[FeatureFlag]:
         """Every known flag; licence-named features read active regardless of tier state."""
-        return [
-            replace(flag, currently_active=True) if flag.name in self._features else flag
-            for flag in self._registry.list_flags()
-        ]
+        return [replace(flag, currently_active=True) if flag.name in self._features else flag for flag in self._registry.list_flags()]
 
     def tier(self) -> str:
         return self._registry.current_tier
@@ -722,10 +711,7 @@ def effective_feature_flags(
     flags = [flag for flag in plan_ctx.list_all_features() if flag.name not in internal_and_retired]
     if not org_overrides:
         return flags
-    return [
-        replace(flag, currently_active=org_overrides[flag.name]) if flag.name in org_overrides else flag
-        for flag in flags
-    ]
+    return [replace(flag, currently_active=org_overrides[flag.name]) if flag.name in org_overrides else flag for flag in flags]
 
 
 class FeatureFlagRegistry:
@@ -984,9 +970,7 @@ class FeatureFlagRegistry:
                 raise
         return None
 
-    async def _get_org_override(
-        self, flag_name: str, org_id: uuid.UUID, *, raise_on_error: bool = False
-    ) -> bool | None:
+    async def _get_org_override(self, flag_name: str, org_id: uuid.UUID, *, raise_on_error: bool = False) -> bool | None:
         """Check org.settings_json.feature_overrides for this flag."""
 
         def _load_factory() -> Callable[[Any], Awaitable[Any]]:

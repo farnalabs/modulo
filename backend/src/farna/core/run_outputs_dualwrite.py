@@ -164,7 +164,7 @@ async def _emit_error_event(
                 "source": "backend",
                 "stacktrace": None,
                 "context_json": context_json,
-                "environment": os.environ.get("MODULO_ENV", "development"),
+                "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
                 "version": get_version(),
             },
         )
@@ -211,10 +211,7 @@ async def _emit_dual_write_failed_event(
     await _emit_error_event(
         uuid.UUID(str(exc.organisation_id)),
         level="error",
-        message=(
-            f"run_node_outputs dual-write failed after retry; run terminalized "
-            f"{_DUAL_WRITE_FAILED_ERROR_CODE} (origin={exc.origin}, sqlstate={exc.sqlstate})"
-        ),
+        message=(f"run_node_outputs dual-write failed after retry; run terminalized {_DUAL_WRITE_FAILED_ERROR_CODE} (origin={exc.origin}, sqlstate={exc.sqlstate})"),
         context_json={
             "run_id": str(exc.run_id),
             "origin": exc.origin,

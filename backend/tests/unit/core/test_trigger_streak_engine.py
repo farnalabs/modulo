@@ -99,9 +99,7 @@ def _deactivated_data(**overrides: Any) -> dict[str, Any]:
 class _RoutedSession:
     """Minimal async session double routing statements to canned results."""
 
-    def __init__(
-        self, *, update_row: Any = None, reason_row: Any = None, trigger_rows: list[Any] | None = None
-    ) -> None:
+    def __init__(self, *, update_row: Any = None, reason_row: Any = None, trigger_rows: list[Any] | None = None) -> None:
         self._update_row = update_row
         self._reason_row = reason_row
         self._trigger_rows = trigger_rows or []
@@ -202,13 +200,13 @@ class TestStreakConfig:
 
     def test_window_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert ts._streak_config({})[1] == 24
-        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")  # dogfood no-window variant
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")  # dogfood no-window variant
         assert ts._streak_config({})[1] == 0
-        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "not-a-number")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "not-a-number")
         assert ts._streak_config({})[1] == 24
 
     def test_per_trigger_window_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
         assert ts._streak_config({"no_delivery_min_window_hours": 12})[1] == 12
 
     # --- FAR-1387: cron defaults are their own, not ongoing's -------------
@@ -230,18 +228,18 @@ class TestStreakConfig:
         ``no_delivery_min_window_hours``) applies to cron, and per-trigger
         values beat both the cron defaults and the env override."""
         assert ts._streak_config({"max_no_delivery_streak": 3}, trigger_type="cron")[0] == 3
-        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "0")
         assert ts._streak_config({}, trigger_type="cron")[1] == 0
         assert ts._streak_config({"no_delivery_min_window_hours": 12}, trigger_type="cron")[1] == 12
 
     def test_cron_window_env_override_and_bad_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "72")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "72")
         assert ts._streak_config({}, trigger_type="cron")[1] == 72
-        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "not-a-number")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "not-a-number")
         assert ts._streak_config({}, trigger_type="cron")[1] == 48
         # The ongoing env override must NOT leak into the cron default.
-        monkeypatch.delenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", raising=False)
-        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_CRON_STREAK_MIN_WINDOW_HOURS", raising=False)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
         assert ts._streak_config({}, trigger_type="cron")[1] == 48
 
     def test_cron_auto_deactivate_config_key(self) -> None:
@@ -262,11 +260,11 @@ class TestKillSwitch:
 
     def test_env_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for value in ("0", "false", "off", "no", "FALSE"):
-            monkeypatch.setenv("MODULO_STREAK_DEACTIVATE_KILL_SWITCH", value)
+            monkeypatch.setenv("FARNA_CONTROL_MODULO_STREAK_DEACTIVATE_KILL_SWITCH", value)
             assert ts._streak_deactivate_enabled() is False
 
     def test_env_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "1")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "1")
         assert ts._streak_deactivate_enabled() is True
 
 
@@ -312,10 +310,7 @@ class TestDeactivateSQL:
         drained (never counted, never breaking the walk; never cancelled). The
         status set is derived from TERMINAL_STATUSES (single source of truth)."""
         sql = ts._NO_DELIVERY_DEACTIVATE_SQL
-        _terminal = (
-            "'budget_exceeded','cancelled','compensation_failed','complete','cost_ceiling_exceeded',"
-            "'eval_failed','failed','rejected','router_no_match','stalled'"
-        )
+        _terminal = "'budget_exceeded','cancelled','compensation_failed','complete','cost_ceiling_exceeded','eval_failed','failed','rejected','router_no_match','stalled'"
         assert f"r.status IN ({_terminal})" in sql
         assert f"r3.status IN ({_terminal})" in sql
         assert "pending" not in sql
@@ -567,9 +562,7 @@ class TestEnforceSweep:
                 return_value=[_sweep_trigger(), _sweep_trigger(second)],
             ),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
-            patch.object(
-                ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock, side_effect=_flaky_deactivate
-            ),
+            patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock, side_effect=_flaky_deactivate),
             patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="pipeline"),
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
@@ -686,7 +679,7 @@ class TestEnforceSweep:
         assert (now - timedelta(hours=24) - captured["cutoff"]).total_seconds() < 5
 
         captured.clear()
-        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
             patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]),
@@ -734,9 +727,7 @@ class TestEnforceSweep:
         calls: list[dict[str, Any]] = []
         page = [_sweep_trigger(uuid.uuid4()) for _ in range(3)]
 
-        async def _page_select(
-            factory: Any, org_id: uuid.UUID, *, max_triggers: int, after_id: Any = None
-        ) -> list[Any]:
+        async def _page_select(factory: Any, org_id: uuid.UUID, *, max_triggers: int, after_id: Any = None) -> list[Any]:
             calls.append({"after_id": after_id, "max": max_triggers})
             if after_id is None:
                 return page[:2]  # a FULL page (len == max) -> cursor advance
@@ -752,9 +743,7 @@ class TestEnforceSweep:
             patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
         ):
-            summary = await ts.enforce_no_delivery_streaks(
-                org_ids=[ORG], redis_client=make_redis_client(), max_triggers_per_tick=2
-            )
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client(), max_triggers_per_tick=2)
         assert summary["scanned"] == 2
         assert len(calls) == 2, "a full page must be followed by a cursor page"
         assert calls[0]["after_id"] is None
@@ -806,9 +795,7 @@ class TestEnforceSweep:
             patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock) as select,
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock) as count,
         ):
-            summary = await ts.enforce_no_delivery_streaks(
-                org_ids=[ORG], redis_client=make_redis_client(), budget_seconds=-1.0
-            )
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=make_redis_client(), budget_seconds=-1.0)
         assert summary["budget_exceeded"] is True
         select.assert_not_awaited()
         count.assert_not_awaited()
@@ -1102,9 +1089,7 @@ class TestPendingRetry:
         — the dispatch is NOT re-attempted and the member is untouched."""
         _patch_env(monkeypatch)
         redis_client = make_redis_client()
-        member = ts._streak_pending_member(
-            _deactivated_data(), threshold=5, pipeline_name="p", retry_count=1, last_retry_at=int(time.time()) - 60
-        )
+        member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p", retry_count=1, last_retry_at=int(time.time()) - 60)
         redis_client.smembers.return_value = {member}
         with patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify:
             retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
@@ -1199,10 +1184,7 @@ class TestPendingRetry:
         can never blow the enclosing 120s tick (FAR-190 qa round 2 FIX 2)."""
         _patch_env(monkeypatch)
         redis_client = make_redis_client()
-        members = {
-            ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
-            for _ in range(3)
-        }
+        members = {ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p") for _ in range(3)}
         redis_client.smembers.return_value = members
         with (
             patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
@@ -1223,10 +1205,7 @@ class TestPendingRetry:
         of blowing the sweep budget (FAR-190 qa round 2 FIX 2)."""
         _patch_env(monkeypatch)
         redis_client = make_redis_client()
-        members = {
-            ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
-            for _ in range(5)
-        }
+        members = {ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p") for _ in range(5)}
         redis_client.smembers.return_value = members
         with (
             patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
@@ -1502,9 +1481,7 @@ class TestDispatcherWiring:
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock()),
             patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}),
-            patch.object(
-                ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={"deactivated": 2, "scanned": 4}
-            ) as streak,
+            patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={"deactivated": 2, "scanned": 4}) as streak,
             patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock),
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
@@ -1817,16 +1794,10 @@ class TestGetTriggerStreakStatus:
         ``last_outcomes`` silently degrades to [] (the FAR-191 outcomes panel
         dead on arrival). The mock enforces the same contract, so a regression
         fails here instead of hiding behind the empty-case."""
-        session = _StatusSession(
-            outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", datetime(2026, 8, 10, 12, 0, tzinfo=UTC))]
-        )
+        session = _StatusSession(outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", datetime(2026, 8, 10, 12, 0, tzinfo=UTC))])
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
-        outcomes_executes = [
-            (stmt, params)
-            for stmt, params in session.executed
-            if "as streak" not in str(stmt).lower() and "audit_events" not in str(stmt).lower()
-        ]
+        outcomes_executes = [(stmt, params) for stmt, params in session.executed if "as streak" not in str(stmt).lower() and "audit_events" not in str(stmt).lower()]
         assert outcomes_executes, "an outcomes query must have been executed"
         _stmt, params = outcomes_executes[0]
         assert params is not None, "outcomes query must be executed with a params dict"
@@ -1986,7 +1957,7 @@ class TestGetTriggerStreakStatus:
     async def test_kill_switch_off_reports_enabled_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The deactivate+notify kill switch gates the ``enabled`` flag (the
         streak is still computed and shown; nothing will auto-deactivate)."""
-        monkeypatch.setenv("MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "0")
         session = _StatusSession(streak=2)
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert status["enabled"] is False
@@ -2170,9 +2141,7 @@ class TestCronTripClaim:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
-            out = await ts._claim_cron_streak_alert(
-                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
-            )
+            out = await ts._claim_cron_streak_alert(factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC))
         assert out is None
         append.assert_not_awaited()
 
@@ -2190,9 +2159,7 @@ class TestCronTripClaim:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
-            out = await ts._claim_cron_streak_alert(
-                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=window_cutoff
-            )
+            out = await ts._claim_cron_streak_alert(factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=window_cutoff)
         assert out is None
         append.assert_not_awaited()
 
@@ -2213,9 +2180,7 @@ class TestCronTripClaim:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
-            out = await ts._claim_cron_streak_alert(
-                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
-            )
+            out = await ts._claim_cron_streak_alert(factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC))
         assert out is not None
         assert out["streak"] == 5
         assert out["reason"] == "no_work"
@@ -2243,9 +2208,7 @@ class TestCronTripClaim:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
-            out = await ts._claim_cron_streak_alert(
-                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
-            )
+            out = await ts._claim_cron_streak_alert(factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC))
         assert out is None
         append.assert_not_awaited()
 
@@ -2327,9 +2290,7 @@ class TestCronSweep:
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
             patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
-            patch.object(
-                ts, "_claim_cron_streak_alert", new_callable=AsyncMock, return_value=_claimed_cron_trip()
-            ) as claim,
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, return_value=_claimed_cron_trip()) as claim,
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock) as deactivate,
             patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True) as notify,
@@ -2498,9 +2459,7 @@ class TestCronAuditStreams:
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
             patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
         ):
-            await ts.record_ongoing_deactivation_lifecycle(
-                session, org_id=ORG, trigger_id=TRIGGER_ID, streak=5, threshold=5, reason="no_delivery"
-            )
+            await ts.record_ongoing_deactivation_lifecycle(session, org_id=ORG, trigger_id=TRIGGER_ID, streak=5, threshold=5, reason="no_delivery")
         assert append.await_args.kwargs["event_type"] == ts.STREAK_DEACTIVATION_EVENT_TYPE
         payload = append.await_args.kwargs["payload_json"]
         assert payload["trigger_type"] == "ongoing"
@@ -2657,9 +2616,7 @@ class TestCronNotifyPayload:
         assert "no_delivery_auto_deactivate" in body
 
     @pytest.mark.asyncio
-    async def test_retry_dispatches_notify_only_member_despite_active_trigger(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_retry_dispatches_notify_only_member_despite_active_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A cron notify-only pending member's trigger is active BY design —
         the active-state re-check (which exists to drop stale deactivation
         notices after re-enable) must skip it and dispatch."""

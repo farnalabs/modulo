@@ -53,27 +53,17 @@ _INDEXES: list[tuple[str, str, str | None]] = [
     (
         "ix_pipeline_edges_pipeline_created",
         "pipeline_edges",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_pipeline_edges_pipeline_created "
-            "ON pipeline_edges (pipeline_id, created_at, id)"
-        ),
+        ("CREATE INDEX IF NOT EXISTS ix_pipeline_edges_pipeline_created ON pipeline_edges (pipeline_id, created_at, id)"),
     ),
     (
         "ix_pipeline_snapshots_channel_version",
         "pipeline_snapshots",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_pipeline_snapshots_channel_version "
-            "ON pipeline_snapshots (pipeline_id, channel, snapshot_version) "
-            "WHERE draft IS false"
-        ),
+        ("CREATE INDEX IF NOT EXISTS ix_pipeline_snapshots_channel_version ON pipeline_snapshots (pipeline_id, channel, snapshot_version) WHERE draft IS false"),
     ),
     (
         "ix_pipeline_folders_org_sort",
         "pipeline_folders",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_pipeline_folders_org_sort "
-            "ON pipeline_folders (organisation_id, sort_order, name)"
-        ),
+        ("CREATE INDEX IF NOT EXISTS ix_pipeline_folders_org_sort ON pipeline_folders (organisation_id, sort_order, name)"),
     ),
     (
         "ix_nodes_parent_created",
@@ -83,11 +73,7 @@ _INDEXES: list[tuple[str, str, str | None]] = [
     (
         "ix_pipelines_org_deleted_created",
         "pipelines",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_pipelines_org_deleted_created "
-            "ON pipelines (organisation_id, deleted_at, created_at) "
-            "WHERE deleted_at IS NULL"
-        ),
+        ("CREATE INDEX IF NOT EXISTS ix_pipelines_org_deleted_created ON pipelines (organisation_id, deleted_at, created_at) WHERE deleted_at IS NULL"),
     ),
 ]
 

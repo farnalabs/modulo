@@ -192,9 +192,7 @@ async def get_hitl_email_preferences(
 @router.put(
     "/me/hitl-email-preferences",
     response_model=HitlEmailPreferenceResponse,
-    dependencies=[
-        Depends(audited("hitl_email_preferences_updated", "user_settings", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("hitl_email_preferences_updated", "user_settings", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("me.update_hitl_email_preferences")
 async def update_hitl_email_preferences(
@@ -222,11 +220,7 @@ async def update_hitl_email_preferences(
                 # REPLACE semantics when the body carries ``pipeline_overrides``
                 # (each key → its bool); omitted from the JSON body ⇒ the
                 # helper preserves the stored override map untouched.
-                pipeline_overrides=(
-                    None
-                    if "pipeline_overrides" not in req.model_fields_set
-                    else {str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()}
-                ),
+                pipeline_overrides=(None if "pipeline_overrides" not in req.model_fields_set else {str(pipeline_id): enabled for pipeline_id, enabled in req.pipeline_overrides.items()}),
             )
     except AccountNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND) from None
@@ -486,9 +480,7 @@ async def get_user_context_sources(
 
 @router.put(
     "/me/assistant/context-sources/{source_key}",
-    dependencies=[
-        Depends(audited("user_context_source_set", "user_context_source", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("user_context_source_set", "user_context_source", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("me.set_user_context_source")
 async def set_user_context_source(

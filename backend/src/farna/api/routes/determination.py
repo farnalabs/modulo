@@ -199,9 +199,7 @@ async def run_determination(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
-                instances = await list_connector_instances(
-                    session, organisation_id=principal.organisation_id, page_size=100
-                )
+                instances = await list_connector_instances(session, organisation_id=principal.organisation_id, page_size=100)
 
         except ProgrammingError:
             logger.exception(_LOG_SCOPE_DETERMINATION)
@@ -211,9 +209,7 @@ async def run_determination(
                 detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
-        relevant: list[ConnectorInstance] = [
-            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-        ]
+        relevant: list[ConnectorInstance] = [ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}]
 
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
         async with ConnectorHub(secrets_backend=secrets_backend) as hub:
@@ -273,9 +269,7 @@ async def run_determination(
         502: {"description": "Bad Gateway"},
         503: {"description": "Service Unavailable"},
     },
-    dependencies=[
-        Depends(audited("determination_draft_created", "determination_draft", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("determination_draft_created", "determination_draft", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
@@ -294,9 +288,7 @@ async def create_determination_draft(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
-                instances = await list_connector_instances(
-                    session, organisation_id=principal.organisation_id, page_size=100
-                )
+                instances = await list_connector_instances(session, organisation_id=principal.organisation_id, page_size=100)
 
         except ProgrammingError:
             logger.exception(_LOG_SCOPE_DETERMINATION)
@@ -306,9 +298,7 @@ async def create_determination_draft(
                 detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
-        relevant: list[ConnectorInstance] = [
-            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-        ]
+        relevant: list[ConnectorInstance] = [ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}]
 
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
         async with ConnectorHub(secrets_backend=secrets_backend) as hub:
@@ -390,9 +380,7 @@ async def create_determination_draft(
 
 @router.post(
     "/compare",
-    dependencies=[
-        Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))],
 )
 async def compare_determination_proposals(
     comparison_request: ProposalComparisonRequest,
@@ -468,9 +456,7 @@ async def rerun_determination(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
-                instances = await list_connector_instances(
-                    session, organisation_id=principal.organisation_id, page_size=100
-                )
+                instances = await list_connector_instances(session, organisation_id=principal.organisation_id, page_size=100)
 
         except ProgrammingError:
             logger.exception(_LOG_SCOPE_DETERMINATION)
@@ -480,9 +466,7 @@ async def rerun_determination(
                 detail=_MSG_MIGRATIONS_REQUIRED,
             ) from None
 
-        relevant: list[ConnectorInstance] = [
-            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-        ]
+        relevant: list[ConnectorInstance] = [ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}]
 
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
         async with ConnectorHub(secrets_backend=secrets_backend) as hub:
@@ -544,9 +528,7 @@ async def rerun_determination(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
-    dependencies=[
-        Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("api_access_post", _RESOURCE_DETERMINATION_PROPOSAL, principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_DETERMINATION_REVIEW_PROPOSAL)
 async def review_determination_proposal(
@@ -620,10 +602,7 @@ async def _record_review_decision(
         "removed_derived_element_ids": [str(i) for i in reviewed.removed_derived_element_ids],
         "decided_at": reviewed.decided_at.isoformat(),
         "actor": principal.username,
-        "summary": (
-            f"Determination proposal {str(reviewed.proposal.proposal_id)[:8]} "
-            f"{reviewed.review_state} by {principal.username}"
-        ),
+        "summary": (f"Determination proposal {str(reviewed.proposal.proposal_id)[:8]} {reviewed.review_state} by {principal.username}"),
     }
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)

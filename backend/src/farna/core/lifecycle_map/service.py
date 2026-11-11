@@ -122,11 +122,7 @@ async def list_lifecycle_maps(
         total = (await session.execute(count_query)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    items = list(
-        (
-            await session.execute(query.order_by(LifecycleMap.updated_at.desc()).offset(offset).limit(page_size))
-        ).scalars()
-    )
+    items = list((await session.execute(query.order_by(LifecycleMap.updated_at.desc()).offset(offset).limit(page_size))).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=offset + len(items) < total)
 
 
@@ -137,11 +133,7 @@ async def update_lifecycle_map(
     updated_by: uuid.UUID | None = None,
 ) -> LifecycleMap | None:
     content_changing = "content_json" in updates
-    lifecycle_map = (
-        await get_lifecycle_map_for_update(session, lifecycle_map_id)
-        if content_changing
-        else await get_lifecycle_map(session, lifecycle_map_id)
-    )
+    lifecycle_map = await get_lifecycle_map_for_update(session, lifecycle_map_id) if content_changing else await get_lifecycle_map(session, lifecycle_map_id)
     if lifecycle_map is None:
         return None
     if content_changing:
@@ -294,9 +286,7 @@ async def _check_pipeline_uniqueness(session: AsyncSession, lifecycle_map: Lifec
     )
     taken = {row for (row,) in result.all() if row is not None}
     if taken:
-        raise LifecycleMapPipelineConflictError(
-            "pipeline(s) already a stage of another active lifecycle map: " + ", ".join(sorted(str(t) for t in taken))
-        )
+        raise LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map: " + ", ".join(sorted(str(t) for t in taken)))
 
 
 async def derive_lifecycle_map_stages(session: AsyncSession, lifecycle_map: LifecycleMap) -> None:

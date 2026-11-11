@@ -105,9 +105,7 @@ class SonarQubeConnector(ConnectorBase):
                     return HealthResult(ok=True, detail=f"SonarQube health: {status_text}")
                 return HealthResult(ok=False, detail=f"SonarQube health: {status_text}")
         except httpx.HTTPStatusError as e:
-            return HealthResult(
-                ok=False, detail=self._redacted_detail(f"HTTP {e.response.status_code}: {e.response.text}")[:200]
-            )
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {e.response.status_code}: {e.response.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as e:

@@ -548,10 +548,7 @@ def _script_budget_killed_message(node_id: str) -> str:
     Covers BOTH kill sources: the resource-cap killer (FAR-296 Phase 3b-3) and
     the wall-clock spend budget killer (FAR-296 Phase 4a).
     """
-    return (
-        f"Script-mode sandbox exceeded its budget (resource limits or wall-clock spend) "
-        f"for node '{node_id}' — killed by platform-side runtime killer"
-    )
+    return f"Script-mode sandbox exceeded its budget (resource limits or wall-clock spend) for node '{node_id}' — killed by platform-side runtime killer"
 
 
 class OutputSchemaValidationError(ValueError):
@@ -1048,9 +1045,7 @@ def _clamp_reported_cost(raw: float, per_node_cap: float | None, band: float) ->
 #: producer -> ``model_tokens_*`` -> ``reported_*`` -> counter chain cannot
 #: drift between layers; reading order is (src, dst) — SOURCE first,
 #: DESTINATION second — matching finalize's ``_REPORTED_TOKEN_FIELD_MAP``.
-_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = tuple(
-    (binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN
-)
+_TOKEN_USAGE_FIELD_MAP: tuple[tuple[str, str], ...] = tuple((binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN)
 
 
 def _build_token_usage_fields(output_json: Any) -> dict[str, Any]:
@@ -1168,11 +1163,7 @@ def recovered_reported_token_usage(exc: BaseException) -> dict[str, int]:
     if not isinstance(recovered, dict) or not recovered:
         return {}
     fields = _build_token_usage_fields({"token_usage": recovered})
-    return {
-        binding.union_key: fields[binding.node_field]
-        for binding in REPORTED_TOKEN_CHAIN
-        if binding.node_field in fields
-    }
+    return {binding.union_key: fields[binding.node_field] for binding in REPORTED_TOKEN_CHAIN if binding.node_field in fields}
 
 
 def merge_recovered_token_usage(node_token_usage: dict[str, Any] | None, exc: BaseException) -> dict[str, Any] | None:
@@ -1336,9 +1327,7 @@ async def _read_log_tail_via_provider(
     if not _is_legacy_e2b_route(provider_type):
         profile_provider: RuntimeProvider | None = None
         try:
-            profile_provider = (
-                borrowed_provider if borrowed_provider is not None else _build_profile_provider(str(provider_type))
-            )
+            profile_provider = borrowed_provider if borrowed_provider is not None else _build_profile_provider(str(provider_type))
             profile_raw = await profile_provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
         except asyncio.CancelledError:
             raise
@@ -1463,9 +1452,7 @@ async def _apply_isolation_via_provider(
         api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
         provider = _build_isolation_provider(api_key) if api_key else None
         if provider is None:
-            raise SandboxTierRefusedError(
-                "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
-            )
+            raise SandboxTierRefusedError("sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)")
     elif borrowed_provider is not None:
         # FAR-1051: reuse the dispatch's already-resolved provider — no hub
         # build per policy step; the dispatch's finally closes it.
@@ -1502,9 +1489,7 @@ async def _apply_isolation_via_provider(
     except asyncio.CancelledError:
         raise
     except ProviderCapabilityUnsupportedError as exc:
-        raise SandboxTierRefusedError(
-            f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}"
-        ) from exc
+        raise SandboxTierRefusedError(f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}") from exc
     finally:
         if _seam_built_provider is not None:
             # FAR-1051 client lifecycle: dispose the per-call provider on
@@ -1573,9 +1558,7 @@ async def _file_io_provider_for(  # NOSONAR S7503 - async seam, see docstring
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     provider = _build_file_io_provider(api_key) if api_key else None
     if provider is None:
-        raise RuntimeProviderError(
-            "sandbox file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
-        )
+        raise RuntimeProviderError("sandbox file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)")
     return provider, sandbox_id
 
 
@@ -1878,10 +1861,7 @@ def _require_dispatch_provider(provider: "RuntimeProvider | None") -> "RuntimePr
     from farna.core.runtime_provider import RuntimeProviderError
 
     if provider is None:
-        raise RuntimeProviderError(
-            "FAR-1050 dispatch could not resolve the E2B runtime provider "
-            "(set MODULO_E2B_API_KEY and restart) — refusing to provision without a provider"
-        )
+        raise RuntimeProviderError("FAR-1050 dispatch could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart) — refusing to provision without a provider")
     return provider
 
 
@@ -2044,9 +2024,7 @@ class _ProviderMediatedHandle:
 
     @property
     def files(self) -> Any:
-        raise RuntimeError(
-            "FAR-1050 dispatch handle has no legacy files surface (a legacy-path call site survived R6?)"
-        )
+        raise RuntimeError("FAR-1050 dispatch handle has no legacy files surface (a legacy-path call site survived R6?)")
 
     async def kill(self, **_kwargs: Any) -> None:
         """T5 kill site: ``destroy_workspace`` on the provider that created it."""
@@ -2696,9 +2674,7 @@ async def _write_raw_output_marker(
             # the best-effort persist fails open (the documented FAR-438
             # durability gap), which is the recovery this path already
             # accepts.
-            run = (
-                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id_filter).with_for_update())
-            ).scalar_one_or_none()
+            run = (await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id_filter).with_for_update())).scalar_one_or_none()
             if run is None:
                 _log.warning(
                     "sandbox_agent.raw_output_marker_skip_row_not_found",
@@ -2715,9 +2691,7 @@ async def _write_raw_output_marker(
             # (the run row is still locked FOR UPDATE, so the read-merge-write
             # serialises exactly like the former ORM leg). One reassembly
             # call, then the REPLACE write below.
-            markers = dict(
-                (await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=org_uuid)).markers or {}
-            )
+            markers = dict((await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=org_uuid)).markers or {})
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
             # FAR-438 read-before-write: stamp the derived per-node idempotency key
             # (from the run's PERSISTED run-level key) so a re-run that reuses the
@@ -2749,9 +2723,7 @@ async def _write_raw_output_marker(
                 # qa rider e: an explicit guard instead of `assert` - asserts
                 # vanish under -O and the failure mode would be an opaque
                 # None-org write into the repo gate.
-                raise RuntimeError(
-                    "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
-                )
+                raise RuntimeError("raw-output marker persist requires a parsed organisation id for the run_node_outputs leg")
             # FAR-583: post-merge marker REPLACE into run_node_outputs. The
             # MERGED dict is stored (prior pr_url preserved, delivery_done
             # monotone) - one row per attempt key, delete-absent. B2c: there
@@ -2837,9 +2809,7 @@ def _log_marker_uncommitted_failure(exc: Exception, *, run_id: str, node_id: str
     )
 
 
-def _merge_existing_raw_output_marker(
-    marker: dict[str, Any], existing: Any, *, promote_newest_key: bool = False, preserve_delivery_done: bool = True
-) -> dict[str, Any]:
+def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any, *, promote_newest_key: bool = False, preserve_delivery_done: bool = True) -> dict[str, Any]:
     """Monotone preservation: a prior attempt's evidence is never wiped by a retry.
 
     A prior marker's non-empty ``pr_url`` and an OR'd ``delivery_done`` are
@@ -2898,9 +2868,7 @@ def _merge_existing_raw_output_marker(
     return merged
 
 
-def _idempotency_gate_skipped_envelope(
-    node_id: str, *, gate_tag: str = "email_sent", delivered: bool = True
-) -> dict[str, Any]:
+def _idempotency_gate_skipped_envelope(node_id: str, *, gate_tag: str = "email_sent", delivered: bool = True) -> dict[str, Any]:
     """FAR-228: the single artifact envelope produced by BOTH guards.
 
     The ``output_json`` sub-key is REQUIRED so ``_split_sandbox_agent`` returns
@@ -3204,10 +3172,7 @@ def _canonical_scalar(obj: Any) -> str:
     obj_type = type(obj)
     # Runtime identity check against the object defaults (getattr keeps the
     # method objects as plain attributes, so the comparison is well-defined).
-    if (
-        getattr(obj_type, "__str__", None) is _OBJECT_DEFAULT_STR
-        and getattr(obj_type, "__repr__", None) is _OBJECT_DEFAULT_REPR
-    ):
+    if getattr(obj_type, "__str__", None) is _OBJECT_DEFAULT_STR and getattr(obj_type, "__repr__", None) is _OBJECT_DEFAULT_REPR:
         return f"<{obj_type.__module__}.{obj_type.__qualname__}>"
     return str(obj)
 
@@ -3890,9 +3855,7 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
         case "neq":
             return score != threshold
         case _:
-            _log.warning(
-                "hitl_review.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
-            )
+            _log.warning("hitl_review.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold})
             return False
 
 
@@ -3923,9 +3886,7 @@ def set_conformance_ctx(
     (computed once by the executor); ``claims_load_failed`` marks a run-start
     load failure so the node gate fails CLOSED rather than skipping claims.
     """
-    _conformance_ctx_cv.set(
-        (session_factory, org_id, environment_profile_id, pipeline_id, claimed_guardrails, claims_load_failed)
-    )
+    _conformance_ctx_cv.set((session_factory, org_id, environment_profile_id, pipeline_id, claimed_guardrails, claims_load_failed))
 
 
 def get_conformance_ctx() -> tuple[Any, ...] | None:
@@ -3966,12 +3927,12 @@ async def _resolve_schema_validator_mode(
     """
     # Fast path: no session factory → env/default
     if session_factory is None:
-        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+        return os.environ.get("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
 
     _org_raw = state.get("_org_id")
     _org_uuid = _parse_uuid_opt(_org_raw)
     if _org_uuid is None:
-        return os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+        return os.environ.get("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
 
     from farna.db.settings_resolver import resolve_schema_validator_mode
 
@@ -3994,7 +3955,7 @@ async def _resolve_schema_validator_mode(
             },
         )
         # Return cached value if available, else env/default
-        return cached or os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+        return cached or os.environ.get("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
     else:
         # Cache the resolved value as last-known-good
         _SCHEMA_MODE_CACHE[str(_org_uuid)] = mode
@@ -5048,11 +5009,7 @@ async def _run_agent_node(
     # ``dag_ancestor_ids`` is frozen at compile time from graph_json
     # (graph_cache); a None (unthreaded caller) degrades to create-time
     # refs only, never to a raise.
-    node_work_item_refs = (
-        _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
-        if _node_declares_work_item_refs(node_def)
-        else None
-    )
+    node_work_item_refs = _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids) if _node_declares_work_item_refs(node_def) else None
     rendered_prompt, routing_mode = _render_agent_prompt(
         state=scoped_state,
         run_context=scoped_run_context,
@@ -5291,11 +5248,7 @@ def _resolve_gate_eval_envelope(
 ) -> dict[str, Any]:
     """Build the gate-eval envelope from the source node's artifact (FAR-311)."""
     artifacts = state.get("artifacts")
-    matching = (
-        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
-        if isinstance(artifacts, list)
-        else []
-    )
+    matching = [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id] if isinstance(artifacts, list) else []
     envelope: dict[str, Any] = {}
     if matching:
         # The source node's most recent artifact (a reject/correction re-run
@@ -5345,11 +5298,7 @@ def _resolve_gate_eval_target(
     if node_type not in SPLITTABLE_NODE_TYPES:
         return state
     artifacts = state.get("artifacts")
-    matching = (
-        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
-        if isinstance(artifacts, list)
-        else []
-    )
+    matching = [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id] if isinstance(artifacts, list) else []
     if not matching and "output" not in state:
         return state
     envelope = _resolve_gate_eval_envelope(state, node_id)
@@ -5387,9 +5336,7 @@ async def _dispatch_reject_correction_inner(
             run_id=run_id_for_correction,
             node_id=str(correction_target),
             node_input=node_output,
-            rejection_reason=(
-                (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
-            ),
+            rejection_reason=((decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"),
             review_id=review_id,
         )
     except asyncio.CancelledError:
@@ -5422,9 +5369,7 @@ async def _dispatch_reject_correction_best_effort(
         run_id_for_correction = state.get("_run_id")
         node_output = state.get("output")
         if correction_target and run_id_for_correction and isinstance(node_output, dict):
-            await _dispatch_reject_correction_inner(
-                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, review_id
-            )
+            await _dispatch_reject_correction_inner(session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, review_id)
 
 
 #: FAR-2489 / FAR-2490: the state key carrying the PROVENANCE MARKER for the
@@ -5524,9 +5469,7 @@ def _stamp_human_output_provenance(review_id: str, gate_result: dict[str, Any]) 
     sibling state key. The value the human overrode is untouched and stays
     readable on the source node's own output.
     """
-    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = hitl_output_provenance_marker(
-        review_id, gate_result["output"]
-    )
+    gate_result[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{review_id}"] = hitl_output_provenance_marker(review_id, gate_result["output"])
 
 
 def _clear_human_output_provenance(review_id: str, gate_result: dict[str, Any]) -> None:
@@ -5751,12 +5694,8 @@ async def _hitl_review_resume_result(
         _inject_answer_state(review_id, decision, gate_result[1])
         return gate_result
     is_rejected = action == "rejected"
-    await _dispatch_reject_correction_best_effort(
-        state, decision, review_id, hitl_review_config, session_factory, org_id
-    )
-    ar_result = _hitl_review_approve_reject_result(
-        review_id, decision, is_rejected, hitl_review_config.get("reject_disposition")
-    )
+    await _dispatch_reject_correction_best_effort(state, decision, review_id, hitl_review_config, session_factory, org_id)
+    ar_result = _hitl_review_approve_reject_result(review_id, decision, is_rejected, hitl_review_config.get("reject_disposition"))
     _inject_answer_state(review_id, decision, ar_result)
     return (True, ar_result)
 
@@ -5767,11 +5706,7 @@ def _human_gated_dtos(eval_definitions: Sequence[EvalDefDTO]) -> list[EvalDefDTO
     Extracted from :func:`_ground_human_gate_evidence` for the
     cognitive-complexity budget (S3776); behaviour unchanged.
     """
-    return [
-        dto
-        for dto in eval_definitions
-        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
-    ]
+    return [dto for dto in eval_definitions if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None]
 
 
 def _build_human_gate_decision(action: Any, decision: Any) -> Any:
@@ -6039,9 +5974,7 @@ def _bound_condition_expression(expression: str) -> str:
     return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
 
 
-def _hitl_review_condition_evaluate(
-    review_id: str, condition_expr: str | None, state: dict[str, Any]
-) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+def _hitl_review_condition_evaluate(review_id: str, condition_expr: str | None, state: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
     """Evaluate the conditional-gate JMESPath expression (FAR-688).
 
     Returns ``(skip_artifact, condition_result)``:
@@ -6322,9 +6255,7 @@ async def _emit_autonomy_level_applied(
     )
 
 
-def _resolve_hitl_subject(
-    subject_path: str | None, state: dict[str, Any], review_id: str
-) -> tuple[str | None, dict[str, Any] | None, str | None]:
+def _resolve_hitl_subject(subject_path: str | None, state: dict[str, Any], review_id: str) -> tuple[str | None, dict[str, Any] | None, str | None]:
     """Resolve ``subject_path`` against ``state`` (failure-isolated) — FAR-859 / FAR-862.
 
     Returns ``(resolved_subject, subject_parent, subject_leaf_key)``; a bad path
@@ -6519,9 +6450,7 @@ def make_hitl_review_fn(
         # FAR-859: resolve subject_path against the SAME state root the
         # condition evaluates against (failure-isolated — a bad path or
         # unresolvable value yields None).
-        resolved_subject, resolved_subject_parent, resolved_subject_leaf_key = _resolve_hitl_subject(
-            subject_path, state, review_id
-        )
+        resolved_subject, resolved_subject_parent, resolved_subject_leaf_key = _resolve_hitl_subject(subject_path, state, review_id)
 
         # State mutations before the interrupt are persisted by the checkpointer.
         decision = interrupt(
@@ -7109,10 +7038,7 @@ def _resolve_dispatch_wait_timeout(
             raise ValueError(f"dispatch node {node_id}: wait_timeout must be a number, got {configured!r}")
         wait = float(configured)
         if not 0 < wait <= _DISPATCH_WAIT_TIMEOUT_MAX_SECONDS:
-            raise ValueError(
-                f"dispatch node {node_id}: wait_timeout must be > 0 and <= "
-                f"{_DISPATCH_WAIT_TIMEOUT_MAX_SECONDS:.0f} seconds, got {wait!r}"
-            )
+            raise ValueError(f"dispatch node {node_id}: wait_timeout must be > 0 and <= {_DISPATCH_WAIT_TIMEOUT_MAX_SECONDS:.0f} seconds, got {wait!r}")
     if node_timeout is not None and (node_timeout - _DISPATCH_WAIT_NODE_MARGIN_SECONDS) > 0:
         wait = min(wait, node_timeout - _DISPATCH_WAIT_NODE_MARGIN_SECONDS)
     return wait
@@ -7174,9 +7100,7 @@ async def _await_dispatch_terminal(
 
     def _timeout_error() -> DispatchWaitTimeoutError:
         return DispatchWaitTimeoutError(
-            f"dispatch run {run_id} did not reach a terminal status within {wait_timeout:g}s "
-            f"(last status {last_status!r}) — terminal, never retried: a retry would fire a "
-            "second external job",
+            f"dispatch run {run_id} did not reach a terminal status within {wait_timeout:g}s (last status {last_status!r}) — terminal, never retried: a retry would fire a second external job",
         )
 
     while True:
@@ -7247,10 +7171,7 @@ def _await_dispatch_poll_error(
             # an operator nothing about which run failed or why, so the cap
             # never lets one escape unwrapped.
             raise TimeoutError(
-                f"dispatch get_run_status(run_id={run_id!r}) timed out on "
-                f"{consecutive_errors} consecutive polls "
-                f"(budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; "
-                f"per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
+                f"dispatch get_run_status(run_id={run_id!r}) timed out on {consecutive_errors} consecutive polls (budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
             ) from exc
         raise exc
     _log.warning(
@@ -7747,8 +7668,7 @@ def _validate_connector_dispatch_config(
     if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
         # Fail loud at graph-build time — never a silent fall-through to query.
         raise ValueError(
-            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — "
-            f"expected one of {sorted(_DISPATCH_ACTIONS)}",
+            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — expected one of {sorted(_DISPATCH_ACTIONS)}",
         )
     # FAR-1141 slice 2: node-level wait config, read from node_def (the API /
     # CLI models persist these fields — they are NOT dropped at the boundary).
@@ -7764,8 +7684,7 @@ def _validate_connector_dispatch_config(
         # Mirror of the API's dispatch-only field rule: a declared-but-unread
         # wait config would be a silent no-op.
         raise ValueError(
-            f"await_completion / wait_timeout are only read by a dispatch node's dispatch "
-            f"operation (node {node_id!r} uses op={op!r})",
+            f"await_completion / wait_timeout are only read by a dispatch node's dispatch operation (node {node_id!r} uses op={op!r})",
         )
     if node_type == "dispatch" and op != "dispatch":
         # FAR-1141 (MAJOR 3): a dispatch node that does not route the dispatch
@@ -7891,9 +7810,7 @@ async def _run_connector_node(
     suppress_envelope: dict[str, Any] | None = None
     intent_active = False
     if op == "write":
-        suppress_envelope, intent_active = await _connector_write_gate_phase(
-            state, session_factory, node_id, connector, resource, filters, data
-        )
+        suppress_envelope, intent_active = await _connector_write_gate_phase(state, session_factory, node_id, connector, resource, filters, data)
     if suppress_envelope is not None:
         return suppress_envelope
 
@@ -8087,8 +8004,7 @@ async def resolve_env_var_refs(
             resolved_value = await resolver(secret_key)
             if resolved_value is None:
                 _log.warning(
-                    "env_var.secret_ref_not_found: env var %s references secret %r "
-                    "which could not be resolved — key omitted from sandbox envs",
+                    "env_var.secret_ref_not_found: env var %s references secret %r which could not be resolved — key omitted from sandbox envs",
                     key,
                     secret_key,
                 )
@@ -8163,9 +8079,7 @@ async def _wait_command_with_exec_process(
     # nosemgrep: create-task-without-guard — this helper is an async def, so a
     # running event loop always exists (same exclusion as the other in-module
     # task creations).
-    pump = asyncio.ensure_future(
-        _pump_exec_chunks(process, stdout_parts, stderr_parts, on_stdout=on_stdout, on_stderr=on_stderr)
-    )  # nosemgrep: create-task-without-guard
+    pump = asyncio.ensure_future(_pump_exec_chunks(process, stdout_parts, stderr_parts, on_stdout=on_stdout, on_stderr=on_stderr))  # nosemgrep: create-task-without-guard
     # One persistent waiter for ``done``: reused across slices so a slice
     # timeout cancels nothing (see the invariant above).
     done_waiter = asyncio.ensure_future(process.done.wait())  # nosemgrep: create-task-without-guard
@@ -8515,16 +8429,14 @@ async def _sandbox_resolve_secret_ref(
     """
     if session_factory is None:
         _log.warning(
-            "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the "
-            "org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
+            "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
             secret_key,
         )
         return None
     org_uuid = _parse_uuid_opt(org_id)
     if org_uuid is None:
         _log.warning(
-            "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
-            "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
+            "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
             secret_key,
         )
         return None
@@ -8696,10 +8608,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
             await set_mutation_row_lock_timeout(session)
             row = (
                 await session.execute(
-                    _sql_text(
-                        "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
-                        "AND claim_token=:tok AND status='running'"
-                    ),
+                    _sql_text("SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"),
                     {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
                 )
             ).fetchone()
@@ -8707,11 +8616,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
                 return None
             key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
             result = await session.execute(
-                _sql_text(
-                    "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
-                    "RETURNING id"
-                ),
+                _sql_text("UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' RETURNING id"),
                 {
                     "rid": run_id,
                     "oid": str(org_uuid),
@@ -8738,11 +8643,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
                     "run_id": run_id,
                     "org_id": str(org_uuid),
                     "node_id": node_id,
-                    "note": (
-                        "bounded wait expired (SQLSTATE 55P03); marker NOT written (transaction "
-                        "rolled back), dispatch proceeds markerless (fail-open) and the marker "
-                        "sweep / rollback-detector heals the row"
-                    ),
+                    "note": ("bounded wait expired (SQLSTATE 55P03); marker NOT written (transaction rolled back), dispatch proceeds markerless (fail-open) and the marker sweep / rollback-detector heals the row"),
                 },
                 exc_info=True,
             )
@@ -8753,10 +8654,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
                 "run_id": run_id,
                 "org_id": str(org_uuid),
                 "node_id": node_id,
-                "note": (
-                    "dispatch proceeds markerless (fail-open); the rollback detector cannot "
-                    "attribute a script anomaly to this attempt until the row is healed"
-                ),
+                "note": ("dispatch proceeds markerless (fail-open); the rollback detector cannot attribute a script anomaly to this attempt until the row is healed"),
             },
             exc_info=True,
         )
@@ -8815,10 +8713,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
         await set_rls_org(session, org_uuid)
         await set_rls_execution_context(session)
         await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-            ),
+            _sql_text("UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"),
             {
                 "rid": run_id,
                 "oid": str(org_uuid),
@@ -8894,10 +8789,7 @@ async def _sandbox_store_script_lease(
             # helper takes no lock itself, so it cannot disturb ordering).
             await set_mutation_row_lock_timeout(session)
             result = await session.execute(
-                _sql_text(
-                    "UPDATE runs SET sandbox_dispatch_state=:marker "
-                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-                ),
+                _sql_text("UPDATE runs SET sandbox_dispatch_state=:marker WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"),
                 {
                     "rid": run_id,
                     "oid": str(org_uuid),
@@ -8938,10 +8830,7 @@ async def _sandbox_store_script_lease(
                     "run_id": run_id,
                     "org_id": str(org_uuid),
                     "attempt_key": attempt_key,
-                    "note": (
-                        "bounded wait expired (SQLSTATE 55P03); lease NOT acquired (transaction "
-                        "rolled back), script NOT started, run stays pre-claim (re-dispatchable)"
-                    ),
+                    "note": ("bounded wait expired (SQLSTATE 55P03); lease NOT acquired (transaction rolled back), script NOT started, run stays pre-claim (re-dispatchable)"),
                 },
                 exc_info=True,
             )
@@ -9039,10 +8928,7 @@ async def _sandbox_clear_dispatch_marker(
             # helper takes no lock itself, so it cannot disturb ordering).
             await set_mutation_row_lock_timeout(session)
             await session.execute(
-                _sql_text(
-                    "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
-                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
-                ),
+                _sql_text("UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"),
                 {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
             )
     except asyncio.CancelledError:
@@ -9057,10 +8943,7 @@ async def _sandbox_clear_dispatch_marker(
                 extra={
                     "run_id": run_id,
                     "org_id": str(org_uuid),
-                    "note": (
-                        "bounded wait expired (SQLSTATE 55P03); marker NOT cleared (transaction "
-                        "rolled back), marker SURVIVES teardown and the marker sweep clears it"
-                    ),
+                    "note": ("bounded wait expired (SQLSTATE 55P03); marker NOT cleared (transaction rolled back), marker SURVIVES teardown and the marker sweep clears it"),
                 },
                 exc_info=True,
             )
@@ -9532,11 +9415,7 @@ class _SandboxWatchdog:
         if not callable(get_metrics):
             # Shape 1: no primitive on the handle at all — explicit,
             # observable fail-open (ADR 040 metrics gap).
-            self._log_resource_caps_gap_once(
-                "the sandbox handle exposes no get_metrics primitive, so the configured "
-                "resource_limits are NOT enforced for this workspace; fail open by design "
-                "(ADR 040 metrics gap)"
-            )
+            self._log_resource_caps_gap_once("the sandbox handle exposes no get_metrics primitive, so the configured resource_limits are NOT enforced for this workspace; fail open by design (ADR 040 metrics gap)")
             return False
         try:
             # get_metrics is a fresh coroutine per call, so wait_for is
@@ -9554,10 +9433,7 @@ class _SandboxWatchdog:
             # warning as a missing primitive (never the generic transient
             # "metrics unavailable" traceback an operator would read as an
             # SDK hiccup), then fail open: never crash the run.
-            self._log_resource_caps_gap_once(
-                f"{exc} - the configured resource_limits are NOT enforced for this "
-                "workspace; fail open by design (ADR 040 metrics gap)"
-            )
+            self._log_resource_caps_gap_once(f"{exc} - the configured resource_limits are NOT enforced for this workspace; fail open by design (ADR 040 metrics gap)")
             return False
         except Exception:
             # Shape 3 - Fail-open: metrics unavailable (SDK too old / self._sandbox
@@ -9995,9 +9871,7 @@ def _sandbox_reported_extraction_datums(output: _SandboxNodeOutput, report: dict
     return reported
 
 
-def _sandbox_reported_datum_provenance(
-    inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str
-) -> dict[str, Any]:
+def _sandbox_reported_datum_provenance(inner: dict[str, Any], output: _SandboxNodeOutput, *, sandbox_mode: str) -> dict[str, Any]:
     """The per-datum ``provenance`` map for a sandbox_agent envelope (FAR-1780).
 
     A sandbox envelope MIXES agent-claimed and engine-observed facts, so the
@@ -10229,18 +10103,14 @@ def _build_sandbox_envs(
        ``GITHUB_TOKEN`` override keeps working because this layer merges LAST.
     """
     sandbox_envs: dict[str, str] = {
-        "MODULO_RUN_ID": run_id,
-        "MODULO_PIPELINE_ID": pipeline_id,
-        "MODULO_ORG_ID": org_id,
-        "MODULO_INPUT_PAYLOAD": input_json,
+        "FARNA_CONTROL_MODULO_RUN_ID": run_id,
+        "FARNA_CONTROL_MODULO_PIPELINE_ID": pipeline_id,
+        "FARNA_CONTROL_MODULO_ORG_ID": org_id,
+        "FARNA_CONTROL_MODULO_INPUT_PAYLOAD": input_json,
     }
     if sandbox_mode != "script":
         sandbox_envs["APP_MODULO_OPENCODE_API_KEY"] = os.environ.get("APP_MODULO_OPENCODE_API_KEY", "")
-        sandbox_envs["GITHUB_TOKEN"] = (
-            os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-            or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-            or os.environ.get("GITHUB_TOKEN", "")
-        )
+        sandbox_envs["GITHUB_TOKEN"] = os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "") or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "") or os.environ.get("GITHUB_TOKEN", "")
     if runner_bindings:
         sandbox_envs.update(runner_bindings)
     sandbox_envs.update(env_vars_extra)
@@ -10317,9 +10187,7 @@ def _has_enforcement_sandbox_controls(
     ``apply_sandbox_policy``), unlike the FAR-1264 ``gh``-guard install,
     which is best-effort.
     """
-    return (
-        read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
-    )
+    return read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
 
 
 def _should_apply_sandbox_policy(
@@ -10366,11 +10234,7 @@ def _sandbox_wallclock_budget_exceeded(
     start_time: float,
 ) -> bool:
     """True when a script-mode node's wall-clock spend budget is already exceeded."""
-    return (
-        sandbox_mode == "script"
-        and wallclock_budget_seconds is not None
-        and (time.monotonic() - start_time) >= wallclock_budget_seconds
-    )
+    return sandbox_mode == "script" and wallclock_budget_seconds is not None and (time.monotonic() - start_time) >= wallclock_budget_seconds
 
 
 def _script_enforcement_requires_remote(
@@ -10382,15 +10246,7 @@ def _script_enforcement_requires_remote(
     git_credentials: str | None,
 ) -> bool:
     """Script mode that REQUIRES enforcement needs a REMOTE E2B provider."""
-    return bool(
-        sandbox_mode == "script"
-        and (
-            egress_policy in ("deny_all", "selected")
-            or resource_limits
-            or read_only
-            or git_credentials in ("scoped", "none")
-        )
-    )
+    return bool(sandbox_mode == "script" and (egress_policy in ("deny_all", "selected") or resource_limits or read_only or git_credentials in ("scoped", "none")))
 
 
 def _resolved_e2b_key_for_enforcement() -> str | None:
@@ -10647,12 +10503,7 @@ async def _resolve_sandbox_git_content_config(config: _SandboxNodeConfig) -> _Sa
     # literal. Raise BEFORE any fetch so the error names the field without a
     # network round-trip.
     if GIT_CONTENT_PREFIX in command and not is_git_content_ref(command):
-        msg = (
-            f"agent_command of sandbox_agent node {config.node_id!r} carries a "
-            f"{GIT_CONTENT_PREFIX} git content token but is not a whole-field git content "
-            "ref — git content refs must be the whole field, not one command of several "
-            f"(got {command.strip()[:160]!r})"
-        )
+        msg = f"agent_command of sandbox_agent node {config.node_id!r} carries a {GIT_CONTENT_PREFIX} git content token but is not a whole-field git content ref — git content refs must be the whole field, not one command of several (got {command.strip()[:160]!r})"
         raise GitContentRefError(msg)
     if not (is_git_content_ref(prompt) or is_git_content_ref(command)):
         return config
@@ -10858,11 +10709,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if _route.profile is not None:
             _profile_net_policy = getattr(_route.profile, "network_policy", None)
 
-        profile_cap = (
-            int(_route.profile.max_node_seconds)
-            if _route.profile is not None and getattr(_route.profile, "max_node_seconds", None) is not None
-            else None
-        )
+        profile_cap = int(_route.profile.max_node_seconds) if _route.profile is not None and getattr(_route.profile, "max_node_seconds", None) is not None else None
         transport_cap = int(get_settings().saq_run_timeout)
         effective_cap = min(profile_cap, transport_cap) if profile_cap is not None else transport_cap
         validate_e2b_dispatch_timeout(
@@ -10962,12 +10809,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # dispatch a sandbox on a blank --model. The normal path bakes at
             # mint (fail-closed there); this backstop catches a snapshot whose
             # bake is missing (e.g. an edit-kind snapshot consumed by a run).
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' declares model_class "
-                f"{node_def.get('model_class')!r} but no model was resolved at snapshot mint "
-                "(no baked _resolved_model and no run-override model) — refusing to dispatch "
-                "pre-sandbox (ADR 037 D3)"
-            )
+            raise ValueError(f"sandbox_agent node '{node_id}' declares model_class {node_def.get('model_class')!r} but no model was resolved at snapshot mint (no baked _resolved_model and no run-override model) — refusing to dispatch pre-sandbox (ADR 037 D3)")
 
         try:
             rendered_prompt = template.render(**template_vars)
@@ -11017,10 +10859,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
             rendered_agent_command = agent_command
         if not rendered_agent_command.strip():
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
-                " — a sandbox agent cannot run an empty command"
-            )
+            raise ValueError(f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution — a sandbox agent cannot run an empty command")
 
     start_time = time.monotonic()
     sandbox: _ProviderMediatedHandle | None = None
@@ -11278,10 +11117,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "timeout_seconds": _sandbox_binding_resolve_timeout(),
                     },
                 )
-                raise SandboxBindingResolutionError(
-                    f"Runner binding resolution timed out after {_sandbox_binding_resolve_timeout()}s "
-                    f"for node '{node_id}'"
-                ) from None
+                raise SandboxBindingResolutionError(f"Runner binding resolution timed out after {_sandbox_binding_resolve_timeout()}s for node '{node_id}'") from None
             except LocalProviderBindingsRefusedError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_local_refused",
@@ -11289,9 +11125,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
                 # The typed refusal carries the remediation copy (opt-in flag
                 # / tier alternatives) — surface it, never drop it.
-                raise SandboxTierRefusedError(
-                    f"Local provider tier refused runner bindings for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
-                ) from exc
+                raise SandboxTierRefusedError(f"Local provider tier refused runner bindings for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}") from exc
             except AgentBindingResolutionError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_resolution_failed",
@@ -11301,9 +11135,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "exc_msg": str(exc)[:_MAX_ERROR_MSG],
                     },
                 )
-                raise SandboxBindingResolutionError(
-                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
-                ) from exc
+                raise SandboxBindingResolutionError(f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}") from exc
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -11318,9 +11150,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.bindings_resolution_failed",
                     extra={"run_id": run_id, "node_id": node_id, "exc_type": type(exc).__name__},
                 )
-                raise SandboxBindingResolutionError(
-                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
-                ) from exc
+                raise SandboxBindingResolutionError(f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}") from exc
 
         # FAR-800: resolve managed workspace input refs → SHA HOST-SIDE
         # BEFORE any sandbox is created.  A resolution failure (ref not
@@ -11465,9 +11295,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             tier=_egress_tier,
         )
         if _egress_resolved.refusal is not None:
-            raise SandboxTierRefusedError(
-                f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
-            )
+            raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}")
         # FAR-1690: record the TYPED egress posture (never a boolean) on the
         # workspace, riding the same provider-neutral workspace_metadata carrier
         # as the allowlist below. Full rationale lives on EgressPosture in
@@ -11513,7 +11341,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # written (they're advisory), but the env var must be present for any
         # consumer that checks it.
         _schema_dir_for_sandbox: dict[str, str] = {
-            "MODULO_SCHEMA_DIR": "/home/user/schemas",
+            "FARNA_CONTROL_MODULO_SCHEMA_DIR": "/home/user/schemas",
         }
 
         _provision_timeout = _sandbox_provisioning_timeout()
@@ -11565,9 +11393,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             while True:
                 try:
                     _dispatch_ref = await asyncio.wait_for(
-                        _require_dispatch_provider(_dispatch_provider).create_workspace(
-                            _require_dispatch_spec(_dispatch_spec)
-                        ),
+                        _require_dispatch_provider(_dispatch_provider).create_workspace(_require_dispatch_spec(_dispatch_spec)),
                         timeout=min(sandbox_timeout, _provision_timeout),
                     )
                     break
@@ -11582,10 +11408,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         raise
                     _rate_limit_attempt += 1
                     if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
-                        raise SandboxQueueTimeoutError(
-                            f"E2B rate-limited after {_rate_limit_attempt} attempts "
-                            f"creating sandbox for node '{node_id}'"
-                        ) from None
+                        raise SandboxQueueTimeoutError(f"E2B rate-limited after {_rate_limit_attempt} attempts creating sandbox for node '{node_id}'") from None
                     _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
                     _log.warning(
                         "sandbox_agent.e2b_rate_limited_retrying",
@@ -11617,10 +11440,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "state": "dispatching",
                 },
             )
-            raise SandboxQueueTimeoutError(
-                f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound "
-                "(AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)"
-            ) from None
+            raise SandboxQueueTimeoutError(f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound (AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)") from None
         if _dispatch_provider is None or _dispatch_ref is None or not _dispatch_ref:
             raise RuntimeProviderError("FAR-1050 dispatch lost its runtime provider after create")
         _sandbox_id = _dispatch_ref
@@ -11704,12 +11524,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         _input_schema_path = f"{_sandbox_schema_dir}/{node_id}/input.active.json"
                         _output_schema_path = f"{_sandbox_schema_dir}/{node_id}/output.active.json"
                         _schema_injection = (
-                            f"\n\n---\nSchema contract files (advisory — Modulo validates independently):\n"
-                            f"  Input schema:  {_input_schema_path}\n"
-                            f"  Output schema: {_output_schema_path}\n"
-                            f"  Schema dir:    {_sandbox_schema_dir}/{node_id}/\n"
-                            f"  Environment:   MODULO_SCHEMA_DIR={_sandbox_schema_dir}\n"
-                            f"---"
+                            f"\n\n---\nSchema contract files (advisory — Modulo validates independently):\n  Input schema:  {_input_schema_path}\n  Output schema: {_output_schema_path}\n  Schema dir:    {_sandbox_schema_dir}/{node_id}/\n  Environment:   MODULO_SCHEMA_DIR={_sandbox_schema_dir}\n---"
                         )
                         rendered_prompt = rendered_prompt + _schema_injection
         except Exception:
@@ -11746,9 +11561,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         else:
             if len(_input_json) > 10240:
-                _input_json = json.dumps(
-                    {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
-                )
+                _input_json = json.dumps({"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0})
             await asyncio.wait_for(
                 _write_file_via_provider(
                     _sandbox_id,
@@ -11813,7 +11626,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _node_scope = node_def.get("capability_scope") or {}
         _allowed_tools = _node_scope.get("allowed_tools")
         if _allowed_tools:
-            env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in _allowed_tools)
+            env_vars_extra["FARNA_CONTROL_MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in _allowed_tools)
 
         # FAR-212 PR B: apply the enforced sandbox policy AFTER the Modulo-owned
         # context files / prompt / input are written but BEFORE the agent/script
@@ -11845,12 +11658,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "run_id": run_id,
                     "node_id": node_id,
                     "pipeline_id": pipeline_id,
-                    "detail": (
-                        "node carries a non-empty delivery_sentinel but NOT "
-                        "single_pr_per_run: the one-PR-per-run gh guard is not "
-                        "installed for this run (set single_pr_per_run=true on "
-                        "the node to arm it)"
-                    ),
+                    "detail": ("node carries a non-empty delivery_sentinel but NOT single_pr_per_run: the one-PR-per-run gh guard is not installed for this run (set single_pr_per_run=true on the node to arm it)"),
                 },
             )
         if _should_apply_sandbox_policy(
@@ -11973,9 +11781,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # watchdog's silence window. Resolve the DEFAULT at runtime so
             # the constant stays patchable (the FAR-97 tests patch it).
             try:
-                stall_timeout: float = (
-                    float(stall_timeout_override) if stall_timeout_override is not None else _SANDBOX_IDLE_TIMEOUT
-                )
+                stall_timeout: float = float(stall_timeout_override) if stall_timeout_override is not None else _SANDBOX_IDLE_TIMEOUT
             except (TypeError, ValueError):
                 _log.warning(
                     "sandbox_agent.stall_timeout_invalid_fallback",
@@ -12165,7 +11971,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # issuance failure leaves the key absent (the sandbox still runs).
             _issued_credential = await _issue_run_credential_for_sandbox()
             if _issued_credential is not None:
-                sandbox_envs["MODULO_API_KEY"] = _issued_credential.secret
+                sandbox_envs["FARNA_CONTROL_MODULO_API_KEY"] = _issued_credential.secret
                 sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = _issued_credential.provenance
             _bridge_wrapped_command = rendered_agent_command
             # FAR-211: start the loop-interception callback server + write
@@ -12219,8 +12025,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
-                        sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
-                        sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+                        sandbox_envs["FARNA_CONTROL_MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
+                        sandbox_envs["FARNA_CONTROL_MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
                         # FAR-664 (newline-safe bridge handoff): the rendered
                         # agent command is handed to the bridge via a FILE, not
                         # inline after ``--``. An inline interpolation word-
@@ -12243,9 +12049,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
-                        _bridge_wrapped_command = (
-                            "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
-                        )
+                        _bridge_wrapped_command = "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -12447,19 +12251,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             if stall_reason:
                 command_error = stall_reason
             else:
-                command_error = (
-                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
-                    "No stdout/stderr was captured — the agent likely hung before "
-                    "writing any result."
-                )
+                command_error = f"Sandbox agent command produced no output within {sandbox_timeout}s. No stdout/stderr was captured — the agent likely hung before writing any result."
             # The E2B kill reason only lives in the sandbox logs, and the logs
             # endpoint only serves live sandboxes — fetch the tail BEFORE the
             # kill below (FAR-97 observability).
             from farna.settings import get_settings
 
-            _sandbox_log_tail = await _read_log_tail_via_provider(
-                _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
-            )
+            _sandbox_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider)
             # The command stalled or timed out. Kill the sandbox BEFORE
             # reading output.json: the interrupted-but-alive process could
             # otherwise write a fabricated completion in the grace window
@@ -12542,9 +12340,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             "sandbox_agent.streaming_writer_cleanup_failed",
                             extra={"node_id": node_id, "run_id": run_id},
                         )
-                _redacted_for_artifact = _redact_raw_output(
-                    _stall_full_stdout if _stall_full_stdout is not None else agent_stdout_raw
-                )
+                _redacted_for_artifact = _redact_raw_output(_stall_full_stdout if _stall_full_stdout is not None else agent_stdout_raw)
                 _stall_stdout_artifact = _persist_full_stdout_artifact(
                     org_id=org_id,
                     run_id=run_id,
@@ -12572,10 +12368,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     org_id_raw=org_id,
                     node_id=node_id,
                     attempt_key=attempt_key,
-                    summary=(
-                        "Sandbox agent command stalled/timed out — raw stdout retained "
-                        "(bounded to the node's retention cap)"
-                    ),
+                    summary=("Sandbox agent command stalled/timed out — raw stdout retained (bounded to the node's retention cap)"),
                     source=_stall_source,
                     parse_error=command_error,
                     exit_code=exit_code,
@@ -12599,10 +12392,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # (timeout / budget / watchdog) with exit undetermined — the
                 # side effect may or may not have happened. Never retryable:
                 # escalate to needs-human via ``script.side_effect_unknown``.
-                raise ScriptSideEffectUnknownError(
-                    "Script-mode sandbox terminated mid-execution (side effect unknown): "
-                    + (command_error or f"no output within {sandbox_timeout}s")
-                )
+                raise ScriptSideEffectUnknownError("Script-mode sandbox terminated mid-execution (side effect unknown): " + (command_error or f"no output within {sandbox_timeout}s"))
             # FAR-1994: the agent burned tokens before the stall/timeout. The
             # retained raw stdout carries opencode ``step_finish`` counters; the
             # failure records ZERO without them. Recover them (agent-reported)
@@ -12691,9 +12481,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # only serves live sandboxes.
                 from farna.settings import get_settings
 
-                _no_output_log_tail = await _read_log_tail_via_provider(
-                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
-                )
+                _no_output_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider)
                 if watchdog.budget_killed:
                     # FAR-296 Phase 3b-3: the platform-side resource-cap killer
                     # fired. On the REAL kill path the command handle raises an
@@ -12858,9 +12646,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # code and is excluded from ``failure`` retries. The
                     # generic ``schema_validation_failure`` code is SHARED
                     # with LLM-mode/manual paths and must stay retryable.
-                    raise ScriptInvalidOutputError(
-                        f"Script-mode output failed schema validation for node '{node_id}': {_schema_exc}"
-                    ) from None
+                    raise ScriptInvalidOutputError(f"Script-mode output failed schema validation for node '{node_id}': {_schema_exc}") from None
                 elapsed = time.monotonic() - start_time
                 _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
                 # FAR-582: finalize artifacts before the node terminates on the
@@ -12908,9 +12694,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
                 from farna.settings import get_settings
 
-                _schema_log_tail = await _read_log_tail_via_provider(
-                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
-                )
+                _schema_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider)
                 raise SandboxNodeFailedError(
                     _build_schema_failure_message(
                         schema_exc=str(_schema_exc),
@@ -13203,9 +12987,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.cancel_log_tail_fetch_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
-            _cancel_sentinel_hit = bool(
-                delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
-            )
+            _cancel_sentinel_hit = bool(delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel))
             _cancel_pr_url = _extract_pr_url(_drained_tail)
             # FAR-1914 B2 / C1: the PR url is EVIDENCE, never a gate. Only the
             # configured full-line sentinel may set ``delivery_done`` — the
@@ -13214,20 +12996,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # payload, a quoted url) could turn a false positive into a MISSED
             # delivery. The url is retained on the marker's existing
             # non-gating ``pr_url`` field for human/analytics evidence.
-            _cancel_no_output_reason = (
-                stall_reason
-                or "Sandbox attempt cancelled before a terminal node envelope was produced "
-                "(node-deadline watchdog, run cancel, or worker shutdown)"
-            )
+            _cancel_no_output_reason = stall_reason or "Sandbox attempt cancelled before a terminal node envelope was produced (node-deadline watchdog, run cancel, or worker shutdown)"
             if _cancel_sentinel_hit:
-                _cancel_summary = (
-                    "Sandbox agent cancelled after delivery sentinel observed — "
-                    "delivery_done retained (idempotency gate)"
-                )
+                _cancel_summary = "Sandbox agent cancelled after delivery sentinel observed — delivery_done retained (idempotency gate)"
             elif _cancel_pr_url:
-                _cancel_summary = (
-                    "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
-                )
+                _cancel_summary = "Sandbox agent cancelled after a PR url was observed — pr_url retained as non-gating evidence"
             else:
                 _cancel_summary = "Sandbox agent cancelled — triage evidence retained (FAR-704)"
             _cancel_marker: dict[str, Any] = {
@@ -13325,9 +13098,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # sandbox may already be dead, in which case the helper returns "".
         from farna.settings import get_settings
 
-        _exc_log_tail = await _read_log_tail_via_provider(
-            _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
-        )
+        _exc_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider)
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
         # FAR-582: finalize artifacts before returning on exception path.
         await _finalize_artifact_writer(
@@ -13848,11 +13619,7 @@ def _resolve_stdout_retention(
     if node_raw_mode is not None:
         return _coerce_stdout_retention_mode(node_raw_mode), _coerce_stdout_max_bytes(node_raw_max_bytes)
     if node_raw_max_bytes is not None:
-        inherited_mode = (
-            _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode"))
-            if pipeline_stdout_retention_config is not None
-            else "tail"
-        )
+        inherited_mode = _coerce_stdout_retention_mode(pipeline_stdout_retention_config.get("mode")) if pipeline_stdout_retention_config is not None else "tail"
         return inherited_mode, _coerce_stdout_max_bytes(node_raw_max_bytes)
     if pipeline_stdout_retention_config is not None:
         return (
@@ -14207,9 +13974,7 @@ def _validate_against_schema(
             # Pre-existing enforcement: required-field violations raise even
             # in lenient mode, preserving the pre-FAR-899 contract exactly.
             raise OutputSchemaValidationError(
-                f"Schema validation failed (required fields missing): "
-                f"(schema={schema_id} v{schema_version}): "
-                f"{format_error_summary(required_errors)}",
+                f"Schema validation failed (required fields missing): (schema={schema_id} v{schema_version}): {format_error_summary(required_errors)}",
                 # FAR-902 (D3): a required-field violation is a hard failure
                 # even under lenient mode; record it as a post-hoc validation
                 # failure so the terminal arm is observable (severity 1).
@@ -14246,9 +14011,7 @@ def _validate_against_schema(
         SchemaValidationOutcome.NATIVE_DECODE_FAILED.value,
     ):
         raise OutputSchemaValidationError(
-            f"Strict schema validation failed ({outcome_val}): "
-            f"(schema={schema_id} v{schema_version}): "
-            f"{format_error_summary(final_errors)}",
+            f"Strict schema validation failed ({outcome_val}): (schema={schema_id} v{schema_version}): {format_error_summary(final_errors)}",
             # FAR-902 (D3): carry the terminal outcome + errors so the caller
             # persists the enforcement record before terminalizing the node.
             outcome=outcome_val,

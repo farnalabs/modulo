@@ -107,7 +107,7 @@ async def _ingest_unhandled_error(request: Request) -> None:
                 "correlation_id": correlation_id,
                 "user_id": str(user_id) if user_id else None,
             },
-            "environment": os.environ.get("MODULO_ENV", "development"),
+            "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
             "version": get_version(),
         }
 

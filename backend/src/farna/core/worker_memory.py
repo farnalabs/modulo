@@ -151,22 +151,11 @@ def evaluate_memory_alarm(stats: dict[str, Any]) -> str | None:
     committed_as = stats.get("Committed_AS")
     commit_limit = stats.get("CommitLimit")
 
-    if (
-        mem_total is not None
-        and mem_available is not None
-        and mem_total > 0
-        and mem_available < mem_total * MEMORY_AVAILABLE_LOW_RATIO
-    ):
-        return (
-            f"MemAvailable={mem_available}kB < 20% of MemTotal={mem_total}kB "
-            f"({mem_available / mem_total * 100:.1f}% available)"
-        )
+    if mem_total is not None and mem_available is not None and mem_total > 0 and mem_available < mem_total * MEMORY_AVAILABLE_LOW_RATIO:
+        return f"MemAvailable={mem_available}kB < 20% of MemTotal={mem_total}kB ({mem_available / mem_total * 100:.1f}% available)"
 
     if committed_as is not None and commit_limit is not None and commit_limit > 0 and committed_as > commit_limit:
-        return (
-            f"Committed_AS={committed_as}kB > CommitLimit={commit_limit}kB "
-            f"({committed_as / commit_limit * 100:.1f}% of limit)"
-        )
+        return f"Committed_AS={committed_as}kB > CommitLimit={commit_limit}kB ({committed_as / commit_limit * 100:.1f}% of limit)"
 
     return None
 

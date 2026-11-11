@@ -29,9 +29,7 @@ def upgrade() -> None:
         "ix_triggers_due_cron",
         "triggers",
         ["organisation_id", "next_fire_at"],
-        postgresql_where=sa.text(
-            "trigger_type = 'cron' AND active IS TRUE AND deleted_at IS NULL AND cron_expression IS NOT NULL"
-        ),
+        postgresql_where=sa.text("trigger_type = 'cron' AND active IS TRUE AND deleted_at IS NULL AND cron_expression IS NOT NULL"),
     )
 
 

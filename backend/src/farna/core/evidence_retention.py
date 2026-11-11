@@ -276,9 +276,7 @@ async def purge_evidence(
         if policy.max_rows is not None:
             while True:
                 # Count current rows for this org.
-                count_result = await session.execute(
-                    select(func.count()).select_from(Evidence).where(Evidence.organisation_id == org_id)
-                )
+                count_result = await session.execute(select(func.count()).select_from(Evidence).where(Evidence.organisation_id == org_id))
                 current_count = count_result.scalar() or 0
                 if current_count <= policy.max_rows:
                     break
@@ -287,12 +285,7 @@ async def purge_evidence(
                 excess = current_count - policy.max_rows
                 delete_count = min(excess, policy.batch_size)
 
-                result = await session.execute(
-                    select(Evidence.id)
-                    .where(Evidence.organisation_id == org_id)
-                    .order_by(Evidence.created_at, Evidence.id)
-                    .limit(delete_count)
-                )
+                result = await session.execute(select(Evidence.id).where(Evidence.organisation_id == org_id).order_by(Evidence.created_at, Evidence.id).limit(delete_count))
                 ids = result.scalars().all()
                 if not ids:
                     break

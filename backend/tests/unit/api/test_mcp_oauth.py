@@ -486,7 +486,7 @@ class TestRegisterOAuthClient:
                     },
                 )
             assert resp.status_code == 500
-            assert "MODULO_PUBLIC_URL" in resp.json()["detail"]
+            assert "FARNA_CONTROL_MODULO_PUBLIC_URL" in resp.json()["detail"]
         finally:
             app.dependency_overrides[get_settings] = _make_settings
 

@@ -97,9 +97,7 @@ _ACTIVE_RUN_STATUSES = (
 # transaction-scoped DDL locks and its count/content verification remain the real
 # cutover guard against a run that starts writing concurrently.
 _DRAIN_BLOCKING_RUN_STATUSES = ("running",)
-_DRAIN_NON_BLOCKING_RUN_STATUSES = tuple(
-    status for status in _ACTIVE_RUN_STATUSES if status not in _DRAIN_BLOCKING_RUN_STATUSES
-)
+_DRAIN_NON_BLOCKING_RUN_STATUSES = tuple(status for status in _ACTIVE_RUN_STATUSES if status not in _DRAIN_BLOCKING_RUN_STATUSES)
 
 # Columns copied from eval_definitions → evals.
 _EVAL_COPY_COLUMNS = (
@@ -200,11 +198,7 @@ def _drain_check() -> None:
         if not stuck_ids:
             return
         if time.monotonic() >= deadline:
-            msg = (
-                f"Migration abort: {len(stuck_ids)} executing run(s) still active "
-                f"after {_DRAIN_TIMEOUT_S}s timeout.  "
-                f"Stuck run IDs: {stuck_ids}"
-            )
+            msg = f"Migration abort: {len(stuck_ids)} executing run(s) still active after {_DRAIN_TIMEOUT_S}s timeout.  Stuck run IDs: {stuck_ids}"
             logger.error(msg)
             raise RuntimeError(msg)
         logger.warning(
@@ -225,16 +219,7 @@ def _enumerate_objects() -> None:
     # FKs INTO eval_definitions
     fk_rows = (
         op.get_bind()
-        .execute(
-            text(
-                "SELECT tc.constraint_name "
-                "FROM information_schema.table_constraints tc "
-                "JOIN information_schema.constraint_column_usage ccu "
-                "  ON tc.constraint_name = ccu.constraint_name "
-                "WHERE tc.constraint_type = 'FOREIGN KEY' "
-                "  AND ccu.table_name = 'eval_definitions'"
-            )
-        )
+        .execute(text("SELECT tc.constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage ccu   ON tc.constraint_name = ccu.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY'   AND ccu.table_name = 'eval_definitions'"))
         .fetchall()
     )
     discovered_fks = {r[0] for r in fk_rows}
@@ -242,31 +227,15 @@ def _enumerate_objects() -> None:
     # which we will repoint.  Any other FK is unexpected.
     unexpected_fks = discovered_fks - {_FK_EVAL_RESULTS_EVAL_ID}
     if unexpected_fks:
-        raise RuntimeError(
-            f"Unexpected FK(s) into eval_definitions: {unexpected_fks}. Add them to the known-objects table or abort."
-        )
+        raise RuntimeError(f"Unexpected FK(s) into eval_definitions: {unexpected_fks}. Add them to the known-objects table or abort.")
 
     # Non-internal triggers on eval_results and eval_definitions
-    trigger_rows = (
-        op.get_bind()
-        .execute(
-            text(
-                "SELECT t.tgname, c.relname "
-                "FROM pg_trigger t "
-                "JOIN pg_class c ON t.tgrelid = c.oid "
-                "WHERE c.relname IN ('eval_results', 'eval_definitions') "
-                "  AND NOT t.tgisinternal"
-            )
-        )
-        .fetchall()
-    )
+    trigger_rows = op.get_bind().execute(text("SELECT t.tgname, c.relname FROM pg_trigger t JOIN pg_class c ON t.tgrelid = c.oid WHERE c.relname IN ('eval_results', 'eval_definitions')   AND NOT t.tgisinternal")).fetchall()
     all_expected = _KNOWN_TRIGGERS_ON_EVAL_RESULTS | _KNOWN_TRIGGERS_ON_EVAL_DEFINITIONS
     discovered_triggers = {(r[0], r[1]) for r in trigger_rows}
     unexpected_triggers = {(name, tbl) for name, tbl in discovered_triggers if name not in all_expected}
     if unexpected_triggers:
-        raise RuntimeError(
-            f"Unexpected trigger(s): {unexpected_triggers}. Add them to the known-objects table or abort."
-        )
+        raise RuntimeError(f"Unexpected trigger(s): {unexpected_triggers}. Add them to the known-objects table or abort.")
 
 
 # ---------------------------------------------------------------------------
@@ -287,9 +256,7 @@ def _create_violation_table() -> None:
             sa.Column("eval_type", sa.Text(), nullable=False),
             sa.Column("node_id", sa.Uuid(), nullable=True),
             sa.Column("violated_exclusions", postgresql.JSONB(), nullable=False),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-            ),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
             sa.UniqueConstraint(
                 "migration_revision",
                 "eval_definition_id",
@@ -299,14 +266,7 @@ def _create_violation_table() -> None:
     else:
         # Table exists — add the unique constraint if missing (idempotent re-run).
         _execute(
-            "DO $$ BEGIN "
-            "IF NOT EXISTS ("
-            "  SELECT 1 FROM pg_constraint WHERE conname = 'uq_eval_backfill_violations_rev_eval'"
-            ") THEN "
-            "  ALTER TABLE eval_backfill_violations "
-            "    ADD CONSTRAINT uq_eval_backfill_violations_rev_eval "
-            "    UNIQUE (migration_revision, eval_definition_id); "
-            "END IF; END $$;"
+            "DO $$ BEGIN IF NOT EXISTS (  SELECT 1 FROM pg_constraint WHERE conname = 'uq_eval_backfill_violations_rev_eval') THEN   ALTER TABLE eval_backfill_violations     ADD CONSTRAINT uq_eval_backfill_violations_rev_eval     UNIQUE (migration_revision, eval_definition_id); END IF; END $$;"
         )
 
 
@@ -327,17 +287,7 @@ def _validate_bindings() -> list[dict[str, Any]]:
     )
 
     # Candidate rows: live, node-scoped, non-guardrail
-    rows = (
-        op.get_bind()
-        .execute(
-            text(
-                "SELECT id, organisation_id, node_id, name, eval_type, failure_behaviour "
-                "FROM eval_definitions "
-                "WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'"
-            )
-        )
-        .fetchall()
-    )
+    rows = op.get_bind().execute(text("SELECT id, organisation_id, node_id, name, eval_type, failure_behaviour FROM eval_definitions WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'")).fetchall()
 
     violations: list[dict[str, Any]] = []
     for row in rows:
@@ -382,12 +332,7 @@ def _record_violations(violations: list[dict[str, Any]]) -> None:
         return
     for v in violations:
         op.get_bind().execute(
-            text(
-                "INSERT INTO eval_backfill_violations "
-                "(migration_revision, eval_definition_id, eval_name, eval_type, node_id, violated_exclusions) "
-                "VALUES (:rev, :eid, :ename, :etype, :nid, :vej::jsonb) "
-                "ON CONFLICT ON CONSTRAINT uq_eval_backfill_violations_rev_eval DO NOTHING"
-            ),
+            text("INSERT INTO eval_backfill_violations (migration_revision, eval_definition_id, eval_name, eval_type, node_id, violated_exclusions) VALUES (:rev, :eid, :ename, :etype, :nid, :vej::jsonb) ON CONFLICT ON CONSTRAINT uq_eval_backfill_violations_rev_eval DO NOTHING"),
             {
                 "rev": revision,
                 "eid": v["eval_definition_id"],
@@ -477,8 +422,7 @@ def _backfill_evals() -> int:
         except Exception:
             sp.rollback()
             logger.warning(
-                "Eval backfill batch starting at offset %d failed (%d rows); "
-                "rolled back.  Re-run the migration to retry.",
+                "Eval backfill batch starting at offset %d failed (%d rows); rolled back.  Re-run the migration to retry.",
                 offset,
                 len(batch),
             )
@@ -497,14 +441,7 @@ def _backfill_policy_gates(violation_ids: set[uuid.UUID]) -> int:
         rows = (
             op.get_bind()
             .execute(
-                text(
-                    "SELECT id, organisation_id, node_id, failure_behaviour "
-                    "FROM eval_definitions "
-                    "WHERE deleted_at IS NULL "
-                    "  AND node_id IS NOT NULL "
-                    "  AND eval_type != 'guardrail' "
-                    "ORDER BY id LIMIT :lim OFFSET :off"
-                ),
+                text("SELECT id, organisation_id, node_id, failure_behaviour FROM eval_definitions WHERE deleted_at IS NULL   AND node_id IS NOT NULL   AND eval_type != 'guardrail' ORDER BY id LIMIT :lim OFFSET :off"),
                 {"lim": _BATCH_SIZE, "off": offset},
             )
             .fetchall()
@@ -522,11 +459,7 @@ def _backfill_policy_gates(violation_ids: set[uuid.UUID]) -> int:
             if r[0] not in violation_ids
         ]
         if batch:
-            insert_sql = (
-                "INSERT INTO policy_gates (eval_id, node_id, action, organisation_id) "
-                "VALUES (:eval_id, :node_id, :action, :organisation_id) "
-                "ON CONFLICT (eval_id) WHERE deleted_at IS NULL DO NOTHING"
-            )
+            insert_sql = "INSERT INTO policy_gates (eval_id, node_id, action, organisation_id) VALUES (:eval_id, :node_id, :action, :organisation_id) ON CONFLICT (eval_id) WHERE deleted_at IS NULL DO NOTHING"
             sp = op.get_bind().begin_nested()
             try:
                 for params in batch:
@@ -553,10 +486,7 @@ def _repoint_fk() -> None:
     # Drop if it exists (idempotent).
     _execute(f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_FK_EVAL_RESULTS_EVAL_ID}"')
     # Recreate.
-    _execute(
-        f'ALTER TABLE eval_results ADD CONSTRAINT "{_FK_EVAL_RESULTS_EVAL_ID}" '
-        "FOREIGN KEY (eval_id) REFERENCES evals(id) ON DELETE CASCADE"
-    )
+    _execute(f'ALTER TABLE eval_results ADD CONSTRAINT "{_FK_EVAL_RESULTS_EVAL_ID}" FOREIGN KEY (eval_id) REFERENCES evals(id) ON DELETE CASCADE')
 
 
 # ---------------------------------------------------------------------------
@@ -567,12 +497,7 @@ def _repoint_fk() -> None:
 def _recreate_trigger() -> None:
     """Drop and recreate trg_eval_results_eval_id_tenant → evals."""
     _execute(f'DROP TRIGGER IF EXISTS "{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}" ON eval_results')
-    _execute(
-        f'CREATE TRIGGER "{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}" '
-        "BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON public.eval_results "
-        "FOR EACH ROW "
-        "EXECUTE FUNCTION public.enforce_same_organisation('evals', 'eval_id')"
-    )
+    _execute(f"CREATE TRIGGER \"{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}\" BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON public.eval_results FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('evals', 'eval_id')")
 
 
 # ---------------------------------------------------------------------------
@@ -595,35 +520,22 @@ def _verify_counts(expected_pg_count: int) -> None:
         raise RuntimeError(f"PolicyGate count mismatch: policy_gates={pg_count}, expected={expected_pg_count}")
 
     # No PolicyGate for soft-deleted Evals
-    bad_soft_deleted = _scalar(
-        "SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.deleted_at IS NOT NULL"
-    )
+    bad_soft_deleted = _scalar("SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.deleted_at IS NOT NULL")
     if bad_soft_deleted:
         raise RuntimeError(f"{bad_soft_deleted} PolicyGate(s) linked to soft-deleted Eval(s)")
 
     # No PolicyGate for guardrail-typed Evals
-    bad_guardrail = _scalar(
-        "SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.eval_type = 'guardrail'"
-    )
+    bad_guardrail = _scalar("SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.eval_type = 'guardrail'")
     if bad_guardrail:
         raise RuntimeError(f"{bad_guardrail} PolicyGate(s) linked to guardrail-typed Eval(s)")
 
     # No PolicyGate for suite-scoped Evals (node_id IS NULL)
-    bad_suite = _scalar(
-        "SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.node_id IS NULL"
-    )
+    bad_suite = _scalar("SELECT COUNT(*) FROM policy_gates pg JOIN evals e ON pg.eval_id = e.id WHERE e.node_id IS NULL")
     if bad_suite:
         raise RuntimeError(f"{bad_suite} PolicyGate(s) linked to suite-scoped Eval(s)")
 
     # Anti-join: every eligible EvalDefinition produced a PolicyGate
-    missing = _scalar(
-        "SELECT COUNT(*) FROM eval_definitions ed "
-        "LEFT JOIN policy_gates pg ON pg.eval_id = ed.id "
-        "WHERE pg.eval_id IS NULL "
-        "  AND ed.deleted_at IS NULL "
-        "  AND ed.node_id IS NOT NULL "
-        "  AND ed.eval_type != 'guardrail'"
-    )
+    missing = _scalar("SELECT COUNT(*) FROM eval_definitions ed LEFT JOIN policy_gates pg ON pg.eval_id = ed.id WHERE pg.eval_id IS NULL   AND ed.deleted_at IS NULL   AND ed.node_id IS NOT NULL   AND ed.eval_type != 'guardrail'")
     if missing:
         raise RuntimeError(f"Anti-join assertion failed: {missing} EvalDefinition(s) missing a PolicyGate")
 
@@ -649,37 +561,18 @@ def _verify_content() -> None:
     )
     if mismatches:
         bad_ids = [str(r[0]) for r in mismatches]
-        raise RuntimeError(
-            f"Content-correctness assertion failed for {len(bad_ids)} Eval(s): "
-            f"{bad_ids[:10]}{'…' if len(bad_ids) > 10 else ''}"
-        )
+        raise RuntimeError(f"Content-correctness assertion failed for {len(bad_ids)} Eval(s): {bad_ids[:10]}{'…' if len(bad_ids) > 10 else ''}")
 
     # PolicyGate.action matches source failure_behaviour
-    bad_actions = (
-        op.get_bind()
-        .execute(
-            text(
-                "SELECT pg.id FROM policy_gates pg "
-                "JOIN eval_definitions ed ON pg.eval_id = ed.id "
-                "WHERE pg.action != ed.failure_behaviour"
-            )
-        )
-        .fetchall()
-    )
+    bad_actions = op.get_bind().execute(text("SELECT pg.id FROM policy_gates pg JOIN eval_definitions ed ON pg.eval_id = ed.id WHERE pg.action != ed.failure_behaviour")).fetchall()
     if bad_actions:
         bad_ids = [str(r[0]) for r in bad_actions]
-        raise RuntimeError(
-            f"PolicyGate.action mismatch for {len(bad_ids)} row(s): {bad_ids[:10]}{'…' if len(bad_ids) > 10 else ''}"
-        )
+        raise RuntimeError(f"PolicyGate.action mismatch for {len(bad_ids)} row(s): {bad_ids[:10]}{'…' if len(bad_ids) > 10 else ''}")
 
 
 def _verify_fk_target() -> None:
     """Verify the FK now targets evals (spec criterion 8)."""
-    result = _scalar(
-        "SELECT conname FROM pg_constraint "
-        "WHERE conrelid = 'eval_results'::regclass "
-        "  AND confrelid = 'evals'::regclass"
-    )
+    result = _scalar("SELECT conname FROM pg_constraint WHERE conrelid = 'eval_results'::regclass   AND confrelid = 'evals'::regclass")
     if not result:
         raise RuntimeError("FK eval_results→evals not found after repoint")
 
@@ -714,11 +607,7 @@ def upgrade() -> None:
         for v in violations:
             unexpected = set(v["violated_exclusions"]) - _KNOWN_EXPECTED_EXCLUSIONS
             if unexpected:
-                raise RuntimeError(
-                    f"Unexpected binding violation(s) for eval {v['eval_definition_id']} "
-                    f"({v['eval_name']}): {unexpected}. "
-                    "Investigate before proceeding."
-                )
+                raise RuntimeError(f"Unexpected binding violation(s) for eval {v['eval_definition_id']} ({v['eval_name']}): {unexpected}. Investigate before proceeding.")
         logger.warning(
             "Recorded %d known-expected binding violation(s). See eval_backfill_violations table.",
             len(violations),
@@ -726,10 +615,7 @@ def upgrade() -> None:
         _record_violations(violations)
 
     # Count expected PolicyGate rows (candidates minus rejections)
-    expected_pg_count = _scalar(
-        "SELECT COUNT(*) FROM eval_definitions "
-        "WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'"
-    ) - len(violations)
+    expected_pg_count = _scalar("SELECT COUNT(*) FROM eval_definitions WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'") - len(violations)
 
     # ---- Step 2c: promote evals.config_json to jsonb (0147 parity) ----
     logger.info("Step 2c: promoting evals.config_json json -> jsonb (0147 parity) …")
@@ -778,26 +664,16 @@ def downgrade() -> None:
 
     # ---- Restore trigger → eval_definitions ----
     _execute(f'DROP TRIGGER IF EXISTS "{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}" ON eval_results')
-    _execute(
-        f'CREATE TRIGGER "{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}" '
-        "BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON public.eval_results "
-        "FOR EACH ROW "
-        "EXECUTE FUNCTION public.enforce_same_organisation('eval_definitions', 'eval_id')"
-    )
+    _execute(f"CREATE TRIGGER \"{_TRIGGER_EVAL_RESULTS_EVAL_ID_TENANT}\" BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON public.eval_results FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('eval_definitions', 'eval_id')")
 
     # ---- Restore FK → eval_definitions ----
     _execute(f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_FK_EVAL_RESULTS_EVAL_ID}"')
-    _execute(
-        f'ALTER TABLE eval_results ADD CONSTRAINT "{_FK_EVAL_RESULTS_EVAL_ID}" '
-        "FOREIGN KEY (eval_id) REFERENCES eval_definitions(id) ON DELETE CASCADE"
-    )
+    _execute(f'ALTER TABLE eval_results ADD CONSTRAINT "{_FK_EVAL_RESULTS_EVAL_ID}" FOREIGN KEY (eval_id) REFERENCES eval_definitions(id) ON DELETE CASCADE')
 
     # ---- Delete backfilled rows (guarded: skip PolicyGates with decisions) ----
     # policy_gate_decisions FK is RESTRICT, so we can only delete gates with
     # zero decisions.
-    gates_with_decisions = _scalar(
-        "SELECT COUNT(DISTINCT pg.id) FROM policy_gates pg JOIN policy_gate_decisions pgd ON pgd.policy_gate_id = pg.id"
-    )
+    gates_with_decisions = _scalar("SELECT COUNT(DISTINCT pg.id) FROM policy_gates pg JOIN policy_gate_decisions pgd ON pgd.policy_gate_id = pg.id")
     if gates_with_decisions:
         logger.warning(
             "Cannot delete %d PolicyGate(s) that have decision records (FK RESTRICT).  They will remain as dead data.",
@@ -810,8 +686,7 @@ def downgrade() -> None:
     evals_with_decisions = _scalar("SELECT COUNT(DISTINCT pgd.eval_id) FROM policy_gate_decisions pgd")
     if evals_with_decisions:
         logger.warning(
-            "Cannot delete %d Eval(s) referenced by policy_gate_decisions (FK RESTRICT).  "
-            "They will remain as dead data.",
+            "Cannot delete %d Eval(s) referenced by policy_gate_decisions (FK RESTRICT).  They will remain as dead data.",
             evals_with_decisions,
         )
     _execute("DELETE FROM evals WHERE id NOT IN (SELECT DISTINCT eval_id FROM policy_gate_decisions)")

@@ -23,6 +23,4 @@ class ParameterSchema(SoftDeleteMixin, OrgScoped):
     description: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     parameters: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)

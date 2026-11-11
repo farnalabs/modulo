@@ -40,9 +40,7 @@ class NpmConnector(ConnectorBase):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        return pinned_async_client_sync(
-            _API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self))
 
     async def health_check(self) -> HealthResult:
         try:
@@ -54,9 +52,7 @@ class NpmConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid npm auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="npm token lacks required permissions")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to npm registry")
         except asyncio.CancelledError:
@@ -126,9 +122,7 @@ class NpmConnector(ConnectorBase):
             try:
                 offset = int(q.filters["from"])
             except (TypeError, ValueError):
-                raise ValueError(
-                    f"npm {q.resource} filter 'from' must be a numeric offset, got {q.filters['from']!r}"
-                ) from None
+                raise ValueError(f"npm {q.resource} filter 'from' must be a numeric offset, got {q.filters['from']!r}") from None
         if q.cursor:
             try:
                 offset = int(q.cursor)

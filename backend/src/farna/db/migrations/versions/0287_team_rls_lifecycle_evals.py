@@ -126,9 +126,7 @@ def _drop_team_policy_sql(table: str) -> str:
 
 
 def _create_team_policy_sql(table: str) -> str:
-    return (
-        f"CREATE POLICY rls_team_isolation ON public.{_validate_identifier(table)} USING ({_TEAM_POLICY_EXEC_CONTEXT})"
-    )
+    return f"CREATE POLICY rls_team_isolation ON public.{_validate_identifier(table)} USING ({_TEAM_POLICY_EXEC_CONTEXT})"
 
 
 def _create_org_only_policy_sql(table: str) -> str:

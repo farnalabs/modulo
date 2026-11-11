@@ -164,9 +164,7 @@ async def get_assistant_config(
 ) -> AssistantConfigResponse:
     try:
         async with session.begin():
-            result = await session.execute(
-                select(SystemConfig).where(SystemConfig.key == f"assistant_config:{principal.organisation_id}")
-            )
+            result = await session.execute(select(SystemConfig).where(SystemConfig.key == f"assistant_config:{principal.organisation_id}"))
             entry = result.scalar_one_or_none()
         if entry is None:
             return AssistantConfigResponse()
@@ -214,15 +212,8 @@ async def get_available_providers(
         from farna.db.enums import ModelBackendProvider
 
         native_ids = set(SUPPORTED_PROVIDERS)
-        native = [
-            AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title()))
-            for k in sorted(native_ids)
-        ]
-        custom_types = [
-            AvailableProviderInfo(id=v.value, label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title()))
-            for v in ModelBackendProvider
-            if v.value not in native_ids
-        ]
+        native = [AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title())) for k in sorted(native_ids)]
+        custom_types = [AvailableProviderInfo(id=v.value, label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title())) for v in ModelBackendProvider if v.value not in native_ids]
         return AvailableProvidersResponse(native=native, custom_types=custom_types)
     except HTTPException:
         raise
@@ -245,9 +236,7 @@ async def _apply_assistant_config_patch(
     the request are written; the merged dict is returned (and stored on the
     entry) so the response can render the merged state.
     """
-    result = await session.execute(
-        select(SystemConfig).where(SystemConfig.key == f"assistant_config:{principal.organisation_id}")
-    )
+    result = await session.execute(select(SystemConfig).where(SystemConfig.key == f"assistant_config:{principal.organisation_id}"))
     entry = result.scalar_one_or_none()
     if entry is None:
         entry = SystemConfig(key=f"assistant_config:{principal.organisation_id}", value={})
@@ -292,9 +281,7 @@ def _assistant_config_response(current: dict[str, Any]) -> AssistantConfigRespon
 
 @router.put(
     "/config",
-    dependencies=[
-        Depends(audited("assistant_config_updated", "assistant_config", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_config_updated", "assistant_config", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.assistant.update_assistant_config")
 async def update_assistant_config(
@@ -413,9 +400,7 @@ async def list_org_skills(
 
 @router.post(
     "/skills",
-    dependencies=[
-        Depends(audited("assistant_skill_created", "assistant_skill", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_skill_created", "assistant_skill", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.assistant.create_org_skill")
@@ -465,9 +450,7 @@ async def create_org_skill(
 
 @router.put(
     "/skills/{skill_id}",
-    dependencies=[
-        Depends(audited("assistant_skill_updated", "assistant_skill", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_skill_updated", "assistant_skill", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.assistant.update_org_skill")
 async def update_org_skill(
@@ -613,13 +596,7 @@ async def get_org_context_sources(
 
 @router.put(
     "/context-sources/{source_key}",
-    dependencies=[
-        Depends(
-            audited(
-                "assistant_context_source_updated", "assistant_context_source", principal_dep=get_current_tenant_user
-            )
-        )
-    ],
+    dependencies=[Depends(audited("assistant_context_source_updated", "assistant_context_source", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.assistant.set_org_context_source")
 async def set_org_context_source(

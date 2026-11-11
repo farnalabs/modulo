@@ -54,9 +54,7 @@ async def admin_list_config(
         return [
             ConfigEntry(
                 key=e.key,
-                value=(
-                    mask_sensitive_value(e.value) if isinstance(e.value, str) and is_sensitive_key(e.key) else e.value
-                ),
+                value=(mask_sensitive_value(e.value) if isinstance(e.value, str) and is_sensitive_key(e.key) else e.value),
                 updated_at=e.updated_at.isoformat() if e.updated_at else None,
             )
             for e in entries

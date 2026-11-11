@@ -50,14 +50,8 @@ def _signed_licence(*, tier: str, features: list[str], org_id: str = "", days: i
         "expires_at": (datetime.now(UTC) + timedelta(days=days)).isoformat(),
         "org_id": org_id,
     }
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
-    sig_b64 = (
-        base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, keypair["private_key"]))).decode().rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, keypair["private_key"]))).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}", keypair["public_key"]
 
 
@@ -161,9 +155,7 @@ class TestAdminSsoGating:
         assert body["status"] == 402
         assert body["type"] == "urn:problem:modulo:feature_required"
         assert body["instance"] == "sso"
-        assert body["detail"] == (
-            "sso is not available on your plan — it requires a Team licence installed at system or organisation scope"
-        )
+        assert body["detail"] == ("sso is not available on your plan — it requires a Team licence installed at system or organisation scope")
 
     def test_list_providers_succeeds_when_enabled(self, client_with_sso: TestClient) -> None:
         mock_provider = MagicMock()
@@ -374,9 +366,7 @@ class TestSsoAuthGating:
             await resolve_anonymous_plan_context(_settings_without_license(), broken_session)
 
         assert excinfo.value.status_code == 503
-        assert any("anonymous_plan_context_resolution_failed" in rec.message for rec in caplog.records), (
-            "a resolution failure must be logged, not swallowed"
-        )
+        assert any("anonymous_plan_context_resolution_failed" in rec.message for rec in caplog.records), "a resolution failure must be logged, not swallowed"
 
     async def test_single_org_with_no_identifiable_tenant_fails_closed(self) -> None:
         """Single-org invariant + ambiguous tenant -> 5xx, never system scope."""
@@ -504,15 +494,9 @@ class TestSsoAuthGating:
             ("get", "/api/v1/auth/saml/provider-x/login"),
         ],
     )
-    def test_per_provider_saml_routes_proceed_when_unlicensed(
-        self, client_no_sso: TestClient, method: str, path: str
-    ) -> None:
-        resp = (
-            client_no_sso.post(path, data={"SAMLResponse": "dGVzdA=="}) if method == "post" else client_no_sso.get(path)
-        )
-        assert resp.status_code not in (401, 402), (
-            f"{path} must not licence-gate an unauthenticated sign-in: {resp.status_code} {resp.text}"
-        )
+    def test_per_provider_saml_routes_proceed_when_unlicensed(self, client_no_sso: TestClient, method: str, path: str) -> None:
+        resp = client_no_sso.post(path, data={"SAMLResponse": "dGVzdA=="}) if method == "post" else client_no_sso.get(path)
+        assert resp.status_code not in (401, 402), f"{path} must not licence-gate an unauthenticated sign-in: {resp.status_code} {resp.text}"
 
     # ── FAR-2060: a determinate refusal still 402s and names the scope ──────
 
@@ -556,9 +540,7 @@ class TestSsoAuthGating:
         assert body["status"] == 402
         assert body["type"] == "urn:problem:modulo:feature_required"
         assert body["instance"] == "sso"
-        assert body["detail"] == (
-            "sso is not enabled for this organisation — the feature is switched off, not restricted by your licence"
-        )
+        assert body["detail"] == ("sso is not enabled for this organisation — the feature is switched off, not restricted by your licence")
         assert "Team licence" not in body["detail"]
 
     # ── FAR-2059/2060: discovery visibility ────────────────────────────────
@@ -889,9 +871,7 @@ class TestAuthenticatedRoutesStillGuarded:
             resp = client.get("/api/v1/admin/sso/providers")
         finally:
             app.dependency_overrides.clear()
-        assert resp.status_code == 401, (
-            f"Admin SSO route must still require authentication, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 401, f"Admin SSO route must still require authentication, got {resp.status_code}: {resp.text}"
 
 
 class TestOidcLoginPublicUrlBridge:
@@ -921,7 +901,7 @@ class TestOidcLoginPublicUrlBridge:
 
         RuntimeConfigStore.reset()
         store = get_runtime_config_store()
-        store.set_override("MODULO_PUBLIC_URL", "https://hot.example.com")
+        store.set_override("FARNA_CONTROL_MODULO_PUBLIC_URL", "https://hot.example.com")
         try:
             with patch(
                 "farna.api.routes.sso.oidc_get_authorize_url",
@@ -929,7 +909,7 @@ class TestOidcLoginPublicUrlBridge:
             ):
                 resp = client_with_sso.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
         finally:
-            store.clear_override("MODULO_PUBLIC_URL")
+            store.clear_override("FARNA_CONTROL_MODULO_PUBLIC_URL")
             RuntimeConfigStore.reset()
 
         assert resp.status_code == 307, resp.text

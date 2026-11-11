@@ -96,7 +96,7 @@ def _write_scratch_tree(rootdir: Path, suite_dir: Path) -> None:
 def _run_pytest(rootdir: Path, target: str, *extra_args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(BACKEND), env.get("PYTHONPATH")]))
-    env.pop("MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", None)
+    env.pop("FARNA_CONTROL_MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", None)
     env.update(extra_env)
 
     return subprocess.run(  # noqa: S603 — fixed argv, sys.executable, no untrusted input

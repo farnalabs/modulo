@@ -52,8 +52,7 @@ def resolve_signing_key_pem(private_key_pem: str | None = None) -> str:
     if configured:
         return configured
     raise EvidenceSigningError(
-        "No evidence signing key configured — set MODULO_EVIDENCE_SIGNING_KEY "
-        "(a PEM-encoded Ed25519 private key) to emit signed evidence packs.",
+        "No evidence signing key configured — set MODULO_EVIDENCE_SIGNING_KEY (a PEM-encoded Ed25519 private key) to emit signed evidence packs.",
     )
 
 

@@ -28,9 +28,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS resolution VARCHAR(20) NOT NULL DEFAULT 'pending'")
     op.execute("ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS resolution_reason TEXT")
     op.execute("ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
-    op.execute(
-        "ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS resolved_by UUID REFERENCES accounts(id) ON DELETE SET NULL"
-    )
+    op.execute("ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS resolved_by UUID REFERENCES accounts(id) ON DELETE SET NULL")
 
     # Add CHECK constraint for resolution vocabulary
     op.execute(
@@ -49,11 +47,7 @@ def downgrade() -> None:
         return
 
     op.execute("DROP INDEX IF EXISTS ix_eval_results_eval_id_resolution")
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_resolution' "
-        "AND conrelid = 'public.eval_results'::regclass) THEN "
-        "ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_resolution; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_resolution' AND conrelid = 'public.eval_results'::regclass) THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_resolution; END IF; END $$;")
     op.execute("ALTER TABLE eval_results DROP COLUMN IF EXISTS resolved_by")
     op.execute("ALTER TABLE eval_results DROP COLUMN IF EXISTS resolved_at")
     op.execute("ALTER TABLE eval_results DROP COLUMN IF EXISTS resolution_reason")

@@ -79,10 +79,7 @@ def downgrade() -> None:
         )
     null_emails = bind.execute(sa.text("SELECT COUNT(*) FROM accounts WHERE email IS NULL")).scalar()
     if null_emails:
-        raise RuntimeError(
-            f"Refusing to downgrade 0296: {null_emails} accounts row(s) have a NULL email. "
-            "Restoring NOT NULL would fail. Backfill or remove those rows first."
-        )
+        raise RuntimeError(f"Refusing to downgrade 0296: {null_emails} accounts row(s) have a NULL email. Restoring NOT NULL would fail. Backfill or remove those rows first.")
     op.alter_column(_TABLE, "auth_provider", existing_type=sa.String(length=20), nullable=False, server_default="local")
     op.alter_column(_TABLE, "email", existing_type=sa.String(length=320), nullable=False)
     op.drop_constraint(_SERVICE_PRIVILEGE_CHECK, _TABLE, type_="check")

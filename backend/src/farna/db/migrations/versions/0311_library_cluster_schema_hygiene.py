@@ -97,9 +97,7 @@ _RECREATE_REDUNDANT_INDEXES: tuple[str, ...] = (
 # (3) — trust_tier vocabulary. The allowed set is exactly VALID_TIERS from
 # crud/publisher.py ({"green", "amber"}), mirrored by the admin route's
 # _RE_GREEN_OR_AMBER pattern.
-_ADD_TRUST_TIER_CHECK = (
-    "ALTER TABLE publishers ADD CONSTRAINT ck_publishers_trust_tier CHECK (trust_tier IN ('green', 'amber')) NOT VALID"
-)
+_ADD_TRUST_TIER_CHECK = "ALTER TABLE publishers ADD CONSTRAINT ck_publishers_trust_tier CHECK (trust_tier IN ('green', 'amber')) NOT VALID"
 _VALIDATE_TRUST_TIER_CHECK = "ALTER TABLE publishers VALIDATE CONSTRAINT ck_publishers_trust_tier"
 _DROP_TRUST_TIER_CHECK = "ALTER TABLE publishers DROP CONSTRAINT IF EXISTS ck_publishers_trust_tier"
 
@@ -107,17 +105,9 @@ _DROP_TRUST_TIER_CHECK = "ALTER TABLE publishers DROP CONSTRAINT IF EXISTS ck_pu
 # ``<table>_<column>_fkey`` the sibling self-references already carry
 # (library_primitives_forked_from_fkey, ..._update_available_version_id_fkey),
 # so the ORM's unnamed ``ForeignKey(...)`` and the migrated DB agree.
-_ADD_VERSION_GROUP_FK = (
-    "ALTER TABLE library_primitives ADD CONSTRAINT library_primitives_version_group_id_fkey "
-    "FOREIGN KEY (version_group_id) REFERENCES library_primitives(id) "
-    "ON DELETE SET NULL NOT VALID"
-)
-_VALIDATE_VERSION_GROUP_FK = (
-    "ALTER TABLE library_primitives VALIDATE CONSTRAINT library_primitives_version_group_id_fkey"
-)
-_DROP_VERSION_GROUP_FK = (
-    "ALTER TABLE library_primitives DROP CONSTRAINT IF EXISTS library_primitives_version_group_id_fkey"
-)
+_ADD_VERSION_GROUP_FK = "ALTER TABLE library_primitives ADD CONSTRAINT library_primitives_version_group_id_fkey FOREIGN KEY (version_group_id) REFERENCES library_primitives(id) ON DELETE SET NULL NOT VALID"
+_VALIDATE_VERSION_GROUP_FK = "ALTER TABLE library_primitives VALIDATE CONSTRAINT library_primitives_version_group_id_fkey"
+_DROP_VERSION_GROUP_FK = "ALTER TABLE library_primitives DROP CONSTRAINT IF EXISTS library_primitives_version_group_id_fkey"
 
 # (4b) — the same-organisation tenant trigger the siblings carry (0109),
 # copied verbatim in shape: idempotent pg_trigger guard, column-scoped
@@ -132,9 +122,7 @@ _CREATE_VERSION_GROUP_TENANT_TRIGGER = (
     "FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('library_primitives', 'version_group_id'); "
     "END IF; END $$;"
 )
-_DROP_VERSION_GROUP_TENANT_TRIGGER = (
-    "DROP TRIGGER IF EXISTS trg_library_primitives_version_group_id_tenant ON public.library_primitives"
-)
+_DROP_VERSION_GROUP_TENANT_TRIGGER = "DROP TRIGGER IF EXISTS trg_library_primitives_version_group_id_tenant ON public.library_primitives"
 
 
 def _constraint_exists(table: str, name: str) -> bool:

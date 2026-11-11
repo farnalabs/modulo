@@ -21,8 +21,8 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "a" * 32)
 os.environ.setdefault("REDIS_URL", "")
-os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
 
 
 @pytest.fixture(scope="module")
@@ -305,9 +305,7 @@ def test_node_nullable_fields(schemas: dict[str, Any]) -> None:
     for field in _EXPECTED_NODE_NULLABLE:
         prop = node["properties"].get(field)
         assert prop is not None, f"nullable field {field} missing"
-        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), (
-            f"field {field} is not nullable"
-        )
+        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), f"field {field} is not nullable"
 
 
 def test_edge_nullable_fields(schemas: dict[str, Any]) -> None:
@@ -315,9 +313,7 @@ def test_edge_nullable_fields(schemas: dict[str, Any]) -> None:
     for field in _EXPECTED_EDGE_NULLABLE:
         prop = edge["properties"].get(field)
         assert prop is not None, f"nullable field {field} missing"
-        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), (
-            f"field {field} is not nullable"
-        )
+        assert any(isinstance(choice, dict) and choice.get("type") == "null" for choice in prop.get("anyOf", [])), f"field {field} is not nullable"
 
 
 def test_write_response_models_differ_only_by_diagnostics(schemas: dict[str, Any]) -> None:
@@ -400,9 +396,7 @@ def test_no_additional_properties_forbidden(schemas: dict[str, Any]) -> None:
         comp = schemas[name]
         # The component's top-level additionalProperties must NOT be False
         addl = comp.get("additionalProperties")
-        assert addl is not False, (
-            f"{name}: additionalProperties is False (extra='forbid' would be a breaking contract change)"
-        )
+        assert addl is not False, f"{name}: additionalProperties is False (extra='forbid' would be a breaking contract change)"
 
 
 def test_node_object_properties_allow_extra(schemas: dict[str, Any]) -> None:
@@ -437,9 +431,7 @@ def test_node_object_properties_allow_extra(schemas: dict[str, Any]) -> None:
         if obj is not None:
             addl = obj.get("additionalProperties")
             # Accept True, {} (empty object = true), or {"type": "string"} (string values allowed)
-            assert addl is True or addl == {} or (isinstance(addl, dict) and addl.get("type") == "string"), (
-                f"PipelineGraphNode.{field}: nested dict must allow extra keys, got {addl!r}"
-            )
+            assert addl is True or addl == {} or (isinstance(addl, dict) and addl.get("type") == "string"), f"PipelineGraphNode.{field}: nested dict must allow extra keys, got {addl!r}"
 
 
 def test_edge_condition_expression_constraints(schemas: dict[str, Any]) -> None:

@@ -36,17 +36,17 @@ _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 class TestAdminAuth:
     def test_missing_credentials_returns_none(self) -> None:
-        env = {"MODULO_ADMIN_SECRET": ""}
+        env = {"FARNA_CONTROL_MODULO_ADMIN_SECRET": ""}
         with patch.dict("os.environ", env, clear=False):
             assert _resolve_admin_auth(None) is None
 
     def test_env_secret_fallback(self) -> None:
-        env = {"MODULO_ADMIN_SECRET": "op-secret"}
+        env = {"FARNA_CONTROL_MODULO_ADMIN_SECRET": "op-secret"}
         with patch.dict("os.environ", env, clear=False):
             assert _resolve_admin_auth(None) == "__admin_secret__"
 
     def test_explicit_token_takes_priority(self) -> None:
-        env = {"MODULO_ADMIN_SECRET": "op-secret-ignored"}
+        env = {"FARNA_CONTROL_MODULO_ADMIN_SECRET": "op-secret-ignored"}
         principal = MagicMock(org_role="admin", user_id=_ADMIN_ID)
         with (
             patch.dict("os.environ", env, clear=False),
@@ -373,7 +373,7 @@ class TestJsonlIO:
 class TestCliCommands:
     def test_cli_requires_auth(self) -> None:
         runner = CliRunner()
-        env = {"MODULO_ADMIN_TOKEN": "", "MODULO_ADMIN_SECRET": ""}
+        env = {"FARNA_CONTROL_MODULO_ADMIN_TOKEN": "", "FARNA_CONTROL_MODULO_ADMIN_SECRET": ""}
         with patch.dict("os.environ", env, clear=False):
             result = runner.invoke(
                 migrate_mod.cli,

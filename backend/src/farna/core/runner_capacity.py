@@ -219,9 +219,7 @@ MARKER_STATE_CLEARED_AT_HITL = "cleared_at_hitl"
 # The SQL filter that applies this set is
 # ``modulo.db.crud.run.RUNNER_HOST_RESOURCE_FILTER_SQL`` (the DB layer owns
 # the count body); the two MUST stay in step.
-HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset(
-    {RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL, RUNNER_PROVIDER_KUBERNETES}
-)
+HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL, RUNNER_PROVIDER_KUBERNETES})
 
 # SQL provider attribution: markers carrying a JSON "provider" key are
 # attributed from it; legacy tier-less markers (pre-D8 JSON without the key,
@@ -490,12 +488,7 @@ async def _lock_dispatch_run_row(
     """Claim-token-fenced ``FOR UPDATE`` on the run's own row; None = fenced."""
     return (
         await session.execute(
-            text(
-                "SELECT claim_count FROM runs "
-                "WHERE id = :rid AND organisation_id = :oid "
-                "AND claim_token = :tok AND status = 'running' "
-                "FOR UPDATE"
-            ),
+            text("SELECT claim_count FROM runs WHERE id = :rid AND organisation_id = :oid AND claim_token = :tok AND status = 'running' FOR UPDATE"),
             {"rid": run_id, "oid": str(org_id), "tok": claim_token},
         )
     ).fetchone()
@@ -548,9 +541,7 @@ def _reject_at_capacity(
             "host_resource_only": decision.host_resource_only,
         },
     )
-    raise RunnerCapacityDeniedError(
-        f"Runner dispatch denied: org {org_id} at capacity ({decision.active}/{decision.cap} active runner dispatches)"
-    )
+    raise RunnerCapacityDeniedError(f"Runner dispatch denied: org {org_id} at capacity ({decision.active}/{decision.cap} active runner dispatches)")
 
 
 async def _write_dispatch_reservation(
@@ -565,12 +556,7 @@ async def _write_dispatch_reservation(
 ) -> bool:
     """Fenced marker UPDATE; False when the claim rotated mid-transaction."""
     marker_result = await session.execute(
-        text(
-            "UPDATE runs SET sandbox_dispatch_state = :marker "
-            "WHERE id = :rid AND organisation_id = :oid "
-            "AND claim_token = :tok AND status = 'running' "
-            "RETURNING id"
-        ),
+        text("UPDATE runs SET sandbox_dispatch_state = :marker WHERE id = :rid AND organisation_id = :oid AND claim_token = :tok AND status = 'running' RETURNING id"),
         {
             "rid": run_id,
             "oid": str(org_id),
@@ -654,9 +640,7 @@ def _handle_capacity_gate_error(
             extra={"run_id": run_id, "org_id": str(org_id), "node_id": node_id},
             exc_info=True,
         )
-        raise RunnerCapacityDeniedError(
-            f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}"
-        ) from exc
+        raise RunnerCapacityDeniedError(f"Runner capacity lock degraded (lock_timeout={lock_timeout_ms}ms) for org {org_id}") from exc
     if sqlstate == "40P01":
         # Deadlock — expected impossible under the uniform row→advisory
         # ordering; a separate alarm, not the routine degradation path.
@@ -819,14 +803,7 @@ async def mark_runner_dispatch_cleared_at_hitl(
             # helper takes no lock itself, so it cannot disturb ordering).
             await set_mutation_row_lock_timeout(session)
             result = await session.execute(
-                text(
-                    "UPDATE runs SET sandbox_dispatch_state = :tombstone "
-                    "WHERE id = :rid AND organisation_id = :oid "
-                    "AND claim_token = :tok AND status = 'running' "
-                    "AND sandbox_dispatch_state IS NOT NULL "
-                    'AND sandbox_dispatch_state NOT LIKE \'%"state": "script_executing"%\' '
-                    "RETURNING id"
-                ),
+                text("UPDATE runs SET sandbox_dispatch_state = :tombstone WHERE id = :rid AND organisation_id = :oid AND claim_token = :tok AND status = 'running' AND sandbox_dispatch_state IS NOT NULL AND sandbox_dispatch_state NOT LIKE '%\"state\": \"script_executing\"%' RETURNING id"),
                 {"rid": run_id, "oid": str(org_id), "tok": claim_token, "tombstone": build_hitl_tombstone()},
             )
             tombstoned = result.fetchone() is not None
@@ -848,10 +825,7 @@ async def mark_runner_dispatch_cleared_at_hitl(
             # clears it; capacity-neutral tombstones only matter while the
             # run is parked, and the sweep owns stale markers regardless.
             _log.warning(
-                "runner.capacity.hitl_tombstone_lock_timeout run=%s — SQLSTATE 55P03 from the "
-                "bounded mutation_row_lock_timeout_ms wait; tombstone NOT written (transaction "
-                "rolled back), so the dispatch marker SURVIVES the park and the marker sweep "
-                "owns clearing it",
+                "runner.capacity.hitl_tombstone_lock_timeout run=%s — SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait; tombstone NOT written (transaction rolled back), so the dispatch marker SURVIVES the park and the marker sweep owns clearing it",
                 run_id,
                 extra={"run_id": run_id, "org_id": str(org_id)},
                 exc_info=True,
@@ -893,13 +867,7 @@ DEFAULT_NODE_STARTED_STALE_SECONDS = 7200
 SWEEP_CANDIDATE_BATCH = 500
 
 _SWEEP_CANDIDATE_SQL = text(
-    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at, dispatch_phase, "
-    "heartbeat_at, started_at, created_at "
-    "FROM runs "
-    "WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
-    "AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) "
-    "ORDER BY id "
-    "LIMIT :batch"
+    "SELECT id, status, error_code, sandbox_dispatch_state, updated_at, dispatch_phase, heartbeat_at, started_at, created_at FROM runs WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) ORDER BY id LIMIT :batch"
 )
 
 # CAS sweep updates (F2): every clear/transition re-checks the EXACT marker
@@ -912,12 +880,7 @@ _SWEEP_CANDIDATE_SQL = text(
 # the sandbox id is the evidence the D4 workspace reconciler needs to find and
 # destroy the container. Only the stale-RUNNING transition nulls it (that run
 # is killed — its workspace must not be re-adopted).
-_CLEAR_MARKER_SQL = text(
-    "UPDATE runs SET sandbox_dispatch_state = NULL "
-    "WHERE id = :rid AND organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
-    "AND sandbox_dispatch_state = :marker_seen "
-    "RETURNING id"
-)
+_CLEAR_MARKER_SQL = text("UPDATE runs SET sandbox_dispatch_state = NULL WHERE id = :rid AND organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL AND sandbox_dispatch_state = :marker_seen RETURNING id")
 
 # A stale-clear on a non-terminal RUNNING run also transitions it terminal
 # (the house worker-death code) so no zombie
@@ -934,11 +897,7 @@ _TRANSITION_STALE_RUNNING_SQL = text(
     "RETURNING id"
 )
 
-_SWEEP_STALE_DETAIL = (
-    "Runner marker reconciliation: dispatch marker stale past threshold "
-    "(or a node-started run whose executor died — FAR-1808); "
-    "slot reclaimed and run terminalised (FAR-594 D8)."
-)
+_SWEEP_STALE_DETAIL = "Runner marker reconciliation: dispatch marker stale past threshold (or a node-started run whose executor died — FAR-1808); slot reclaimed and run terminalised (FAR-594 D8)."
 
 
 def sweep_staleness_reference(
@@ -1267,10 +1226,7 @@ class RunnerMarkerSweepError(RuntimeError):
     detail: str = ""
 
     def __post_init__(self) -> None:
-        super().__init__(
-            f"scanned={self.scanned}, cleared={self.cleared}, "
-            f"transitioned={self.transitioned}, org_failures={self.org_failures}"
-        )
+        super().__init__(f"scanned={self.scanned}, cleared={self.cleared}, transitioned={self.transitioned}, org_failures={self.org_failures}")
 
 
 # Bounded polling for the SESSION-scoped sweep dedup advisory lock. Mirrors
@@ -1594,9 +1550,7 @@ def _resolve_sweep_windows(settings: Any, stale_seconds: int | None) -> tuple[in
     # FAR-1808: the node-started reclaim bound. The authoritative value is the
     # Settings knob; a double that does not expose it falls back to the module
     # default so the sweep still runs (the fallback equals the shipped default).
-    node_started_stale_seconds = int(
-        getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS)
-    )
+    node_started_stale_seconds = int(getattr(settings, "node_started_stale_seconds", DEFAULT_NODE_STARTED_STALE_SECONDS))
     # The heartbeat-freshness window for the d2 exemption AND the FAR-1808
     # liveness condition: a run whose heartbeat (falling back to
     # started_at/created_at) is more recent than the reconciler's

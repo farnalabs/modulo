@@ -234,9 +234,7 @@ class RedisTokenBucket:
                 "rest.rate_limit.corrupt_bucket",
                 extra={"bucket": key_, "result": result},
             )
-            raise SharedBudgetUnavailableError(
-                f"shared rate-limit bucket {key_!r} was corrupt; refusing to re-burst (fail-closed)"
-            )
+            raise SharedBudgetUnavailableError(f"shared rate-limit bucket {key_!r} was corrupt; refusing to re-burst (fail-closed)")
         return bool(result)
 
 
@@ -278,10 +276,7 @@ class PerDestinationRateLimiter:
             # tenant to "default" would bucket every caller into ONE Redis budget
             # across distinct orgs (a cross-tenant leak). Require a tenant at the
             # composition root — fail loud rather than share a budget.
-            raise ValueError(
-                "a shared (Redis) per-destination rate limiter requires a non-empty tenant_id; "
-                "refusing to bucket every caller into a shared 'default' budget (cross-tenant leak)"
-            )
+            raise ValueError("a shared (Redis) per-destination rate limiter requires a non-empty tenant_id; refusing to bucket every caller into a shared 'default' budget (cross-tenant leak)")
         self.rate = float(rate)
         self.burst = int(burst)
         self._redis_client = redis_client
@@ -332,9 +327,7 @@ class PerDestinationRateLimiter:
                             "error": str(exc2),
                         },
                     )
-                    raise SharedBudgetUnavailableError(
-                        f"shared rate-limit budget unavailable for {self.key(destination)!r}: {exc2}"
-                    ) from exc2
+                    raise SharedBudgetUnavailableError(f"shared rate-limit budget unavailable for {self.key(destination)!r}: {exc2}") from exc2
             if ok:
                 self._saturated[destination] = False
             else:

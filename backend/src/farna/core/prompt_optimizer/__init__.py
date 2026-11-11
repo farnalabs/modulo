@@ -166,9 +166,7 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
     suggested_prompt = parsed.get("suggested_prompt")
     rationale = parsed.get("rationale")
     if not isinstance(suggested_prompt, str):
-        raise OptimizationFailedError(
-            f"LLM response 'suggested_prompt' must be a string, got {type(suggested_prompt).__name__}"
-        )
+        raise OptimizationFailedError(f"LLM response 'suggested_prompt' must be a string, got {type(suggested_prompt).__name__}")
     if not isinstance(rationale, str):
         raise OptimizationFailedError(f"LLM response 'rationale' must be a string, got {type(rationale).__name__}")
     analysis = parsed.get("analysis")

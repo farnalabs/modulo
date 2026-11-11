@@ -61,11 +61,7 @@ def _reject_mask_sentinel_sub_nodes(sub_nodes: list[Any], context: str) -> None:
     findings = find_mask_sentinel_values(sub_nodes)
     if not findings:
         return
-    raise MaskedCredentialExpansionError(
-        f"{MASK_SENTINEL_ISSUE_CODE}: {context} has a credential mask sentinel at "
-        f"{format_mask_sentinel_detail(findings)}; re-enter the real credential value in the "
-        "composite editor before this pipeline can run."
-    )
+    raise MaskedCredentialExpansionError(f"{MASK_SENTINEL_ISSUE_CODE}: {context} has a credential mask sentinel at {format_mask_sentinel_detail(findings)}; re-enter the real credential value in the composite editor before this pipeline can run.")
 
 
 def _is_composite_node(node: dict[str, Any]) -> bool:
@@ -208,10 +204,7 @@ def _validate_model_judge_eval(
     Kept (rather than deleted) so a direct caller fails loudly too instead of
     resurrecting the silently-incomparable path.
     """
-    raise NotImplementedError(
-        f"model_judge output validation ({name!r}) is not supported by the composite "
-        "engine (ADR 066 D11: explicit named exclusion). Use a pipeline eval."
-    )
+    raise NotImplementedError(f"model_judge output validation ({name!r}) is not supported by the composite engine (ADR 066 D11: explicit named exclusion). Use a pipeline eval.")
 
 
 async def execute_composite_with_retry(
@@ -431,8 +424,7 @@ def _remap_edge_refs(
         tgt = str(edge.get("target"))
         if src not in sub_ids or tgt not in sub_ids:
             logger.warning(
-                "Composite edge %s references sub-node id(s) not present in the template "
-                "of composite node %s: source=%s target=%s",
+                "Composite edge %s references sub-node id(s) not present in the template of composite node %s: source=%s target=%s",
                 edge.get("id", "?"),
                 parent_node_id,
                 src,
@@ -534,11 +526,7 @@ def _rewire_edges(
         target = str(edge.get("target"))
         source_ids = _resolve_endpoint(source, leaf_map, composite_map, endpoint="exit")
         target_ids = _resolve_endpoint(target, leaf_map, composite_map, endpoint="entry")
-        rewired.extend(
-            _rewire_edge_metadata(edge, src, tgt, leaf_map=leaf_map, composite_map=composite_map)
-            for src in source_ids
-            for tgt in target_ids
-        )
+        rewired.extend(_rewire_edge_metadata(edge, src, tgt, leaf_map=leaf_map, composite_map=composite_map) for src in source_ids for tgt in target_ids)
     return rewired
 
 
@@ -693,16 +681,12 @@ class _CompositeExpander:
         for idx, sub in enumerate(sub_nodes):
             old_id = str(sub.get("id"))
             if _is_composite_node(sub):
-                nested, nested_entries, nested_exits = await self._expand_nested_composite(
-                    old_id, sub, parameter_values, depth
-                )
+                nested, nested_entries, nested_exits = await self._expand_nested_composite(old_id, sub, parameter_values, depth)
                 composite_id_map[old_id] = nested
                 del leaf_id_map[old_id]
                 flat_nodes.extend(nested.nodes)
                 bindings.extend(nested.bindings)
-                self._record_boundary(
-                    old_id, incoming_ids, outgoing_ids, entry_ids, exit_ids, nested_entries, nested_exits
-                )
+                self._record_boundary(old_id, incoming_ids, outgoing_ids, entry_ids, exit_ids, nested_entries, nested_exits)
                 continue
 
             new_id = leaf_id_map[old_id]
@@ -721,9 +705,7 @@ class _CompositeExpander:
     ) -> _ExpandedComposite:
         """Expand one composite node's sub-pipeline into flat nodes and edges."""
         if depth > self._depth_limit:
-            raise ValueError(
-                f"Composite nesting exceeds depth limit {self._depth_limit} for node '{composite_node.get('id')}'"
-            )
+            raise ValueError(f"Composite nesting exceeds depth limit {self._depth_limit} for node '{composite_node.get('id')}'")
 
         sub_nodes, sub_edges = self._sub_graph_parts(template)
 

@@ -30,12 +30,12 @@ _OTHER_EMAIL = "demo-rls-other@example.com"
 
 async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Demo-org rows and other-org rows are mutually invisible under RLS."""
-    monkeypatch.setenv("MODULO_DEMO_ENABLED", "1")
-    monkeypatch.setenv("MODULO_DEMO_USER", _DEMO_EMAIL)
-    monkeypatch.setenv("MODULO_DEMO_PASSWORD", _DEMO_PASSWORD)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DEMO_ENABLED", "1")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DEMO_USER", _DEMO_EMAIL)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DEMO_PASSWORD", _DEMO_PASSWORD)
     # The demo seed creates a second org ("demo"), which the ADR 005 single-org
     # invariant blocks unless multi-org is explicitly enabled (FAR-929).
-    monkeypatch.setenv("MODULO_MULTI_ORG_ENABLED", "true")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_MULTI_ORG_ENABLED", "true")
     get_settings.cache_clear()
 
     role = f"test_demo_rls_{uuid.uuid4().hex[:8]}"
@@ -102,9 +102,7 @@ async def test_demo_seed_org_isolation_under_rls(db_engine: AsyncEngine, monkeyp
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
             await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(other_org_id)})
-            other_pipeline_names = {
-                row[0] for row in (await conn.execute(text("SELECT name FROM pipelines"))).fetchall()
-            }
+            other_pipeline_names = {row[0] for row in (await conn.execute(text("SELECT name FROM pipelines"))).fetchall()}
             other_run_count = (await conn.execute(text("SELECT count(*) FROM runs"))).scalar_one()
         assert "Other Org Pipeline" in other_pipeline_names
         assert "Demo Governance Pipeline" not in other_pipeline_names

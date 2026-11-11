@@ -120,9 +120,7 @@ def _warn_if_external_backend_unconfigured(name: str) -> None:
     """
     if name == "vault" and not (os.environ.get("VAULT_ADDR") or "").strip():
         logger.warning(
-            "Secrets backend 'vault' is selected but VAULT_ADDR is unset; "
-            "VaultSecretsBackend construction will fail rather than silently "
-            "falling back to fernet.",
+            "Secrets backend 'vault' is selected but VAULT_ADDR is unset; VaultSecretsBackend construction will fail rather than silently falling back to fernet.",
         )
 
 
@@ -162,7 +160,7 @@ def create_secrets_backend(
             or ``"aws"``.
 
     """
-    name = (backend_name or os.environ.get("MODULO_SECRETS_BACKEND") or "fernet").lower().strip()
+    name = (backend_name or os.environ.get("FARNA_CONTROL_MODULO_SECRETS_BACKEND") or "fernet").lower().strip()
 
     match name:
         case "fernet":

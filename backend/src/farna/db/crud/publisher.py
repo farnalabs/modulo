@@ -69,13 +69,7 @@ async def list_publishers(
         count_q = select(func.count()).select_from(Publisher).where(*conditions)
         total = (await session.execute(count_q)).scalar() or 0
 
-        items_stmt = (
-            select(Publisher)
-            .where(*conditions)
-            .order_by(Publisher.trust_tier, Publisher.name)
-            .offset(offset)
-            .limit(page_size)
-        )
+        items_stmt = select(Publisher).where(*conditions).order_by(Publisher.trust_tier, Publisher.name).offset(offset).limit(page_size)
         items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)

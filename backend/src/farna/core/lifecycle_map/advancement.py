@@ -527,11 +527,7 @@ async def advance_journeys(
     if not refs:
         return 0
 
-    advancing = (
-        (status in _ADVANCING_TERMINAL_STATUSES or status == _AWAITING_HUMAN)
-        and not is_replay
-        and variant_group_id is None
-    )
+    advancing = (status in _ADVANCING_TERMINAL_STATUSES or status == _AWAITING_HUMAN) and not is_replay and variant_group_id is None
 
     # run_count increments only for terminal advancing statuses; awaiting_human
     # updates latest evidence but must not count (the run is not terminal).
@@ -684,9 +680,7 @@ async def _upsert_one_provenance(
     agent_suppressed = 0
     dismissed_suppressed = 0
     if agent:
-        agent_minted, agent_suppressed, dismissed_suppressed, skip_write = await _classify_agent_provenance(
-            session, organisation_id, canonical, include_agent
-        )
+        agent_minted, agent_suppressed, dismissed_suppressed, skip_write = await _classify_agent_provenance(session, organisation_id, canonical, include_agent)
         if skip_write:
             return (0, agent_minted, agent_suppressed, dismissed_suppressed)
     params = _ref_params(organisation_id, canonical)

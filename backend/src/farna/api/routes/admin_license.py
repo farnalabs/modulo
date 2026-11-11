@@ -445,9 +445,7 @@ async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusR
     """Best-effort Redis cache read for an org's license status."""
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         cached = await redis.get(f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}")
         if cached:
             return LicenseStatusResponse(**json.loads(cached))
@@ -463,12 +461,8 @@ async def _write_license_cache(settings: Settings, org_id: str, response: Licens
     """Best-effort Redis cache write (60s TTL) for an org's license status."""
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
-        await redis.set(
-            f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}", response.model_dump_json(), ex=_LICENSE_CACHE_TTL_SECONDS
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
+        await redis.set(f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}", response.model_dump_json(), ex=_LICENSE_CACHE_TTL_SECONDS)
     except Exception:
         logger.warning("license.cache_write_failed", exc_info=True)
     finally:
@@ -493,9 +487,7 @@ async def invalidate_license_status_cache(settings: Settings, org_id: str | None
     """
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         if org_id is not None:
             await redis.delete(f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}")
             return
@@ -617,9 +609,7 @@ async def upload_license(
     # on the next deploy and is invisible to the worker. Writing first means a
     # failed write surfaces as an error and leaves this process on its old
     # licence, rather than reporting success for an install that will vanish.
-    await persist_installed_system_license(
-        session, req.license_key, parked=is_parked(data), updated_by=principal.user_id
-    )
+    await persist_installed_system_license(session, req.license_key, parked=is_parked(data), updated_by=principal.user_id)
     store_license(req.license_key, data)
     # A system-licence change can flip the effective resolution of EVERY org
     # that falls back to the system licence, so bust every cached entry. The
@@ -740,17 +730,9 @@ async def issue_license(
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
-                "detail": (
-                    "Generated license key failed signature verification against this deployment's "
-                    "trust anchor. Check that MODULO_LICENSE_PRIVATE_KEY and MODULO_LICENSE_PUBLIC_KEY "
-                    "belong to the same Ed25519 keypair (anchor mismatch)."
-                ),
+                "detail": ("Generated license key failed signature verification against this deployment's trust anchor. Check that MODULO_LICENSE_PRIVATE_KEY and MODULO_LICENSE_PUBLIC_KEY belong to the same Ed25519 keypair (anchor mismatch)."),
                 "reason": validation.reason or REASON_SIGNATURE_MISMATCH,
-                "hint": (
-                    "The signing key and the anchor must be the two halves of one keypair. "
-                    "Set MODULO_LICENSE_PUBLIC_KEY to the public key derived from "
-                    "MODULO_LICENSE_PRIVATE_KEY."
-                ),
+                "hint": ("The signing key and the anchor must be the two halves of one keypair. Set MODULO_LICENSE_PUBLIC_KEY to the public key derived from MODULO_LICENSE_PRIVATE_KEY."),
             },
         )
 

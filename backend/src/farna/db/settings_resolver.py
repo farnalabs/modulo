@@ -69,7 +69,7 @@ async def resolve_schema_validator_mode(
     )
     if raw is None:
         # First-boot seed: env var.
-        raw = os.environ.get("MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
+        raw = os.environ.get("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "lenient")
     if not isinstance(raw, str) or raw not in _VALID_SCHEMA_VALIDATOR_MODES:
         return "lenient"
     return raw
@@ -140,9 +140,7 @@ async def org_is_paused(session: AsyncSession, org_id: uuid.UUID) -> bool:
 
     from farna.db.models.organisation import Organisation
 
-    result = await session.execute(
-        select(Organisation.triggers_paused, Organisation.status).where(Organisation.id == org_id)
-    )
+    result = await session.execute(select(Organisation.triggers_paused, Organisation.status).where(Organisation.id == org_id))
     row = result.one_or_none()
     if row is None:
         return True

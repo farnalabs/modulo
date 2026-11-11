@@ -99,11 +99,7 @@ async def _rotate_model_backends(session: AsyncSession, new_fernet: Fernet, old_
 
 async def _rotate_notification_endpoints(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
     """Re-encrypt secret_ciphertext in notification_endpoints (nullable)."""
-    rows = (
-        await session.execute(
-            text("SELECT id, secret_ciphertext FROM notification_endpoints WHERE secret_ciphertext IS NOT NULL")
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT id, secret_ciphertext FROM notification_endpoints WHERE secret_ciphertext IS NOT NULL"))).all()
     count = 0
     for row in rows:
         new_ct = re_encrypt_bytes(row.secret_ciphertext, new_fernet, old_fernet)
@@ -137,10 +133,7 @@ def _reencrypt_trigger_secret_or_classify(
     if is_encrypted_secret(stored, new_key, old_key):
         return re_encrypt_str(stored, new_fernet, old_fernet)
     if _is_complete_fernet_token(stored):
-        raise InvalidToken(
-            f"trigger {row_id} config key {key}: stored value is a structurally complete "
-            "Fernet token that neither the new nor the old key can decrypt"
-        )
+        raise InvalidToken(f"trigger {row_id} config key {key}: stored value is a structurally complete Fernet token that neither the new nor the old key can decrypt")
     return None
 
 
@@ -265,11 +258,7 @@ async def _rotate_triggers(
             # (caught by the integration test; the unit-tier SQL-text
             # assertion cannot see it).
             await session.execute(
-                text(
-                    "UPDATE triggers SET config_json = "
-                    "jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(CAST(:ct AS text))) "
-                    "WHERE id = :id"
-                ),
+                text("UPDATE triggers SET config_json = jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(CAST(:ct AS text))) WHERE id = :id"),
                 {"key": key, "ct": new_ct, "id": row.id},
             )
         count += 1
@@ -289,14 +278,7 @@ async def _rotate_otel_config(session: AsyncSession, new_fernet: Fernet, old_fer
     this column). The SELECT still reads the whole document (it only needs the
     stored ciphertext to re-encrypt); only the WRITE is narrow.
     """
-    rows = (
-        await session.execute(
-            text(
-                "SELECT id, otel_config_json FROM organisations "
-                "WHERE otel_config_json->>'langsmith_api_key_ciphertext' IS NOT NULL"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT id, otel_config_json FROM organisations WHERE otel_config_json->>'langsmith_api_key_ciphertext' IS NOT NULL"))).all()
     count = 0
     for row in rows:
         config: dict[str, Any] = row.otel_config_json
@@ -307,12 +289,7 @@ async def _rotate_otel_config(session: AsyncSession, new_fernet: Fernet, old_fer
         # CAST(:ct AS text), NOT :ct::text — SQLAlchemy's bind-param regex
         # skips a ":name" immediately followed by "::" (see _rotate_triggers).
         await session.execute(
-            text(
-                "UPDATE organisations SET otel_config_json = "
-                "jsonb_set(COALESCE(otel_config_json, '{}'::jsonb), "
-                "ARRAY['langsmith_api_key_ciphertext'], to_jsonb(CAST(:ct AS text))) "
-                "WHERE id = :id"
-            ),
+            text("UPDATE organisations SET otel_config_json = jsonb_set(COALESCE(otel_config_json, '{}'::jsonb), ARRAY['langsmith_api_key_ciphertext'], to_jsonb(CAST(:ct AS text))) WHERE id = :id"),
             {"ct": new_ct, "id": row.id},
         )
         count += 1
@@ -325,14 +302,7 @@ async def _rotate_checkpoints(
     old_fernet: Fernet | None,
 ) -> int:
     """Re-encrypt checkpoint JSONB data (``__encrypted__`` wrapper)."""
-    rows = (
-        await session.execute(
-            text(
-                "SELECT organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint "
-                "FROM checkpoints WHERE checkpoint->>'__encrypted__' = 'true'"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint FROM checkpoints WHERE checkpoint->>'__encrypted__' = 'true'"))).all()
     count = 0
     for row in rows:
         wrapper: dict[str, Any] = row.checkpoint
@@ -342,11 +312,7 @@ async def _rotate_checkpoints(
         new_ct = re_encrypt_str(stored, new_fernet, old_fernet)
         wrapper["data"] = new_ct
         await session.execute(
-            text(
-                "UPDATE checkpoints SET checkpoint = :checkpoint "
-                "WHERE organisation_id = :org_id AND thread_id = :thread_id "
-                "AND checkpoint_ns = :ns AND checkpoint_id = :ckpt_id"
-            ),
+            text("UPDATE checkpoints SET checkpoint = :checkpoint WHERE organisation_id = :org_id AND thread_id = :thread_id AND checkpoint_ns = :ns AND checkpoint_id = :ckpt_id"),
             {
                 "checkpoint": json.dumps(wrapper),
                 "org_id": row.organisation_id,
@@ -361,23 +327,12 @@ async def _rotate_checkpoints(
 
 async def _rotate_checkpoint_blobs(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
     """Re-encrypt BYTEA blobs in checkpoint_blobs."""
-    rows = (
-        await session.execute(
-            text(
-                "SELECT organisation_id, thread_id, checkpoint_ns, channel, version, blob "
-                "FROM checkpoint_blobs WHERE blob IS NOT NULL"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT organisation_id, thread_id, checkpoint_ns, channel, version, blob FROM checkpoint_blobs WHERE blob IS NOT NULL"))).all()
     count = 0
     for row in rows:
         new_blob = re_encrypt_bytes(row.blob, new_fernet, old_fernet)
         await session.execute(
-            text(
-                "UPDATE checkpoint_blobs SET blob = :blob "
-                "WHERE organisation_id = :org_id AND thread_id = :thread_id "
-                "AND checkpoint_ns = :ns AND channel = :channel AND version = :version"
-            ),
+            text("UPDATE checkpoint_blobs SET blob = :blob WHERE organisation_id = :org_id AND thread_id = :thread_id AND checkpoint_ns = :ns AND channel = :channel AND version = :version"),
             {
                 "blob": new_blob,
                 "org_id": row.organisation_id,
@@ -393,24 +348,12 @@ async def _rotate_checkpoint_blobs(session: AsyncSession, new_fernet: Fernet, ol
 
 async def _rotate_checkpoint_writes(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
     """Re-encrypt BYTEA blobs in checkpoint_writes."""
-    rows = (
-        await session.execute(
-            text(
-                "SELECT organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx, blob "
-                "FROM checkpoint_writes"
-            )
-        )
-    ).all()
+    rows = (await session.execute(text("SELECT organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx, blob FROM checkpoint_writes"))).all()
     count = 0
     for row in rows:
         new_blob = re_encrypt_bytes(row.blob, new_fernet, old_fernet)
         await session.execute(
-            text(
-                "UPDATE checkpoint_writes SET blob = :blob "
-                "WHERE organisation_id = :org_id AND thread_id = :thread_id "
-                "AND checkpoint_ns = :ns AND checkpoint_id = :ckpt_id "
-                "AND task_id = :task_id AND idx = :idx"
-            ),
+            text("UPDATE checkpoint_writes SET blob = :blob WHERE organisation_id = :org_id AND thread_id = :thread_id AND checkpoint_ns = :ns AND checkpoint_id = :ckpt_id AND task_id = :task_id AND idx = :idx"),
             {
                 "blob": new_blob,
                 "org_id": row.organisation_id,

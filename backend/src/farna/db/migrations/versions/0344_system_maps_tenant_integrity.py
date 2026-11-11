@@ -60,21 +60,9 @@ def upgrade() -> None:
             """
         )
     )
-    op.execute(
-        sa.text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_system_map_revisions_one_published "
-            "ON public.system_map_revisions (system_map_id) WHERE status = 'published'"
-        )
-    )
+    op.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS uq_system_map_revisions_one_published ON public.system_map_revisions (system_map_id) WHERE status = 'published'"))
     op.execute(sa.text(f'DROP TRIGGER IF EXISTS "{_TRIGGER}" ON public.system_maps'))
-    op.execute(
-        sa.text(
-            f'CREATE TRIGGER "{_TRIGGER}" '
-            "BEFORE INSERT OR UPDATE OF owner_team_id, organisation_id, visibility "
-            "ON public.system_maps FOR EACH ROW "
-            f"EXECUTE FUNCTION public.{_FUNCTION}()"
-        )
-    )
+    op.execute(sa.text(f'CREATE TRIGGER "{_TRIGGER}" BEFORE INSERT OR UPDATE OF owner_team_id, organisation_id, visibility ON public.system_maps FOR EACH ROW EXECUTE FUNCTION public.{_FUNCTION}()'))
 
 
 def downgrade() -> None:

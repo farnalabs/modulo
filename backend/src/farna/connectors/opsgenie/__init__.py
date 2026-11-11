@@ -72,9 +72,7 @@ class OpsgenieConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Opsgenie API key validated")
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Opsgenie API key")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -134,9 +132,7 @@ class OpsgenieConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_safe_paging_total(body, "totalCount"),
-            next_cursor=_next_offset_cursor(
-                params.get("offset", 0), records, body.get("paging") if isinstance(body, dict) else None
-            ),
+            next_cursor=_next_offset_cursor(params.get("offset", 0), records, body.get("paging") if isinstance(body, dict) else None),
         )
 
     async def _query_alert(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:

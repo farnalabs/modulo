@@ -141,14 +141,7 @@ def validate_dataset_has_cases(session: Any, dataset_id: uuid.UUID) -> int:
     """
     from sqlalchemy import func, select
 
-    return (
-        session.scalar(
-            select(func.count())
-            .select_from(EvalCase)
-            .where(EvalCase.dataset_id == dataset_id, EvalCase.deleted_at.is_(None))
-        )
-        or 0
-    )
+    return session.scalar(select(func.count()).select_from(EvalCase).where(EvalCase.dataset_id == dataset_id, EvalCase.deleted_at.is_(None))) or 0
 
 
 def purge_soft_deleted_eval_cases(session: Any, older_than: datetime) -> int:

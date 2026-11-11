@@ -72,12 +72,12 @@ def _validate_override_key(key: str) -> None:
 
 def _validate_override_value(key: str, value: str) -> None:
     """Reject values the governed consumer would silently ignore (FAR-1135)."""
-    if key == "MODULO_LOG_LEVEL" and value.upper() not in logging.getLevelNamesMapping():
+    if key == "FARNA_CONTROL_MODULO_LOG_LEVEL" and value.upper() not in logging.getLevelNamesMapping():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid log level for 'MODULO_LOG_LEVEL': {value!r}",
+            detail=f"Invalid log level for 'FARNA_CONTROL_MODULO_LOG_LEVEL': {value!r}",
         )
-    if key == "MODULO_MAX_LOCAL_CONCURRENCY":
+    if key == "FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY":
         try:
             int(value)
         except ValueError:

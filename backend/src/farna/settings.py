@@ -83,10 +83,7 @@ def pin_env_file(path: str | Path) -> None:
     """
     global _pinned_env_file
     if get_settings.cache_info().currsize > 0:
-        raise RuntimeError(
-            "pin_env_file must be called before the first Settings construction: "
-            "get_settings' cache is already warm, so the pin would be silently ignored"
-        )
+        raise RuntimeError("pin_env_file must be called before the first Settings construction: get_settings' cache is already warm, so the pin would be silently ignored")
     _pinned_env_file = path
 
 
@@ -430,7 +427,7 @@ class Settings(BaseSettings):
     # node output self-reports agent_status=failed OR outcome=failed, the run
     # terminalizes as ``failed`` with error_code ``agent.failed`` instead of
     # landing ``complete``. Rollout flag — agent-failure-ux-proposal §15.4.
-    modulo_agent_failure_elevation_enabled: bool = Field(True, alias="MODULO_AGENT_FAILURE_ELEVATION_ENABLED")
+    modulo_agent_failure_elevation_enabled: bool = Field(True, alias="FARNA_CONTROL_MODULO_AGENT_FAILURE_ELEVATION_ENABLED")
     # FAR-228 kill-switch for the sandbox idempotency gate (opt-in per node via
     # PipelineGraphNode.delivery_sentinel). Consumed at BOTH sandbox guards: guard
     # A (node_runner early skip for single sandbox node) and guard B (executor
@@ -438,20 +435,20 @@ class Settings(BaseSettings):
     # failures retry exactly as before. The FAR-458 connector-write gate is a
     # separate concern with its OWN opt-in kill-switch below — this flag never
     # gates it.
-    modulo_idempotency_gate_enabled: bool = Field(True, alias="MODULO_IDEMPOTENCY_GATE_ENABLED")
+    modulo_idempotency_gate_enabled: bool = Field(True, alias="FARNA_CONTROL_MODULO_IDEMPOTENCY_GATE_ENABLED")
     # FAR-458 connector-write idempotency gate kill-switch. GENUINELY OPT-IN:
     # defaults to False so a deploy never silently suppresses byte-identical
     # re-executed connector writes (a behavioural change vs. the pre-FAR-458
     # contract where every visit fired). Operators enable it explicitly once the
     # dedup semantics are wanted. Consumed only by ``_connector_write_gate``.
-    modulo_connector_write_gate_enabled: bool = Field(False, alias="MODULO_CONNECTOR_WRITE_GATE_ENABLED")
+    modulo_connector_write_gate_enabled: bool = Field(False, alias="FARNA_CONTROL_MODULO_CONNECTOR_WRITE_GATE_ENABLED")
     # FAR-802: managed workspace inputs kill-switch.  When OFF (default),
     # sandbox_agent nodes that declare workspace_inputs short-circuit with
     # ``sandbox.workspace_inputs_disabled`` and provision nothing — existing
     # sandbox behaviour is unchanged.  Operators enable it explicitly once MWI
     # is ready for production use.  Consumed in node_runner before host-side
     # ref resolution.
-    modulo_workspace_inputs_enabled: bool = Field(False, alias="MODULO_WORKSPACE_INPUTS_ENABLED")
+    modulo_workspace_inputs_enabled: bool = Field(False, alias="FARNA_CONTROL_MODULO_WORKSPACE_INPUTS_ENABLED")
     # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): path to the devtools-owned
     # model-management.json registry the sandbox_agent ``model_class`` seam
     # resolves through at snapshot mint. None (default) = no registry: nodes
@@ -472,10 +469,10 @@ class Settings(BaseSettings):
     # When True, every sandbox node run writes full stdout/stderr to
     # zstd-compressed side-car files on disk. Pointer dicts travel via the
     # ``_artifact_pointers`` key in the node output JSON.
-    modulo_artifacts_enabled: bool = Field(True, alias="MODULO_ARTIFACTS_ENABLED")
+    modulo_artifacts_enabled: bool = Field(True, alias="FARNA_CONTROL_MODULO_ARTIFACTS_ENABLED")
     # Base directory for artifact files.  Empty defaults to
     # ``<backend>/.data/artifacts`` resolved by the store factory.
-    modulo_artifacts_dir: str = Field(default="", alias="MODULO_ARTIFACTS_DIR")
+    modulo_artifacts_dir: str = Field(default="", alias="FARNA_CONTROL_MODULO_ARTIFACTS_DIR")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
     saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")
@@ -505,9 +502,7 @@ class Settings(BaseSettings):
     # in [65, 134] would drop the mid-graph gate below the maximum legitimate
     # run duration and falsely fail a live run ``no_progress`` — FAR-1715
     # pre-PR QA M1).
-    saq_zero_progress_max_age_minutes: int | None = Field(
-        default=None, alias="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES", ge=1, le=10080
-    )
+    saq_zero_progress_max_age_minutes: int | None = Field(default=None, alias="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES", ge=1, le=10080)
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
@@ -561,9 +556,7 @@ class Settings(BaseSettings):
     # per-org advisory lock degrades to a RETRYABLE capacity denial
     # (SQLSTATE 55P03 → runner.capacity.lock_degraded) instead of hanging on
     # deadlock_timeout.
-    runner_capacity_lock_timeout_ms: int = Field(
-        default=2000, alias="RUNNER_CAPACITY_LOCK_TIMEOUT_MS", ge=100, le=30000
-    )
+    runner_capacity_lock_timeout_ms: int = Field(default=2000, alias="RUNNER_CAPACITY_LOCK_TIMEOUT_MS", ge=100, le=30000)
     # D8 marker staleness threshold for the reconciliation sweep: a non-fence
     # marker older than this (marker written_at; legacy tier-less markers fall
     # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
@@ -598,9 +591,7 @@ class Settings(BaseSettings):
     # (default 5s) and the org pass fails OPEN (logged, counted in orgs_failed,
     # skipped for this tick; the 60s cadence self-heals). Follows the executor's
     # SET LOCAL lock_timeout pattern (executor.py ~line 2937).
-    runner_marker_sweep_lock_timeout_seconds: int = Field(
-        default=5, alias="RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS", ge=1, le=30
-    )
+    runner_marker_sweep_lock_timeout_seconds: int = Field(default=5, alias="RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS", ge=1, le=30)
     # FAR-1279: operator-tunable bound for row-lock waits in two consumers,
     # each applied transaction-scoped (`set_config('lock_timeout', ..., true)`)
     # before its transaction's first lock.
@@ -630,15 +621,13 @@ class Settings(BaseSettings):
     mutation_row_lock_timeout_ms: int = Field(default=5000, alias="MUTATION_ROW_LOCK_TIMEOUT_MS", ge=100, le=30000)
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).
-    runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")
+    runner_machine_id: str = Field(default="", alias="FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID")
     # FAR-604 dispatcher backpressure: a trigger fire (webhook/cron/polling) is
     # skipped when the pipeline's pending-queue OLDEST run is older than this.
     # Depth-based backpressure is derived from the pipeline's own
     # max_concurrent_runs (max(3x, 5)); this knob bounds queue AGE so a wedged
     # admission gate stops accumulating deliveries even below the depth cap.
-    trigger_backpressure_max_age_seconds: int = Field(
-        default=3600, alias="TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS", ge=60, le=86400
-    )
+    trigger_backpressure_max_age_seconds: int = Field(default=3600, alias="TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS", ge=60, le=86400)
     # FAR-604 D2 (HITL capacity) park-on-expiry sweep: an open HITL gate whose
     # ``expires_at`` passed MORE than this window ago (and whose run still
     # waits ``awaiting_human``) gets its run parked to ``hitl_parked`` so it
@@ -676,9 +665,7 @@ class Settings(BaseSettings):
     # ``hitl_park_grace_seconds`` no longer makes parking reachable for
     # FAR-1257-stamped rows (the stamp, not this knob, sets their deadline);
     # it still does for legacy unstamped rows.
-    hitl_review_cancel_grace_seconds: int = Field(
-        default=3600, alias="HITL_REVIEW_CANCEL_GRACE_SECONDS", ge=60, le=604800
-    )
+    hitl_review_cancel_grace_seconds: int = Field(default=3600, alias="HITL_REVIEW_CANCEL_GRACE_SECONDS", ge=60, le=604800)
     # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
     # least one node within this setup window or the execute_run zombie watchdog
     # fails it. Covers the pre-node hang window: checkpointer setup, graph
@@ -686,9 +673,7 @@ class Settings(BaseSettings):
     # super-step. MUST exceed any legitimate pre-first-node setup but stay well
     # below the run_claim_stale_seconds claim fence so the watchdog wins before
     # a stale-heartbeat re-claim can double-execute the hung run.
-    saq_setup_grace_seconds: int = Field(
-        default=SAQ_SETUP_GRACE_DEFAULT_SECONDS, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600
-    )
+    saq_setup_grace_seconds: int = Field(default=SAQ_SETUP_GRACE_DEFAULT_SECONDS, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
     # FAR-1088 W-B: how long a LIVE ``sandbox_dispatch_state`` marker shields a
     # run from the nodeless backstop, measured from the PER-ATTEMPT anchor
     # ``max(runs.started_at, runs.dispatched_at)``. UNSET (the default) DERIVES
@@ -713,9 +698,7 @@ class Settings(BaseSettings):
     # ``timeout_seconds`` (e.g. 1200s), and the watchdog keys off that value —
     # this only guards the degenerate case. Never smaller than the smallest
     # legitimate node timeout.
-    saq_node_default_timeout_seconds: int = Field(
-        default=1200, alias="SAQ_NODE_DEFAULT_TIMEOUT_SECONDS", ge=30, le=7200
-    )
+    saq_node_default_timeout_seconds: int = Field(default=1200, alias="SAQ_NODE_DEFAULT_TIMEOUT_SECONDS", ge=30, le=7200)
     # FAR-766: sandbox_agent PROVISIONING watchdog bound. A run that has written
     # the "dispatching" dispatch marker but never reaches "script_executing"
     # (``AsyncSandbox.create`` never returns — observed E2B provider degradation
@@ -725,17 +708,13 @@ class Settings(BaseSettings):
     # timeout (the provisioned sandbox's own lifetime still uses the node
     # timeout; this is the pre-sandbox create bound). Never larger than the
     # smallest legitimate create window.
-    sandbox_provisioning_timeout_seconds: int = Field(
-        default=90, alias="SANDBOX_PROVISIONING_TIMEOUT_SECONDS", ge=15, le=600
-    )
+    sandbox_provisioning_timeout_seconds: int = Field(default=90, alias="SANDBOX_PROVISIONING_TIMEOUT_SECONDS", ge=15, le=600)
     # FAR-766: bound for ``resolve_agent_bindings`` at provision time. The
     # secrets-backend / DB read was previously unbounded, so a hard secrets-backend
     # stall also rode to the node timeout. Tight, retryable bound; a timeout is
     # classified as a retryable binding resolution failure (never the terminal
     # ``harness.unknown`` path).
-    sandbox_binding_resolve_timeout_seconds: int = Field(
-        default=30, alias="SANDBOX_BINDING_RESOLVE_TIMEOUT_SECONDS", ge=5, le=120
-    )
+    sandbox_binding_resolve_timeout_seconds: int = Field(default=30, alias="SANDBOX_BINDING_RESOLVE_TIMEOUT_SECONDS", ge=5, le=120)
     # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
     # heartbeat but ZERO LangGraph checkpoints for its thread after this many
     # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
@@ -796,9 +775,7 @@ class Settings(BaseSettings):
     # (status='timeout'), and returns gracefully. Bounds: ge=10 keeps a
     # useful budget; le=119 keeps it strictly below the SAQ 120s job timeout
     # so the outer cancellation path can never fire in normal operation.
-    dispatcher_reconcile_budget_seconds: int = Field(
-        default=95, alias="DISPATCHER_RECONCILE_BUDGET_SECONDS", ge=10, le=119
-    )
+    dispatcher_reconcile_budget_seconds: int = Field(default=95, alias="DISPATCHER_RECONCILE_BUDGET_SECONDS", ge=10, le=119)
     # FAR-746 batch cap: per-tick row cap on EACH per-org SQL terminalizer
     # (mid-graph wedge, claim-cap, HITL-gate expiry) — a big zombie backlog
     # must drain gradually across 60s ticks instead of one unbounded UPDATE
@@ -807,18 +784,14 @@ class Settings(BaseSettings):
     # zombie rows/hour while keeping every tick far under the inner deadline.
     # The reconcile predicates re-select remaining rows next tick, so
     # overflow drains automatically on subsequent ticks.
-    dispatcher_reconcile_terminalize_max_per_tick: int = Field(
-        default=25, alias="DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK", ge=1, le=1000
-    )
+    dispatcher_reconcile_terminalize_max_per_tick: int = Field(default=25, alias="DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK", ge=1, le=1000)
     # FAR-746 batch cap: per-tick cap on the compensating run_daily_facts
     # writes for terminalised runs — each write opens its OWN RLS-scoped
     # session + re-select, the most expensive per-row step in the tick (one
     # DB round-trip chain each at the observed ~250-440ms latency). Overflow
     # is counted (facts_deferred in the stats blob) and logged; the
     # terminalizer caps bound the backlog growth, so deferrals stay rare.
-    dispatcher_reconcile_facts_max_per_tick: int = Field(
-        default=25, alias="DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK", ge=1, le=1000
-    )
+    dispatcher_reconcile_facts_max_per_tick: int = Field(default=25, alias="DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK", ge=1, le=1000)
     # FAR-904: cumulative row budget across all orgs per tick. The per-org
     # reconcile loop processes terminalizers + a row scan + per-row
     # operations.  Without a cross-org cap the tick can grow unbounded
@@ -826,18 +799,14 @@ class Settings(BaseSettings):
     # completing — a timeout with no recovery.  This cap bounds the total
     # rows processed (terminalizers + reconcile scan) so the sweep always
     # completes within budget; overflow drains on subsequent ticks.
-    dispatcher_reconcile_max_rows_per_tick: int = Field(
-        default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
-    )
+    dispatcher_reconcile_max_rows_per_tick: int = Field(default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000)
     # FAR-2122: recency window in which a ``run_node_outputs`` write counts as
     # live progress for the mid-graph age gate. A node output inside this window
     # is durable evidence the executor is still advancing, so the age gate must
     # not stamp the run ``no_progress``. Bound as a param into the age-gate SQL
     # (never a literal), threaded through ``ReconcileTuning``. Default 15 min
     # matches the historical hard-coded window.
-    dispatcher_reconcile_node_output_progress_seconds: int = Field(
-        default=900, alias="DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS", ge=60, le=86400
-    )
+    dispatcher_reconcile_node_output_progress_seconds: int = Field(default=900, alias="DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS", ge=60, le=86400)
     # FAR-1525: per-ORG TIME bound inside the tick. The row budget (FAR-904 /
     # FAR-1425) bounds ROWS, not time — a single org whose pass hangs on a
     # wedged await consumed the ENTIRE inner budget at stage
@@ -864,9 +833,7 @@ class Settings(BaseSettings):
     # safe boundary and the tick records a truthful ``status='timeout'`` +
     # ``org_timeouts`` marker naming the org (then continues with the
     # remaining orgs).
-    dispatcher_reconcile_org_budget_seconds: int = Field(
-        default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
-    )
+    dispatcher_reconcile_org_budget_seconds: int = Field(default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119)
     # RETIRED NO-OP (FAR-1883): this was the FAR-705 per-run capacity-retry
     # budget for the stale-run sweep's ``capacity_timeout`` TTL
     # terminalisation. The instance-wide queued TTL was removed - a
@@ -940,7 +907,7 @@ class Settings(BaseSettings):
     # floor.
     max_reportable_usd_min: Decimal = Field(
         default=Decimal("0.000001"),
-        alias="MODULO_MAX_REPORTABLE_USD_MIN",
+        alias="FARNA_CONTROL_MODULO_MAX_REPORTABLE_USD_MIN",
         ge=Decimal("0.000001"),
     )
     # The per-node clamp: an absurd single-node report is clamped here. The
@@ -950,7 +917,7 @@ class Settings(BaseSettings):
     # would disable the floor).
     max_self_reported_usd: Decimal = Field(
         default=Decimal("10000.0"),
-        alias="MODULO_MAX_SELF_REPORTED_USD",
+        alias="FARNA_CONTROL_MODULO_MAX_SELF_REPORTED_USD",
         ge=Decimal("0.000001"),
     )
     # The band ceiling — the TOP OF THE SANITY BAND, the trust boundary for
@@ -959,7 +926,7 @@ class Settings(BaseSettings):
     # dominates). ge-bounded like the other knobs.
     max_reportable_band_usd: Decimal = Field(
         default=Decimal("50.0"),
-        alias="MODULO_MAX_REPORTABLE_BAND_USD",
+        alias="FARNA_CONTROL_MODULO_MAX_REPORTABLE_BAND_USD",
         ge=Decimal("0.000001"),
     )
     # Dynamic rate_usd bound for cost_components writes: a rate above this is
@@ -968,7 +935,7 @@ class Settings(BaseSettings):
     # cap. ge-bounded at 0.
     max_rate_usd: Decimal = Field(
         default=Decimal("100000.0"),
-        alias="MODULO_MAX_RATE_USD",
+        alias="FARNA_CONTROL_MODULO_MAX_RATE_USD",
         ge=Decimal(0),
     )
 
@@ -978,27 +945,19 @@ class Settings(BaseSettings):
     # 0, meaning "fall back to MODULO_HEALTH_TIMEOUT_SECONDS". Overrides are
     # capped at 60s so a single hung dependency cannot stall readiness.
     # ------------------------------------------------------------------
-    modulo_health_timeout_seconds: float = Field(default=5.0, alias="MODULO_HEALTH_TIMEOUT_SECONDS", ge=0.5, le=60)
-    modulo_health_db_timeout_seconds: float = Field(
-        default=0.0, alias="MODULO_HEALTH_DB_TIMEOUT_SECONDS", ge=0.0, le=60
-    )
-    modulo_health_redis_timeout_seconds: float = Field(
-        default=0.0, alias="MODULO_HEALTH_REDIS_TIMEOUT_SECONDS", ge=0.0, le=60
-    )
-    modulo_health_checkpointer_timeout_seconds: float = Field(
-        default=0.0, alias="MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS", ge=0.0, le=60
-    )
-    modulo_health_migrations_timeout_seconds: float = Field(
-        default=0.0, alias="MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60
-    )
+    modulo_health_timeout_seconds: float = Field(default=5.0, alias="FARNA_CONTROL_MODULO_HEALTH_TIMEOUT_SECONDS", ge=0.5, le=60)
+    modulo_health_db_timeout_seconds: float = Field(default=0.0, alias="FARNA_CONTROL_MODULO_HEALTH_DB_TIMEOUT_SECONDS", ge=0.0, le=60)
+    modulo_health_redis_timeout_seconds: float = Field(default=0.0, alias="FARNA_CONTROL_MODULO_HEALTH_REDIS_TIMEOUT_SECONDS", ge=0.0, le=60)
+    modulo_health_checkpointer_timeout_seconds: float = Field(default=0.0, alias="FARNA_CONTROL_MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS", ge=0.0, le=60)
+    modulo_health_migrations_timeout_seconds: float = Field(default=0.0, alias="FARNA_CONTROL_MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60)
     # Readiness alert correlation (FAR-2156): when the migrations check reports
     # repo-vs-DB divergence, the detail links the most recent run of this deploy
     # workflow so an operator can jump straight to it. The defaults point at
     # Modulo's own dogfood repo/instance; a self-hosted deployment sets these to
     # its own fork and API base. An empty repo disables the lookup entirely.
-    modulo_deploy_run_repo: str = Field(default="farnalabs/modulo", alias="MODULO_DEPLOY_RUN_REPO")
-    modulo_deploy_run_workflow: str = Field(default="deploy.yml", alias="MODULO_DEPLOY_RUN_WORKFLOW")
-    modulo_deploy_run_api_base: str = Field(default="https://api.github.com", alias="MODULO_DEPLOY_RUN_API_BASE")
+    modulo_deploy_run_repo: str = Field(default="farnalabs/modulo", alias="FARNA_CONTROL_MODULO_DEPLOY_RUN_REPO")
+    modulo_deploy_run_workflow: str = Field(default="deploy.yml", alias="FARNA_CONTROL_MODULO_DEPLOY_RUN_WORKFLOW")
+    modulo_deploy_run_api_base: str = Field(default="https://api.github.com", alias="FARNA_CONTROL_MODULO_DEPLOY_RUN_API_BASE")
     # database-hygiene sub-check (FAR-1445). Unlike its neighbours this
     # override defaults to a NON-zero 1s: the probe is a single read of the
     # in-memory statistics views, so anything above a second means the
@@ -1006,9 +965,7 @@ class Settings(BaseSettings):
     # nothing and only risks adding to the /healthz/ready tail (the endpoint
     # that 504'd on the 5s gateway budget). 0 still falls back to the global
     # MODULO_HEALTH_TIMEOUT_SECONDS like every other per-check override.
-    modulo_health_db_hygiene_timeout_seconds: float = Field(
-        default=1.0, alias="MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", ge=0.0, le=60
-    )
+    modulo_health_db_hygiene_timeout_seconds: float = Field(default=1.0, alias="FARNA_CONTROL_MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", ge=0.0, le=60)
     # Dead-tuple floor for the database-hygiene check: a dead-tuple RATIO is
     # only acted on once the table carries at least this many dead rows.
     # Rationale (FAR-1445): a small table that is momentarily 90% dead is
@@ -1017,9 +974,7 @@ class Settings(BaseSettings):
     # autovacuum_vacuum_threshold (50) yet still 36x BELOW the 361,302 dead
     # tuples the runs table carried during the bloat incident, so the
     # incident still trips it with enormous margin.
-    modulo_health_db_hygiene_min_dead_tuples: int = Field(
-        default=10_000, alias="MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES", ge=0
-    )
+    modulo_health_db_hygiene_min_dead_tuples: int = Field(default=10_000, alias="FARNA_CONTROL_MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES", ge=0)
     # Dead-tuple ratio at/above which a table (already over the dead-tuple
     # floor) is reported degraded. Rationale (FAR-1445): autovacuum's own
     # default trigger is 20% dead (autovacuum_vacuum_scale_factor=0.2), so a
@@ -1029,9 +984,7 @@ class Settings(BaseSettings):
     # several consecutive trigger crossings, a real hygiene failure. It still
     # leaves 37 points of headroom before the 97% the incident reached, so
     # the check never has to wait for catastrophe.
-    modulo_health_db_hygiene_dead_ratio: float = Field(
-        default=0.60, alias="MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO", ge=0.0, le=1.0
-    )
+    modulo_health_db_hygiene_dead_ratio: float = Field(default=0.60, alias="FARNA_CONTROL_MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO", ge=0.0, le=1.0)
 
     # ------------------------------------------------------------------
     # FAR-1771 — event-loop stall ATTRIBUTION (opt-in, off by default).
@@ -1044,7 +997,7 @@ class Settings(BaseSettings):
     # synchronous call freezes the loop — the FAR-1439 class that starves
     # every async DB op at once. 0 (the default) = off: no sampler thread,
     # no loop debug flags, no per-tick work — zero cost, exactly as today.
-    modulo_slow_callback_warn_ms: int = Field(default=0, alias="MODULO_SLOW_CALLBACK_WARN_MS", ge=0, le=60_000)
+    modulo_slow_callback_warn_ms: int = Field(default=0, alias="FARNA_CONTROL_MODULO_SLOW_CALLBACK_WARN_MS", ge=0, le=60_000)
 
     # ------------------------------------------------------------------
     # In-process worker-liveness watchdog (postmortem 2026-08-09, FAR-121)
@@ -1059,9 +1012,7 @@ class Settings(BaseSettings):
     watchdog_enabled: bool = Field(default=True, alias="WATCHDOG_ENABLED")
     watchdog_tick_seconds: int = Field(default=30, alias="WATCHDOG_TICK_SECONDS", ge=5, le=600)
     watchdog_worker_stale_seconds: int = Field(default=180, alias="WATCHDOG_WORKER_STALE_SECONDS", ge=60, le=3600)
-    watchdog_alert_state_ttl_seconds: int = Field(
-        default=7 * 24 * 3600, alias="WATCHDOG_ALERT_STATE_TTL_SECONDS", ge=3600, le=60 * 24 * 3600
-    )  # edge-triggered state: outlives any incident so no repeat alerts
+    watchdog_alert_state_ttl_seconds: int = Field(default=7 * 24 * 3600, alias="WATCHDOG_ALERT_STATE_TTL_SECONDS", ge=3600, le=60 * 24 * 3600)  # edge-triggered state: outlives any incident so no repeat alerts
     # Slack-compatible webhook URL for watchdog alerts. None (default) = the
     # watchdog ticks and logs but never POSTs — the operator must configure
     # this in production for alerts to fire.
@@ -1075,10 +1026,10 @@ class Settings(BaseSettings):
     alert_email_to: str | None = Field(default=None, alias="ALERT_EMAIL_TO", repr=False)
     # Deployment environment name — carried on every operator alert email so a
     # recipient can tell staging from production at a glance (FAR-1495).
-    # This field MIRRORS the pre-existing scattered ``os.environ.get("MODULO_ENV",
+    # This field MIRRORS the pre-existing scattered ``os.environ.get("FARNA_CONTROL_MODULO_ENV",
     # "development")`` convention for the alert path; the pre-existing call
     # sites are deliberately not migrated in this change.
-    environment: str = Field("development", alias="MODULO_ENV")
+    environment: str = Field("development", alias="FARNA_CONTROL_MODULO_ENV")
     # Comma-separated allowlist of environments (case-insensitive, trimmed)
     # that may SEND operator alerts — it gates the TWO in-app operator-alert
     # channels that consult it: the readiness-degradation cron
@@ -1126,11 +1077,9 @@ class Settings(BaseSettings):
 
     # Product analytics — opt-in aggregate usage metrics (design doc section 11).
     # Endpoint URL for the vendor service. Empty = disabled.
-    product_analytics_endpoint_url: str = Field(default="", alias="MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL")
+    product_analytics_endpoint_url: str = Field(default="", alias="FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL")
     # Instance secret for HMAC signing. Empty = disabled.
-    product_analytics_instance_secret: str = Field(
-        default="", alias="MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET", repr=False
-    )
+    product_analytics_instance_secret: str = Field(default="", alias="FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET", repr=False)
 
     # Telemetry — disabled by default for data residency compliance.
     # Set to "true" to enable OTel stdout + OTLP exporters.
@@ -1276,8 +1225,7 @@ class Settings(BaseSettings):
     def _warn_deprecated_modulo_oidc_providers(self) -> "Settings":
         if self.modulo_oidc_providers and self.modulo_oidc_providers != "[]":
             _log.warning(
-                "settings.deprecated_oidc_env_var — MODULO_OIDC_PROVIDERS is deprecated. "
-                "Use the admin SSO providers UI at /admin/settings/sso instead.",
+                "settings.deprecated_oidc_env_var — MODULO_OIDC_PROVIDERS is deprecated. Use the admin SSO providers UI at /admin/settings/sso instead.",
             )
         return self
 
@@ -1347,10 +1295,7 @@ class Settings(BaseSettings):
         ``debug=false`` (no SAQ_ENABLED to combine with).
         """
         if self.saq_test_pause and not self.debug:
-            raise ValueError(
-                "SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be used outside test/staging "
-                "(set DEBUG=true in test/staging environments)."
-            )
+            raise ValueError("SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be used outside test/staging (set DEBUG=true in test/staging environments).")
         return self
 
     @model_validator(mode="after")
@@ -1538,35 +1483,24 @@ class Settings(BaseSettings):
         that honour warn|fail mode via ``break_glass_boot_findings``.
         """
         if self.modulo_break_glass_enabled is None:
-            self.modulo_break_glass_enabled = bool(
-                self.modulo_break_glass_secret or self.modulo_break_glass_standby_secret
-            )
+            self.modulo_break_glass_enabled = bool(self.modulo_break_glass_secret or self.modulo_break_glass_standby_secret)
 
         secret = self.modulo_break_glass_secret
         standby = self.modulo_break_glass_standby_secret
         if secret and standby and secret == standby:
-            raise ValueError(
-                "MODULO_BREAK_GLASS_SECRET and MODULO_BREAK_GLASS_STANDBY_SECRET must differ "
-                "(identical secrets break the rotation path)"
-            )
+            raise ValueError("MODULO_BREAK_GLASS_SECRET and MODULO_BREAK_GLASS_STANDBY_SECRET must differ (identical secrets break the rotation path)")
         for name, value in (
-            ("MODULO_BREAK_GLASS_SECRET", secret),
-            ("MODULO_BREAK_GLASS_STANDBY_SECRET", standby),
+            ("FARNA_CONTROL_MODULO_BREAK_GLASS_SECRET", secret),
+            ("FARNA_CONTROL_MODULO_BREAK_GLASS_STANDBY_SECRET", standby),
         ):
             if value and len(value) < _MIN_BREAK_GLASS_SECRET_LEN:
                 raise ValueError(f"{name} must be at least {_MIN_BREAK_GLASS_SECRET_LEN} characters; got {len(value)}")
 
         if self.modulo_break_glass_ttl_minutes > self.modulo_break_glass_max_ttl_minutes:
-            raise ValueError(
-                "MODULO_BREAK_GLASS_TTL_MINUTES must be <= MODULO_BREAK_GLASS_MAX_TTL_MINUTES "
-                f"({self.modulo_break_glass_ttl_minutes} > {self.modulo_break_glass_max_ttl_minutes})"
-            )
+            raise ValueError(f"MODULO_BREAK_GLASS_TTL_MINUTES must be <= MODULO_BREAK_GLASS_MAX_TTL_MINUTES ({self.modulo_break_glass_ttl_minutes} > {self.modulo_break_glass_max_ttl_minutes})")
 
         if self.modulo_break_glass_boot_failure_mode not in ("warn", "fail"):
-            raise ValueError(
-                "MODULO_BREAK_GLASS_BOOT_FAILURE_MODE must be 'warn' or 'fail'; "
-                f"got {self.modulo_break_glass_boot_failure_mode!r}"
-            )
+            raise ValueError(f"MODULO_BREAK_GLASS_BOOT_FAILURE_MODE must be 'warn' or 'fail'; got {self.modulo_break_glass_boot_failure_mode!r}")
         return self
 
     @model_validator(mode="after")
@@ -1615,11 +1549,7 @@ class Settings(BaseSettings):
             )
         if band > clamp:
             raise ValueError(
-                "Cost-knob knob-below-band violation (BOOT-FATAL): "
-                f"MODULO_MAX_REPORTABLE_BAND_USD ({band}) > "
-                f"MODULO_MAX_SELF_REPORTED_USD ({clamp}) — the out_of_band_high "
-                "marker can never fire because no report can exceed the band. "
-                f"Set MODULO_MAX_REPORTABLE_BAND_USD <= {clamp} (default 50.0)."
+                f"Cost-knob knob-below-band violation (BOOT-FATAL): MODULO_MAX_REPORTABLE_BAND_USD ({band}) > MODULO_MAX_SELF_REPORTED_USD ({clamp}) — the out_of_band_high marker can never fire because no report can exceed the band. Set MODULO_MAX_REPORTABLE_BAND_USD <= {clamp} (default 50.0)."
             )
         return self
 
@@ -1652,8 +1582,7 @@ class Settings(BaseSettings):
         old_val = os.environ.get("HITL_GATE_CANCEL_GRACE_SECONDS")
         if not new_val and old_val:
             _log.warning(
-                "settings.deprecated_env_var — HITL_GATE_CANCEL_GRACE_SECONDS is deprecated. "
-                "Rename it to HITL_REVIEW_CANCEL_GRACE_SECONDS. Using old value: %s",
+                "settings.deprecated_env_var — HITL_GATE_CANCEL_GRACE_SECONDS is deprecated. Rename it to HITL_REVIEW_CANCEL_GRACE_SECONDS. Using old value: %s",
                 old_val,
             )
             # Pydantic has already set the default; override with the old value
@@ -1718,20 +1647,14 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 True,
-                (
-                    "MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and "
-                    "MODULO_BREAK_GLASS_STANDBY_SECRET are empty"
-                ),
+                ("MODULO_BREAK_GLASS_ENABLED=true but both MODULO_BREAK_GLASS_SECRET and MODULO_BREAK_GLASS_STANDBY_SECRET are empty"),
             )
         )
     elif not (has_primary and has_standby):
         findings.append(
             (
                 False,
-                (
-                    "one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — "
-                    "the operator rotation path is degraded"
-                ),
+                ("one of MODULO_BREAK_GLASS_SECRET / MODULO_BREAK_GLASS_STANDBY_SECRET is empty — the operator rotation path is degraded"),
             )
         )
 
@@ -1746,10 +1669,7 @@ def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:
         findings.append(
             (
                 False,
-                (
-                    "MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI "
-                    "deactivate/force/status commands are inoperable while disabled"
-                ),
+                ("MODULO_BREAK_GLASS_DATABASE_URL is empty — the break-glass CLI deactivate/force/status commands are inoperable while disabled"),
             )
         )
     return findings

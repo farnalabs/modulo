@@ -80,9 +80,7 @@ async def list_mcp_servers(
     total = (await session.execute(total_query)).scalar_one()
 
     offset = (page - 1) * page_size
-    items_stmt = (
-        select(McpServer).order_by(McpServer.created_at.desc(), McpServer.id.desc()).offset(offset).limit(page_size)
-    )
+    items_stmt = select(McpServer).order_by(McpServer.created_at.desc(), McpServer.id.desc()).offset(offset).limit(page_size)
     if org_filter is not None:
         items_stmt = items_stmt.where(org_filter)
     items = list((await session.execute(items_stmt)).scalars())

@@ -152,12 +152,10 @@ class TestTelemetryRoundTrip:
         assert resp.status_code == 200
         assert resp.json() == {"enabled": False}
 
-    def test_put_persists_override_in_store(
-        self, admin_client: TestClient, runtime_config_store: RuntimeConfigStore
-    ) -> None:
+    def test_put_persists_override_in_store(self, admin_client: TestClient, runtime_config_store: RuntimeConfigStore) -> None:
         resp = admin_client.put("/api/v1/admin/telemetry", json={"enabled": True})
         assert resp.status_code == 200
-        assert runtime_config_store.get("MODULO_TELEMETRY_ENABLED") == "true"
+        assert runtime_config_store.get("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED") == "true"
         # A subsequent GET reflects the persisted override.
         assert admin_client.get("/api/v1/admin/telemetry").json() == {"enabled": True}
 

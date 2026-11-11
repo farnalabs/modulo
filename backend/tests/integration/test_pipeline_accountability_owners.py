@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from farna.auth.jwt import create_access_token
 from farna.db.crud.pipeline_owner import validate_accountability_owner
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -66,11 +66,7 @@ async def _seed_account(
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', :active)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', :active)"),
             {
                 "id": str(account_id),
                 "email": f"far1161-{tag}-{account_id.hex[:12]}@example.com",
@@ -80,10 +76,7 @@ async def _seed_account(
         )
         if org_id is not None:
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'operator')"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
             )
     return account_id
@@ -115,14 +108,10 @@ async def owners_data(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uu
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(test_org)},
         )
-        team = await create_team(
-            session, org_id=test_org, name=f"FAR-1161 Team {uuid.uuid4().hex[:6]}", account_id=test_user
-        )
+        team = await create_team(session, org_id=test_org, name=f"FAR-1161 Team {uuid.uuid4().hex[:6]}", account_id=test_user)
         await add_team_member(session, org_id=test_org, team_id=team.id, account_id=eligible, role="runner")
         team_id = team.id
-        team2 = await create_team(
-            session, org_id=test_org, name=f"FAR-1161 Team B {uuid.uuid4().hex[:6]}", account_id=test_user
-        )
+        team2 = await create_team(session, org_id=test_org, name=f"FAR-1161 Team B {uuid.uuid4().hex[:6]}", account_id=test_user)
         team2_id = team2.id
 
     return {
@@ -336,13 +325,7 @@ async def test_api_patch_changes_and_clears_owners_with_audit(
     async with db_engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT event_type, payload_json FROM audit_events "
-                    "WHERE resource_id = CAST(:rid AS uuid) "
-                    "AND event_type IN "
-                    "('pipeline.business_owner_changed', 'pipeline.reliability_owner_changed') "
-                    "ORDER BY created_at"
-                ),
+                text("SELECT event_type, payload_json FROM audit_events WHERE resource_id = CAST(:rid AS uuid) AND event_type IN ('pipeline.business_owner_changed', 'pipeline.reliability_owner_changed') ORDER BY created_at"),
                 {"rid": pipeline_id},
             )
         ).all()
@@ -353,16 +336,12 @@ async def test_api_patch_changes_and_clears_owners_with_audit(
     assert event_types.count("pipeline.reliability_owner_changed") == 2
 
     payloads = [row[1] if isinstance(row[1], dict) else json.loads(str(row[1])) for row in rows]
-    business_payloads = [
-        p for p, et in zip(payloads, event_types, strict=True) if et == "pipeline.business_owner_changed"
-    ]
+    business_payloads = [p for p, et in zip(payloads, event_types, strict=True) if et == "pipeline.business_owner_changed"]
     # Second business event = the PATCH change: eligible -> out_of_team.
     assert business_payloads[1]["previous_owner_id"] == str(owners_data["eligible"])
     assert business_payloads[1]["new_owner_id"] == str(owners_data["out_of_team"])
 
-    reliability_payloads = [
-        p for p, et in zip(payloads, event_types, strict=True) if et == "pipeline.reliability_owner_changed"
-    ]
+    reliability_payloads = [p for p, et in zip(payloads, event_types, strict=True) if et == "pipeline.reliability_owner_changed"]
     # Second reliability event = the PATCH clear: eligible -> None.
     assert reliability_payloads[1]["previous_owner_id"] == str(owners_data["eligible"])
     assert reliability_payloads[1]["new_owner_id"] is None

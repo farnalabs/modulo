@@ -51,17 +51,11 @@ def upgrade() -> None:
         # Idempotent: skip if the constraint already exists (partial re-run
         # safety, same pattern as 0219).
         already = bind.execute(
-            text(
-                "SELECT 1 FROM pg_constraint c "
-                "JOIN pg_class t ON t.oid = c.conrelid "
-                "WHERE c.conname = :name AND t.relname = :table"
-            ),
+            text("SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid WHERE c.conname = :name AND t.relname = :table"),
             {"name": _CONSTRAINT_NAME, "table": _TABLE},
         ).scalar_one_or_none()
         if already is None:
-            op.execute(
-                text(f'ALTER TABLE public."{_TABLE}" ADD CONSTRAINT {_CONSTRAINT_NAME} CHECK ({_CHECK_EXPR}) NOT VALID')
-            )
+            op.execute(text(f'ALTER TABLE public."{_TABLE}" ADD CONSTRAINT {_CONSTRAINT_NAME} CHECK ({_CHECK_EXPR}) NOT VALID'))
             op.execute(text(f'ALTER TABLE public."{_TABLE}" VALIDATE CONSTRAINT {_CONSTRAINT_NAME}'))
     else:
         # SQLite / other dialects — batch mode handles it.

@@ -162,9 +162,7 @@ class RedisEventBroker:
         async with self._lock:
             sub = self._sub
         if sub is None:
-            raise RuntimeError(
-                f"Redis subscriber connection not established for channel {channel}. Call connect() first."
-            )
+            raise RuntimeError(f"Redis subscriber connection not established for channel {channel}. Call connect() first.")
         pubsub = sub.pubsub()
         try:
             await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
@@ -192,9 +190,7 @@ class RedisEventBroker:
         async with self._lock:
             sub = self._sub
         if sub is None:
-            raise RuntimeError(
-                f"Redis subscriber connection not established for pattern {pattern}. Call connect() first."
-            )
+            raise RuntimeError(f"Redis subscriber connection not established for pattern {pattern}. Call connect() first.")
         pubsub = sub.pubsub()
         try:
             await pubsub.psubscribe(f"{CHANNEL_PREFIX}{pattern}")

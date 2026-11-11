@@ -127,11 +127,7 @@ async def generate_quality_report(
         },
         "week_over_week": {
             "runs_delta_pct": _pct_delta(float(current_runs), float(previous_runs)),
-            "eval_pass_rate_delta_pct": (
-                _pct_delta(current_avg_rate, previous_avg_rate)
-                if current_avg_rate is not None and previous_avg_rate is not None
-                else None
-            ),
+            "eval_pass_rate_delta_pct": (_pct_delta(current_avg_rate, previous_avg_rate) if current_avg_rate is not None and previous_avg_rate is not None else None),
             "cost_delta_pct": _pct_delta(current_cost, previous_cost),
             "previous_week_runs": previous_runs,
             "previous_week_avg_pass_rate": previous_avg_rate,
@@ -282,21 +278,9 @@ def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[
     prev_rate = wow["previous_week_avg_pass_rate"]
     prev_rate_str = _fmt_pct(prev_rate)
 
-    runs_line = (
-        f"{_trend_symbol(wow['runs_delta_pct'])} *Runs*: {summary['total_runs']} "
-        f"(prev: {wow['previous_week_runs']}, \u0394 {_fmt_delta(wow['runs_delta_pct'])})"
-    )
-    eval_line = (
-        f"{_trend_symbol(wow['eval_pass_rate_delta_pct'])} *Eval Pass Rate*: "
-        f"{rate_str} (prev: {prev_rate_str}, "
-        f"\u0394 {_fmt_delta(wow['eval_pass_rate_delta_pct'])})"
-    )
-    cost_line = (
-        f"{_trend_symbol(wow['cost_delta_pct'], invert=True)} *Cost*: "
-        f"${summary['total_cost_usd']:.2f} "
-        f"(prev: ${wow['previous_week_cost_usd']:.2f}, "
-        f"\u0394 {_fmt_delta(wow['cost_delta_pct'])})"
-    )
+    runs_line = f"{_trend_symbol(wow['runs_delta_pct'])} *Runs*: {summary['total_runs']} (prev: {wow['previous_week_runs']}, \u0394 {_fmt_delta(wow['runs_delta_pct'])})"
+    eval_line = f"{_trend_symbol(wow['eval_pass_rate_delta_pct'])} *Eval Pass Rate*: {rate_str} (prev: {prev_rate_str}, \u0394 {_fmt_delta(wow['eval_pass_rate_delta_pct'])})"
+    cost_line = f"{_trend_symbol(wow['cost_delta_pct'], invert=True)} *Cost*: ${summary['total_cost_usd']:.2f} (prev: ${wow['previous_week_cost_usd']:.2f}, \u0394 {_fmt_delta(wow['cost_delta_pct'])})"
     lines = [runs_line, eval_line, cost_line]
     return {
         "type": "section",
@@ -319,11 +303,7 @@ def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": (
-                f"*Eval Breakdown*\n"
-                f"\u2022 This week: {cw['passed_evals']}/{cw['total_evals']} passed ({cw_rate})\n"
-                f"\u2022 Last week: {pw['passed_evals']}/{pw['total_evals']} passed ({pw_rate})"
-            ),
+            "text": (f"*Eval Breakdown*\n\u2022 This week: {cw['passed_evals']}/{cw['total_evals']} passed ({cw_rate})\n\u2022 Last week: {pw['passed_evals']}/{pw['total_evals']} passed ({pw_rate})"),
         },
     }
 
@@ -332,9 +312,7 @@ def _format_trend_block(trend: list[dict[str, Any]]) -> dict[str, Any]:
     lines = ["*Daily Trend (last 7 days)*"]
     for entry in trend:
         rate_str = _fmt_pct(entry["eval_pass_rate"])
-        lines.append(
-            f"\u2022 {entry['date']}: {entry['run_count']} runs, {rate_str} pass, ${entry['token_spend_usd']:.2f}"
-        )
+        lines.append(f"\u2022 {entry['date']}: {entry['run_count']} runs, {rate_str} pass, ${entry['token_spend_usd']:.2f}")
     return {
         "type": "section",
         "text": {"type": "mrkdwn", "text": "\n".join(lines)},
@@ -354,9 +332,7 @@ def format_slack_message(report: dict[str, Any]) -> str:
         },
         {
             "type": "context",
-            "elements": [
-                {"type": "mrkdwn", "text": f"Period: {report['period']['start']} \u2192 {report['period']['end']}"}
-            ],
+            "elements": [{"type": "mrkdwn", "text": f"Period: {report['period']['start']} \u2192 {report['period']['end']}"}],
         },
         {"type": "divider"},
         _format_summary_block(report["summary"]),

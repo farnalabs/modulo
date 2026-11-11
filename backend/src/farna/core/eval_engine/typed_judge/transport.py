@@ -130,8 +130,7 @@ def _question_id(question: dict[str, Any]) -> str:
 def _quarantine_error(key: str) -> JudgeExecutionError:
     return JudgeExecutionError(
         JudgeErrorCode.JUDGE_UNAVAILABLE,
-        f"judge backend {key!r} is quarantined after repeated timeouts; "
-        "no verdict was produced and later calls fail fast until the quarantine expires",
+        f"judge backend {key!r} is quarantined after repeated timeouts; no verdict was produced and later calls fail fast until the quarantine expires",
         judge=JudgeIdentity(mechanism="model_backend", judge_backend_id=key),
     )
 
@@ -155,11 +154,7 @@ def _question_answer_schema(question: dict[str, Any]) -> dict[str, Any]:
         answer_schema = {"type": "string", "enum": keys}
         probability_keys = keys
     elif question_type == "score":
-        keys = [
-            str(level.get("score"))
-            for level in question.get("levels") or []
-            if isinstance(level, dict) and level.get("score") is not None
-        ]
+        keys = [str(level.get("score")) for level in question.get("levels") or [] if isinstance(level, dict) and level.get("score") is not None]
         answer_schema = {"type": "number", "enum": [float(key) for key in keys]}
         probability_keys = keys
     else:
@@ -257,13 +252,7 @@ def _usage_from_response(response: Any) -> dict[str, Any] | None:
         usage = metadata.get("token_usage") if isinstance(metadata, dict) else None
     if not isinstance(usage, dict):
         return None
-    cleaned = {
-        key: int(value)
-        for key, value in usage.items()
-        if key in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens")
-        and isinstance(value, (int, float))
-        and not isinstance(value, bool)
-    }
+    cleaned = {key: int(value) for key, value in usage.items() if key in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens") and isinstance(value, (int, float)) and not isinstance(value, bool)}
     return cleaned or None
 
 
@@ -315,10 +304,7 @@ async def _invoke_question(
             last_error = exc
             if exc.code is not JudgeErrorCode.JUDGE_MALFORMED_RESPONSE or attempt >= MAX_CORRECTIVE_RETRIES:
                 raise
-            prompt = (
-                f"{prompt}\n\nYour previous response was rejected: {exc.detail}. "
-                "Return ONLY the required JSON object for this question."
-            )
+            prompt = f"{prompt}\n\nYour previous response was rejected: {exc.detail}. Return ONLY the required JSON object for this question."
             continue
         _BREAKER.record_success(handle.key)
         return parsed, _usage_from_response(response)
@@ -345,10 +331,7 @@ def _aggregate(
     confidence_kind: JudgeConfidenceKind,
     usage: dict[str, Any] | None,
 ) -> JudgeVerdict:
-    answer_map = {
-        str(question.get("id", "")): {"answer": answer.answer, "probabilities": answer.probabilities}
-        for question, answer in zip(questions, answers, strict=True)
-    }
+    answer_map = {str(question.get("id", "")): {"answer": answer.answer, "probabilities": answer.probabilities} for question, answer in zip(questions, answers, strict=True)}
     verdicts, aggregate, passed = aggregate_typed_answers(questions, answer_map, pass_rule)
     confidence = derived_pass_confidence(verdicts, questions)
     detail = "; ".join(answer.detail for answer in answers if answer.detail)

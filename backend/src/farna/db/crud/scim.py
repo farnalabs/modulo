@@ -183,22 +183,10 @@ async def scim_list_users(
         conditions.append(or_(Account.email.ilike(like), Account.display_name.ilike(like)))
 
     try:
-        count_q = (
-            select(func.count())
-            .select_from(OrgMembership)
-            .join(Account, Account.id == OrgMembership.account_id)
-            .where(*conditions)
-        )
+        count_q = select(func.count()).select_from(OrgMembership).join(Account, Account.id == OrgMembership.account_id).where(*conditions)
         total = (await session.execute(count_q)).scalar() or 0
 
-        query = (
-            select(Account)
-            .join(OrgMembership, Account.id == OrgMembership.account_id)
-            .where(*conditions)
-            .order_by(Account.created_at)
-            .offset(max(0, start_index - 1))
-            .limit(count)
-        )
+        query = select(Account).join(OrgMembership, Account.id == OrgMembership.account_id).where(*conditions).order_by(Account.created_at).offset(max(0, start_index - 1)).limit(count)
         result = await session.execute(query)
         items = list(result.scalars().all())
     except ProgrammingError:

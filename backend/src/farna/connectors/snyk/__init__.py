@@ -86,9 +86,7 @@ class SnykConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid Snyk auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="Snyk token lacks required permissions")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to Snyk API")
         except asyncio.CancelledError:

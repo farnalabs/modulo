@@ -65,9 +65,7 @@ class N8NConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="n8n API is reachable and token is valid")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid n8n API token")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except httpx.ConnectError as exc:
             return HealthResult(ok=False, detail=self._redactor.redact(f"Cannot connect to n8n: {exc}"))
         except asyncio.CancelledError:

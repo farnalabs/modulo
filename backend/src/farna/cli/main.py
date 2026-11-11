@@ -89,9 +89,7 @@ def _print_version() -> None:
 class ModuloGroup(click.Group):
     """Top-level group where an unrecognised first token defaults to backup."""
 
-    def resolve_command(
-        self, ctx: click.Context, args: list[str]
-    ) -> tuple[str | None, click.Command | None, list[str]]:
+    def resolve_command(self, ctx: click.Context, args: list[str]) -> tuple[str | None, click.Command | None, list[str]]:
         if args and args[0] not in self.commands:
             args = [_DEFAULT_COMMAND, *args]
         return super().resolve_command(ctx, args)
@@ -322,10 +320,7 @@ def status(data_dir: Path | None, as_json: bool) -> None:
     click.echo(f"initialized: {payload.get('initialized', False)}")
     launcher = payload.get("launcher")
     if isinstance(launcher, dict):
-        click.echo(
-            f"launcher: pid={launcher.get('pid')} mode={launcher.get('mode')} "
-            f"alive={str(launcher.get('alive')).lower()}"
-        )
+        click.echo(f"launcher: pid={launcher.get('pid')} mode={launcher.get('mode')} alive={str(launcher.get('alive')).lower()}")
     components = payload.get("components", {})
     if not isinstance(components, dict):
         components = {}
@@ -336,10 +331,7 @@ def status(data_dir: Path | None, as_json: bool) -> None:
             continue
         pid = component.get("pid")
         port = component.get("port")
-        click.echo(
-            f"{name:<12} {pid if pid is not None else '-'!s:>8} "
-            f"{port if port is not None else '-'!s:>8} {str(bool(component.get('alive'))).lower()}"
-        )
+        click.echo(f"{name:<12} {pid if pid is not None else '-'!s:>8} {port if port is not None else '-'!s:>8} {str(bool(component.get('alive'))).lower()}")
         remediation = component.get("remediation")
         if remediation:
             click.echo(f"  hint ({name}): {remediation}")
@@ -564,10 +556,7 @@ def logs(
         _rotate_log_or_exit(resolved, path, component)
         return
     if not path.is_file():
-        click.echo(
-            f"no {component} log file in the data dir — an attached (foreground) launcher writes its "
-            "log to the terminal, not to a file; bundled children land logs in data-dir/logs/*."
-        )
+        click.echo(f"no {component} log file in the data dir — an attached (foreground) launcher writes its log to the terminal, not to a file; bundled children land logs in data-dir/logs/*.")
         raise SystemExit(1)
     _echo_log_contents(path, follow=follow)
 
@@ -589,10 +578,7 @@ def _rotate_log_or_exit(resolved: Path, path: Path, component: str) -> None:
     holder = _read_lock_holder(lock_path)
     if holder is not None and _pid_alive(holder.pid):
         click.echo(
-            "refused: the launcher is still running — rotating launcher.log while the "
-            "launcher holds it open for appending would redirect writes into the "
-            "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
-            "`modulo logs --rotate`.",
+            "refused: the launcher is still running — rotating launcher.log while the launcher holds it open for appending would redirect writes into the rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run `modulo logs --rotate`.",
             err=True,
         )
         raise SystemExit(1)
@@ -671,12 +657,7 @@ def _service_uninstall_callback() -> None:
         result = service_module.uninstall()
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(
-        "uninstalled modulo.service "
-        f"(removed: {str(result.unit_removed).lower()}, "
-        f"stopped: {str(result.stopped).lower()}, disabled: {str(result.disabled).lower()}, "
-        f"linger disabled: {str(result.linger_disabled).lower()})"
-    )
+    click.echo(f"uninstalled modulo.service (removed: {str(result.unit_removed).lower()}, stopped: {str(result.stopped).lower()}, disabled: {str(result.disabled).lower()}, linger disabled: {str(result.linger_disabled).lower()})")
     for warning in result.warnings:
         click.echo(f"warning: {warning}")
 
@@ -714,10 +695,7 @@ def service_status(data_dir: Path | None) -> None:
             click.echo(f"launcher: {launcher['error']}")
         else:
             holder = launcher.get("launcher") or {}
-            click.echo(
-                f"launcher: alive={str(bool(holder.get('alive'))).lower()} "
-                f"pid={holder.get('pid')} initialized={str(bool(launcher.get('initialized'))).lower()}"
-            )
+            click.echo(f"launcher: alive={str(bool(holder.get('alive'))).lower()} pid={holder.get('pid')} initialized={str(bool(launcher.get('initialized'))).lower()}")
 
 
 @cli.command("clear-degraded")

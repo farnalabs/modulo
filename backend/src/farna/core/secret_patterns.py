@@ -133,7 +133,7 @@ SECRET_VALUE_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
 # substring pattern.
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
     {
-        "MODULO_USERS",
+        "FARNA_CONTROL_MODULO_USERS",
         "DATABASE_URL",
         "PYPI_TOKEN",
     }
@@ -355,8 +355,5 @@ def _mask_bounded_pattern(text: str, pattern: re.Pattern[str], replacement: Any)
             matches.append((window_start, close_end, span_mask))
             continue
         window = text[window_start:close_end]
-        matches.extend(
-            (window_start + match.start(), window_start + match.end(), render(match))
-            for match in pattern.finditer(window)
-        )
+        matches.extend((window_start + match.start(), window_start + match.end(), render(match)) for match in pattern.finditer(window))
     return _resolve_overlaps(text, matches)

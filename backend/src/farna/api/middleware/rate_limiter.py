@@ -23,7 +23,7 @@ from farna.core.rate_limiter import RateLimiterRegistry, RateLimitRule, TokenBuc
 from farna.core.runtime_config.key_bridge import override_or
 from farna.settings import Settings, get_settings
 
-RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
+RATELIMIT_BYPASS_HEADER = "FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN"
 
 # FAR-535: process-local floor for the demo auto-login path. The demo
 # endpoint mints real sessions with zero user input, so its 10/hour cap must
@@ -154,9 +154,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry | _NoopRateLimit
         try:
             from redis.asyncio import Redis
 
-            client: Any = Redis.from_url(
-                settings.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
-            )
+            client: Any = Redis.from_url(settings.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
             _redis_clients.add(client)
             registry = RateLimiterRegistry(redis_client=client)
             redis_available = True
@@ -321,9 +319,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             rule = self._rule_for(request)
 
             allowed, retry_after, registry_failed = await self._check_registry(client_key, rule)
-            if rule.path_prefix == DEMO_RULE_PREFIX and (
-                registry_failed or isinstance(self._registry, _NoopRateLimiter)
-            ):
+            if rule.path_prefix == DEMO_RULE_PREFIX and (registry_failed or isinstance(self._registry, _NoopRateLimiter)):
                 # FAR-535 demo floor: engaged whenever the shared registry
                 # cannot enforce the demo cap — either it degrades to the noop
                 # limiter (Redis unconfigured / sqlite mode) or its runtime
@@ -384,7 +380,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
         # FAR-1135: bypass token is hot-reloadable — resolve the override
         # per-request so an admin rotation takes effect without a restart.
-        bypass = override_or("MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
+        bypass = override_or("FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
         if _matches_bypass_token(token, bypass):
             return False
         path = request.url.path
@@ -476,9 +472,7 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
     try:
         from redis.asyncio import Redis
 
-        client: Any = Redis.from_url(
-            resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
-        )
+        client: Any = Redis.from_url(resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
         _redis_clients.add(client)
         _auth_rate_limiter = AuthRateLimiterCls(
             redis_client=client,
@@ -537,7 +531,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
         # FAR-1135: bypass token is hot-reloadable — resolve the override
         # per-request so an admin rotation takes effect without a restart.
-        bypass = override_or("MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
+        bypass = override_or("FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN", self._bypass_token or "")
         if _matches_bypass_token(token, bypass):
             return False
         path = request.url.path

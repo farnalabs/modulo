@@ -330,7 +330,7 @@ async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPa
 
 
 async def test_helper_returns_empty_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_log_tail_provider", builder)

@@ -593,9 +593,7 @@ class _AttemptResolution(Enum):
 _RERAISE = _AttemptResolution.RERAISE
 
 
-async def _resolve_failed_attempt(
-    ctx: _RetryContext, state: dict[str, Any], exc: Exception, attempt_n: int
-) -> dict[str, Any] | _AttemptResolution | None:
+async def _resolve_failed_attempt(ctx: _RetryContext, state: dict[str, Any], exc: Exception, attempt_n: int) -> dict[str, Any] | _AttemptResolution | None:
     """Resolve one failed attempt; ``None`` means the caller should retry.
 
     Order is load-bearing (FAR-402): the node's own retry budget is consulted

@@ -224,7 +224,7 @@ class TestFulfilTeamPurchase:
         # structured classification the install surfaces return, so the
         # operator can tell a signature/anchor mismatch from a corrupt key.
         assert f"reason={REASON_SIGNATURE_MISMATCH}" in caplog.text
-        assert "MODULO_LICENSE_PUBLIC_KEY" in caplog.text
+        assert "FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY" in caplog.text
 
     async def test_fulfilment_without_email(self) -> None:
         settings = _make_settings()
@@ -343,9 +343,7 @@ class TestResolveStartsAt:
     def test_exactly_ninety_days_ahead_is_allowed(self) -> None:
         latest = (_NOW + timedelta(days=90)).date()
 
-        assert resolve_starts_at(latest.isoformat(), now=_NOW) == datetime(
-            latest.year, latest.month, latest.day, tzinfo=UTC
-        )
+        assert resolve_starts_at(latest.isoformat(), now=_NOW) == datetime(latest.year, latest.month, latest.day, tzinfo=UTC)
 
     def test_more_than_ninety_days_ahead_is_rejected(self) -> None:
         too_far = (_NOW + timedelta(days=91)).date()

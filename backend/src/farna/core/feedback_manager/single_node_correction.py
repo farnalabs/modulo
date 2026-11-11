@@ -45,11 +45,7 @@ class CorrectionRunContext:
 def validate_correction_eligibility(record: Any, ctx: CorrectionRunContext) -> None:
     """Fence a single-node correction: no terminal records, restricted backend only."""
     if record.feedback_status in CORRECTION_TERMINAL_STATUSES:
-        raise InvalidTransitionError(
-            f"FeedbackRecord {record.id} is in terminal status "
-            f"'{record.feedback_status}'; cannot run a single-node correction "
-            f"on a record a human has already decided on"
-        )
+        raise InvalidTransitionError(f"FeedbackRecord {record.id} is in terminal status '{record.feedback_status}'; cannot run a single-node correction on a record a human has already decided on")
 
     ctx.correction.validate_guardrail_binding(ctx.guardrail)
     backend_capabilities = getattr(ctx.backend, "capabilities", ())
@@ -122,9 +118,7 @@ async def claim_correction_slot(
             resource_id=record_id,
             payload_json={"correction_id": ctx.correction.id, "reason": "org concurrent-correction cap reached"},
         )
-        raise CorrectionCapExceededError(
-            f"Correction {ctx.correction.id!r} blocked at claim time: org concurrent-correction cap reached"
-        )
+        raise CorrectionCapExceededError(f"Correction {ctx.correction.id!r} blocked at claim time: org concurrent-correction cap reached")
 
 
 async def run_correction_attempts(
@@ -200,10 +194,7 @@ def budget_exhausted_outcome(
 
     return CorrectionOutcome(
         verdict=CorrectionVerdict.BUDGET_EXHAUSTED,
-        detail=(
-            f"correction budget exhausted (recorded attempt {attempt} of "
-            f"{ctx.correction.max_attempts}): no fresh attempt available"
-        ),
+        detail=(f"correction budget exhausted (recorded attempt {attempt} of {ctx.correction.max_attempts}): no fresh attempt available"),
         needs_human_review=True,
         state=dict(persisted_state),
     )
@@ -335,9 +326,7 @@ async def persist_correction_outcome(
         values={"needs_human_review": True},
         failure_message="Expected 'correcting', failed to persist an escalated correction outcome.",
     )
-    violation_event = (
-        EVENT_CORRECTION_VIOLATED if verdict == CorrectionVerdict.CORRECTION_VIOLATED else EVENT_CORRECTION_ESCALATED
-    )
+    violation_event = EVENT_CORRECTION_VIOLATED if verdict == CorrectionVerdict.CORRECTION_VIOLATED else EVENT_CORRECTION_ESCALATED
     await append_audit_event(
         session,
         org_id=org_id,

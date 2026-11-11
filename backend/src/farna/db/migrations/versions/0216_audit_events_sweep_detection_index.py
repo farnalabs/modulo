@@ -22,10 +22,7 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_audit_events_org_type_actor_time "
-        'ON public."audit_events" USING btree (organisation_id, event_type, account_id, created_at);'
-    )
+    op.execute('CREATE INDEX IF NOT EXISTS ix_audit_events_org_type_actor_time ON public."audit_events" USING btree (organisation_id, event_type, account_id, created_at);')
 
 
 def downgrade() -> None:

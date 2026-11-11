@@ -73,11 +73,7 @@ def _extract_trend_counts(trend_row: object) -> dict[str, int]:
     """
     if trend_row is None:
         return {field: 0 for _, total_field, passed_field in _TREND_PERIODS for field in (total_field, passed_field)}
-    return {
-        field: int(getattr(trend_row, field) or 0)
-        for _, total_field, passed_field in _TREND_PERIODS
-        for field in (total_field, passed_field)
-    }
+    return {field: int(getattr(trend_row, field) or 0) for _, total_field, passed_field in _TREND_PERIODS for field in (total_field, passed_field)}
 
 
 def _comparison_points(trend: list[OkrTrendPoint]) -> tuple[float, float] | None:
@@ -271,10 +267,7 @@ async def track_okr_progress(
     pass_threshold, trend_row = await _load_okr_data(session, org_id, suite_id, window_7, window_14, window_30)
 
     counts = _extract_trend_counts(trend_row)
-    trend = [
-        _trend_point(period, counts[total_field], counts[passed_field])
-        for period, total_field, passed_field in _TREND_PERIODS
-    ]
+    trend = [_trend_point(period, counts[total_field], counts[passed_field]) for period, total_field, passed_field in _TREND_PERIODS]
 
     # Use the most recent non-empty discrete window; fall back to overall
     scored = [t for t in trend if t.total_evals > 0 and t.period != "overall"]

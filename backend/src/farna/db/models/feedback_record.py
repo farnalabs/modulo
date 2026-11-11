@@ -46,22 +46,16 @@ class FeedbackRecord(OrgScoped):
         index=True,
     )
     review_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=False)
     # JSONB on Postgres (migration 0147 promoted this column from json);
     # generic JSON keeps SQLite/MariaDB parity (the evidence.py pattern).
     rejected_output: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     producing_node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
-    producing_agent_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    producing_agent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
     feedback_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     feedback_handler_type: Mapped[str] = mapped_column(String(40), nullable=False, server_default="human")
-    correction_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    correction_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
     eval_gap: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     needs_human_review: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     annotation: Mapped[str | None] = mapped_column(Text, nullable=True)

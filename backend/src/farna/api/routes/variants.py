@@ -653,9 +653,7 @@ async def run_variant(
 @router.post(
     "/{group_id}/batch-run",
     response_model=RunVariantBatchResponse,
-    dependencies=[
-        Depends(audited("variant_batch_run_triggered", "variant_group", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("variant_batch_run_triggered", "variant_group", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_VARIANTS_RUN_VARIANT_BATCH)
 async def run_batch(

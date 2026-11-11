@@ -102,21 +102,9 @@ _VERDICT_BUDGET_EXHAUSTED = "budget_exhausted"
 
 # Fixed note strings — the advisory-only contract is surfaced on every rate so
 # no consumer can mistake a scorecard metric for a gate (S1192).
-_NOTE_RATES = (
-    "Advisory only — the first-try-pass and corrected-pass rates are reported "
-    "SEPARATELY and never merged into a single pass rate (retries inflate a "
-    "merged number). No scorecard rate gates autonomy."
-)
-_NOTE_CORRECTIONS = (
-    "Advisory only — corrected-pass counts single-node corrections that "
-    "converged clean (resolved) vs escalated to HITL vs budget-exhausted; "
-    "reported separately from first-try-pass, never merged."
-)
-_NOTE_DRIFT = (
-    "Advisory only — a drift indicator never gates or blocks anything. It "
-    "flags when unexpected guardrail skips occurred or the errored rate moved "
-    "above the historical baseline + margin."
-)
+_NOTE_RATES = "Advisory only — the first-try-pass and corrected-pass rates are reported SEPARATELY and never merged into a single pass rate (retries inflate a merged number). No scorecard rate gates autonomy."
+_NOTE_CORRECTIONS = "Advisory only — corrected-pass counts single-node corrections that converged clean (resolved) vs escalated to HITL vs budget-exhausted; reported separately from first-try-pass, never merged."
+_NOTE_DRIFT = "Advisory only — a drift indicator never gates or blocks anything. It flags when unexpected guardrail skips occurred or the errored rate moved above the historical baseline + margin."
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +215,7 @@ def _build_corrections_stmt(
         sa.func.sum(sa.case((FeedbackRecord.feedback_status == "resolved", 1), else_=0)).label("converged_clean"),
         sa.func.sum(sa.case((FeedbackRecord.feedback_status == "escalated", 1), else_=0)).label("escalated_hitl"),
         sa.func.sum(sa.case((FeedbackRecord.feedback_status == "dismissed", 1), else_=0)).label("dismissed"),
-        sa.func.sum(
-            sa.case((FeedbackRecord.feedback_status.in_(("pending", "routing", "correcting")), 1), else_=0)
-        ).label("in_flight"),
+        sa.func.sum(sa.case((FeedbackRecord.feedback_status.in_(("pending", "routing", "correcting")), 1), else_=0)).label("in_flight"),
     ).where(
         FeedbackRecord.organisation_id == org_id,
         FeedbackRecord.feedback_handler_type.in_(_AI_CORRECTION_HANDLER_TYPES),
@@ -554,25 +540,10 @@ async def _run_scorecard_queries(
             if dialect == "postgresql":
                 await _maybe_apply_postgres_timeout(session, settings)
 
-            runs_row = (
-                await session.execute(
-                    _build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to, team_ids)
-                )
-            ).one()
-            corrections_row = (
-                await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to, team_ids))
-            ).one()
-            budget_exhausted = int(
-                (
-                    await session.execute(_build_budget_exhausted_stmt(dialect, org_id, effective_from, effective_to))
-                ).scalar()
-                or 0
-            )
-            baseline_row = (
-                await session.execute(
-                    _build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from, team_ids)
-                )
-            ).one()
+            runs_row = (await session.execute(_build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to, team_ids))).one()
+            corrections_row = (await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to, team_ids))).one()
+            budget_exhausted = int((await session.execute(_build_budget_exhausted_stmt(dialect, org_id, effective_from, effective_to))).scalar() or 0)
+            baseline_row = (await session.execute(_build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from, team_ids))).one()
     except asyncio.CancelledError:
         raise
     except Exception as exc:

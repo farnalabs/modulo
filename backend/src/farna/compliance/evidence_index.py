@@ -136,9 +136,7 @@ class EvidenceIndexIncompleteError(RuntimeError):
 
     def __init__(self, missing_artifact_types: tuple[str, ...]) -> None:
         self.missing_artifact_types = missing_artifact_types
-        super().__init__(
-            "evidence index is incomplete; no records for mapped artefact type(s): " + ", ".join(missing_artifact_types)
-        )
+        super().__init__("evidence index is incomplete; no records for mapped artefact type(s): " + ", ".join(missing_artifact_types))
 
 
 class ArtifactEntry(BaseModel):
@@ -321,12 +319,7 @@ async def _collect_audit_chain(
     period_from: datetime | None = None,
     period_to: datetime | None = None,
 ) -> ArtifactEntry:
-    location = (
-        "GET /api/v1/admin/audit (browse), GET /api/v1/admin/audit/verify (integrity), "
-        "GET /api/v1/admin/audit/evidence-pack (signed offline-verifiable export) - all "
-        "three require the Team tier's audit_viewer feature plus audit.manage; the events "
-        "themselves are recorded on every tier"
-    )
+    location = "GET /api/v1/admin/audit (browse), GET /api/v1/admin/audit/verify (integrity), GET /api/v1/admin/audit/evidence-pack (signed offline-verifiable export) - all three require the Team tier's audit_viewer feature plus audit.manage; the events themselves are recorded on every tier"
     head = await get_chain_head(session, organisation_id)
     # Served by ix_audit_events_org_created_at (migration 0155): the count and
     # both min/max bounds are answered from one (organisation_id, created_at)
@@ -346,10 +339,7 @@ async def _collect_audit_chain(
             pack=pack,
             artifact_type=ARTIFACT_AUDIT_CHAIN,
             location=location,
-            reason=(
-                "this instance holds no audit events for the organisation"
-                + (_window_suffix(period_from, period_to) or " yet")
-            ),
+            reason=("this instance holds no audit events for the organisation" + (_window_suffix(period_from, period_to) or " yet")),
             detail={"event_count": event_count},
         )
     if head is None:
@@ -361,11 +351,7 @@ async def _collect_audit_chain(
             pack=pack,
             artifact_type=ARTIFACT_AUDIT_CHAIN,
             location=location,
-            reason=(
-                "audit events exist for the organisation"
-                + _window_suffix(period_from, period_to)
-                + " but no audit chain head is recorded, so chain integrity cannot be evidenced"
-            ),
+            reason=("audit events exist for the organisation" + _window_suffix(period_from, period_to) + " but no audit chain head is recorded, so chain integrity cannot be evidenced"),
             detail={"event_count": event_count, "chain_head_present": False},
         )
 
@@ -386,11 +372,7 @@ async def _collect_audit_chain(
             # event_count_scope states which is which.
             "chain_head_event_count": int(head.event_count),
             "event_count": event_count,
-            "event_count_scope": (
-                "organisation-wide full history"
-                if period_from is None and period_to is None
-                else "organisation-wide, limited to the requested audit period"
-            ),
+            "event_count_scope": ("organisation-wide full history" if period_from is None and period_to is None else "organisation-wide, limited to the requested audit period"),
             "first_event_at": _iso(stats[1]),
             "last_event_at": _iso(stats[2]),
         },
@@ -421,18 +403,13 @@ async def _collect_run_snapshots(
             PipelineSnapshot.organisation_id == organisation_id,
         )
     )
-    snapshot_count = int(
-        (await session.execute(_apply_period(count_stmt, Run.created_at, period_from, period_to))).scalar_one() or 0
-    )
+    snapshot_count = int((await session.execute(_apply_period(count_stmt, Run.created_at, period_from, period_to))).scalar_one() or 0)
     if snapshot_count == 0:
         return _absent(
             pack=pack,
             artifact_type=ARTIFACT_RUN_SNAPSHOT,
             location=location,
-            reason=(
-                "no run in this instance has executed against a frozen pipeline snapshot"
-                + _window_suffix(period_from, period_to)
-            ),
+            reason=("no run in this instance has executed against a frozen pipeline snapshot" + _window_suffix(period_from, period_to)),
         )
 
     # Bounded sample: pick the _SAMPLE_LIMIT most recently-run snapshots in a
@@ -446,9 +423,7 @@ async def _collect_run_snapshots(
         func.max(Run.created_at).label("last_run_at"),
     ).where(Run.organisation_id == organisation_id)
     recent_runs = _apply_period(recent_runs, Run.created_at, period_from, period_to)
-    recent_snapshots = (
-        recent_runs.group_by(Run.snapshot_id).order_by(func.max(Run.created_at).desc()).limit(_SAMPLE_LIMIT).subquery()
-    )
+    recent_snapshots = recent_runs.group_by(Run.snapshot_id).order_by(func.max(Run.created_at).desc()).limit(_SAMPLE_LIMIT).subquery()
     sample_stmt = (
         select(
             PipelineSnapshot.id,
@@ -486,10 +461,7 @@ async def _collect_hitl_decisions(
     period_from: datetime | None = None,
     period_to: datetime | None = None,
 ) -> ArtifactEntry:
-    location = (
-        "GET /api/v1/hitl/reviews and GET /api/v1/runs/{run_id}/hitl/pending; the "
-        "decision is stored on the HITL claim row"
-    )
+    location = "GET /api/v1/hitl/reviews and GET /api/v1/runs/{run_id}/hitl/pending; the decision is stored on the HITL claim row"
     # Both legs are served by ix_hitl_claims_org_decision_at (migration 0328):
     # (organisation_id, decision_at) WHERE decision IS NOT NULL. The pre-existing
     # per-actor window index leads on decided_by, which neither query filters.
@@ -497,11 +469,7 @@ async def _collect_hitl_decisions(
         HitlClaim.organisation_id == organisation_id,
         HitlClaim.decision.is_not(None),
     )
-    by_decision = (
-        await session.execute(
-            _apply_period(by_decision_stmt, HitlClaim.decision_at, period_from, period_to).group_by(HitlClaim.decision)
-        )
-    ).all()
+    by_decision = (await session.execute(_apply_period(by_decision_stmt, HitlClaim.decision_at, period_from, period_to).group_by(HitlClaim.decision))).all()
     counts = {str(row[0]): int(row[1]) for row in by_decision}
     total = sum(counts.values())
     if total == 0:
@@ -509,9 +477,7 @@ async def _collect_hitl_decisions(
             pack=pack,
             artifact_type=ARTIFACT_HITL_DECISION,
             location=location,
-            reason=(
-                "no human-in-the-loop gate has been decided in this instance" + _window_suffix(period_from, period_to)
-            ),
+            reason=("no human-in-the-loop gate has been decided in this instance" + _window_suffix(period_from, period_to)),
         )
 
     decided_stmt = select(
@@ -531,9 +497,7 @@ async def _collect_hitl_decisions(
     # FIRST under ``DESC``, which would put undated rows at the head of the
     # scan, report ``latest_decision_at`` as None and fill the truncated window
     # with rows that carry no decision time at all.
-    decided_rows = (
-        await session.execute(decided_stmt.order_by(HitlClaim.decision_at.desc().nulls_last()).limit(_HITL_SCAN_LIMIT))
-    ).all()
+    decided_rows = (await session.execute(decided_stmt.order_by(HitlClaim.decision_at.desc().nulls_last()).limit(_HITL_SCAN_LIMIT))).all()
     human_only_approved = 0
     human_only_total = 0
     for row in decided_rows:
@@ -579,10 +543,7 @@ async def _collect_eval_results(
     period_from: datetime | None = None,
     period_to: datetime | None = None,
 ) -> ArtifactEntry:
-    location = (
-        "GET /api/v1/runs/{run_id}/evals and GET /api/v1/eval-suites; each result "
-        "records the eval-definition version that scored it"
-    )
+    location = "GET /api/v1/runs/{run_id}/evals and GET /api/v1/eval-suites; each result records the eval-definition version that scored it"
     # ADR 066 D18: a judge row with ``outcome='error'`` produced no verdict —
     # an instrument failure, not a failed check. It stays in ``record_count``
     # (a row WAS recorded) but is excluded from both the passed and failed
@@ -613,17 +574,7 @@ async def _collect_eval_results(
     passed = int(stats[1] or 0)
     failed = int(stats[2] or 0)
     sample_stmt = select(EvalResult.id).where(EvalResult.organisation_id == organisation_id)
-    sample_ids = (
-        (
-            await session.execute(
-                _apply_period(sample_stmt, EvalResult.evaluated_at, period_from, period_to)
-                .order_by(EvalResult.evaluated_at.desc())
-                .limit(_SAMPLE_LIMIT)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    sample_ids = (await session.execute(_apply_period(sample_stmt, EvalResult.evaluated_at, period_from, period_to).order_by(EvalResult.evaluated_at.desc()).limit(_SAMPLE_LIMIT))).scalars().all()
     return _present(
         pack=pack,
         artifact_type=ARTIFACT_EVAL_RESULT,
@@ -647,20 +598,12 @@ async def _collect_autonomy_changes(
     period_from: datetime | None = None,
     period_to: datetime | None = None,
 ) -> ArtifactEntry:
-    location = (
-        "Audit events pipeline.autonomy_promotion_decided and pipeline.autonomy_demoted, "
-        "recorded on every tier and read at GET /api/v1/admin/audit (Team tier's "
-        "audit_viewer feature plus audit.manage)"
-    )
+    location = "Audit events pipeline.autonomy_promotion_decided and pipeline.autonomy_demoted, recorded on every tier and read at GET /api/v1/admin/audit (Team tier's audit_viewer feature plus audit.manage)"
     by_type_stmt = select(AuditEvent.event_type, func.count(AuditEvent.id)).where(
         AuditEvent.organisation_id == organisation_id,
         AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
     )
-    by_type = (
-        await session.execute(
-            _apply_period(by_type_stmt, AuditEvent.created_at, period_from, period_to).group_by(AuditEvent.event_type)
-        )
-    ).all()
+    by_type = (await session.execute(_apply_period(by_type_stmt, AuditEvent.created_at, period_from, period_to).group_by(AuditEvent.event_type))).all()
     counts = {str(row[0]): int(row[1]) for row in by_type}
     total = sum(counts.values())
     if total == 0:
@@ -668,27 +611,14 @@ async def _collect_autonomy_changes(
             pack=pack,
             artifact_type=ARTIFACT_AUTONOMY_CHANGE,
             location=location,
-            reason=(
-                "no pipeline autonomy level has been promoted or demoted in this instance"
-                + _window_suffix(period_from, period_to)
-            ),
+            reason=("no pipeline autonomy level has been promoted or demoted in this instance" + _window_suffix(period_from, period_to)),
         )
 
     sample_stmt = select(AuditEvent.id).where(
         AuditEvent.organisation_id == organisation_id,
         AuditEvent.event_type.in_(AUTONOMY_EVENT_TYPES),
     )
-    sample_ids = (
-        (
-            await session.execute(
-                _apply_period(sample_stmt, AuditEvent.created_at, period_from, period_to)
-                .order_by(AuditEvent.created_at.desc())
-                .limit(_SAMPLE_LIMIT)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    sample_ids = (await session.execute(_apply_period(sample_stmt, AuditEvent.created_at, period_from, period_to).order_by(AuditEvent.created_at.desc()).limit(_SAMPLE_LIMIT))).scalars().all()
     return _present(
         pack=pack,
         artifact_type=ARTIFACT_AUTONOMY_CHANGE,
@@ -709,10 +639,7 @@ def _collect_build_identity(pack: MappingPack) -> ArtifactEntry:
             pack=pack,
             artifact_type=ARTIFACT_BUILD_IDENTITY,
             location=location,
-            reason=(
-                "the running process cannot identify its release (the package reports the "
-                "development version, so no version, source revision or build time is available)"
-            ),
+            reason=("the running process cannot identify its release (the package reports the development version, so no version, source revision or build time is available)"),
         )
 
     identifiers = [f"product-version:{version}"]
@@ -720,9 +647,7 @@ def _collect_build_identity(pack: MappingPack) -> ArtifactEntry:
         identifiers.append(f"git-sha:{git_sha}")
     if build_timestamp:
         identifiers.append(f"build-timestamp:{build_timestamp}")
-    missing_fields = [
-        field for field, value in (("git_sha", git_sha), ("build_timestamp", build_timestamp)) if not value
-    ]
+    missing_fields = [field for field, value in (("git_sha", git_sha), ("build_timestamp", build_timestamp)) if not value]
     return _present(
         pack=pack,
         artifact_type=ARTIFACT_BUILD_IDENTITY,
@@ -745,19 +670,13 @@ def _collect_release_sbom(pack: MappingPack) -> ArtifactEntry:
         status=STATUS_CUSTOMER_SUPPLIED,
         provenance=PROVENANCE_CUSTOMER_SUPPLIED,
         description=ARTIFACT_TYPES[ARTIFACT_RELEASE_SBOM].description,
-        location=(
-            "Release: Unified Pipeline artefact sbom-cyclonedx (.github/workflows/release-unified.yml), or "
-            "regenerate with python backend/scripts/generate-sbom.py"
-        ),
+        location=("Release: Unified Pipeline artefact sbom-cyclonedx (.github/workflows/release-unified.yml), or regenerate with python backend/scripts/generate-sbom.py"),
         identifiers=(),
         record_count=None,
         detail={
             "supplied_by": "customer/operator",
             "format": "CycloneDX",
-            "note": (
-                "the running instance does not hold the SBOM; the operator must retain the "
-                "SBOM for the release it deployed and hand it to the auditor"
-            ),
+            "note": ("the running instance does not hold the SBOM; the operator must retain the SBOM for the release it deployed and hand it to the auditor"),
         },
         mapping_row_ids=_entries_for_rows(pack, ARTIFACT_RELEASE_SBOM),
     )
@@ -812,10 +731,7 @@ async def build_evidence_index(
     if covered != INDEXED_ARTIFACT_TYPES:
         # A collector was added, removed or renamed without updating the pack
         # vocabulary. Fail rather than serve an index with a silent hole.
-        raise RuntimeError(
-            "evidence index artifact coverage does not match the indexed vocabulary: "
-            f"index={covered} expected={INDEXED_ARTIFACT_TYPES}"
-        )
+        raise RuntimeError(f"evidence index artifact coverage does not match the indexed vocabulary: index={covered} expected={INDEXED_ARTIFACT_TYPES}")
 
     missing = tuple(entry.artifact_type for entry in artifacts if entry.status == STATUS_ABSENT)
     if missing:

@@ -238,7 +238,4 @@ def downgrade() -> None:
     that distinguishes its own writes from later writes. Refusing is safer than
     a destructive, best-effort rollback.
     """
-    raise RuntimeError(
-        "0348_far147_legacy_run_group_backfill cannot be downgraded safely: "
-        "backfilled run-group values are not distinguishable from later application writes"
-    )
+    raise RuntimeError("0348_far147_legacy_run_group_backfill cannot be downgraded safely: backfilled run-group values are not distinguishable from later application writes")

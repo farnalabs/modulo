@@ -20,10 +20,7 @@ def is_postgres(bind: sa.Connection) -> bool:
 
 def role_exists(bind: sa.Connection, role: str) -> bool:
     """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
@@ -32,13 +29,6 @@ def assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
     The app role must NOT own an RLS-FORCED org-scoped table, or it bypasses
     its own RLS.
     """
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(
-            tbl=f"public.{table}"
-        )
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(tbl=f"public.{table}")).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
-            "(the app role must NOT own an RLS-FORCED org-scoped table — owner bypasses RLS)"
-        )
+        raise RuntimeError(f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' (the app role must NOT own an RLS-FORCED org-scoped table — owner bypasses RLS)")

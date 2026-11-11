@@ -96,13 +96,7 @@ _CHECK_PREDICATE = "org_cumulative_spend_cents >= 0"
 #: Literal DDL only — no f-string/format-built SQL (the migration-fstring-sql
 #: semgrep rule), and every statement is table-qualified so a same-named
 #: constraint on another table can never make an existence gate silently skip.
-_DROP_CHECK_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname = 'ck_organisations_cum_spend' "
-    "AND conrelid = 'public.organisations'::regclass) "
-    "THEN ALTER TABLE public.organisations DROP CONSTRAINT ck_organisations_cum_spend; "
-    "END IF; END $$;"
-)
+_DROP_CHECK_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend' AND conrelid = 'public.organisations'::regclass) THEN ALTER TABLE public.organisations DROP CONSTRAINT ck_organisations_cum_spend; END IF; END $$;"
 
 _ADD_CHECK_NOT_VALID_SQL = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
@@ -113,26 +107,12 @@ _ADD_CHECK_NOT_VALID_SQL = (
     "END IF; END $$;"
 )
 
-_VALIDATE_CHECK_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname = 'ck_organisations_cum_spend' "
-    "AND conrelid = 'public.organisations'::regclass "
-    "AND NOT convalidated) "
-    "THEN ALTER TABLE public.organisations VALIDATE CONSTRAINT ck_organisations_cum_spend; "
-    "END IF; END $$;"
-)
+_VALIDATE_CHECK_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_organisations_cum_spend' AND conrelid = 'public.organisations'::regclass AND NOT convalidated) THEN ALTER TABLE public.organisations VALIDATE CONSTRAINT ck_organisations_cum_spend; END IF; END $$;"
 
 #: Downgrade restore — the exact inverse of 0321's backfill. ``UPDATE ... FROM``
 #: touches only organisations that HAVE a cost-state row; the rest keep the
 #: column defaults, which is their pre-cutover semantic (no ceilings, 0 spent).
-_RESTORE_SQL = (
-    "UPDATE organisations o SET "
-    "max_run_cost_cents = s.max_run_cost_cents, "
-    "spend_ceiling_cents = s.spend_ceiling_cents, "
-    "org_cumulative_spend_cents = s.org_cumulative_spend_cents "
-    "FROM organisation_cost_state s "
-    "WHERE s.org_id = o.id"
-)
+_RESTORE_SQL = "UPDATE organisations o SET max_run_cost_cents = s.max_run_cost_cents, spend_ceiling_cents = s.spend_ceiling_cents, org_cumulative_spend_cents = s.org_cumulative_spend_cents FROM organisation_cost_state s WHERE s.org_id = o.id"
 
 # The restore is deliberately cross-organisation: it is migration DML, not an
 # application operation.  ``modulo_migrate`` is the only role allowed to make
@@ -186,16 +166,11 @@ def _ddl_with_retry(bind: Connection, sql: str, *, description: str) -> None:
 
 
 def _role_exists(bind: Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _cost_state_table_exists(bind: Connection) -> bool:
-    return (
-        bind.execute(sa.text("SELECT to_regclass('public.organisation_cost_state')")).scalar_one_or_none() is not None
-    )
+    return bind.execute(sa.text("SELECT to_regclass('public.organisation_cost_state')")).scalar_one_or_none() is not None
 
 
 def _restore_postgres(bind: Connection) -> int:
@@ -207,10 +182,7 @@ def _restore_postgres(bind: Connection) -> int:
     tenant setting or leave the elevated role active after the statement.
     """
     if not _role_exists(bind, _MIGRATE_ROLE):
-        raise RuntimeError(
-            "FAR-1902 downgrade cannot restore organisations cost columns: "
-            "the dedicated modulo_migrate role does not exist"
-        )
+        raise RuntimeError("FAR-1902 downgrade cannot restore organisations cost columns: the dedicated modulo_migrate role does not exist")
 
     bind.execute(sa.text(_GRANT_RESTORE_SQL))
     bind.execute(sa.text(_SET_LOCAL_ROLE_SQL))
@@ -287,8 +259,7 @@ def upgrade() -> None:
         )
 
     _log.info(
-        "FAR-1902: dropped organisations cost columns %s and CHECK %s "
-        "(lock_timeout=%s, per-attempt savepoint retry on every DDL statement)",
+        "FAR-1902: dropped organisations cost columns %s and CHECK %s (lock_timeout=%s, per-attempt savepoint retry on every DDL statement)",
         ", ".join(_COST_COLUMNS),
         _CHECK_NAME,
         _DDL_LOCK_TIMEOUT,
@@ -330,8 +301,7 @@ def downgrade() -> None:
     # does not rewrite the table.
     _ddl_with_retry(
         bind,
-        "ALTER TABLE public.organisations ADD COLUMN IF NOT EXISTS "
-        "org_cumulative_spend_cents INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE public.organisations ADD COLUMN IF NOT EXISTS org_cumulative_spend_cents INTEGER NOT NULL DEFAULT 0",
         description="ADD COLUMN organisations.org_cumulative_spend_cents",
     )
 

@@ -33,17 +33,9 @@ depends_on: str | Sequence[str] | None = None
 
 # The OLD vocabularies (pre-0213) and the WIDENED ones. Kept side by side so
 # the downgrade restores the exact pre-migration expressions.
-_RUNS_TRIGGER_TYPE_OLD = (
-    "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', "
-    "'correction', 'slack_app_mention')"
-)
-_RUNS_TRIGGER_TYPE_NEW = (
-    "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', "
-    "'correction', 'slack_app_mention', 'rerun')"
-)
-_FACTS_TRIGGER_TYPE_OLD = (
-    "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention')"
-)
+_RUNS_TRIGGER_TYPE_OLD = "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction', 'slack_app_mention')"
+_RUNS_TRIGGER_TYPE_NEW = "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction', 'slack_app_mention', 'rerun')"
+_FACTS_TRIGGER_TYPE_OLD = "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention')"
 _FACTS_TRIGGER_TYPE_NEW = "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention','rerun')"
 
 

@@ -91,17 +91,11 @@ def _callback_responses() -> dict[int | str, dict[str, Any]]:
     }
     return {
         status.HTTP_307_TEMPORARY_REDIRECT: {
-            "description": (
-                "Success: redirect to the frontend callback URL. The access token is carried "
-                "in the URL fragment; there is no response body."
-            ),
+            "description": ("Success: redirect to the frontend callback URL. The access token is carried in the URL fragment; there is no response body."),
             "headers": location_header,
         },
         status.HTTP_303_SEE_OTHER: {
-            "description": (
-                "Handled sign-in failure: redirect to the frontend login page with a "
-                "whitelisted ``sso_error`` code; there is no response body."
-            ),
+            "description": ("Handled sign-in failure: redirect to the frontend login page with a whitelisted ``sso_error`` code; there is no response body."),
             "headers": location_header,
         },
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal Server Error"},
@@ -360,10 +354,7 @@ def _env_saml_available(settings: Settings) -> bool:
     screen. Entitlement is enforced post-auth (the plan resolves to Community)
     and on the admin configuration surface by ``require_feature("sso")``.
     """
-    return bool(
-        settings.modulo_saml_enabled
-        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
-    )
+    return bool(settings.modulo_saml_enabled and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml)))
 
 
 async def is_saml_available(
@@ -450,16 +441,12 @@ async def sso_providers(
 
     try:
         async with session.begin():
-            db_oidc_providers: list[Any] = (
-                [] if scoped_org is None else await _list_enabled_oidc_for_org(system_session, session, scoped_org.id)
-            )
+            db_oidc_providers: list[Any] = [] if scoped_org is None else await _list_enabled_oidc_for_org(system_session, session, scoped_org.id)
             db_ids = {p.provider_id for p in db_oidc_providers}
             oidc_list: list[dict[str, str]] = [
                 {
                     "provider_id": p.provider_id,
-                    "display_name": (
-                        _DEGRADED_PROVIDER_LABEL if degraded else (p.name or getattr(p, "preset", "custom"))
-                    ),
+                    "display_name": (_DEGRADED_PROVIDER_LABEL if degraded else (p.name or getattr(p, "preset", "custom"))),
                     "preset": getattr(p, "preset", "custom"),
                 }
                 for p in db_oidc_providers
@@ -477,11 +464,7 @@ async def sso_providers(
                         }
                     )
 
-            saml_enabled = (
-                await is_saml_available(settings, system_session, session)
-                if scoped_org is not None
-                else _env_saml_available(settings)
-            )
+            saml_enabled = await is_saml_available(settings, system_session, session) if scoped_org is not None else _env_saml_available(settings)
             return SsoProvidersResponse(
                 oidc=[OidcProviderInfo(**p) for p in oidc_list],
                 saml=saml_enabled,
@@ -620,9 +603,7 @@ async def oidc_login(
 
     try:
         async with session.begin():
-            auth_url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
-                provider, settings, redirect_uri, system_session, session
-            )
+            auth_url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(provider, settings, redirect_uri, system_session, session)
     except ValueError as exc:
         # Unknown provider, missing client config or a discovery-fetch failure —
         # all are the SAME generic auth failure to the browser.

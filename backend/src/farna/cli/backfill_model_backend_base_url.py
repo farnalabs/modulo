@@ -424,17 +424,7 @@ async def _process_org(
                 # endpoint kept sending the stored key in cleartext.
                 await set_rls_execution_context(session)
                 secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-                backends = (
-                    (
-                        await session.execute(
-                            select(ModelBackend)
-                            .where(ModelBackend.organisation_id == organisation.id)
-                            .order_by(ModelBackend.id)
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
+                backends = (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == organisation.id).order_by(ModelBackend.id))).scalars().all()
                 for backend in backends:
                     params = backend.default_params if isinstance(backend.default_params, Mapping) else {}
                     if "base_url" not in params:
@@ -463,10 +453,7 @@ async def _process_org(
                                 planned.report.backend_id,
                                 organisation.id,
                             )
-                            audit_failures.append(
-                                f"audit append failed for backend {planned.report.backend_id} "
-                                f"in org {organisation.slug} ({organisation.id})"
-                            )
+                            audit_failures.append(f"audit append failed for backend {planned.report.backend_id} in org {organisation.slug} ({organisation.id})")
         except Exception as exc:  # reported per org, never swallowed
             return [], [f"org {organisation.slug} ({organisation.id}): {type(exc).__name__}: {exc}"]
     return [planned.report for planned in planned_rows], audit_failures

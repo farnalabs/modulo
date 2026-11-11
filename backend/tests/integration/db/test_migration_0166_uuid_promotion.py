@@ -107,7 +107,7 @@ def fresh_migration_db(monkeypatch):
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
-        m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
+        m.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
         from farna.db.bootstrap_role import bootstrap_roles
 
         asyncio_run(bootstrap_roles(raw, app_url))
@@ -130,47 +130,18 @@ async def test_0155_0156_0157_upgrade_on_fresh_schema(fresh_migration_db) -> Non
     try:
         # 0156 CHECK constraints exist on the production tables after the chain.
         async with engine.connect() as conn:
-            check_names = (
-                (
-                    await conn.execute(
-                        text(
-                            "SELECT conname FROM pg_constraint WHERE contype = 'c' "
-                            "AND conrelid = (SELECT oid FROM pg_class WHERE relname = 'runs')"
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            check_names = (await conn.execute(text("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid = (SELECT oid FROM pg_class WHERE relname = 'runs')"))).scalars().all()
         assert "ck_run_claim_count" in check_names, check_names
 
         # 0155 foreign keys exist after the chain (added NOT VALID + VALIDATE).
         async with engine.connect() as conn:
-            fk_names = (
-                (
-                    await conn.execute(
-                        text(
-                            "SELECT conname FROM pg_constraint WHERE contype = 'f' "
-                            "AND conrelid = (SELECT oid FROM pg_class WHERE relname = 'org_api_keys')"
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            fk_names = (await conn.execute(text("SELECT conname FROM pg_constraint WHERE contype = 'f' AND conrelid = (SELECT oid FROM pg_class WHERE relname = 'org_api_keys')"))).scalars().all()
         assert "org_api_keys_run_id_fkey" in fk_names, fk_names
 
         # 0157 promoted run_evidence.node_id to native uuid, and the ORM already
         # declares it as Uuid — so compare_metadata parity holds.
         async with engine.connect() as conn:
-            evidence_type = (
-                await conn.execute(
-                    text(
-                        "SELECT data_type FROM information_schema.columns "
-                        "WHERE table_name = 'run_evidence' AND column_name = 'node_id'"
-                    )
-                )
-            ).scalar()
+            evidence_type = (await conn.execute(text("SELECT data_type FROM information_schema.columns WHERE table_name = 'run_evidence' AND column_name = 'node_id'"))).scalar()
         assert evidence_type == "uuid", f"run_evidence.node_id should be uuid, got {evidence_type!r}"
     finally:
         await engine.dispose()
@@ -199,9 +170,7 @@ async def test_0157_uuid_promotion_round_trips(fresh_migration_db) -> None:
 
         # And the 0157 downgrade cast: Uuid -> String(255) USING node_id::text.
         async with engine.begin() as conn:
-            await conn.execute(
-                text("ALTER TABLE t_uuidpromo_promo ALTER COLUMN node_id TYPE varchar(255) USING node_id::text")
-            )
+            await conn.execute(text("ALTER TABLE t_uuidpromo_promo ALTER COLUMN node_id TYPE varchar(255) USING node_id::text"))
         async with engine.connect() as conn:
             back = (await conn.execute(text("SELECT node_id FROM t_uuidpromo_promo WHERE id IS NOT NULL"))).scalar()
         assert back == str(well_formed), f"uuid must revert via ::text, got {back!r}"

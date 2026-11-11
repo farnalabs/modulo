@@ -34,15 +34,7 @@ depends_on: tuple[str, ...] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "DO $$ BEGIN "
-        "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname="
-        "'ck_connector_profiles_timeout_positive') THEN "
-        "ALTER TABLE public.connector_profiles ADD CONSTRAINT "
-        "ck_connector_profiles_timeout_positive "
-        "CHECK (timeout_seconds IS NULL OR timeout_seconds > 0); "
-        "END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_connector_profiles_timeout_positive') THEN ALTER TABLE public.connector_profiles ADD CONSTRAINT ck_connector_profiles_timeout_positive CHECK (timeout_seconds IS NULL OR timeout_seconds > 0); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN "
         "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname="
@@ -52,23 +44,10 @@ def upgrade() -> None:
         "CHECK (response_max_bytes IS NULL OR response_max_bytes > 0); "
         "END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN "
-        "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname="
-        "'ck_web_vital_events_metric_value_nonneg') THEN "
-        "ALTER TABLE public.web_vital_events ADD CONSTRAINT "
-        "ck_web_vital_events_metric_value_nonneg "
-        "CHECK (metric_value >= 0); "
-        "END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_web_vital_events_metric_value_nonneg') THEN ALTER TABLE public.web_vital_events ADD CONSTRAINT ck_web_vital_events_metric_value_nonneg CHECK (metric_value >= 0); END IF; END $$;")
 
 
 def downgrade() -> None:
     op.execute("ALTER TABLE public.web_vital_events DROP CONSTRAINT IF EXISTS ck_web_vital_events_metric_value_nonneg;")
-    op.execute(
-        "ALTER TABLE public.connector_profiles "
-        "DROP CONSTRAINT IF EXISTS ck_connector_profiles_response_max_bytes_positive;"
-    )
-    op.execute(
-        "ALTER TABLE public.connector_profiles DROP CONSTRAINT IF EXISTS ck_connector_profiles_timeout_positive;"
-    )
+    op.execute("ALTER TABLE public.connector_profiles DROP CONSTRAINT IF EXISTS ck_connector_profiles_response_max_bytes_positive;")
+    op.execute("ALTER TABLE public.connector_profiles DROP CONSTRAINT IF EXISTS ck_connector_profiles_timeout_positive;")

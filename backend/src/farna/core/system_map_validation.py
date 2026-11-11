@@ -40,9 +40,7 @@ def validate_system_map_graph_references(
     relationship_keys = {(rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in relationships}
     if len(relationship_keys) != len(relationships):
         raise ValueError("relationships must be unique within a revision")
-    missing_relationship_nodes = sorted(
-        {key for rel in relationships for key in (rel.source_node_key, rel.target_node_key) if key not in node_key_set}
-    )
+    missing_relationship_nodes = sorted({key for rel in relationships for key in (rel.source_node_key, rel.target_node_key) if key not in node_key_set})
     if missing_relationship_nodes:
         raise ValueError(f"relationships reference missing nodes: {', '.join(missing_relationship_nodes)}")
     loop_keys = [loop.node_key for loop in loop_configs]
@@ -52,8 +50,6 @@ def validate_system_map_graph_references(
     if missing_loop_nodes:
         raise ValueError(f"loop_configs reference missing nodes: {', '.join(missing_loop_nodes)}")
     nodes_by_key = {node.node_key: node for node in nodes}
-    wrong_loop_types = sorted(
-        loop.node_key for loop in loop_configs if nodes_by_key[loop.node_key].node_type != "improvement_loop"
-    )
+    wrong_loop_types = sorted(loop.node_key for loop in loop_configs if nodes_by_key[loop.node_key].node_type != "improvement_loop")
     if wrong_loop_types:
         raise ValueError(f"loop_configs require improvement_loop nodes: {', '.join(wrong_loop_types)}")

@@ -239,26 +239,12 @@ class ModuloSamlAuth:
         assertions = list(root.iter(f"{_SAML_ASSERTION_NS}Assertion"))
         if not assertions:
             _log.warning("sso.saml_assertion_missing", extra={"entity_id": entity_id})
-            raise SamlAuthError(
-                "SAML response rejected: no plaintext Assertion found — cannot enforce "
-                f"audience containment for SP entity ID {entity_id!r} "
-                "(encrypted-only or assertion-less response)"
-            )
+            raise SamlAuthError(f"SAML response rejected: no plaintext Assertion found — cannot enforce audience containment for SP entity ID {entity_id!r} (encrypted-only or assertion-less response)")
         for assertion in assertions:
-            audiences = [
-                (aud.text or "").strip()
-                for aud in assertion.findall(
-                    f"{_SAML_ASSERTION_NS}Conditions/{_SAML_ASSERTION_NS}AudienceRestriction"
-                    f"/{_SAML_ASSERTION_NS}Audience"
-                )
-            ]
+            audiences = [(aud.text or "").strip() for aud in assertion.findall(f"{_SAML_ASSERTION_NS}Conditions/{_SAML_ASSERTION_NS}AudienceRestriction/{_SAML_ASSERTION_NS}Audience")]
             if not any(audiences):
                 _log.warning("sso.saml_audience_restriction_missing", extra={"entity_id": entity_id})
-                raise SamlAuthError(
-                    "SAML response rejected: assertion is missing an AudienceRestriction "
-                    f"for SP entity ID {entity_id!r}; configure the IdP to set the "
-                    "audience to the SP Entity ID (see SP metadata)"
-                )
+                raise SamlAuthError(f"SAML response rejected: assertion is missing an AudienceRestriction for SP entity ID {entity_id!r}; configure the IdP to set the audience to the SP Entity ID (see SP metadata)")
             if entity_id not in audiences:
                 _log.warning(
                     "sso.saml_audience_mismatch",

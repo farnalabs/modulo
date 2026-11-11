@@ -168,9 +168,7 @@ async def _check_auto_completion(
 
     auto_completed.add("login")
 
-    model_backend_result = await session.execute(
-        select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1)
-    )
+    model_backend_result = await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1))
     if model_backend_result.scalar_one_or_none() is not None:
         auto_completed.add("add_ai_model")
 
@@ -351,17 +349,12 @@ async def seed_examples(
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        mb_result = await session.execute(
-            select(ModelBackend).where(ModelBackend.organisation_id == principal.organisation_id).limit(1)
-        )
+        mb_result = await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == principal.organisation_id).limit(1))
         model_backend = mb_result.scalar_one_or_none()
         if model_backend is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Cannot seed example primitives: no AI model backend is configured for this org. "
-                    "Complete the 'Add an AI Model' step first, then seed the examples again."
-                ),
+                detail=("Cannot seed example primitives: no AI model backend is configured for this org. Complete the 'Add an AI Model' step first, then seed the examples again."),
             )
 
         truth_schema = await create_schema(
@@ -427,10 +420,7 @@ async def seed_examples(
             input_schema_version="1.0",
             output_schema_id=truth_schema.id,
             output_schema_version="1.0",
-            prompt_template=(
-                "Classify the following statement as TRUE, FALSE, or UNDETERMINED. "
-                "Respond with a JSON object containing 'classification' and 'confidence'."
-            ),
+            prompt_template=("Classify the following statement as TRUE, FALSE, or UNDETERMINED. Respond with a JSON object containing 'classification' and 'confidence'."),
             model_backend_id=model_backend.id,
         )
         agent_id = agent.id
@@ -513,9 +503,7 @@ async def create_starter_pipeline(
             org_id=principal.organisation_id,
             name="SDLC Starter Pipeline",
             account_id=principal.account_id,
-            description=(
-                "A starter pipeline mapping your SDLC workflow. Customise each stage to match your team's process."
-            ),
+            description=("A starter pipeline mapping your SDLC workflow. Customise each stage to match your team's process."),
         )
 
         schema_id = schema.id

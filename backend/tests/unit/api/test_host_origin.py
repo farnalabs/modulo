@@ -79,4 +79,4 @@ def test_split_lan_origins_parses_comma_lists() -> None:
 
 
 def test_lan_env_name_is_the_configuration_entry_point() -> None:
-    assert LAN_ORIGINS_ENV == "MODULO_LAN_ORIGINS"
+    assert LAN_ORIGINS_ENV == "FARNA_CONTROL_MODULO_LAN_ORIGINS"

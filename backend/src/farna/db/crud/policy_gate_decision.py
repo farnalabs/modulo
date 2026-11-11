@@ -92,11 +92,7 @@ async def purge_org_decision_records(
 
     Returns the number of rows deleted.
     """
-    result = await session.execute(
-        delete(PolicyGateDecision)
-        .where(PolicyGateDecision.organisation_id == org_id)
-        .execution_options(synchronize_session=False)
-    )
+    result = await session.execute(delete(PolicyGateDecision).where(PolicyGateDecision.organisation_id == org_id).execution_options(synchronize_session=False))
     count = result.rowcount if hasattr(result, "rowcount") else 0
     if count:
         _log.info(

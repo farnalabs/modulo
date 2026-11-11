@@ -101,9 +101,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -181,9 +179,7 @@ class TestCreateProfile:
     }
 
     def test_create_profile_returns_201(self, client: TestClient) -> None:
-        fake = _fake_profile(
-            name="new-env", provider_type="e2b", image_ref="ubuntu:22.04", capabilities=["docker", "gpu"]
-        )
+        fake = _fake_profile(name="new-env", provider_type="e2b", image_ref="ubuntu:22.04", capabilities=["docker", "gpu"])
         with (
             patch(f"{_ROUTES}.create_environment_profile") as mock_create,
             patch(f"{_ROUTES}.set_rls_org"),
@@ -262,9 +258,7 @@ class TestCreateProfile:
             patch(f"{_ROUTES}.create_environment_profile", new_callable=AsyncMock, side_effect=ValueError("locked")),
             patch(f"{_ROUTES}.set_rls_org"),
         ):
-            resp = client.post(
-                self.URL, json={"name": "runner", "provider_type": "runner_docker", "persistence_policy": persistence}
-            )
+            resp = client.post(self.URL, json={"name": "runner", "provider_type": "runner_docker", "persistence_policy": persistence})
         assert resp.status_code == 422
 
     def test_create_profile_invalid_workspace_network_returns_422(self, client: TestClient) -> None:
@@ -692,7 +686,7 @@ class TestProfileTestEndpoint:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers.get("content-type", "")
         assert "failed" in resp.text
-        expected = str(ProviderNotConfiguredError("local_docker", "MODULO_DOCKER_HOST"))
+        expected = str(ProviderNotConfiguredError("local_docker", "FARNA_CONTROL_MODULO_DOCKER_HOST"))
         assert expected in resp.text
         assert "provisioning" in resp.text
 
@@ -868,9 +862,7 @@ class TestSandboxStreamHelpers:
         with pytest.raises(HTTPException):
             await _cleanup_failed_sandbox(provider, "ws-ref")
 
-    async def test_cleanup_failed_sandbox_logs_and_swallows_other_errors(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_cleanup_failed_sandbox_logs_and_swallows_other_errors(self, caplog: pytest.LogCaptureFixture) -> None:
         from farna.api.routes.environment_profiles import _cleanup_failed_sandbox
 
         provider = MagicMock()

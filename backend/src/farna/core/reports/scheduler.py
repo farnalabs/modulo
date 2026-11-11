@@ -199,20 +199,14 @@ _REPORT_FIRE_LEASE_TTL_SECONDS = 900
 #: Release the lease only when we still own it (compare-and-delete on the whole
 #: stored value), so a fire whose lease was stolen/expired cannot delete a newer
 #: fire's lease.
-_RELEASE_REPORT_FIRE_LEASE_LUA = (
-    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-)
+_RELEASE_REPORT_FIRE_LEASE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 #: Steal a lease left by a dead SAME-epoch predecessor (compare-and-set on the
 #: whole observed value). The compare-and-set — not a plain ``SET`` after a
 #: check-then-read — is what makes the steal atomic: two concurrent re-queues of
 #: the same epoch both observe the dead holder's value, but only the first SET
 #: wins; the loser's CAS misses and it treats the lease as a genuine live fire.
-_STEAL_REPORT_FIRE_LEASE_LUA = (
-    "if redis.call('get', KEYS[1]) == ARGV[1] then "
-    "redis.call('set', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1 "
-    "else return 0 end"
-)
+_STEAL_REPORT_FIRE_LEASE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then redis.call('set', KEYS[1], ARGV[2], 'EX', ARGV[3]) return 1 else return 0 end"
 
 
 class ReportFireLeaseUnavailableError(RuntimeError):

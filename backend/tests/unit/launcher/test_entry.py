@@ -192,9 +192,7 @@ def _install_boot_mocks(monkeypatch: pytest.MonkeyPatch, order: list[str], *, mo
 
     def recorded_secrets(path: Path) -> secrets_file_module.LauncherSecrets:
         order.append("secrets")
-        return secrets_file_module.LauncherSecrets(
-            postgres_password="pg-pass", redis_password="redis-pass", state_hmac_key=bytes(range(32))
-        )
+        return secrets_file_module.LauncherSecrets(postgres_password="pg-pass", redis_password="redis-pass", state_hmac_key=bytes(range(32)))
 
     monkeypatch.setattr(secrets_file_module, "load_or_create", recorded_secrets)
 
@@ -499,9 +497,7 @@ def _install_degrade_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(entry_module, "_add_saq_children", lambda supervisor, settings, composed: None)
 
 
-def test_degraded_boot_exits_nonzero_with_status_hint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_degraded_boot_exits_nonzero_with_status_hint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from farna.launcher import policy as policy_module
     from farna.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
 
@@ -535,9 +531,7 @@ def test_degraded_boot_exits_nonzero_with_status_hint(
     assert UNIT_FILENAME == "modulo.service"
 
 
-def test_degrade_within_the_upgrade_window_persists_post_upgrade_context(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_degrade_within_the_upgrade_window_persists_post_upgrade_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A crash-cap trip shortly after an upgrade boot carries restore guidance."""
     import time as time_module
 
@@ -822,9 +816,7 @@ def test_detach_forks_twice_and_setsid(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork mechanics")
-def test_detach_failure_is_signalled_through_the_handshake(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_detach_failure_is_signalled_through_the_handshake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A failed detached boot must surface, never report silent success."""
     forks: list[int] = []
 
@@ -853,9 +845,7 @@ def test_detach_failure_is_signalled_through_the_handshake(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork mechanics")
-def test_detach_system_exit_propagates_but_still_logs_the_cause(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_detach_system_exit_propagates_but_still_logs_the_cause(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A pre-ready SystemExit keeps its semantics AND the operator diagnostic."""
     monkeypatch.setattr(os, "fork", lambda: 0)
     monkeypatch.setattr(os, "setsid", lambda: None)
@@ -1053,9 +1043,7 @@ def test_terminal_degraded_refuses_a_normal_start(monkeypatch: pytest.MonkeyPatc
     assert "modulo clear-degraded" in message
 
 
-def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import farna.launcher.supervisor as supervisor_mod
 
     class FakeLock:
@@ -1312,8 +1300,8 @@ def test_prepare_database_env_with_admin_url() -> None:
 
 
 def test_prepare_database_env_with_system_url() -> None:
-    entry_module._prepare_database_env({"MODULO_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
-    assert os.environ.get("MODULO_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
+    entry_module._prepare_database_env({"FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
+    assert os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
 
 
 def test_prepare_database_env_missing_keys() -> None:
@@ -1967,9 +1955,7 @@ def test_serve_until_shutdown_writes_readiness_handshake(tmp_path: Path) -> None
     assert served == [(entry_module.POSTGRES_HOST, 18000)]
 
 
-def test_serve_until_shutdown_uses_serve_api_when_no_serve_callable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_serve_until_shutdown_uses_serve_api_when_no_serve_callable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[tuple[str, int]] = []
 
     def _fake_serve_api(host: str, port: int, stop_event: threading.Event, force_exit: threading.Event) -> None:

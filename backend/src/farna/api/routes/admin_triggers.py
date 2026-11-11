@@ -160,12 +160,7 @@ async def _fetch_trigger_event_rows(
     async def query() -> list[_TriggerEventRow]:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            q = (
-                select(TriggerEvent)
-                .join(Trigger, Trigger.id == TriggerEvent.trigger_id)
-                .join(Pipeline, Pipeline.id == Trigger.pipeline_id)
-                .where(*_event_query_scope(principal))
-            )
+            q = select(TriggerEvent).join(Trigger, Trigger.id == TriggerEvent.trigger_id).join(Pipeline, Pipeline.id == Trigger.pipeline_id).where(*_event_query_scope(principal))
             if trigger_type:
                 q = q.where(TriggerEvent.trigger_type == trigger_type)
             if validation_result:
@@ -190,10 +185,7 @@ async def _fetch_trigger_event_rows(
             )
             statement = statement.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(statement)).all()
-            return [
-                _TriggerEventRow(event, pipeline_id, pipeline_name, deleted)
-                for event, pipeline_id, pipeline_name, deleted in rows
-            ]
+            return [_TriggerEventRow(event, pipeline_id, pipeline_name, deleted) for event, pipeline_id, pipeline_name, deleted in rows]
 
     result: Any = await _run_trigger_event_query(query, "admin list_trigger_events failed")
     rows: list[_TriggerEventRow] = cast("list[_TriggerEventRow]", result)
@@ -212,12 +204,7 @@ async def _count_trigger_events_total(session: AsyncSession, principal: TenantPr
     async def query() -> int:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            stmt = (
-                select(func.count(TriggerEvent.id))
-                .join(Trigger, Trigger.id == TriggerEvent.trigger_id)
-                .join(Pipeline, Pipeline.id == Trigger.pipeline_id)
-                .where(*_event_query_scope(principal))
-            )
+            stmt = select(func.count(TriggerEvent.id)).join(Trigger, Trigger.id == TriggerEvent.trigger_id).join(Pipeline, Pipeline.id == Trigger.pipeline_id).where(*_event_query_scope(principal))
             count_result = await session.execute(include_soft_deleted(stmt))
             return count_result.scalar() or 0
 
@@ -250,9 +237,7 @@ async def _fetch_result_counts(
     cutoff_recent = now - timedelta(hours=_RESULT_COUNT_WINDOW_HOURS)
     cutoff_previous = now - timedelta(hours=_RESULT_COUNT_WINDOW_HOURS * 2)
     recent_expr = func.count().filter(TriggerEvent.created_at >= cutoff_recent)
-    previous_expr = func.count().filter(
-        sa.and_(TriggerEvent.created_at >= cutoff_previous, TriggerEvent.created_at < cutoff_recent)
-    )
+    previous_expr = func.count().filter(sa.and_(TriggerEvent.created_at >= cutoff_previous, TriggerEvent.created_at < cutoff_recent))
 
     async def query() -> list[Any]:
         async with session.begin():
@@ -268,9 +253,7 @@ async def _fetch_result_counts(
             )
             return list((await session.execute(stmt)).all())
 
-    rows: list[Any] = cast(
-        "list[Any]", await _run_trigger_event_query(query, "admin list_trigger_events result-count query failed")
-    )
+    rows: list[Any] = cast("list[Any]", await _run_trigger_event_query(query, "admin list_trigger_events result-count query failed"))
     recent: dict[str, int] = dict.fromkeys(CAPACITY_VALIDATION_RESULTS, 0)
     previous: dict[str, int] = dict.fromkeys(CAPACITY_VALIDATION_RESULTS, 0)
     for validation_result, recent_count, previous_count in rows:

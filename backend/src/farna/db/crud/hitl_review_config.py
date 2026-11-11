@@ -171,9 +171,7 @@ async def read_org_hitl_review_window(session: AsyncSession, org_id: uuid.UUID) 
     already set the RLS org context; the explicit ``organisation_id`` filter is
     defence in depth, matching this module's convention.
     """
-    settings_json = (
-        await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
-    ).scalar_one_or_none()
+    settings_json = (await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))).scalar_one_or_none()
     return org_hitl_review_window(settings_json)
 
 
@@ -191,13 +189,7 @@ async def resolve_review_window_for_gate(
     ``organisation_id`` filters (defence in depth under the caller's RLS
     context).
     """
-    pipeline_override = (
-        await session.execute(
-            select(Pipeline.hitl_review_window_seconds)
-            .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    pipeline_override = (await session.execute(select(Pipeline.hitl_review_window_seconds).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id).limit(1))).scalar_one_or_none()
     org_default = await read_org_hitl_review_window(session, org_id)
     return resolve_hitl_review_window_seconds(pipeline_override, org_default)
 
@@ -516,19 +508,13 @@ async def resolve_review_descriptions(
     description_by_review: dict[tuple[uuid.UUID, str], str | None] = {}
     if not gates:
         return description_by_review
-    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
-        session, run_ids={g.run_id for g in gates}, org_id=org_id
-    )
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(session, run_ids={g.run_id for g in gates}, org_id=org_id)
     config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
     for gate in gates:
         # A missing snapshot (or an unlisted run) leaves the review without a
         # snapshot config — context-first still applies from the claim row.
-        config = _gate_snapshot_config(
-            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
-        )
-        description_by_review[(gate.run_id, gate.review_id)] = resolve_review_description(
-            gate.context_json if isinstance(gate.context_json, dict) else None, config
-        )
+        config = _gate_snapshot_config(config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id)
+        description_by_review[(gate.run_id, gate.review_id)] = resolve_review_description(gate.context_json if isinstance(gate.context_json, dict) else None, config)
     return description_by_review
 
 
@@ -584,16 +570,12 @@ async def resolve_review_human_only_map(
         return human_only_by_review
     stamped_map, unstamped_run_ids = _stamped_human_only_map(gates)
     human_only_by_review.update(stamped_map)
-    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
-        session, run_ids=unstamped_run_ids, org_id=org_id
-    )
+    snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(session, run_ids=unstamped_run_ids, org_id=org_id)
     config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
     for gate in gates:
         if (gate.run_id, gate.review_id) in human_only_by_review:
             continue
-        config = _gate_snapshot_config(
-            config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id
-        )
+        config = _gate_snapshot_config(config_map_by_snapshot, graph_by_snapshot, snapshot_id_by_run.get(gate.run_id), gate.review_id)
         human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(config)
     return human_only_by_review
 
@@ -661,12 +643,7 @@ async def _config_from_live_nodes(
     if not isinstance(nodes, list):
         return None
     for node in nodes:
-        if (
-            isinstance(node, dict)
-            and node.get("node_type") == "hitl"
-            and node.get("id") is not None
-            and str(node["id"]) == gate_source
-        ):
+        if isinstance(node, dict) and node.get("node_type") == "hitl" and node.get("id") is not None and str(node["id"]) == gate_source:
             config = node.get("hitl_config")
             if isinstance(config, dict):
                 return dict(config)
@@ -835,11 +812,7 @@ async def hitl_review_exists_but_unresolved(
 #: audit append, the MCP warning log, and the MCP audit append all read this
 #: one constant.
 EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
-MSG_HUMAN_ONLY_DENY = (
-    "human_only gate requires browser authentication; "
-    "non-browser credentials (API keys and programmatic tokens) cannot "
-    "claim or decide this gate"
-)
+MSG_HUMAN_ONLY_DENY = "human_only gate requires browser authentication; non-browser credentials (API keys and programmatic tokens) cannot claim or decide this gate"
 MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
 
 

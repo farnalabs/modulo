@@ -87,9 +87,7 @@ async def _resolve_tier(settings: Settings, session: AsyncSession, current_user:
     return plan_context.tier()
 
 
-async def _build_registry(
-    settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
-) -> FeatureFlagRegistry:
+async def _build_registry(settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal) -> FeatureFlagRegistry:
     tier = await _resolve_tier(settings, session, current_user)
     lic = get_license()
     # FAR-1733: the env-var key is only counted after verification — never on
@@ -151,9 +149,7 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
     """
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         await redis.delete(f"feature-flags:{org_id}:public", f"feature-flags:{org_id}:internal")
     except Exception:
         logger.warning("feature-flags.cache_invalidate_failed", exc_info=True)
@@ -297,9 +293,7 @@ def _enforce_team_tier_gate(
     if registry.tier_rank(flag.tier) > registry.tier_rank(current_tier):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Cannot enable team-tier flag '{flag_name}' on the '{current_tier}' plan. A team licence is required."
-            ),
+            detail=(f"Cannot enable team-tier flag '{flag_name}' on the '{current_tier}' plan. A team licence is required."),
         )
 
 
@@ -406,9 +400,7 @@ async def list_feature_flags(
     # an internal response can never be served to an ordinary caller.
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         cache_key = _feature_flag_cache_key(
             current_user.organisation_id,
             internal_system_maps_access=internal_system_maps_access,
@@ -473,9 +465,7 @@ async def list_feature_flags(
 
         # Write to Redis cache (best-effort, 60s TTL)
         try:
-            redis = Redis.from_url(
-                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-            )
+            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
             cache_key = _feature_flag_cache_key(
                 current_user.organisation_id,
                 internal_system_maps_access=internal_system_maps_access,

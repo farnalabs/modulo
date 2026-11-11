@@ -142,9 +142,7 @@ class LocalDockerRuntimeProvider:
             environment_profile_id=profile_id,
             organisation_id=organisation_id,
             image_ref=str(getattr(profile, "image_ref", "") or ""),
-            capabilities=[item for item in capabilities if isinstance(item, str)]
-            if isinstance(capabilities, list)
-            else [],
+            capabilities=[item for item in capabilities if isinstance(item, str)] if isinstance(capabilities, list) else [],
             resource_limits=dict(config) if isinstance(config, dict) else {},
         )
 

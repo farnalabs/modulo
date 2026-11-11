@@ -220,9 +220,7 @@ async def get_registry_primitive_endpoint(
 @router.post(
     "/primitives",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("registry.publish_primitive_endpoint")
 async def publish_primitive_endpoint(
@@ -258,9 +256,7 @@ async def publish_primitive_endpoint(
 
 @router.post(
     "/primitives/{slug:path}/download",
-    dependencies=[
-        Depends(audited("registry_primitive_downloaded", "registry_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("registry_primitive_downloaded", "registry_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("registry.download_registry_primitive_endpoint")
 async def download_registry_primitive_endpoint(
@@ -411,9 +407,7 @@ class VerifyResponseV2(BaseModel):
 @router.post(
     "/publish",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("registry.publish_primitive_v2")
 async def publish_primitive_v2(
@@ -662,9 +656,7 @@ async def verify_registry_primitive_v2(
 @router.post(
     "/publishers",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("registry_publisher_registered", "registry_publisher", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("registry_publisher_registered", "registry_publisher", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("registry.register_publisher_endpoint")
 async def register_publisher_endpoint(
@@ -683,9 +675,7 @@ async def register_publisher_endpoint(
 
 @router.post(
     "/publishers/{fingerprint_hex}/revoke",
-    dependencies=[
-        Depends(audited("registry_publisher_revoked", "registry_publisher", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("registry_publisher_revoked", "registry_publisher", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("registry.revoke_publisher_endpoint")
 async def revoke_publisher_endpoint(
@@ -704,6 +694,4 @@ async def revoke_publisher_endpoint(
 async def list_publishers_endpoint() -> list[dict[str, str]]:
     """List all verified publishers."""
     publishers = list_verified_publishers()
-    return [
-        {"author": p.author, "name": p.name, "fingerprint": p.fingerprint, "website": p.website} for p in publishers
-    ]
+    return [{"author": p.author, "name": p.name, "fingerprint": p.fingerprint, "website": p.website} for p in publishers]

@@ -235,13 +235,7 @@ def load_state(path: Path, hmac_key: bytes) -> LauncherState:
         # The v2 stamp is reserved for backup-marked payloads (the field the
         # old readers cannot parse): anything else at v2 was written by a
         # launcher this one cannot safely adopt — the designed version gate.
-        raise StateVersionError(
-            f"Downgrade refused: state.json schema_version {version} was written by a NEWER launcher "
-            f"(this launcher speaks {SCHEMA_VERSION}). Restore the matching binary or reset the data dir."
-        )
+        raise StateVersionError(f"Downgrade refused: state.json schema_version {version} was written by a NEWER launcher (this launcher speaks {SCHEMA_VERSION}). Restore the matching binary or reset the data dir.")
     if version < 1:
-        raise StateVersionError(
-            f"state.json schema_version {version} predates this launcher's schema ({SCHEMA_VERSION}); "
-            "no migration path exists — restore a matching binary or reset the data dir."
-        )
+        raise StateVersionError(f"state.json schema_version {version} predates this launcher's schema ({SCHEMA_VERSION}); no migration path exists — restore a matching binary or reset the data dir.")
     return LauncherState.from_payload(payload)

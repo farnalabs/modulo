@@ -108,9 +108,7 @@ class SlackConnector(ConnectorBase):
         # pin the validated IP onto the transport so the connection never
         # re-resolves at connect time (closes DNS-rebind). ``trust_env=False``
         # stops a proxy from re-resolving the destination and defeating the pin.
-        return pinned_async_client_sync(
-            _SLACK_API, base_url=_SLACK_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_SLACK_API, base_url=_SLACK_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self))
 
     async def _send_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         async with self._client() as client:
@@ -151,9 +149,7 @@ class SlackConnector(ConnectorBase):
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            raise SlackAPIError(
-                self._redacted_detail(f"Slack API returned invalid JSON: {response.text}")[:200]
-            ) from exc
+            raise SlackAPIError(self._redacted_detail(f"Slack API returned invalid JSON: {response.text}")[:200]) from exc
 
     async def verify_scopes(self) -> dict[str, Any]:
         r = await self._call_api("GET", "/auth.test")
@@ -182,9 +178,7 @@ class SlackConnector(ConnectorBase):
             try:
                 await self.verify_scopes()
             except SlackNetworkError as exc:
-                return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"Token validation failed due to network error: {exc}")
-                )
+                return HealthResult(ok=False, detail=self._redactor.redact(f"Token validation failed due to network error: {exc}"))
             except SlackError as exc:
                 return HealthResult(ok=False, detail=self._redactor.redact(f"Token is invalid or revoked: {exc}"))
             try:

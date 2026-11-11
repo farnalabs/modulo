@@ -57,9 +57,7 @@ from farna.util import is_valid_http_url
 
 _CODE_ADMIN_NOTIFICATION_MANAGE = "admin.notification.manage"
 _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING = "notifications.delivery_table_missing"
-_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT = (
-    "Notification delivery logging is not available. Run database migrations to enable it."
-)
+_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT = "Notification delivery logging is not available. Run database migrations to enable it."
 _CODE_NOTIFICATIONS_DB_ERROR = "notifications.db_error"
 _CODE_NOTIFICATIONS_UNEXPECTED_ERROR = "notifications.unexpected_error"
 _MSG_MODULO_NOTIFIER_1_0 = "Modulo-Notifier/1.0"
@@ -137,9 +135,7 @@ class WebhookCreate(BaseModel):
     secret: str | None = Field(None)
     events: list[str] = Field(default_factory=list)
     description: str | None = Field(None, max_length=500)
-    team_id: uuid.UUID | None = Field(
-        None, description="Optional team scope; when set, only that team's events hit this endpoint"
-    )
+    team_id: uuid.UUID | None = Field(None, description="Optional team scope; when set, only that team's events hit this endpoint")
 
     @field_validator("url")
     @classmethod
@@ -158,9 +154,7 @@ class WebhookUpdate(BaseModel):
     secret: str | None = None
     events: list[str] | None = None
     description: str | None = Field(None, max_length=500)
-    team_id: uuid.UUID | None = Field(
-        None, description="Optional team scope; when set, only that team's events hit this endpoint"
-    )
+    team_id: uuid.UUID | None = Field(None, description="Optional team scope; when set, only that team's events hit this endpoint")
 
     @field_validator("url")
     @classmethod
@@ -436,9 +430,7 @@ async def _count_deliveries(
 
 @router.post(
     "/deliveries/retry-all-failed",
-    dependencies=[
-        Depends(audited("notification_deliveries_retried", "notification", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("notification_deliveries_retried", "notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 async def retry_all_failed_deliveries(
@@ -502,9 +494,7 @@ async def retry_all_failed_deliveries(
 
 @router.post(
     "/{webhook_id}/deliveries/replay",
-    dependencies=[
-        Depends(audited("notification_deliveries_replayed", "notification", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("notification_deliveries_replayed", "notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.notifications.replay_failed_deliveries")
 async def replay_failed_deliveries(
@@ -637,9 +627,7 @@ async def _retry_one_delivery(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
-                raw_secret = await decode_stored_secret_scoped(
-                    session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id
-                )
+                raw_secret = await decode_stored_secret_scoped(session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id)
             sig = hmac.new(raw_secret.encode(), body, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
@@ -703,9 +691,7 @@ async def _record_delivery_result(
             else:
                 await _bump_dead_letter_count(session, ep)
     except ProgrammingError:
-        logger.warning(
-            _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING, extra={"route": "retry_all_failed_deliveries.record"}
-        )
+        logger.warning(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING, extra={"route": "retry_all_failed_deliveries.record"})
         logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -776,11 +762,7 @@ async def _bump_dead_letter_count(session: AsyncSession, ep: NotificationEndpoin
     )
     new_count = result.scalar_one()
     if new_count >= 10:
-        await session.execute(
-            update(NotificationEndpoint)
-            .where(NotificationEndpoint.id == ep.id)
-            .values(auto_disabled=True, disabled_at=datetime.now(UTC))
-        )
+        await session.execute(update(NotificationEndpoint).where(NotificationEndpoint.id == ep.id).values(auto_disabled=True, disabled_at=datetime.now(UTC)))
 
 
 @router.get("/available-events")
@@ -803,11 +785,7 @@ async def list_webhooks(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(NotificationEndpoint)
-                .where(NotificationEndpoint.organisation_id == principal.organisation_id)
-                .order_by(NotificationEndpoint.created_at.desc())
-            )
+            result = await session.execute(select(NotificationEndpoint).where(NotificationEndpoint.organisation_id == principal.organisation_id).order_by(NotificationEndpoint.created_at.desc()))
             endpoints = list(result.scalars())
     except ProgrammingError:
         logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "list_webhooks"})
@@ -836,11 +814,7 @@ async def list_webhooks(
 
 @router.post(
     "",
-    dependencies=[
-        Depends(
-            audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.notifications.create_webhook")
@@ -912,9 +886,7 @@ async def get_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
     except ProgrammingError:
-        logger.warning(
-            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -930,9 +902,7 @@ async def get_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -942,11 +912,7 @@ async def get_webhook(
 
 @router.put(
     "/{webhook_id}",
-    dependencies=[
-        Depends(
-            audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.notifications.update_webhook")
 async def update_webhook(
@@ -978,9 +944,7 @@ async def update_webhook(
 
             await session.flush()
     except ProgrammingError:
-        logger.warning(
-            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -996,9 +960,7 @@ async def update_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -1035,9 +997,7 @@ async def delete_webhook(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
             await session.delete(ep)
     except ProgrammingError:
-        logger.warning(
-            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1053,9 +1013,7 @@ async def delete_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -1080,9 +1038,7 @@ async def test_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
     except ProgrammingError:
-        logger.warning(
-            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1098,9 +1054,7 @@ async def test_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -1119,9 +1073,7 @@ async def test_webhook(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
-                raw_secret = await decode_stored_secret_scoped(
-                    session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id
-                )
+                raw_secret = await decode_stored_secret_scoped(session, ep.secret_ciphertext, settings.fernet_key, org_id=principal.organisation_id)
             sig = hmac.new(raw_secret.encode(), payload, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
@@ -1166,11 +1118,7 @@ async def test_webhook(
 
 @router.post(
     "/{webhook_id}/re-enable",
-    dependencies=[
-        Depends(
-            audited("notification_endpoint_re_enabled", "notification_endpoint", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("notification_endpoint_re_enabled", "notification_endpoint", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.notifications.re_enable_webhook")
 async def re_enable_webhook(
@@ -1200,9 +1148,7 @@ async def re_enable_webhook(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_notifications.re_enable_webhook")
-        logger.exception(
-            _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1210,9 +1156,7 @@ async def re_enable_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -1308,9 +1252,7 @@ async def _fetch_webhook_deliveries(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_notifications._fetch_webhook_deliveries")
-        logger.exception(
-            _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1318,9 +1260,7 @@ async def _fetch_webhook_deliveries(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
-        )
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
@@ -1346,9 +1286,7 @@ def _delivery_entry_from_row(row: NotificationDeliveryLog, endpoint_url: str) ->
 
 @router.post(
     "/{webhook_id}/deliveries/{delivery_id}/retry",
-    dependencies=[
-        Depends(audited("notification_delivery_retried", "notification", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("notification_delivery_retried", "notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.notifications.retry_delivery")
 async def retry_delivery(

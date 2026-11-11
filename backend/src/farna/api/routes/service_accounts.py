@@ -195,22 +195,10 @@ async def _list_service_accounts(
     if search:
         conditions.append(Account.display_name.ilike(f"%{search}%"))
 
-    count_q = (
-        select(func.count())
-        .select_from(OrgMembership)
-        .join(Account, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-    )
+    count_q = select(func.count()).select_from(OrgMembership).join(Account, Account.id == OrgMembership.account_id).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Account, OrgMembership)
-        .join(Account, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-        .order_by(Account.created_at)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    query = select(Account, OrgMembership).join(Account, Account.id == OrgMembership.account_id).where(*conditions).order_by(Account.created_at).offset((page - 1) * page_size).limit(page_size)
     result = await session.execute(query)
     return [(row[0], row[1]) for row in result.all()], total
 
@@ -638,10 +626,7 @@ async def create_service_account_key_endpoint(
             if org_role_level(req.role) > org_role_level(live_role):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=(
-                        f"Cannot use role '{req.role}' for an API key while the "
-                        f"service account's live role is '{live_role}'"
-                    ),
+                    detail=(f"Cannot use role '{req.role}' for an API key while the service account's live role is '{live_role}'"),
                 )
             if req.grants is not None:
                 await enforce_grants_mint_cap_for(

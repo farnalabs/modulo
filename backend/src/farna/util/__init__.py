@@ -120,11 +120,7 @@ class WorkspaceNetworkValidationError(ValueError):
         # Bound and sanitise the echoed value: it is request-controlled input
         # and must not be able to forge log lines or bloat a 422 detail.
         safe = sanitise_log_value(value, _NETWORK_ERROR_VALUE_LIMIT)
-        super().__init__(
-            f"workspace_network value {safe!r} is not a valid named Docker network — "
-            "the following network modes are explicitly rejected: host, container:*, bridge, none, default. "
-            "Use a deployment-owned bridge network name (e.g. 'modulo-runner-workspace')."
-        )
+        super().__init__(f"workspace_network value {safe!r} is not a valid named Docker network — the following network modes are explicitly rejected: host, container:*, bridge, none, default. Use a deployment-owned bridge network name (e.g. 'modulo-runner-workspace').")
 
 
 def validate_workspace_network(value: str | None) -> str | None:

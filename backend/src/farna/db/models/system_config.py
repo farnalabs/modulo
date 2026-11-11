@@ -11,9 +11,7 @@ from farna.db.models.base import JSONB_COL, Base
 class SystemConfig(Base):
     __tablename__ = "system_config"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     value: Mapped[Any] = mapped_column(JSONB_COL, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -22,6 +20,4 @@ class SystemConfig(Base):
         onupdate=func.current_timestamp(),
         nullable=False,
     )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True)

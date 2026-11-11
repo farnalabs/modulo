@@ -128,13 +128,7 @@ async def list_model_backends(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
-        items_stmt = (
-            select(ModelBackend)
-            .where(ModelBackend.organisation_id == org_id)
-            .order_by(ModelBackend.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
-        )
+        items_stmt = select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
         if excluded_tiers:
             items_stmt = items_stmt.where(~ModelBackend.tier.in_(excluded_tiers))
         items = list((await session.execute(items_stmt)).scalars())
@@ -173,10 +167,7 @@ async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUI
         if binding_count:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Cannot delete model backend: it is in use by {binding_count} "
-                    "agent runner binding(s). Re-bind or delete the agents' bindings first."
-                ),
+                detail=(f"Cannot delete model backend: it is in use by {binding_count} agent runner binding(s). Re-bind or delete the agents' bindings first."),
             )
         await session.delete(mb)
         await session.flush()
@@ -191,10 +182,7 @@ async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUI
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Cannot delete model backend: it is still in use by one or "
-                "more agents or runner bindings. Re-bind them first."
-            ),
+            detail=("Cannot delete model backend: it is still in use by one or more agents or runner bindings. Re-bind them first."),
         ) from exc
     return True
 
@@ -343,11 +331,7 @@ async def list_pipeline_references_for_backend(
     ``agent_name``, ``agent_id``, and ``reference_type``.
     """
     target = str(backend_id)
-    pipelines_stmt = (
-        select(Pipeline)
-        .where(Pipeline.deleted_at.is_(None), Pipeline.organisation_id == org_id)
-        .order_by(Pipeline.name.asc())
-    )
+    pipelines_stmt = select(Pipeline).where(Pipeline.deleted_at.is_(None), Pipeline.organisation_id == org_id).order_by(Pipeline.name.asc())
     all_pipelines = list((await session.execute(pipelines_stmt)).scalars())
 
     # Scan 1: index agent ids for a single batched backend lookup.

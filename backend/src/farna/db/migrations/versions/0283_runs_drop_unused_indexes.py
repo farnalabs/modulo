@@ -82,6 +82,4 @@ def downgrade() -> None:
     # drift between these literals and the originals fails CI.
     op.execute("CREATE INDEX IF NOT EXISTS ix_runs_account_id ON runs (account_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_runs_dispatcher ON runs (dispatcher)")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_runs_org_status_completed ON runs (organisation_id, status, completed_at)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_runs_org_status_completed ON runs (organisation_id, status, completed_at)")

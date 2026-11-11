@@ -138,7 +138,7 @@ SHIM_POLL_SECONDS = 2.0
 # as initdb's; the entry scrubs the variable so a production boot is inert).
 GATE_SUPERVISOR_PRE_TEARDOWN = "supervisor_pre_teardown"
 _REGISTERED_GATES = frozenset({GATE_SUPERVISOR_PRE_TEARDOWN})
-_PAUSE_ENV_VAR = "MODULO_TEST_PAUSE_AT"
+_PAUSE_ENV_VAR = "FARNA_CONTROL_MODULO_TEST_PAUSE_AT"
 
 # Shutdown priorities: lower tears down first (SAQ -> PG -> Redis).
 # Single-sourced from the shared policy module.
@@ -384,13 +384,13 @@ def knobs_from_env(env: dict[str, str] | None = None) -> SupervisorKnobs:
     defaults = SupervisorKnobs()
     overrides: dict[str, Any] = {}
     for attr, var in (
-        ("tick_seconds", "MODULO_LAUNCHER_TICK_SECONDS"),
-        ("restart_backoff_initial", "MODULO_LAUNCHER_RESTART_BACKOFF_INITIAL"),
-        ("restart_backoff_max", "MODULO_LAUNCHER_RESTART_BACKOFF_MAX"),
-        ("crash_window_seconds", "MODULO_LAUNCHER_CRASH_WINDOW_SECONDS"),
-        ("pg_fast_shutdown_timeout", "MODULO_LAUNCHER_PG_FAST_SHUTDOWN_TIMEOUT"),
-        ("shutdown_grace_seconds", "MODULO_LAUNCHER_SHUTDOWN_GRACE_SECONDS"),
-        ("crash_cap", "MODULO_LAUNCHER_CRASH_CAP"),
+        ("tick_seconds", "FARNA_CONTROL_MODULO_LAUNCHER_TICK_SECONDS"),
+        ("restart_backoff_initial", "FARNA_CONTROL_MODULO_LAUNCHER_RESTART_BACKOFF_INITIAL"),
+        ("restart_backoff_max", "FARNA_CONTROL_MODULO_LAUNCHER_RESTART_BACKOFF_MAX"),
+        ("crash_window_seconds", "FARNA_CONTROL_MODULO_LAUNCHER_CRASH_WINDOW_SECONDS"),
+        ("pg_fast_shutdown_timeout", "FARNA_CONTROL_MODULO_LAUNCHER_PG_FAST_SHUTDOWN_TIMEOUT"),
+        ("shutdown_grace_seconds", "FARNA_CONTROL_MODULO_LAUNCHER_SHUTDOWN_GRACE_SECONDS"),
+        ("crash_cap", "FARNA_CONTROL_MODULO_LAUNCHER_CRASH_CAP"),
     ):
         raw = source.get(var)
         if not raw:
@@ -491,10 +491,7 @@ class DataDirLock:
         if not supports_posix_file_locking():
             # Windows requires a named mutex implementation; refuse rather than
             # pretending a JSON holder record is an exclusive lock.
-            raise DataDirLockError(
-                "The data-dir lock is not implemented on Windows yet (TODO(P3)); "
-                "the native launcher is Linux-first (ADR 031 P1a)."
-            )
+            raise DataDirLockError("The data-dir lock is not implemented on Windows yet (TODO(P3)); the native launcher is Linux-first (ADR 031 P1a).")
         import fcntl
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -516,10 +513,7 @@ class DataDirLock:
                     f"(mode {self.mode!r}) is refused. Stop that launcher first (or remove the "
                     "stale lock file only if the holder process is confirmed dead)."
                 ) from exc
-            raise DataDirLockError(
-                f"Refusing to start: data dir {self.data_dir} is locked by another process "
-                f"({exc}). Another launcher may be mid-boot."
-            ) from exc
+            raise DataDirLockError(f"Refusing to start: data dir {self.data_dir} is locked by another process ({exc}). Another launcher may be mid-boot.") from exc
         self._fd = fd
         holder = LockHolder(
             pid=os.getpid(),
@@ -626,10 +620,7 @@ def _stop_with_no_holder(data_dir: Path, lock_path: Path) -> int:
     if _lock_is_free(lock_path):
         _log.info("stop.no_holder data_dir=%s", data_dir)
         return 0
-    raise LauncherError(
-        f"Refusing to stop: the data dir {data_dir} is locked but no holder is recorded "
-        "(a launcher may be mid-boot) — retry in a moment."
-    )
+    raise LauncherError(f"Refusing to stop: the data dir {data_dir} is locked but no holder is recorded (a launcher may be mid-boot) — retry in a moment.")
 
 
 def _stop_with_stale_identity(holder: LockHolder, lock_path: Path) -> int:
@@ -637,11 +628,7 @@ def _stop_with_stale_identity(holder: LockHolder, lock_path: Path) -> int:
     _log.warning("stop.stale_holder_identity pid=%s", holder.pid)
     if _lock_is_free(lock_path):
         return 0
-    raise LauncherError(
-        f"Refusing to stop: the recorded launcher PID {holder.pid} was reused by another "
-        "process and the lock is still held by an unidentified process — inspect the "
-        "data dir manually before signalling anything."
-    )
+    raise LauncherError(f"Refusing to stop: the recorded launcher PID {holder.pid} was reused by another process and the lock is still held by an unidentified process — inspect the data dir manually before signalling anything.")
 
 
 def _signal_holder(holder: LockHolder, lock_path: Path, timeout: float) -> int | None:
@@ -693,10 +680,7 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     confirmed stopped.
     """
     if not supports_posix_file_locking():
-        raise LauncherError(
-            "modulo stop requires a Windows service-control implementation and installer validation (FAR-2229); "
-            "refusing to signal an unverified Windows launcher"
-        )
+        raise LauncherError("modulo stop requires a Windows service-control implementation and installer validation (FAR-2229); refusing to signal an unverified Windows launcher")
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     holder = _read_lock_holder(lock_path)
     if holder is None:
@@ -819,9 +803,7 @@ class _LinuxProcessBackend:
         counting fields. Returns None when the process does not exist.
         """
         try:
-            raw = Path(f"/proc/{pid}/stat").read_text(
-                encoding="ascii"
-            )  # NOSONAR — pid is int, not user-controlled string
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")  # NOSONAR — pid is int, not user-controlled string
         except (OSError, ValueError):
             return None
         tail = raw.rpartition(")")[2].split()
@@ -1072,12 +1054,7 @@ def _child_shim_pythonpath() -> str:
     """
     source_root = Path(__file__).resolve().parents[2]
     backend_root = source_root.parent
-    site_package_roots = [
-        path
-        for pattern in ("lib/python*/site-packages", "Lib/site-packages")
-        for path in backend_root.joinpath(".venv").glob(pattern)
-        if path.is_dir()
-    ]
+    site_package_roots = [path for pattern in ("lib/python*/site-packages", "Lib/site-packages") for path in backend_root.joinpath(".venv").glob(pattern) if path.is_dir()]
     return os.pathsep.join(str(path) for path in [source_root, *site_package_roots])
 
 
@@ -1572,16 +1549,11 @@ class Supervisor:
         window = self.knobs.crash_window_seconds
         while child.crash_times and now - child.crash_times[0] > window:
             child.crash_times.popleft()
-        self._crash_records.append(
-            CrashRecord(child=name, exit_code=code, at=self._wall_clock(), backtrace=stderr_tail)
-        )
+        self._crash_records.append(CrashRecord(child=name, exit_code=code, at=self._wall_clock(), backtrace=stderr_tail))
         if self._crash_hook is not None:
             self._crash_hook(name, code)
         if len(child.crash_times) >= self.knobs.crash_cap:
-            self._degrade_locked(
-                f"child {name!r} crashed {len(child.crash_times)} times in the last "
-                f"{window:.0f}s (cap {self.knobs.crash_cap})"
-            )
+            self._degrade_locked(f"child {name!r} crashed {len(child.crash_times)} times in the last {window:.0f}s (cap {self.knobs.crash_cap})")
             return
         if child.backoff <= 0:
             child.backoff = self.knobs.restart_backoff_initial
@@ -1891,10 +1863,7 @@ def reconcile_orphans(pgdata: Path, *, tolerance_seconds: float = 5.0) -> str | 
     if pidfile.exists():
         stale = _postmaster_is_stale(pidfile, tolerance_seconds=tolerance_seconds)
         if stale is not True:
-            raise LauncherError(
-                f"Refusing to start: {pidfile} belongs to a live postgres process. "
-                "Stop that postgres first; the launcher never races another postmaster."
-            )
+            raise LauncherError(f"Refusing to start: {pidfile} belongs to a live postgres process. Stop that postgres first; the launcher never races another postmaster.")
         pidfile.unlink(missing_ok=True)
         action = "removed_stale_postmaster_pid"
         _log.warning("supervisor.stale_postmaster_pid_removed path=%s", pidfile)
@@ -2165,10 +2134,7 @@ def _apply_degraded_reason(status: dict[str, Any], degraded_reason: str | None) 
         return
     status["degraded"] = {
         "reason": degraded_reason,
-        "remediation": (
-            "the supervisor trip is terminal — restart `modulo start` once the underlying "
-            "fault is cleared, and inspect the app log (`modulo logs`) for crash backtraces"
-        ),
+        "remediation": ("the supervisor trip is terminal — restart `modulo start` once the underlying fault is cleared, and inspect the app log (`modulo logs`) for crash backtraces"),
     }
 
 

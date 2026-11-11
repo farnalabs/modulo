@@ -173,9 +173,7 @@ class TestGetConsentingOrgs:
         narrow it to a date. ``date.fromisoformat`` alone rejects any string with
         a time component, which previously crashed the whole daily dump.
         """
-        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 15, 10, 30, tzinfo=UTC))[
-            "level_changed_at"
-        ]
+        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 15, 10, 30, tzinfo=UTC))["level_changed_at"]
         rows = [_org("dddd-4444", {"product_analytics": {"level": "all", "level_changed_at": stored}})]
 
         result = await _run_get_consenting_orgs(rows)
@@ -566,11 +564,7 @@ class TestSystemSessionFactory:
             ) as system_factory,
             patch(
                 "farna.core.saq_worker._make_session_factory",
-                side_effect=AssertionError(
-                    "metrics_dump must use the SYSTEM session factory "
-                    "(BYPASSRLS) — the app factory silently returns zero rows "
-                    "on team-scoped tables without an org context"
-                ),
+                side_effect=AssertionError("metrics_dump must use the SYSTEM session factory (BYPASSRLS) — the app factory silently returns zero rows on team-scoped tables without an org context"),
             ),
             patch(
                 "farna.core.product_analytics.metrics_dump._should_dump_now",
@@ -650,9 +644,7 @@ class TestVendorClient:
         assert len(RETRY_DELAYS) == MAX_ATTEMPTS - 1
 
     @pytest.mark.asyncio
-    async def test_post_batch_rejects_blocked_endpoint_without_contacting_it(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_post_batch_rejects_blocked_endpoint_without_contacting_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
             raise ValueError("blocked internal address")
 
@@ -794,7 +786,7 @@ class TestCheckInstanceSwitch:
 
     @pytest.mark.asyncio
     async def test_bool_true_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with (
             patch(
@@ -809,7 +801,7 @@ class TestCheckInstanceSwitch:
     @pytest.mark.asyncio
     async def test_stored_false_string_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Regression: a stored string ``"false"`` is OFF, never truthy (fail-open)."""
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with (
             patch(
@@ -824,7 +816,7 @@ class TestCheckInstanceSwitch:
     @pytest.mark.asyncio
     async def test_absent_key_env_unset_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Absent setting + no licence claim + no env: OFF, so no egress path runs."""
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with (
             patch(
@@ -839,7 +831,7 @@ class TestCheckInstanceSwitch:
     @pytest.mark.asyncio
     async def test_absent_key_env_fallback_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The env fallback the consent surface honours must gate the dump too."""
-        monkeypatch.setenv("MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
         factory = _FakeSessionFactory()
         with (
             patch(
@@ -854,7 +846,7 @@ class TestCheckInstanceSwitch:
     @pytest.mark.asyncio
     async def test_licence_required_default_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Absent setting + a licence carrying the claim: ON (licence supplies the default)."""
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         licence = MagicMock()
         licence.raw_payload = {"product_analytics_required": True}
@@ -878,7 +870,7 @@ class TestEffectiveSwitchGatesDump:
 
     @pytest.mark.asyncio
     async def test_effective_switch_off_never_collects_or_sends(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with (
             patch(
@@ -907,7 +899,7 @@ class TestEffectiveSwitchGatesDump:
 
     @pytest.mark.asyncio
     async def test_licence_required_default_opens_the_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         licence = MagicMock()
         licence.raw_payload = {"product_analytics_required": True}
@@ -1009,9 +1001,7 @@ class TestResolveStartDate:
         read boundary owns the writer-format contract); it does not re-parse raw
         ``settings_json`` strings.
         """
-        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 1, 9, 0, tzinfo=UTC))[
-            "level_changed_at"
-        ]
+        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 1, 9, 0, tzinfo=UTC))["level_changed_at"]
         row = MagicMock(
             id="org-1",
             settings_json={"product_analytics": {"level": "all", "level_changed_at": stored}},

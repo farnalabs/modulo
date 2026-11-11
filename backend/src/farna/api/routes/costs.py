@@ -134,9 +134,7 @@ def _read_circuit_breaker(org: object | None) -> bool:
     return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
 
 
-def _cost_controls_patch(
-    org: Organisation, req: "UpdateCostControlsRequest"
-) -> tuple[dict[str, Any] | None, dict[str, int | None]]:
+def _cost_controls_patch(org: Organisation, req: "UpdateCostControlsRequest") -> tuple[dict[str, Any] | None, dict[str, int | None]]:
     """Compute the ``cost_controls`` settings patch and the cost-state ceiling writes.
 
     ``settings_json`` is a JSON column that may hold arbitrary shapes, so the
@@ -594,9 +592,7 @@ async def get_cost_controls(
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
         max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
         spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
-        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
-        if cost_state is not None
-        else 0.0,
+        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0 if cost_state is not None else 0.0,
         alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
@@ -624,9 +620,7 @@ def _cost_controls_response(
         budget=_coerce_spend_limit_usd(org.daily_spend_limit),
         max_run_cost=_coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None,
         spend_ceiling=_coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None,
-        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0
-        if cost_state is not None
-        else 0.0,
+        org_cumulative_spend_usd=_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0 if cost_state is not None else 0.0,
         alert_thresholds=_read_alert_thresholds(settings_view),
         circuit_breaker_enabled=_read_circuit_breaker(settings_view),
         currency=_read_currency(settings_view),
@@ -783,9 +777,7 @@ async def get_spend_ceiling(
 
     max_run_cost = _coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None
     spend_ceiling = _coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None
-    cumulative = (
-        (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
-    )
+    cumulative = (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
     remaining = None
     if spend_ceiling is not None:
         remaining = max(spend_ceiling - cumulative, 0.0)
@@ -858,9 +850,7 @@ async def set_spend_ceiling(
 
     max_run_cost = _coerce_cents_usd(cost_state.max_run_cost_cents) if cost_state is not None else None
     spend_ceiling = _coerce_cents_usd(cost_state.spend_ceiling_cents) if cost_state is not None else None
-    cumulative = (
-        (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
-    )
+    cumulative = (_coerce_cents_usd(cost_state.org_cumulative_spend_cents or 0) or 0.0) if cost_state is not None else 0.0
     remaining = None
     if spend_ceiling is not None:
         remaining = max(spend_ceiling - cumulative, 0.0)

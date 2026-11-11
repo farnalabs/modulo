@@ -191,9 +191,7 @@ async def list_mcp_servers_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_mcp_servers(
-                session, organisation_id=principal.organisation_id, page=page, page_size=page_size
-            )
+            result = await list_mcp_servers(session, organisation_id=principal.organisation_id, page=page, page_size=page_size)
     except ProgrammingError as exc:
         _log.exception(_CODE_MCP_SERVERS_LIST)
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=MSG_FEATURE_NOT_AVAILABLE) from exc

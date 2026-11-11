@@ -835,14 +835,8 @@ def _feature_required_detail(feature_name: str, current_tier: str) -> str:
     if declared_tier is None:
         return f"{feature_name} is not available"
     if TIER_RANK.get(declared_tier, 0) > TIER_RANK.get(current_tier, 0):
-        return (
-            f"{feature_name} is not available on your plan — it requires a Team licence "
-            "installed at system or organisation scope"
-        )
-    return (
-        f"{feature_name} is not enabled for this organisation — the feature is switched "
-        "off, not restricted by your licence"
-    )
+        return f"{feature_name} is not available on your plan — it requires a Team licence installed at system or organisation scope"
+    return f"{feature_name} is not enabled for this organisation — the feature is switched off, not restricted by your licence"
 
 
 def require_feature_anonymous(
@@ -948,9 +942,7 @@ def pg_connection_string(database_url: str) -> str:
     ``modulo.db.url_utils``), so a settings-derived URL reaches this
     helper with its ``sslmode`` intact and libpq honours it directly.
     """
-    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
-        "postgresql+psycopg://", "postgresql://"
-    )
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
 
 
 _engine: AsyncEngine | None = None
@@ -1089,12 +1081,7 @@ def get_or_create_system_engine() -> AsyncEngine:
                     _SYSTEM_ENGINE_IS_FALLBACK = True
                     logger.warning(
                         "api.system_engine_fallback",
-                        extra={
-                            "reason": (
-                                "MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider "
-                                "resolution falls back to a scoped app read (single-org)"
-                            )
-                        },
+                        extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — pre-auth SSO provider resolution falls back to a scoped app read (single-org)")},
                     )
                     _SYSTEM_ASYNC_ENGINE = get_or_create_engine(settings)
     return _SYSTEM_ASYNC_ENGINE

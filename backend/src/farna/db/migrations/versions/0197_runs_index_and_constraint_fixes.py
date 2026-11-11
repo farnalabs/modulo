@@ -68,11 +68,7 @@ def upgrade() -> None:
     #    Plain CREATE UNIQUE INDEX (NOT CONCURRENTLY): Alembic wraps each revision
     #    in a single transaction, so CONCURRENTLY is unavailable here — consistent
     #    with 0154/0171/0182/0187/0193.
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_idempotency "
-        "ON runs (pipeline_id, idempotency_key) "
-        "WHERE idempotency_key IS NOT NULL"
-    )
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_idempotency ON runs (pipeline_id, idempotency_key) WHERE idempotency_key IS NOT NULL")
 
 
 def downgrade() -> None:

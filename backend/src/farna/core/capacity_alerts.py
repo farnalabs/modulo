@@ -648,9 +648,7 @@ def _candidate_label(candidate: Candidate, subject: str) -> str:
 
 def _needs_unhealthy_sustain(candidate: Candidate) -> bool:
     """Whether a candidate is a queue/backpressure unhealthy episode."""
-    return candidate.rung >= WARNING_RUNG and candidate.subject.startswith(
-        (f"{_SUBJECT_QUEUE}:", f"{_SUBJECT_BACKPRESSURE}:")
-    )
+    return candidate.rung >= WARNING_RUNG and candidate.subject.startswith((f"{_SUBJECT_QUEUE}:", f"{_SUBJECT_BACKPRESSURE}:"))
 
 
 async def _invalidate_unhealthy_markers(
@@ -803,9 +801,7 @@ async def _apply_present_candidates(
 ) -> None:
     """Apply the state machine to this tick's candidates and track open subjects."""
     for subject, candidate in sorted(candidates.items()):
-        action = await _apply_subject(
-            redis_client, notifier, org_id=org_id, candidate=candidate, summary=summary, now=now
-        )
+        action = await _apply_subject(redis_client, notifier, org_id=org_id, candidate=candidate, summary=summary, now=now)
         if action == "notify":
             await redis_client.sadd(open_key, subject)
             await redis_client.expire(open_key, _STATE_TTL_SECONDS)
@@ -1006,12 +1002,7 @@ async def _org_ids_with_pending(factory: async_sessionmaker[AsyncSession]) -> li
     silently return zero rows here.
     """
     async with factory() as session, session.begin():
-        result = await session.execute(
-            select(Run.organisation_id)
-            .where(Run.status == "pending", Run.cancellation_requested.is_(False))
-            .group_by(Run.organisation_id)
-            .limit(MAX_ORGS_PER_TICK)
-        )
+        result = await session.execute(select(Run.organisation_id).where(Run.status == "pending", Run.cancellation_requested.is_(False)).group_by(Run.organisation_id).limit(MAX_ORGS_PER_TICK))
         return list(result.scalars())
 
 
@@ -1377,8 +1368,7 @@ def _log_redis_pressure(redis_memory: dict[str, Any] | None) -> None:
     """Emit one alert-grade log per tick when the queue store is under pressure."""
     if redis_memory is not None and redis_memory_rung(redis_memory) >= WARNING_RUNG:
         _log.warning(
-            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is "
-            "shedding/at risk of refusing enqueues (FAR-2002)",
+            "capacity_alerts.redis_pressure used=%s maxmemory=%s policy=%s — the queue store is shedding/at risk of refusing enqueues (FAR-2002)",
             redis_memory.get("used_memory"),
             redis_memory.get("maxmemory"),
             redis_memory.get("maxmemory_policy"),

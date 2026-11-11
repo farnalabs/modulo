@@ -39,9 +39,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
         CheckConstraint(
-            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map', "
-            "'library_collection')",
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map', 'library_collection')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(
@@ -132,9 +130,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     tags: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2000))
-    forked_from: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete="RESTRICT"), index=True
-    )
+    forked_from: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete="RESTRICT"), index=True)
     checksum: Mapped[str | None] = mapped_column(String(128))
     ed25519_signature: Mapped[str | None] = mapped_column(String(256))
     verified: Mapped[bool | None] = mapped_column(Boolean)
@@ -142,15 +138,11 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
     download_count: Mapped[int | None] = mapped_column(Integer)
     average_rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     review_count: Mapped[int | None] = mapped_column(Integer)
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True)
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     contribution_status: Mapped[str | None] = mapped_column(String(20))
     auto_update: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), index=True)
     version_group_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         # Self-FK (FAR-1758): the service always points this at an EXISTING
@@ -164,9 +156,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         nullable=True,
         index=True,
     )
-    update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    update_available_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_LIBRARY_PRIMITIVES_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
     # Collection authoring lifecycle fields (FAR-760).
     status: Mapped[str | None] = mapped_column(String(20))

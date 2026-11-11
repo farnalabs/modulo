@@ -37,15 +37,9 @@ from farna.db.models.team_membership import TeamMembership
 # rest of the request transaction keeps its original visibility. Same
 # ``set_config(..., is_local => true)`` form as ``db/rls.py``
 # (transaction-scoped, reverts on rollback).
-_RLS_READ_GUCS_SQL = (
-    "SELECT current_setting('app.organisation_id', true), current_setting('app.execution_context', true)"
-)
-_RLS_WIDEN_SQL = (
-    "SELECT set_config('app.organisation_id', :oid, true), set_config('app.execution_context', 'true', true)"
-)
-_RLS_RESTORE_SQL = (
-    "SELECT set_config('app.organisation_id', :oid, true), set_config('app.execution_context', :exec_ctx, true)"
-)
+_RLS_READ_GUCS_SQL = "SELECT current_setting('app.organisation_id', true), current_setting('app.execution_context', true)"
+_RLS_WIDEN_SQL = "SELECT set_config('app.organisation_id', :oid, true), set_config('app.execution_context', 'true', true)"
+_RLS_RESTORE_SQL = "SELECT set_config('app.organisation_id', :oid, true), set_config('app.execution_context', :exec_ctx, true)"
 
 
 def team_scope_clause(owner_team_id_col: Any, team_id: Any) -> ColumnElement[bool]:

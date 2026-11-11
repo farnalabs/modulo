@@ -24,12 +24,12 @@ _ENTRYPOINT = _REPO_ROOT / "deploy" / "fly" / "entrypoint.sh"
 _CREDENTIAL_ENV: dict[str, str] = {
     "DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
     "DATABASE_ADMIN_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
-    "MODULO_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
+    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
     "REDIS_URL": "redis://:redis-pass@127.0.0.1:16379/0",
     "SECRET_KEY": "a" * 64,
     "FERNET_KEY": "b" * 44,
-    "MODULO_ADMIN_PASSWORD": "admin-secret",
-    "MODULO_BREAK_GLASS_SECRET": "breakglass-secret",
+    "FARNA_CONTROL_MODULO_ADMIN_PASSWORD": "admin-secret",
+    "FARNA_CONTROL_MODULO_BREAK_GLASS_SECRET": "breakglass-secret",
 }
 
 
@@ -38,20 +38,20 @@ def test_allowlist_is_exactly_monitor_and_autologin() -> None:
 
 
 def test_monitor_config_is_parsed_into_the_allowlisted_key() -> None:
-    payload = build_runtime_config_payload({"MODULO_MONITOR_CONFIG": '{"targets": ["db"]}'})
+    payload = build_runtime_config_payload({"FARNA_CONTROL_MODULO_MONITOR_CONFIG": '{"targets": ["db"]}'})
     assert set(payload) == {"monitor"}
     assert payload["monitor"] == {"targets": ["db"]}
 
 
 def test_invalid_monitor_config_is_reported_and_dropped(capsys: pytest.CaptureFixture[str]) -> None:
-    payload = build_runtime_config_payload({"MODULO_MONITOR_CONFIG": "not-json"})
+    payload = build_runtime_config_payload({"FARNA_CONTROL_MODULO_MONITOR_CONFIG": "not-json"})
     assert not payload
     assert "Ignoring invalid MODULO_MONITOR_CONFIG" in capsys.readouterr().out
 
 
 def test_auto_login_pair_requires_both_values() -> None:
-    assert not build_runtime_config_payload({"MODULO_AUTO_LOGIN_USERNAME": "u"})
-    payload = build_runtime_config_payload({"MODULO_AUTO_LOGIN_USERNAME": "demo", "MODULO_AUTO_LOGIN_PASSWORD": "demo"})
+    assert not build_runtime_config_payload({"FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME": "u"})
+    payload = build_runtime_config_payload({"FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME": "demo", "FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD": "demo"})
     assert set(payload) == {"autoLogin"}
 
 
@@ -59,9 +59,9 @@ def test_auto_login_org_slug_is_forwarded_when_supplied() -> None:
     """FAR-865: MODULO_AUTO_LOGIN_ORG_SLUG binds the session to that org."""
     payload = build_runtime_config_payload(
         {
-            "MODULO_AUTO_LOGIN_USERNAME": "demo",
-            "MODULO_AUTO_LOGIN_PASSWORD": "demo",
-            "MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME": "demo",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD": "demo",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
         }
     )
     auto_login = payload["autoLogin"]
@@ -73,7 +73,7 @@ def test_auto_login_org_slug_is_forwarded_when_supplied() -> None:
 
 def test_auto_login_org_slug_is_omitted_when_unset() -> None:
     """Unset org slug keeps the pre-FAR-865 payload shape (SPA falls back)."""
-    payload = build_runtime_config_payload({"MODULO_AUTO_LOGIN_USERNAME": "demo", "MODULO_AUTO_LOGIN_PASSWORD": "demo"})
+    payload = build_runtime_config_payload({"FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME": "demo", "FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD": "demo"})
     auto_login = payload["autoLogin"]
     assert isinstance(auto_login, dict)
     assert auto_login["username"] == "demo"
@@ -84,14 +84,14 @@ def test_auto_login_org_slug_is_omitted_when_unset() -> None:
 def test_auto_login_org_slug_round_trips_through_render() -> None:
     payload = build_runtime_config_payload(
         {
-            "MODULO_AUTO_LOGIN_USERNAME": "demo",
-            "MODULO_AUTO_LOGIN_PASSWORD": "demo",
-            "MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME": "demo",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD": "demo",
+            "FARNA_CONTROL_MODULO_AUTO_LOGIN_ORG_SLUG": "acme",
         }
     )
     rendered = render_runtime_config_js(payload)
     assert '"autoLogin":{"username":"demo","password":"demo","orgSlug":"acme"}' in rendered
-    assert "MODULO_AUTO_LOGIN_ORG_SLUG" not in rendered
+    assert "FARNA_CONTROL_MODULO_AUTO_LOGIN_ORG_SLUG" not in rendered
 
 
 def test_payload_never_contains_credential_shaped_values() -> None:
@@ -124,5 +124,5 @@ def test_deploy_entrypoint_generates_through_the_shared_module() -> None:
     assert RUNTIME_CONFIG_FILENAME in script
     # The inline generator must be GONE — one allowlist, one renderer.
     assert "window.__MODULO_CONFIG__" not in script
-    assert "MODULO_MONITOR_CONFIG" not in script
+    assert "FARNA_CONTROL_MODULO_MONITOR_CONFIG" not in script
     assert "autoLogin" not in script

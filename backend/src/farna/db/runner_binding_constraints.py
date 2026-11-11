@@ -22,18 +22,18 @@ import re
 #    Docker endpoint.
 RESERVED_ENV_VARS: frozenset[str] = frozenset(
     {
-        "MODULO_API_KEY",
-        "MODULO_RUN_ID",
-        "MODULO_PIPELINE_ID",
-        "MODULO_ORG_ID",
-        "MODULO_INPUT_PAYLOAD",
-        "MODULO_ALLOWED_TOOLS",
+        "FARNA_CONTROL_MODULO_API_KEY",
+        "FARNA_CONTROL_MODULO_RUN_ID",
+        "FARNA_CONTROL_MODULO_PIPELINE_ID",
+        "FARNA_CONTROL_MODULO_ORG_ID",
+        "FARNA_CONTROL_MODULO_INPUT_PAYLOAD",
+        "FARNA_CONTROL_MODULO_ALLOWED_TOOLS",
         # FAR-1690 A1: the run-scoped credential's issuance provenance is
         # stamped by the platform, never by a node — reserving it keeps a
         # pipeline from spoofing ``modulo_minted`` / ``broker_issued``.
-        "MODULO_CREDENTIAL_PROVENANCE",
-        "MODULO_BRIDGE_ENDPOINT",
-        "MODULO_BRIDGE_CONFIG",
+        "FARNA_CONTROL_MODULO_CREDENTIAL_PROVENANCE",
+        "FARNA_CONTROL_MODULO_BRIDGE_ENDPOINT",
+        "FARNA_CONTROL_MODULO_BRIDGE_CONFIG",
         "APP_MODULO_OPENCODE_API_KEY",
         "GITHUB_TOKEN",
         "LD_PRELOAD",
@@ -107,9 +107,7 @@ def validate_target_env_var(name: str) -> str:
     if len(candidate) > _MAX_TARGET_ENV_VAR_LEN:
         raise BindingValidationError(f"target_env_var exceeds {_MAX_TARGET_ENV_VAR_LEN} characters")
     if not _ENV_NAME_PATTERN.fullmatch(candidate):
-        raise BindingValidationError(
-            "target_env_var must match [A-Za-z_][A-Za-z0-9_]* (start with a letter or underscore; no dashes or dots)"
-        )
+        raise BindingValidationError("target_env_var must match [A-Za-z_][A-Za-z0-9_]* (start with a letter or underscore; no dashes or dots)")
     candidate = candidate.upper()
     if is_reserved_env_var(candidate):
         raise BindingValidationError(f"target_env_var '{candidate}' is reserved and cannot be bound")
@@ -127,10 +125,7 @@ def _validate_source_field(source_field: str, provider: str) -> str:
         raise BindingValidationError("source_field must match [A-Za-z_][A-Za-z0-9_]*")
     known = known_source_fields_for(provider)
     if candidate not in known:
-        raise BindingValidationError(
-            f"source_field '{candidate}' is not a known credential field of a "
-            f"'{provider}' model backend (known: {', '.join(sorted(known))})"
-        )
+        raise BindingValidationError(f"source_field '{candidate}' is not a known credential field of a '{provider}' model backend (known: {', '.join(sorted(known))})")
     return candidate
 
 

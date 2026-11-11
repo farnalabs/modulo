@@ -303,11 +303,7 @@ def _channel_configured(settings: Settings) -> bool:
     ``smtp_host``). Default-off: with none configured the watchdog ticks and
     logs but never sends anything.
     """
-    return bool(
-        settings.alert_webhook_url
-        or settings.alert_teams_webhook_url
-        or (settings.alert_email_to and settings.smtp_host)
-    )
+    return bool(settings.alert_webhook_url or settings.alert_teams_webhook_url or (settings.alert_email_to and settings.smtp_host))
 
 
 def _alert_text(settings: Settings, conditions: list[str]) -> str:
@@ -320,12 +316,7 @@ def _alert_text(settings: Settings, conditions: list[str]) -> str:
     — every text channel therefore carries the context exactly once and the
     three renderings can never drift apart.
     """
-    return (
-        "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n"
-        + "\n".join(f"\u2022 {condition}" for condition in conditions)
-        + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}"
-        + _alert_context_suffix(settings)
-    )
+    return "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n" + "\n".join(f"\u2022 {condition}" for condition in conditions) + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}" + _alert_context_suffix(settings)
 
 
 def _recovery_text(settings: Settings, state: dict[str, Any]) -> str:
@@ -337,15 +328,7 @@ def _recovery_text(settings: Settings, state: dict[str, Any]) -> str:
     prior_conditions = state.get("conditions") or []
     started_at = state.get("started_at")
     duration = f" for {(time.time() - float(started_at)):.0f}s" if started_at else ""
-    return (
-        "\u2705 *Modulo watchdog: worker-liveness recovered*\n"
-        "The following conditions have cleared"
-        + duration
-        + ":\n"
-        + "\n".join(f"\u2022 {condition}" for condition in prior_conditions)
-        + f"\nResolved at {datetime.now(UTC).isoformat()} on {_hostname()}"
-        + _alert_context_suffix(settings)
-    )
+    return "\u2705 *Modulo watchdog: worker-liveness recovered*\nThe following conditions have cleared" + duration + ":\n" + "\n".join(f"\u2022 {condition}" for condition in prior_conditions) + f"\nResolved at {datetime.now(UTC).isoformat()} on {_hostname()}" + _alert_context_suffix(settings)
 
 
 async def _post_webhook_payload(url: str, payload: bytes, channel: str) -> None:
@@ -576,8 +559,7 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
         state = await _claim_recovery(redis)
         if state is not None:
             _log.info(
-                "watchdog.alert_recovery_suppressed_environment cleared_conditions=%s "
-                "(ALERT_ENVIRONMENTS does not include environment=%r; all-clear not sent)",
+                "watchdog.alert_recovery_suppressed_environment cleared_conditions=%s (ALERT_ENVIRONMENTS does not include environment=%r; all-clear not sent)",
                 "; ".join(str(c) for c in (state.get("conditions") or [])),
                 settings.environment,
             )
@@ -585,8 +567,7 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
     if not _channel_configured(settings):
         # Default-off: the watchdog still ticks and logs, but never sends.
         _log.warning(
-            "watchdog.alert_suppressed_no_channel conditions=%s "
-            "(no generic webhook / Teams webhook / email configured)",
+            "watchdog.alert_suppressed_no_channel conditions=%s (no generic webhook / Teams webhook / email configured)",
             "; ".join(conditions),
         )
         return
@@ -693,10 +674,7 @@ def _worker_stale_condition(
         state.all_dead_since = now
     dead_for = now - state.all_dead_since
     if dead_for >= settings.watchdog_worker_stale_seconds:
-        return (
-            f"no live SAQ worker on any queue for {dead_for:.0f}s "
-            f"(stale threshold {settings.watchdog_worker_stale_seconds}s)"
-        )
+        return f"no live SAQ worker on any queue for {dead_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
     _log.info("watchdog.workers_dead_detected dead_for=%.0fs", dead_for)
     return None
 
@@ -728,10 +706,7 @@ def _cron_stale_condition(
             state.cron_stale_since = now
         cron_stale_for = now - state.cron_stale_since
         if cron_stale_for >= settings.watchdog_worker_stale_seconds:
-            return (
-                f"system-cron (fire_due_triggers) heartbeat stale fleet-wide for "
-                f"{cron_stale_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
-            )
+            return f"system-cron (fire_due_triggers) heartbeat stale fleet-wide for {cron_stale_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
         _log.info("watchdog.cron_stale_detected stale_for=%.0fs", cron_stale_for)
     # cron_fresh is None -> undeterminable: append nothing, leave the timer as-is.
     return None

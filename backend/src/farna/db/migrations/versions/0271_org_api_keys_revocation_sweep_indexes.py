@@ -50,19 +50,11 @@ depends_on: tuple[str, ...] | None = None
 _INDEXES = [
     (
         "ix_org_api_keys_live_run_keys",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_org_api_keys_live_run_keys "
-            'ON public."org_api_keys" (organisation_id, run_id) '
-            "WHERE revoked_at IS NULL AND run_id IS NOT NULL;"
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_org_api_keys_live_run_keys ON public."org_api_keys" (organisation_id, run_id) WHERE revoked_at IS NULL AND run_id IS NOT NULL;'),
     ),
     (
         "ix_org_api_keys_stale_sweep",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_org_api_keys_stale_sweep "
-            'ON public."org_api_keys" (organisation_id, last_used_at) '
-            "WHERE revoked_at IS NULL;"
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_org_api_keys_stale_sweep ON public."org_api_keys" (organisation_id, last_used_at) WHERE revoked_at IS NULL;'),
     ),
 ]
 

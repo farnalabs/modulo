@@ -128,10 +128,7 @@ def find_mask_sentinel_values(nodes: Iterable[Any]) -> list[MaskSentinelFinding]
             field_value = node.get(field)
             if field_value is None:
                 continue
-            findings.extend(
-                MaskSentinelFinding(node_id=node_id, field=field, path=path)
-                for path in _walk_sentinels(field_value, ())
-            )
+            findings.extend(MaskSentinelFinding(node_id=node_id, field=field, path=path) for path in _walk_sentinels(field_value, ()))
     return findings
 
 

@@ -43,15 +43,7 @@ _MARKER_ERROR_CODE_RE = re.compile(r"[a-z_]{1,64}")
 # ``_mark_run_failed``'s SQL template. __ERROR_CODE__ / __TERMINAL_LIST__ /
 # __CLAIM_FENCE__ are substituted with code-owned constants only (see the
 # function body); :rid/:oid/:detail/:tok stay bound parameters.
-_MARK_RUN_FAILED_SQL_TEMPLATE = (
-    "UPDATE runs SET status='failed', error_code='__ERROR_CODE__', "
-    "error_detail=:detail, completed_at=now() "
-    "WHERE id=:rid AND organisation_id=:oid "
-    "AND status NOT IN (__TERMINAL_LIST__) "
-    "AND status <> 'unknown' "
-    "AND cancellation_requested = false "
-    "__CLAIM_FENCE__"
-)
+_MARK_RUN_FAILED_SQL_TEMPLATE = "UPDATE runs SET status='failed', error_code='__ERROR_CODE__', error_detail=:detail, completed_at=now() WHERE id=:rid AND organisation_id=:oid AND status NOT IN (__TERMINAL_LIST__) AND status <> 'unknown' AND cancellation_requested = false __CLAIM_FENCE__"
 
 # ``SET LOCAL lock_timeout`` (FAR-583): utility commands do not accept bind
 # parameters (asyncpg rewrites :lt to $1 → "syntax error at or near $1"), so
@@ -285,17 +277,13 @@ async def _mark_run_failed(
             # ``runs`` row.
             from farna.settings import get_settings
 
-            effective_lock_timeout_ms = (
-                lock_timeout_ms if lock_timeout_ms is not None else get_settings().mutation_row_lock_timeout_ms
-            )
+            effective_lock_timeout_ms = lock_timeout_ms if lock_timeout_ms is not None else get_settings().mutation_row_lock_timeout_ms
             # Utility commands do not accept bind parameters (asyncpg
             # rewrites :lt to $1 → "syntax error at or near $1"), so the
             # validated integer is inlined via the __PLACEHOLDER__ +
             # str.replace pattern (see _SET_LOCK_TIMEOUT_SQL_TEMPLATE) —
             # an f-stringed text() violates the raw-SQL architecture rule.
-            lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace(
-                "__LOCK_TIMEOUT_MS__", str(int(effective_lock_timeout_ms))
-            )
+            lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace("__LOCK_TIMEOUT_MS__", str(int(effective_lock_timeout_ms)))
             await session.execute(text(lock_timeout_statement))
         result = await session.execute(
             text(statement),
@@ -363,7 +351,7 @@ async def _ingest_error_event(
                 "source": "saq",
                 "stacktrace": error,
                 "context_json": {"function": function},
-                "environment": os.environ.get("MODULO_ENV", "development"),
+                "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
                 "version": get_version(),
             },
         )
@@ -433,9 +421,7 @@ async def after_process(ctx: dict[str, Any]) -> None:
             # never raised: a hook that propagates would take the SAQ
             # worker's job-completion path down with it.
             _log.warning(
-                "saq_hooks.task_failure_lock_timeout run=%s (SQLSTATE 55P03 from the bounded "
-                "mutation_row_lock_timeout_ms wait) — the failed transition was NOT written; "
-                "the run is left for dispatcher_reconcile exactly as any after_process DB failure",
+                "saq_hooks.task_failure_lock_timeout run=%s (SQLSTATE 55P03 from the bounded mutation_row_lock_timeout_ms wait) — the failed transition was NOT written; the run is left for dispatcher_reconcile exactly as any after_process DB failure",
                 outcome.get("run_id"),
                 exc_info=True,
             )

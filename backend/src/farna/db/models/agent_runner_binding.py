@@ -29,16 +29,10 @@ class AgentRunnerBinding(OrgScoped):
         ),
     )
 
-    agent_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    model_backend_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    agent_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    model_backend_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False, index=True)
     target_env_var: Mapped[str] = mapped_column(String(128), nullable=False)
     source_field: Mapped[str] = mapped_column(String(64), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
 
     # Bindings live and die with their agent: no soft delete.

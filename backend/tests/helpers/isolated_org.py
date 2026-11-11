@@ -19,7 +19,7 @@ import httpx
 _log = logging.getLogger(__name__)
 
 BASE_URL: str = os.environ.get(
-    "MODULO_BASE_URL",
+    "FARNA_CONTROL_MODULO_BASE_URL",
     "https://staging-modulo.fly.dev",
 )
 _HTTP_TIMEOUT: float = 30.0
@@ -73,7 +73,7 @@ def _make_client(
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    verify_ssl = os.environ.get("MODULO_VERIFY_SSL", "0").lower() in ("1", "true", "yes")
+    verify_ssl = os.environ.get("FARNA_CONTROL_MODULO_VERIFY_SSL", "0").lower() in ("1", "true", "yes")
     return httpx.AsyncClient(
         base_url=base_url,
         verify=verify_ssl,

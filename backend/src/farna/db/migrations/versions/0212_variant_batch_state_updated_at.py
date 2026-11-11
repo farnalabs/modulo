@@ -86,11 +86,7 @@ def upgrade() -> None:
     # removed it), so this follow-up is the one that adds the column. The ADD COLUMN
     # IF NOT EXISTS keeps the chain idempotent across fresh DBs (column absent) and
     # production replays that applied an older 0211 (column already present).
-    op.execute(
-        f'ALTER TABLE public."{_TABLE}" '
-        f'ADD COLUMN IF NOT EXISTS "{_COLUMN}" timestamp with time zone '
-        f"NOT NULL DEFAULT now()"
-    )
+    op.execute(f'ALTER TABLE public."{_TABLE}" ADD COLUMN IF NOT EXISTS "{_COLUMN}" timestamp with time zone NOT NULL DEFAULT now()')
 
     if pg and migrate_owns_table:
         op.execute("RESET ROLE")

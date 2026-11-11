@@ -289,16 +289,9 @@ def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> Non
         return
     _last_disabled_log_at = now
     if environment_excluded:
-        _log.info(
-            "health_alerts.disabled: readiness alerting is off for this environment — set "
-            "ALERT_ENVIRONMENTS to include it to email the operator (health is still "
-            "evaluated; no email is sent)"
-        )
+        _log.info("health_alerts.disabled: readiness alerting is off for this environment — set ALERT_ENVIRONMENTS to include it to email the operator (health is still evaluated; no email is sent)")
         return
-    _log.info(
-        "health_alerts.disabled: readiness alerting is off — set SMTP_HOST and ALERT_EMAIL_TO "
-        "to email the operator when readiness degrades (health is still evaluated; no email is sent)"
-    )
+    _log.info("health_alerts.disabled: readiness alerting is off — set SMTP_HOST and ALERT_EMAIL_TO to email the operator when readiness degrades (health is still evaluated; no email is sent)")
 
 
 @dataclass
@@ -484,10 +477,7 @@ class _LoopThreadSampler:
                     self._samples.append((time.monotonic(), _attributed_frame(leaf)))
                 self._stop.wait(self._interval)
         except Exception:
-            _log.exception(
-                "event_loop_stall.sampler_failed — the attribution sampler thread exited; "
-                "later stall windows will report no blocking callback"
-            )
+            _log.exception("event_loop_stall.sampler_failed — the attribution sampler thread exited; later stall windows will report no blocking callback")
 
     def attribute(self, window_start: float, window_end: float) -> str | None:
         """Most common blocking call site for samples inside the window.
@@ -499,11 +489,7 @@ class _LoopThreadSampler:
         that only ever saw a parked loop answers ``None`` too.
         """
         with self._samples_lock:
-            in_window = [
-                frame
-                for sampled_at, frame in self._samples
-                if window_start <= sampled_at <= window_end and frame is not None
-            ]
+            in_window = [frame for sampled_at, frame in self._samples if window_start <= sampled_at <= window_end and frame is not None]
         if not in_window:
             return None
         counts = Counter((frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name) for frame in in_window)
@@ -664,9 +650,7 @@ class HealthObservation:
             # FAR-1771: reportable only at the severe tier — the very rule
             # that keeps a sub-second stall off the alert stream while a
             # >=1s stall names itself in the body.
-            if name in BENIGN_NON_TRIGGERING_CHECKS and not (
-                name == "event_loop_lag" and _severe_event_loop_stall(check)
-            ):
+            if name in BENIGN_NON_TRIGGERING_CHECKS and not (name == "event_loop_lag" and _severe_event_loop_stall(check)):
                 continue
             bullet = f"{name}: {check.status}"
             if check.detail:
@@ -819,13 +803,7 @@ def _alert_html(settings: Settings, status: str, conditions: list[str], observed
 
 
 def _alert_text(settings: Settings, status: str, conditions: list[str], observed_at: str) -> str:
-    return (
-        "Modulo: readiness degraded\n"
-        f"Readiness is now {status}. Failing checks:\n"
-        + "\n".join(f"- {condition}" for condition in conditions)
-        + f"\nDetected at {observed_at} on {_host()}\n"
-        + alert_context_text(settings)
-    )
+    return f"Modulo: readiness degraded\nReadiness is now {status}. Failing checks:\n" + "\n".join(f"- {condition}" for condition in conditions) + f"\nDetected at {observed_at} on {_host()}\n" + alert_context_text(settings)
 
 
 def _split_cleared_conditions(
@@ -895,15 +873,7 @@ def _recovery_html(
 ) -> str:
     intro, items = _recovery_summary(cleared, still_failing, duration_seconds)
     list_html = "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in items) + "</ul>" if items else ""
-    return (
-        "<html><body>"
-        "<h2>Modulo: readiness recovered</h2>"
-        f"<p>{html.escape(intro)}</p>"
-        f"{list_html}"
-        f"<p>Resolved at {html.escape(resolved_at)} on {html.escape(_host())}</p>"
-        f"{alert_context_html(settings)}"
-        "</body></html>"
-    )
+    return f"<html><body><h2>Modulo: readiness recovered</h2><p>{html.escape(intro)}</p>{list_html}<p>Resolved at {html.escape(resolved_at)} on {html.escape(_host())}</p>{alert_context_html(settings)}</body></html>"
 
 
 def _recovery_text(
@@ -917,11 +887,7 @@ def _recovery_text(
     listing = "\n".join(f"- {item}" for item in items)
     if listing:
         listing = f"\n{listing}"
-    return (
-        "Modulo: readiness recovered\n"
-        f"{intro}{listing}\n"
-        f"Resolved at {resolved_at} on {_host()}\n" + alert_context_text(settings)
-    )
+    return f"Modulo: readiness recovered\n{intro}{listing}\nResolved at {resolved_at} on {_host()}\n" + alert_context_text(settings)
 
 
 async def _notify_alert(

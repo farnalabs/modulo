@@ -87,7 +87,7 @@ _EGRESS_RESTRICTIVE_POLICIES: frozenset[str] = frozenset({"deny_all", "selected"
 # sandboxes); the creation marker drives the orphan sweep's grace window and
 # 24h max-lifetime backstop; the run-id key is what the sweep
 # cross-references against ACTIVE runs.
-_DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
+_DEPLOYMENT_IDENTITY_ENV = "FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_METADATA_KEY = "modulo.machine.id"
 _CREATED_AT_METADATA_KEY = "modulo.created_at"
 _RUN_ID_METADATA_KEY = "modulo.run.id"
@@ -371,9 +371,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             # Falling back to the SDK's 300s default is the exact defect this
             # fix removes, so make it loud instead of silent.
             _log.warning(
-                "E2B create_workspace: spec.timeout_seconds=%r is not a positive lifetime — "
-                "not forwarding it; the SDK's 300s default_sandbox_timeout applies "
-                "(no FAR-487 strictly-greater-than-the-command guarantee)",
+                "E2B create_workspace: spec.timeout_seconds=%r is not a positive lifetime — not forwarding it; the SDK's 300s default_sandbox_timeout applies (no FAR-487 strictly-greater-than-the-command guarantee)",
                 spec.timeout_seconds,
             )
         else:
@@ -408,9 +406,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            raise RuntimeError(
-                f"Timed out after {provision_wait_s}s provisioning E2B sandbox with template {template_id!r}"
-            ) from None
+            raise RuntimeError(f"Timed out after {provision_wait_s}s provisioning E2B sandbox with template {template_id!r}") from None
         except Exception as exc:
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
             raise RuntimeError(f"Failed to create E2B sandbox with template {template_id!r}: {exc}") from exc

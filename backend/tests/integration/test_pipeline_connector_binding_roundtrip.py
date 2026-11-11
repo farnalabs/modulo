@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from farna.auth.jwt import create_access_token
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -108,11 +108,7 @@ async def _persisted_binding(
 
     async with db_engine.begin() as conn:
         await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
-        nodes = (
-            await conn.execute(
-                select(Pipeline.__table__.c.graph_nodes_json).where(Pipeline.__table__.c.id == pipeline_id)
-            )
-        ).scalar_one()
+        nodes = (await conn.execute(select(Pipeline.__table__.c.graph_nodes_json).where(Pipeline.__table__.c.id == pipeline_id))).scalar_one()
     return dict(nodes[0]["connector_binding"])
 
 

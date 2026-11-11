@@ -128,7 +128,7 @@ def fresh_migration_db(monkeypatch):
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
-        m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
+        m.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
         from farna.db.bootstrap_role import bootstrap_roles
 
         asyncio_run(bootstrap_roles(raw, app_url))
@@ -150,12 +150,7 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
 
     try:
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT table_name, column_name, column_default FROM information_schema.columns "
-                    "WHERE table_schema = 'public'"
-                )
-            )
+            result = await conn.execute(text("SELECT table_name, column_name, column_default FROM information_schema.columns WHERE table_schema = 'public'"))
             rows = {(r[0], r[1]): r[2] for r in result.fetchall()}
     finally:
         await engine.dispose()
@@ -195,9 +190,7 @@ async def test_raw_insert_without_id_gets_server_generated_uuid(fresh_migration_
                 {"key": key, "value": "{}"},
             )
         async with engine.connect() as conn:
-            generated = (
-                await conn.execute(text("SELECT id FROM system_config WHERE key = :key"), {"key": key})
-            ).scalar()
+            generated = (await conn.execute(text("SELECT id FROM system_config WHERE key = :key"), {"key": key})).scalar()
     finally:
         await engine.dispose()
 
@@ -214,12 +207,7 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
 
     async def _snapshot() -> dict[tuple[str, str], str]:
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT table_name, column_name, column_default FROM information_schema.columns "
-                    "WHERE table_schema = 'public'"
-                )
-            )
+            result = await conn.execute(text("SELECT table_name, column_name, column_default FROM information_schema.columns WHERE table_schema = 'public'"))
             return {(r[0], r[1]): r[2] for r in result.fetchall()}
 
     pairs = _uuid_pk_pairs()

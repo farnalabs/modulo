@@ -53,38 +53,23 @@ def upgrade() -> None:
         op.execute("SET search_path TO public")
 
     # 1. Guardrail-loading hot path (eval_definitions).
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS "
-        "ix_eval_definitions_org_pipeline_type_active "
-        "ON eval_definitions (organisation_id, pipeline_id, eval_type) "
-        "WHERE deleted_at IS NULL"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_eval_definitions_org_pipeline_type_active ON eval_definitions (organisation_id, pipeline_id, eval_type) WHERE deleted_at IS NULL")
 
     # 2. eval_suite_id FK lookup (model declares index=True but 0130 used
     #    raw SQL so no index was created).
     op.execute("CREATE INDEX IF NOT EXISTS ix_eval_definitions_eval_suite_id ON eval_definitions (eval_suite_id)")
 
     # 3. Dashboard date-range + regression scan (eval_results).
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_eval_results_org_evaluated_at ON eval_results (organisation_id, evaluated_at)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_eval_results_org_evaluated_at ON eval_results (organisation_id, evaluated_at)")
 
     # 4. Alert rate-limiting query (suite_runs).
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS "
-        "ix_suite_runs_org_suite_notified "
-        "ON suite_runs (organisation_id, suite_id, notified_at)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_suite_runs_org_suite_notified ON suite_runs (organisation_id, suite_id, notified_at)")
 
     # 5. Daily-spend range scan (suite_runs).
     op.execute("CREATE INDEX IF NOT EXISTS ix_suite_runs_org_created ON suite_runs (organisation_id, created_at)")
 
     # 6. Concurrency-limit active-count check (suite_runs).
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS "
-        "ix_suite_runs_active_check "
-        "ON suite_runs (organisation_id, suite_id, dataset_id, state)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_suite_runs_active_check ON suite_runs (organisation_id, suite_id, dataset_id, state)")
 
     # 7. Org-scoped case fetch (eval_cases).
     op.execute("CREATE INDEX IF NOT EXISTS ix_eval_cases_org_dataset ON eval_cases (organisation_id, dataset_id)")

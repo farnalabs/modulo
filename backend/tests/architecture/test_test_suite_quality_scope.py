@@ -73,20 +73,20 @@ class TestResolveScopePaths:
 
     def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When the env var is absent, resolution returns None (full scan)."""
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         result = _resolve_scope_paths()
         assert result is None
 
     def test_empty_string_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An empty env var value means full scan."""
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", "")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", "")
         _resolve_scope_paths.cache_clear()
         result = _resolve_scope_paths()
         assert result is None
 
     def test_whitespace_only_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Whitespace-only entries collapse to nothing → full scan (None)."""
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", "   \t  ")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", "   \t  ")
         _resolve_scope_paths.cache_clear()
         result = _resolve_scope_paths()
         assert result is None
@@ -94,7 +94,7 @@ class TestResolveScopePaths:
     def test_single_existing_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A single real .py file resolves into the scope set."""
         target = TESTS / "architecture" / "test_test_suite_quality.py"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
         result = _resolve_scope_paths()
         assert result is not None
@@ -103,7 +103,7 @@ class TestResolveScopePaths:
     def test_nonexistent_file_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A path that does not exist on disk is silently dropped from scope."""
         fake = TESTS / "architecture" / "nonexistent_file_xyz.py"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(fake))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(fake))
         _resolve_scope_paths.cache_clear()
         result = _resolve_scope_paths()
         assert result is not None
@@ -115,7 +115,7 @@ class TestResolveScopePaths:
         if conftest.exists():
             # Rename the suffix to something non-.py for the test
             fake = conftest.with_suffix(".txt")
-            monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(fake))
+            monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(fake))
             _resolve_scope_paths.cache_clear()
             result = _resolve_scope_paths()
             assert result is not None
@@ -126,7 +126,7 @@ class TestResolveScopePaths:
         file_a = TESTS / "architecture" / "test_test_suite_quality.py"
         file_b = TESTS / "architecture" / "__init__.py"
         combined = os.pathsep.join([str(file_a), str(file_b)])
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", combined)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", combined)
         _resolve_scope_paths.cache_clear()
         result = _resolve_scope_paths()
         assert result is not None
@@ -139,7 +139,7 @@ class TestIterTestModulesScope:
 
     def test_full_scan_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without the env var, _iter_test_modules yields the full set."""
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         all_modules = list(_iter_test_modules())
         assert len(all_modules) > 100
@@ -147,7 +147,7 @@ class TestIterTestModulesScope:
     def test_scoped_yields_only_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With scope set to one file, only that file is yielded."""
         target = TESTS / "architecture" / "test_test_suite_quality.py"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
         scoped = list(_iter_test_modules())
         yielded_paths = [p.resolve() for p in scoped]
@@ -158,7 +158,7 @@ class TestIterTestModulesScope:
     def test_scoped_excludes_others(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Scoped scan must not yield files outside the scope set."""
         target = TESTS / "architecture" / "test_test_suite_quality.py"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
         scoped = list(_iter_test_modules())
         for path in scoped:
@@ -166,14 +166,14 @@ class TestIterTestModulesScope:
 
     def test_empty_scope_yields_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Scope set to only nonexistent files yields nothing."""
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", "/nonexistent/fake.py")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", "/nonexistent/fake.py")
         _resolve_scope_paths.cache_clear()
         scoped = list(_iter_test_modules())
         assert not scoped
 
     def test_whitespace_only_yields_full_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Whitespace-only scope collapses to full scan."""
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", "   \t  ")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", "   \t  ")
         _resolve_scope_paths.cache_clear()
         scoped = list(_iter_test_modules())
         assert len(scoped) > 100
@@ -188,7 +188,7 @@ class TestIterTestModulesScope:
                 py_files = list(excluded_dir.rglob("*.py"))
                 if py_files:
                     target = py_files[0]
-                    monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+                    monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
                     _resolve_scope_paths.cache_clear()
                     scoped = list(_iter_test_modules())
                     assert not scoped
@@ -220,14 +220,12 @@ class TestDeadFixtureLensUnderScope:
         requesters from the scoped files alone (the pre-fix wiring) would flag
         it and make this raise."""
         target = TESTS / "bdd" / "conftest.py"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
 
         scoped_paths = [p.resolve() for p in _iter_test_modules()]
         assert scoped_paths == [target.resolve()], "the scope must narrow the scan to the changed conftest alone"
-        assert "def unauth_client(" in target.read_text(encoding="utf-8"), (
-            "regression fixture: bdd/conftest.py must define the cross-file fixture this test relies on"
-        )
+        assert "def unauth_client(" in target.read_text(encoding="utf-8"), "regression fixture: bdd/conftest.py must define the cross-file fixture this test relies on"
 
         # The real assertion: the end-to-end lens must pass. On the pre-fix
         # wiring (used names built from the scoped iteration) this raises,
@@ -296,10 +294,8 @@ class TestBaselineStalenessUnderScope:
         planted = "bdd/steps/planted_steps.py:test_planted_out_of_scope"
         monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {planted})
         assert _read_baseline() == {planted}
-        assert not any(key.startswith("architecture/") for key in _read_baseline()), (
-            "regression fixture: the planted baseline lists only bdd/ modules, so this scope excludes them all"
-        )
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        assert not any(key.startswith("architecture/") for key in _read_baseline()), "regression fixture: the planted baseline lists only bdd/ modules, so this scope excludes them all"
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
         assert not _candidates()
         _stale_baseline_check()  # the real assertion; fails if out-of-scope entries count as stale
@@ -313,7 +309,7 @@ class TestBaselineStalenessUnderScope:
         module = TESTS / "unit" / "api" / "test_csrf.py"
         planted = "unit/api/test_csrf.py:test_not_self_asserting"
         assert planted not in _read_baseline(), "regression fixture: the planted entry must not exist already"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(module))
         _resolve_scope_paths.cache_clear()
         monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {planted})
         # The real assertion: the check itself must raise, naming the planted entry.
@@ -331,7 +327,7 @@ class TestBaselineStalenessUnderScope:
             "bdd/steps/planted_steps.py:test_planted_two",
         }
         monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: set(planted))
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         assert _candidates() == _read_baseline()
         assert _read_baseline() == planted
@@ -353,10 +349,8 @@ class TestDuplicateBaselineStalenessUnderScope:
         reporting all out-of-scope entries."""
         target = TESTS / "architecture" / "test_test_suite_quality_scope.py"
         assert _read_dup_baseline(), "regression fixture: the duplicate baseline must be non-empty"
-        assert not any(key.startswith("architecture/") for key in _read_dup_baseline()), (
-            "regression fixture: the baseline lists no architecture/ modules, so this scope excludes them all"
-        )
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        assert not any(key.startswith("architecture/") for key in _read_dup_baseline()), "regression fixture: the baseline lists no architecture/ modules, so this scope excludes them all"
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(target))
         _resolve_scope_paths.cache_clear()
         assert not _dup_candidates()
         _dup_stale_baseline_check()  # the real assertion; fails if out-of-scope entries count as stale
@@ -365,10 +359,8 @@ class TestDuplicateBaselineStalenessUnderScope:
         """Scope = a module whose baseline pairs are still duplicates: the
         stale check must pass (its entries are found by the scanned tree)."""
         module = TESTS / "unit" / "api" / "test_csrf.py"
-        assert any(key.startswith("unit/api/test_csrf.py:") for key in _read_dup_baseline()), (
-            "regression fixture: the duplicate baseline must list test_csrf.py entries"
-        )
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        assert any(key.startswith("unit/api/test_csrf.py:") for key in _read_dup_baseline()), "regression fixture: the duplicate baseline must list test_csrf.py entries"
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(module))
         _resolve_scope_paths.cache_clear()
         _dup_stale_baseline_check()
 
@@ -381,7 +373,7 @@ class TestDuplicateBaselineStalenessUnderScope:
         module = TESTS / "unit" / "api" / "test_csrf.py"
         planted = "unit/api/test_csrf.py:TestNotADuplicatePair:test_not_a_duplicate_a=test_not_a_duplicate_b"
         assert planted not in _read_dup_baseline(), "regression fixture: the planted entry must not exist already"
-        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", str(module))
         _resolve_scope_paths.cache_clear()
         monkeypatch.setattr(_scanner, "_read_duplicate_test_body_baseline", lambda: {planted})
         # The real assertion: the check itself must raise, naming the planted entry.
@@ -392,7 +384,7 @@ class TestDuplicateBaselineStalenessUnderScope:
     def test_unscoped_run_still_judges_every_duplicate_baseline_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without a scope the candidate set must be the WHOLE baseline — the
         filter may never blind the tree-wide ratchet."""
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         assert _dup_candidates() == _read_dup_baseline()
         assert _read_dup_baseline()
@@ -431,7 +423,7 @@ class TestRatchetsFireOnStaleEntries:
     _PLANTED_DUP = "unit/api/test_csrf.py:TestNotADuplicatePair:test_not_a_duplicate_a=test_not_a_duplicate_b"
 
     def test_self_asserting_bdd_ratchet_fires_on_planted_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {self._PLANTED_BDD})
         with pytest.raises(AssertionError, match="no longer violate the lens") as exc_info:
@@ -439,7 +431,7 @@ class TestRatchetsFireOnStaleEntries:
         assert self._PLANTED_BDD in str(exc_info.value)
 
     def test_duplicate_body_ratchet_fires_on_planted_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", raising=False)
         _resolve_scope_paths.cache_clear()
         monkeypatch.setattr(_scanner, "_read_duplicate_test_body_baseline", lambda: {self._PLANTED_DUP})
         with pytest.raises(AssertionError, match="no longer duplicates") as exc_info:

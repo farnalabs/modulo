@@ -534,9 +534,7 @@ async def _import_table(
 
     for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
         try:
-            await _import_one_row(
-                session, model_cls, org_id, table_name, row, name_field, strategy, id_map, counts, skip_cols
-            )
+            await _import_one_row(session, model_cls, org_id, table_name, row, name_field, strategy, id_map, counts, skip_cols)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

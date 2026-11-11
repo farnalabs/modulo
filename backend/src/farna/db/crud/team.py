@@ -76,13 +76,7 @@ async def list_teams(
 
     offset = (page - 1) * page_size
     try:
-        query = (
-            select(Team)
-            .where(Team.organisation_id == org_id, Team.deleted_at.is_(None))
-            .order_by(Team.created_at)
-            .offset(offset)
-            .limit(page_size)
-        )
+        query = select(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None)).order_by(Team.created_at).offset(offset).limit(page_size)
         result = await session.execute(query)
         items = list(result.scalars().all())
     except ProgrammingError:
@@ -124,12 +118,7 @@ async def update_team_if_unchanged(
         expected = datetime.fromisoformat(expected_updated_at)
     except ValueError:
         return TeamUpdateOutcome.STALE, None
-    result = await session.execute(
-        update(Team)
-        .where(Team.id == team_id, Team.deleted_at.is_(None), Team.updated_at == expected)
-        .values(**updates, updated_at=datetime.now(UTC))
-        .returning(Team)
-    )
+    result = await session.execute(update(Team).where(Team.id == team_id, Team.deleted_at.is_(None), Team.updated_at == expected).values(**updates, updated_at=datetime.now(UTC)).returning(Team))
     team = result.scalar_one_or_none()
     if team is not None:
         return TeamUpdateOutcome.UPDATED, team
@@ -222,9 +211,7 @@ async def count_owned_resources(
     counts: dict[uuid.UUID, int] = {}
     for model_cls in (Pipeline, ConnectorInstance, ModelBackend, LibraryPrimitive):
         owner_col = model_cls.__table__.c.owner_team_id
-        rows = (
-            await session.execute(select(owner_col, func.count()).where(owner_col.in_(team_ids)).group_by(owner_col))
-        ).all()
+        rows = (await session.execute(select(owner_col, func.count()).where(owner_col.in_(team_ids)).group_by(owner_col))).all()
         for team_id, cnt in rows:
             if team_id is None:
                 continue

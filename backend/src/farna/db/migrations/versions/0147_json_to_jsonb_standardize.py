@@ -173,10 +173,7 @@ def _column_meta(bind: Connection, table_name: str, column_name: str) -> dict | 
     upgrade chain are always visible.
     """
     row = bind.execute(
-        text(
-            "SELECT is_nullable, column_default FROM information_schema.columns "
-            "WHERE table_schema = :schema AND table_name = :table AND column_name = :col"
-        ),
+        text("SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = :schema AND table_name = :table AND column_name = :col"),
         {"schema": _SCHEMA, "table": table_name, "col": column_name},
     ).fetchone()
     if row is None:
@@ -238,9 +235,7 @@ def _finalize(bind: Connection, table_name: str, col: str, orig: dict) -> None:
     if orig["is_nullable"] == "NO":
         bind.execute(text(f'ALTER TABLE public."{table_name}" ALTER COLUMN "{col}" SET NOT NULL'))
     if orig["column_default"] is not None:
-        bind.execute(
-            text(f'ALTER TABLE public."{table_name}" ALTER COLUMN "{col}" SET DEFAULT {orig["column_default"]}')
-        )
+        bind.execute(text(f'ALTER TABLE public."{table_name}" ALTER COLUMN "{col}" SET DEFAULT {orig["column_default"]}'))
 
 
 def _convert(bind: Connection, *, tmp_suffix: str, cast: str) -> None:

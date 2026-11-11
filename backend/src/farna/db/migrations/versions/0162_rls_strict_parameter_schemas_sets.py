@@ -46,10 +46,7 @@ depends_on: str | Sequence[str] | None = None
 
 _STRICT_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 _OLD_STRICT_SCOPE = "organisation_id = current_setting('app.organisation_id')::uuid"
-_NULL_CONTEXT_SCOPE = (
-    "current_setting('app.organisation_id', true) IS NULL "
-    "OR organisation_id = current_setting('app.organisation_id')::uuid"
-)
+_NULL_CONTEXT_SCOPE = "current_setting('app.organisation_id', true) IS NULL OR organisation_id = current_setting('app.organisation_id')::uuid"
 
 _TABLES = ("parameter_schemas", "parameter_sets")
 

@@ -332,10 +332,7 @@ async def get_runners_status(
     # NO machine rows at all (the probe never ran) the aggregate reads
     # "stale" — absent cache must NOT read healthy (the strip shows
     # "status unknown", and the profile row shows the same unknown state).
-    profiles = [
-        _profile_health(p, aggregate if p.provider_type == "runner_docker" else None, active_workspaces)
-        for p in profiles_page
-    ]
+    profiles = [_profile_health(p, aggregate if p.provider_type == "runner_docker" else None, active_workspaces) for p in profiles_page]
 
     engine_infos = [m.engine_info for m in machines if m.engine_info]
     concurrency = ConcurrencyContractResponse(
@@ -387,13 +384,7 @@ def _apply_response(p: EnvironmentProfile) -> ApplyTemplateResponse:
 
 @router.post(
     "/profiles/{profile_id}/apply-template",
-    dependencies=[
-        Depends(
-            audited(
-                "environment_profile_template_applied", "environment_profile", principal_dep=get_current_tenant_user
-            )
-        )
-    ],
+    dependencies=[Depends(audited("environment_profile_template_applied", "environment_profile", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_RUNNERS_APPLY_TEMPLATE)
 async def apply_template(

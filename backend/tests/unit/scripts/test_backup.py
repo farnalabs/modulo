@@ -58,17 +58,17 @@ def test_resolve_passphrase_from_arg():
 
 
 def test_resolve_passphrase_from_env(monkeypatch):
-    monkeypatch.setenv("MODULO_BACKUP_PASSPHRASE", "envpass")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", "envpass")
     assert resolve_passphrase(None) == "envpass"
 
 
 def test_resolve_passphrase_prefers_arg_over_env(monkeypatch):
-    monkeypatch.setenv("MODULO_BACKUP_PASSPHRASE", "envpass")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", "envpass")
     assert resolve_passphrase("argpass") == "argpass"
 
 
 def test_resolve_passphrase_prompts_when_no_arg_or_env(monkeypatch):
-    monkeypatch.delenv("MODULO_BACKUP_PASSPHRASE", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", raising=False)
     with patch("scripts.backup.getpass.getpass", return_value="typed-pass") as mock_prompt:
         assert resolve_passphrase(None) == "typed-pass"
     mock_prompt.assert_called_once_with("Backup passphrase: ")
@@ -177,12 +177,12 @@ def test_collect_secrets_creates_env_file(tmp_manifest_dir, monkeypatch):
 
 
 def test_collect_secrets_writes_all_keys_with_empty_defaults(tmp_manifest_dir, monkeypatch):
-    for key in ("FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"):
+    for key in ("FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "FARNA_CONTROL_MODULO_PUBLIC_URL", "REDIS_URL"):
         monkeypatch.delenv(key, raising=False)
     files = collect_secrets(tmp_manifest_dir)
     content = Path(tmp_manifest_dir, "secrets.env").read_text()
     lines = dict(line.split("=", 1) for line in content.strip().splitlines())
-    assert set(lines) == {"FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"}
+    assert set(lines) == {"FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "FARNA_CONTROL_MODULO_PUBLIC_URL", "REDIS_URL"}
     assert all(value == "" for value in lines.values())
     assert str(Path(tmp_manifest_dir) / "secrets.env") in files
 

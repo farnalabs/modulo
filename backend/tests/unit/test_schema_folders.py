@@ -14,8 +14,8 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "b" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
 os.environ.setdefault("REDIS_URL", "")
-os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
 
 # get_settings() is lru_cached. An earlier-imported module (e.g. test_migrate
 # building the DB engine at import) may have cached Settings with CSRF enabled

@@ -48,7 +48,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv(
-            "MODULO_MONITOR_DOMAINS",
+            "FARNA_CONTROL_MODULO_MONITOR_DOMAINS",
             "https://faro.mycompany.com",
         )
         settings = Settings()
@@ -63,7 +63,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv(
-            "MODULO_MONITOR_DOMAINS",
+            "FARNA_CONTROL_MODULO_MONITOR_DOMAINS",
             "https://faro.mycompany.com https://sentry.mycompany.com",
         )
         settings = Settings()
@@ -77,7 +77,7 @@ class TestSecurityHeadersMiddleware:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
-        monkeypatch.setenv("MODULO_MONITOR_DOMAINS", "")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_MONITOR_DOMAINS", "")
         settings = Settings()
         with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
             app = FastAPI()

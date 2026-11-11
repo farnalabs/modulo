@@ -271,6 +271,4 @@ async def _stamp_overdue_notified(
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await set_rls_execution_context(session)
-        await session.execute(
-            update(HitlClaim).where(HitlClaim.id.in_(notified_ids)).values(overdue_notified_at=datetime.now(UTC))
-        )
+        await session.execute(update(HitlClaim).where(HitlClaim.id.in_(notified_ids)).values(overdue_notified_at=datetime.now(UTC)))
