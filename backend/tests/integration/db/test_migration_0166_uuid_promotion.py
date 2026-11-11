@@ -90,19 +90,19 @@ def fresh_migration_db(monkeypatch):
         # asyncpg connection later surfaces as an unclosed-connection warning.
         eng = create_async_engine(raw, poolclass=NullPool)
         async with eng.connect() as conn:
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_app"'))
-            await conn.execute(text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
-            await conn.execute(text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
-            await conn.execute(text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_migrate"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_breakglass"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_app"'))
+            await conn.execute(text("CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+            await conn.execute(text("CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+            await conn.execute(text("CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
             await conn.commit()
         await eng.dispose()
 
     asyncio_run(_provision())
 
-    app_url = _with_credentials(raw, "modulo_app", "apppass")
-    bg_url = _with_credentials(raw, "modulo_breakglass", "bgpass")
+    app_url = _with_credentials(raw, "farna_control_app", "apppass")
+    bg_url = _with_credentials(raw, "farna_control_breakglass", "bgpass")
     config = _alembic_config(raw)
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)

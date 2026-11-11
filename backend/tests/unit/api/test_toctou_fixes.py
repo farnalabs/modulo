@@ -346,7 +346,7 @@ def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
-            modulo_system_database_url="postgresql+asyncpg://localhost/system",
+            farna_control_system_database_url="postgresql+asyncpg://localhost/system",
             redis_url="",
         )
 
@@ -413,7 +413,7 @@ def _no_redis_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_system_database_url="postgresql+asyncpg://localhost/system",
+        farna_control_system_database_url="postgresql+asyncpg://localhost/system",
         redis_url="",
     )
 
@@ -583,9 +583,7 @@ class TestNoRedisInProcessGuard:
                 assert admin_rotation._rotation_owner is not None
 
                 resp2 = client.post("/api/v1/admin/rotation/rotate-key", json={"new_fernet_key": _VALID_32})
-                assert resp2.status_code == 409, (
-                    f"second concurrent rotate must be rejected, got {resp2.status_code}: {resp2.text}"
-                )
+                assert resp2.status_code == 409, f"second concurrent rotate must be rejected, got {resp2.status_code}: {resp2.text}"
                 admin_rotation._run_rotation_background.assert_called_once()
 
                 # The status endpoint consults the same guard.

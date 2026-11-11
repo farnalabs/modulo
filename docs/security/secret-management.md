@@ -59,7 +59,7 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
    background task, and the old key stays valid for reads until it finishes,
    so the rotation needs no downtime. The endpoint answers `409` while another
    rotation is in progress and `503` when `MODULO_SYSTEM_DATABASE_URL` is unset
-   (the cross-org `modulo_system` role is required; without it the rotation
+   (the cross-org `farna_control_system` role is required; without it the rotation
    would silently re-encrypt nothing).
 5. Poll `GET /api/v1/admin/rotation/status` until `rotation_in_progress` is
    `false`, then inspect `last_rotation_result`. Keep `FERNET_KEY_OLD`

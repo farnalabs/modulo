@@ -284,17 +284,17 @@ def db_url(
     # with 503 (system_bootstrap_degraded) and every integration test that
     # exercises them fails.
     #
-    # It MUST carry the dedicated ``modulo_system`` role's credentials, not the
+    # It MUST carry the dedicated ``farna_control_system`` role's credentials, not the
     # container superuser's: ``bootstrap_role._bootstrap`` derives the system
     # role NAME from this URL's username (``sys_user = _parse_role(sys_url) or
     # _SYSTEM_ROLE``). Pointing it at the superuser URL makes bootstrap
-    # provision the superuser instead, ``modulo_system`` is never created, and
+    # provision the superuser instead, ``farna_control_system`` is never created, and
     # the fatal role-posture assertion fails the boot for every integration
-    # test ("modulo_system does not have BYPASSRLS"). ``bootstrap_roles``
+    # test ("farna_control_system does not have BYPASSRLS"). ``bootstrap_roles``
     # creates the role LOGIN BYPASSRLS with exactly this password, which
     # mirrors production: deploy/fly/bootstrap_db.derive_system_database_url
-    # swaps the runtime URL's username to ``modulo_system``.
-    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "modulo_system", "syspass"))
+    # swaps the runtime URL's username to ``farna_control_system``.
+    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "farna_control_system", "syspass"))
     return url
 
 
@@ -337,29 +337,29 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         """Provision the break-glass DB roles BEFORE the migrations run.
 
         The reconciliation chain (0108_schema_org_identity) re-owns tables to
-        ``modulo_migrate`` and grants EXECUTE on ``deactivate_break_glass`` to
-        ``modulo_app``/``modulo_breakglass``, so all three roles must exist
+        ``farna_control_migrate`` and grants EXECUTE on ``deactivate_break_glass`` to
+        ``farna_control_app``/``farna_control_breakglass``, so all three roles must exist
         before ``alembic upgrade heads``.
         """
         eng = create_async_engine(db_url, poolclass=NullPool)
         async with eng.connect() as conn:
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
-            await conn.execute(text('DROP ROLE IF EXISTS "modulo_app"'))
-            await conn.execute(text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
-            await conn.execute(text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
-            await conn.execute(text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_migrate"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_breakglass"'))
+            await conn.execute(text('DROP ROLE IF EXISTS "farna_control_app"'))
+            await conn.execute(text("CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+            await conn.execute(text("CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+            await conn.execute(text("CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
             await conn.commit()
         await eng.dispose()
 
-    app_url = _with_credentials(db_url, "modulo_app", "apppass")
-    bg_url = _with_credentials(db_url, "modulo_breakglass", "bgpass")
-    # modulo_system: cross-org system-cron role (fail-closed since #2162 —
+    app_url = _with_credentials(db_url, "farna_control_app", "apppass")
+    bg_url = _with_credentials(db_url, "farna_control_breakglass", "bgpass")
+    # farna_control_system: cross-org system-cron role (fail-closed since #2162 —
     # cron_helpers/saq_worker raise RuntimeError when MODULO_SYSTEM_DATABASE_URL
     # is unset). Provision it with a KNOWN password (bootstrap_role.py parses
     # the role/password out of this URL) and expose it to the session so
     # get_settings() resolves the system engine exactly as in production.
-    sys_url = _with_credentials(db_url, "modulo_system", "syspass")
+    sys_url = _with_credentials(db_url, "farna_control_system", "syspass")
 
     from farna.db.bootstrap_role import bootstrap_roles
 
@@ -403,7 +403,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         await eng.dispose()
 
     # Persist for the session: settings consumers (cron_helpers/saq_worker
-    # system engine) read get_settings().modulo_system_database_url at test
+    # system engine) read get_settings().farna_control_system_database_url at test
     # time, after the per-test get_settings.cache_clear().
     session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
 
@@ -441,7 +441,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
                 await conn.execute(text(_ddl))
 
             # Force RLS on all org-scoped tables so it applies to the testcontainers
-            # superuser role too. In production, the modulo_app role is not a superuser
+            # superuser role too. In production, the farna_control_app role is not a superuser
             # so RLS applies automatically — but testcontainers run as the DB superuser
             # which bypasses ENABLE RLS, hence the explicit FORCE in tests.
             for _tbl in (
@@ -499,7 +499,7 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
     ``FORCE ROW LEVEL SECURITY`` (verified empirically against the
     testcontainers ``test`` user). Tests that assert cross-org isolation must
     run their DB sessions as a non-superuser role so the RLS policies actually
-    filter rows. This mirrors production, where the ``modulo_app`` runtime role
+    filter rows. This mirrors production, where the ``farna_control_app`` runtime role
     is a non-owner. Returns the role name; ``app_engine`` SET ROLEs to it on
     every connection checkout.
     """
@@ -519,7 +519,7 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
         # loses the app role's privileges and trigger fire paths fail with
         # "permission denied for table run_number_counters". Default privileges
         # keep every future/recreated table granted to the role, mirroring the
-        # ``ALTER DEFAULT PRIVILEGES`` bootstrap_role.py applies for modulo_app.
+        # ``ALTER DEFAULT PRIVILEGES`` bootstrap_role.py applies for farna_control_app.
         await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "{role}"'))
         await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{role}"'))
         await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "{role}"'))
@@ -540,7 +540,7 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
     BYPASSES row-level security. Without RLS the per-org scoping inside
     ``fire_due_triggers`` is a no-op: a due trigger in a PAUSED org is processed
     under the first *unpaused* org's iteration and gets enqueued (skip-not-defer
-    broken). In production the app connects as ``modulo_app`` (NOBYPASSRLS), so
+    broken). In production the app connects as ``farna_control_app`` (NOBYPASSRLS), so
     RLS applies. This fixture patches ``cron_helpers._get_engine`` to
     ``SET ROLE`` to the non-superuser ``modulo_integration_app`` role on every
     checkout — the same pattern ``app_engine`` uses — restoring RLS for the SAQ
@@ -804,10 +804,10 @@ async def app_engine(migrated_db_url: str, non_superuser_role: str) -> AsyncEngi
 
 
 @pytest_asyncio.fixture(scope="session")
-async def modulo_app_engine(migrated_db_url: str) -> AsyncEngine:
-    """Engine whose connections run as the real modulo_app role (RLS applies).
+async def farna_control_app_engine(migrated_db_url: str) -> AsyncEngine:
+    """Engine whose connections run as the real farna_control_app role (RLS applies).
 
-    ``SET ROLE modulo_app`` sets ``current_user`` only (``session_user`` stays
+    ``SET ROLE farna_control_app`` sets ``current_user`` only (``session_user`` stays
     the superuser), which is exactly how the REST + SCIM routes run. The
     caller-bound SECURITY DEFINER's non-operator branch is exercised this way.
     """
@@ -823,7 +823,7 @@ async def modulo_app_engine(migrated_db_url: str) -> AsyncEngine:
     ) -> None:
         cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
         try:
-            cursor.execute('SET ROLE "modulo_app"')
+            cursor.execute('SET ROLE "farna_control_app"')
         finally:
             cursor.close()
 
@@ -833,14 +833,14 @@ async def modulo_app_engine(migrated_db_url: str) -> AsyncEngine:
 
 @pytest_asyncio.fixture(scope="session")
 async def breakglass_engine(migrated_db_url: str) -> AsyncEngine:
-    """A REAL LOGIN engine connecting as modulo_breakglass.
+    """A REAL LOGIN engine connecting as farna_control_breakglass.
 
     Connecting directly (not via SET ROLE) makes ``session_user =
-    'modulo_breakglass'``, which is the ONLY path that satisfies the SECURITY
+    'farna_control_breakglass'``, which is the ONLY path that satisfies the SECURITY
     DEFINER's operator branch — a SET ROLE session does NOT (negative assertion
     covered in test_break_glass.py).
     """
-    bg_url = _with_credentials(migrated_db_url, "modulo_breakglass", "bgpass")
+    bg_url = _with_credentials(migrated_db_url, "farna_control_breakglass", "bgpass")
     engine = create_async_engine(bg_url, echo=False, poolclass=NullPool)
     yield engine
     await engine.dispose()

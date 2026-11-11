@@ -8,7 +8,7 @@ code:
   - backend/src/farna/db/crud/environment_profile.py
   - backend/src/farna/db/models/environment_profile.py
   - backend/src/farna/db/crud/pipeline_snapshot.py
-  - backend/src/farna/db/migrations/versions/0289_pipelines_environment_profile.py
+  - backend/src/farna/db/migrations/versions/0001_baseline_schema.py
   - backend/src/farna/db/migrations/versions/0338_environment_profile_max_node_seconds.py
   - backend/src/farna/core/graph_validator/__init__.py
   - backend/src/farna/core/runtime_provider
@@ -165,7 +165,7 @@ into the Runners page as redirects.)
       (`backend/src/farna/api/routes/pipelines.py`,
       `backend/src/farna/api/routes/environment_profiles.py`,
       `backend/src/farna/core/team_visibility.py`,
-      `backend/src/farna/db/migrations/versions/0289_pipelines_environment_profile.py`,
+      `backend/src/farna/db/migrations/versions/0001_baseline_schema.py`,
       `frontend/src/views/PipelineEditorView.vue`;
       `unit-tests: test_pipeline_environment_profile_binding.py,
       test_environment_profiles_routes.py,

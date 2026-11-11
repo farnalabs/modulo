@@ -14,7 +14,7 @@ the migration without a live DB:
 * **Org-scoped RLS coverage** - ``_ORG_SCOPED_TABLES`` names both new tables, so
   ``test_rls_coverage.py`` sees them without parsing the DDL.
 * **Upgrade (mocked ``op``)** - on Postgres it runs the new-table ceremony
-  (``SET ROLE modulo_migrate`` -> create -> ownership assertion -> ENABLE/FORCE
+  (``SET ROLE farna_control_migrate`` -> create -> ownership assertion -> ENABLE/FORCE
   ROW LEVEL SECURITY + the verbatim ``rls_team_isolation`` team policy on BOTH
   tables -> DML grants) and creates both tables with their indexes; on SQLite it
   creates the tables with no ceremony.
@@ -185,14 +185,14 @@ class TestUpgradeSqlite:
 class TestUpgradePostgres:
     def test_full_ceremony_present(self) -> None:
         joined = _joined(_run("upgrade", "postgresql", roles_exist=True))
-        assert "SET ROLE modulo_migrate" in joined
+        assert "SET ROLE farna_control_migrate" in joined
         assert "RESET ROLE" in joined
         assert "ENABLE ROW LEVEL SECURITY" in joined
         assert "FORCE ROW LEVEL SECURITY" in joined
         assert "CREATE POLICY rls_team_isolation" in joined
         assert "GRANT " in joined
-        assert "modulo_app" in joined
-        assert "modulo_system" in joined
+        assert "farna_control_app" in joined
+        assert "farna_control_system" in joined
 
     def test_rls_statement_list_is_pinned(self) -> None:
         module = _load_migration()
@@ -204,10 +204,7 @@ class TestUpgradePostgres:
         ) == module._ENABLE_RLS_STATEMENTS
         assert len(module._CREATE_POLICY_STATEMENTS) == 2
         for table in (_EXTERNAL_AGENTS, _MCP_SERVERS):
-            assert any(
-                statement.startswith(f'CREATE POLICY rls_team_isolation ON "{table}" USING (')
-                for statement in module._CREATE_POLICY_STATEMENTS
-            ), f"no rls_team_isolation policy for {table}"
+            assert any(statement.startswith(f'CREATE POLICY rls_team_isolation ON "{table}" USING (') for statement in module._CREATE_POLICY_STATEMENTS), f"no rls_team_isolation policy for {table}"
 
         rec = _run("upgrade", "postgresql", roles_exist=True)
         for statement in (*module._ENABLE_RLS_STATEMENTS, *module._CREATE_POLICY_STATEMENTS):
@@ -242,7 +239,7 @@ class TestUpgradePostgres:
         assert asserted == {_EXTERNAL_AGENTS, _MCP_SERVERS}
 
     def test_owner_assertion_skipped_when_migrate_role_absent(self) -> None:
-        # Without the modulo_migrate role there is no SET ROLE, no owner
+        # Without the farna_control_migrate role there is no SET ROLE, no owner
         # assertion and no grants - the tables are still created (SQLite/pre-role
         # bootstrap path).
         migration = _load_migration()
@@ -264,25 +261,14 @@ class TestUpgradeChecks:
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert set(rec.checks[_EXTERNAL_AGENTS]) == _EXTERNAL_AGENT_CHECKS
         assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_visibility"] == "visibility IN ('org', 'team')"
-        assert (
-            rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_runtime_kind"]
-            == "runtime_kind IN ('claude-code', 'cursor', 'opencode', 'other')"
-        )
-        assert (
-            rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_discovery_provenance"]
-            == "discovery_provenance IN ('manual', 'mcp', 'webhook', 'forge')"
-        )
+        assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_runtime_kind"] == "runtime_kind IN ('claude-code', 'cursor', 'opencode', 'other')"
+        assert rec.checks[_EXTERNAL_AGENTS]["ck_external_agents_discovery_provenance"] == "discovery_provenance IN ('manual', 'mcp', 'webhook', 'forge')"
 
     def test_mcp_servers_check_constraints(self) -> None:
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert set(rec.checks[_MCP_SERVERS]) == _MCP_SERVER_CHECKS
-        assert (
-            rec.checks[_MCP_SERVERS]["ck_mcp_servers_transport"] == "transport IN ('stdio', 'sse', 'http', 'websocket')"
-        )
-        assert (
-            rec.checks[_MCP_SERVERS]["ck_mcp_servers_approval_status"]
-            == "approval_status IN ('unapproved', 'approved', 'approved-stale', 'blocked')"
-        )
+        assert rec.checks[_MCP_SERVERS]["ck_mcp_servers_transport"] == "transport IN ('stdio', 'sse', 'http', 'websocket')"
+        assert rec.checks[_MCP_SERVERS]["ck_mcp_servers_approval_status"] == "approval_status IN ('unapproved', 'approved', 'approved-stale', 'blocked')"
 
     def test_team_owner_check_on_both_tables(self) -> None:
         rec = _run("upgrade", "sqlite", roles_exist=False)
@@ -305,16 +291,12 @@ class TestDowngrade:
 
 class TestModelParity:
     def test_external_agent_carries_the_migration_checks(self) -> None:
-        model_checks = {
-            c.name: str(c.sqltext) for c in ExternalAgent.__table__.constraints if isinstance(c, sa.CheckConstraint)
-        }
+        model_checks = {c.name: str(c.sqltext) for c in ExternalAgent.__table__.constraints if isinstance(c, sa.CheckConstraint)}
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert model_checks == rec.checks[_EXTERNAL_AGENTS]
 
     def test_mcp_server_carries_the_migration_checks(self) -> None:
-        model_checks = {
-            c.name: str(c.sqltext) for c in McpServer.__table__.constraints if isinstance(c, sa.CheckConstraint)
-        }
+        model_checks = {c.name: str(c.sqltext) for c in McpServer.__table__.constraints if isinstance(c, sa.CheckConstraint)}
         rec = _run("upgrade", "sqlite", roles_exist=False)
         assert model_checks == rec.checks[_MCP_SERVERS]
 

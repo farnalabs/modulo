@@ -170,12 +170,9 @@ async def _provision_cluster_roles(db_url: str) -> None:
     dropping a role that owns objects would fail and break the shared container.
     """
     statements = (
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
-        "THEN CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS; END IF; END $$;",
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_breakglass') "
-        "THEN CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'; END IF; END $$;",
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') "
-        "THEN CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'; END IF; END $$;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'farna_control_migrate') THEN CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS; END IF; END $$;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'farna_control_breakglass') THEN CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'; END IF; END $$;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'farna_control_app') THEN CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'; END IF; END $$;",
     )
     for sql in statements:
         await _admin_execute(db_url, sql)
@@ -200,9 +197,7 @@ def purge_template_db(db_url: str) -> Generator[str, None, None]:
         engine = _async_engine(template_url)
         try:
             async with engine.connect() as conn:
-                await conn.execute(
-                    text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-                )
+                await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
                 await conn.commit()
         finally:
             await engine.dispose()
@@ -239,18 +234,11 @@ async def _seed_world(url: str, *, include_orphan: bool = False) -> None:
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                    "VALUES (:id, 'purge@example.com', 'purge', 'hash', 'local', true), "
-                    "(:oid, 'purge-other@example.com', 'purge-other', 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'purge@example.com', 'purge', 'hash', 'local', true), (:oid, 'purge-other@example.com', 'purge-other', 'hash', 'local', true)"),
                 {"id": str(_ACCOUNT_ID), "oid": str(_OTHER_ACCOUNT_ID)},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES "
-                    "(:id, 'purge', 'purge', '{}'::jsonb), (:oid, 'purge-other', 'purge-other', '{}'::jsonb)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'purge', 'purge', '{}'::jsonb), (:oid, 'purge-other', 'purge-other', '{}'::jsonb)"),
                 {"id": str(_ORG_ID), "oid": str(_OTHER_ORG_ID)},
             )
             await conn.execute(
@@ -299,11 +287,7 @@ async def _seed_world(url: str, *, include_orphan: bool = False) -> None:
             legacy_ids = list(_EVAL_IDS) + ([_ORPHAN_EVAL_ID] if include_orphan else [])
             for eval_id in legacy_ids:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, account_id, "
-                        "name, eval_type, config_json, eval_suite_id) VALUES "
-                        "(:id, :oid, :pid, :aid, :name, 'llm_judge', '{}'::jsonb, :sid)"
-                    ),
+                    text("INSERT INTO eval_definitions (id, organisation_id, pipeline_id, account_id, name, eval_type, config_json, eval_suite_id) VALUES (:id, :oid, :pid, :aid, :name, 'llm_judge', '{}'::jsonb, :sid)"),
                     {
                         "id": str(eval_id),
                         "oid": str(_ORG_ID),
@@ -315,10 +299,7 @@ async def _seed_world(url: str, *, include_orphan: bool = False) -> None:
                 )
             for eval_id in _EVAL_IDS:
                 await conn.execute(
-                    text(
-                        "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, name, "
-                        "eval_type, config_json) VALUES (:id, :oid, :pid, :aid, :name, 'llm_judge', '{}'::jsonb)"
-                    ),
+                    text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, name, eval_type, config_json) VALUES (:id, :oid, :pid, :aid, :name, 'llm_judge', '{}'::jsonb)"),
                     {
                         "id": str(eval_id),
                         "oid": str(_ORG_ID),
@@ -331,11 +312,7 @@ async def _seed_world(url: str, *, include_orphan: bool = False) -> None:
             # A NON-TERMINAL run, so the purge is proven not to depend on a
             # quiesced run table (0254's drain gate is not repeated here).
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                    "run_number, input_hash, langgraph_thread_id) VALUES "
-                    "(:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', 'purge-thread')"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', 'purge-thread')"),
                 {
                     "id": str(_RUN_ID),
                     "oid": str(_ORG_ID),
@@ -347,10 +324,7 @@ async def _seed_world(url: str, *, include_orphan: bool = False) -> None:
             # already targets ``evals`` (0294), so these must survive the drop.
             for eval_id in _EVAL_IDS:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_results (run_id, eval_id, organisation_id, passed, score) "
-                        "VALUES (:rid, :eid, :oid, true, 0.9)"
-                    ),
+                    text("INSERT INTO eval_results (run_id, eval_id, organisation_id, passed, score) VALUES (:rid, :eid, :oid, true, 0.9)"),
                     {"rid": str(_RUN_ID), "eid": str(eval_id), "oid": str(_ORG_ID)},
                 )
     finally:
@@ -433,8 +407,7 @@ async def test_purge_asserts_deletes_and_drops(pre_purge_url: str, caplog: pytes
     # 3. eval_results still reads AND writes through the FK to evals.
     joined = await _rows(
         pre_purge_url,
-        "SELECT r.eval_id, e.name FROM eval_results r JOIN evals e ON e.id = r.eval_id "
-        "WHERE r.eval_id = :eid ORDER BY e.name",
+        "SELECT r.eval_id, e.name FROM eval_results r JOIN evals e ON e.id = r.eval_id WHERE r.eval_id = :eid ORDER BY e.name",
         {"eid": str(_EVAL_IDS[0])},
     )
     assert len(joined) == 1
@@ -443,18 +416,11 @@ async def test_purge_asserts_deletes_and_drops(pre_purge_url: str, caplog: pytes
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results (run_id, eval_id, organisation_id, passed, score) "
-                    "VALUES (:rid, :eid, :oid, false, 0.1)"
-                ),
+                text("INSERT INTO eval_results (run_id, eval_id, organisation_id, passed, score) VALUES (:rid, :eid, :oid, false, 0.1)"),
                 {"rid": str(_RUN_ID), "eid": str(_EVAL_IDS[1]), "oid": str(_ORG_ID)},
             )
         async with engine.connect() as conn:
-            post = (
-                await conn.execute(
-                    text("SELECT COUNT(*) FROM eval_results WHERE eval_id = :eid"), {"eid": str(_EVAL_IDS[1])}
-                )
-            ).scalar()
+            post = (await conn.execute(text("SELECT COUNT(*) FROM eval_results WHERE eval_id = :eid"), {"eid": str(_EVAL_IDS[1])})).scalar()
         assert post == 2
     finally:
         await engine.dispose()
@@ -474,11 +440,7 @@ async def test_purge_asserts_deletes_and_drops(pre_purge_url: str, caplog: pytes
         # only do that by resolving the live ``evals`` row.
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, name, "
-                    "eval_type, config_json) VALUES (:id, :oid, :pid, :aid, 'other-org eval', "
-                    "'llm_judge', '{}'::jsonb)"
-                ),
+                text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, name, eval_type, config_json) VALUES (:id, :oid, :pid, :aid, 'other-org eval', 'llm_judge', '{}'::jsonb)"),
                 {
                     "id": str(_OTHER_EVAL_ID),
                     "oid": str(_OTHER_ORG_ID),
@@ -489,10 +451,7 @@ async def test_purge_asserts_deletes_and_drops(pre_purge_url: str, caplog: pytes
         with pytest.raises(DBAPIError, match="cross-organisation reference"):
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_results (run_id, eval_id, organisation_id, passed) "
-                        "VALUES (:rid, :eid, :oid, true)"
-                    ),
+                    text("INSERT INTO eval_results (run_id, eval_id, organisation_id, passed) VALUES (:rid, :eid, :oid, true)"),
                     {"rid": str(_RUN_ID), "eid": str(_OTHER_EVAL_ID), "oid": str(_ORG_ID)},
                 )
     finally:
@@ -509,25 +468,17 @@ async def test_purge_asserts_deletes_and_drops(pre_purge_url: str, caplog: pytes
         names = sorted(inventory[inventory_key])
         assert names, f"no {kind} was enumerated for the legacy table"
         assert await _scalar(pre_purge_url, sql, {"names": names}) == 0, f"{kind}(s) survived the drop: {names}"
-    assert (
-        await _scalar(pre_purge_url, "SELECT COUNT(*) FROM pg_policy WHERE polrelid = :oid", {"oid": legacy_oid}) == 0
-    )
+    assert await _scalar(pre_purge_url, "SELECT COUNT(*) FROM pg_policy WHERE polrelid = :oid", {"oid": legacy_oid}) == 0
 
     # 6. The logged count matches the rows actually deleted.
     assert _logged_counts(caplog) == [2]
-    order = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == PURGE_LOGGER and record.levelno >= logging.INFO
-    ]
+    order = [record.getMessage() for record in caplog.records if record.name == PURGE_LOGGER and record.levelno >= logging.INFO]
     assert any("assertion passed" in message for message in order)
     assert any("deleted 2 proven-redundant" in message for message in order)
     assert any("table dropped" in message for message in order)
 
 
-async def test_purge_fails_closed_when_a_legacy_row_has_no_twin(
-    pre_purge_url: str, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_purge_fails_closed_when_a_legacy_row_has_no_twin(pre_purge_url: str, caplog: pytest.LogCaptureFixture) -> None:
     """A legacy row with no ``evals`` twin ABORTS, and the transaction rolls back."""
     await _seed_world(pre_purge_url, include_orphan=True)
     legacy_rows = await _scalar(pre_purge_url, 'SELECT COUNT(*) FROM public."eval_definitions"')
@@ -540,12 +491,7 @@ async def test_purge_fails_closed_when_a_legacy_row_has_no_twin(
     # The table AND both rows are still there: the failed transaction rolled back.
     assert await _scalar(pre_purge_url, "SELECT to_regclass('public.\"eval_definitions\"')") is not None
     assert await _scalar(pre_purge_url, 'SELECT COUNT(*) FROM public."eval_definitions"') == 3
-    assert (
-        await _scalar(
-            pre_purge_url, "SELECT COUNT(*) FROM eval_definitions WHERE id = :id", {"id": str(_ORPHAN_EVAL_ID)}
-        )
-        == 1
-    )
+    assert await _scalar(pre_purge_url, "SELECT COUNT(*) FROM eval_definitions WHERE id = :id", {"id": str(_ORPHAN_EVAL_ID)}) == 1
     # …and no delete was logged for this attempt.
     assert not _logged_counts(caplog)
     # Alembic did not record the revision: the chain is still at the pre-purge head.
@@ -562,13 +508,7 @@ async def test_purge_repoints_a_trigger_that_still_resolves_the_legacy_table(pre
         # before dropping the table.
         async with engine.begin() as conn:
             await conn.execute(text("DROP TRIGGER trg_eval_results_eval_id_tenant ON public.eval_results"))
-            await conn.execute(
-                text(
-                    "CREATE TRIGGER trg_eval_results_eval_id_tenant BEFORE INSERT OR UPDATE OF eval_id, "
-                    "organisation_id ON public.eval_results FOR EACH ROW "
-                    "EXECUTE FUNCTION public.enforce_same_organisation('eval_definitions', 'eval_id')"
-                )
-            )
+            await conn.execute(text("CREATE TRIGGER trg_eval_results_eval_id_tenant BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON public.eval_results FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('eval_definitions', 'eval_id')"))
     finally:
         await engine.dispose()
 
@@ -589,13 +529,7 @@ async def test_purge_refuses_when_a_foreign_key_still_references_the_table(pre_p
     engine = _async_engine(pre_purge_url)
     try:
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "CREATE TABLE purge_inbound_fk_probe ("
-                    "id uuid PRIMARY KEY DEFAULT gen_random_uuid(), "
-                    "eval_id uuid REFERENCES eval_definitions(id) ON DELETE CASCADE)"
-                )
-            )
+            await conn.execute(text("CREATE TABLE purge_inbound_fk_probe (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), eval_id uuid REFERENCES eval_definitions(id) ON DELETE CASCADE)"))
     finally:
         await engine.dispose()
 

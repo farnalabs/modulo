@@ -9,7 +9,7 @@ code:
   - backend/src/farna/db/crud/pipeline.py
   - backend/src/farna/api/routes/pipelines.py
   - backend/src/farna/api/routes/runs.py
-  - backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - backend/src/farna/db/migrations/versions/0001_baseline_schema.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
   - frontend/src/components/pipeline/PipelineSnapshotCompare.vue

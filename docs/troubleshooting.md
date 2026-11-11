@@ -291,7 +291,7 @@ docker compose down
 # install native, then restore the SQL into the fresh data dir
 bash modulo-install.sh
 modulo start --detach
-modulo restore <backup-dir> --data-dir <fresh-data-dir> --yes
+farna-control restore <backup-dir> --data-dir <fresh-data-dir> --yes
 ```
 
 The Compose images are alpine/musl and the native bundle is glibc - the
@@ -336,7 +336,7 @@ observation that proved it, and what changed.
 ### 1. `connector_health_checks` failed every connector with an RLS-context error
 
 **Cause.** The sweep runs on the cross-org system session factory
-(`modulo_system`, BYPASSRLS), which deliberately never calls `set_rls_org` – so
+(`farna_control_system`, BYPASSRLS), which deliberately never calls `set_rls_org` – so
 the session carries no `app.organisation_id`. `FernetSecretsBackend.get_secret`
 refuses to read the `secrets` table without one and raised
 `RuntimeError: FernetSecretsBackend: RLS organisation context not set` for

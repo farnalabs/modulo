@@ -239,7 +239,7 @@ def test_quarantine_privileges_are_explicit_and_role_guarded() -> None:
     accident, and a fleet without it wedges the org's sweep forever."""
     module = _load_migration()
     code = _source_code()
-    assert module._SYSTEM_ROLE == "modulo_system"
+    assert module._SYSTEM_ROLE == "farna_control_system"
     assert "GRANT SELECT, INSERT, DELETE ON {_QUARANTINE_TABLE} TO {_SYSTEM_ROLE}" in code
     assert "GRANT SELECT, DELETE ON {_QUARANTINE_TABLE} TO {_APP_ROLE}" in code
     # Both grants are role-existence-guarded (fresh dev/BDD DBs have none).
@@ -252,12 +252,10 @@ def test_quarantine_privileges_are_explicit_and_role_guarded() -> None:
 
 def test_quarantine_docstrings_do_not_claim_default_revoke_posture() -> None:
     """qa iteration 2 (Major 5): the helper docstrings must describe the
-    EXPLICIT grants (the retention purge runs on modulo_app, the sweep on
-    modulo_system) — the old 'no app-role grant / default REVOKE' claims
+    EXPLICIT grants (the retention purge runs on farna_control_app, the sweep on
+    farna_control_system) — the old 'no app-role grant / default REVOKE' claims
     drifted from the shipped ceremony."""
-    retention_src = (
-        Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "crud" / "run_retention.py"
-    ).read_text(encoding="utf-8")
+    retention_src = (Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "crud" / "run_retention.py").read_text(encoding="utf-8")
     assert "no app-role grant on Postgres (default" not in retention_src
     assert "migration 0192 grants" in retention_src, "the docstring names the explicit grants"
 

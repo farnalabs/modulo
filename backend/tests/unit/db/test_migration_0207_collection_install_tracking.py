@@ -3,9 +3,9 @@
 These run WITHOUT a database. They pin the migration's contract against the
 review-blockers raised on PR #308:
 
-* Major 1 — new-table ceremony: ``SET ROLE modulo_migrate`` + RLS
-  ENABLE/FORCE + ``rls_org_isolation`` policy + GRANTs to ``modulo_app`` /
-  ``modulo_system`` + the post-create ownership assertion.
+* Major 1 — new-table ceremony: ``SET ROLE farna_control_migrate`` + RLS
+  ENABLE/FORCE + ``rls_org_isolation`` policy + GRANTs to ``farna_control_app`` /
+  ``farna_control_system`` + the post-create ownership assertion.
 * Major 2 — naming: ``organisation_id`` (NOT ``org_id``),
   ``ix_<table>_<col>`` index convention.
 * Major 4/5 — no redundant ``CREATE UNIQUE INDEX`` on the PK; all indexes use
@@ -154,14 +154,14 @@ class TestPostgresCeremony:
         migration = _load_migration()
         rec = _run_upgrade(migration, "postgresql", roles_exist=True)
         joined = " ".join(rec.sql)
-        assert "SET ROLE modulo_migrate" in joined
+        assert "SET ROLE farna_control_migrate" in joined
         assert "RESET ROLE" in joined
         assert "ENABLE ROW LEVEL SECURITY" in joined
         assert "FORCE ROW LEVEL SECURITY" in joined
         assert "CREATE POLICY rls_org_isolation" in joined
         assert "GRANT " in joined
-        assert "modulo_app" in joined
-        assert "modulo_system" in joined
+        assert "farna_control_app" in joined
+        assert "farna_control_system" in joined
 
     def test_ownership_assertion_invoked(self) -> None:
         migration = _load_migration()

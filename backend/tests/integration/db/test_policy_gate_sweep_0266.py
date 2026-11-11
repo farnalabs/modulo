@@ -161,18 +161,18 @@ def sweep_db(monkeypatch):
     def _provision():
         eng = sa.create_engine(_sync_url(raw))
         with eng.connect() as conn:
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_migrate"'))
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_breakglass"'))
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_app"'))
-            conn.execute(sa.text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
-            conn.execute(sa.text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
-            conn.execute(sa.text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_migrate"'))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_breakglass"'))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_app"'))
+            conn.execute(sa.text("CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+            conn.execute(sa.text("CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+            conn.execute(sa.text("CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
             conn.commit()
         eng.dispose()
 
     _provision()
-    app_url = _with_credentials(raw, "modulo_app", "apppass")
-    bg_url = _with_credentials(raw, "modulo_breakglass", "bgpass")
+    app_url = _with_credentials(raw, "farna_control_app", "apppass")
+    bg_url = _with_credentials(raw, "farna_control_breakglass", "bgpass")
     config = _alembic_config(raw)
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)

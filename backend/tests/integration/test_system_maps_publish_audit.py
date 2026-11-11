@@ -91,10 +91,7 @@ async def _fetch_audit_event(
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT id::text, organisation_id::text, event_type, "
-                "account_id::text, resource_id::text, payload_json "
-                "FROM audit_events WHERE organisation_id = :oid AND event_type = :et "
-                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT id::text, organisation_id::text, event_type, account_id::text, resource_id::text, payload_json FROM audit_events WHERE organisation_id = :oid AND event_type = :et ORDER BY created_at DESC, id DESC LIMIT 1",
             ),
             {"oid": str(org_id), "et": event_type},
         )
@@ -113,7 +110,7 @@ async def _fetch_audit_event(
 async def rls_session(app_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     """Session whose connections run as a NOBYPASSRLS role, so RLS applies.
 
-    Mirrors production where the app connects as ``modulo_app`` (NOBYPASSRLS).
+    Mirrors production where the app connects as ``farna_control_app`` (NOBYPASSRLS).
     """
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     session = factory()

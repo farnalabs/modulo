@@ -77,7 +77,7 @@ postgres:
   host: modulo-db.cluster-xxxxxx.us-east-1.rds.amazonaws.com
   port: 5432
   database: modulo
-  username: modulo_app       # Restricted runtime role (DATABASE_URL)
+  username: farna_control_app       # Restricted runtime role (DATABASE_URL)
   adminUsername: modulo      # Admin/superuser role (DATABASE_ADMIN_URL)
   existingSecret: modulo-secrets
 

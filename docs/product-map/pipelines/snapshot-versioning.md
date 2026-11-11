@@ -11,7 +11,7 @@ code:
   - backend/src/farna/api/routes/runs.py
   - backend/src/farna/api/mcp_server.py
   - backend/src/farna/core/release_channels.py
-  - backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py
+  - backend/src/farna/db/migrations/versions/0001_baseline_schema.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/components/pipeline/PipelineSnapshotTimeline.vue
   - frontend/src/components/pipeline/PipelineVersionChip.vue
@@ -100,7 +100,7 @@ annotate, delete, rollback, diff) is the data layer under
       `0317_drop_retired_pipeline_diff_rollback_flag` sweeps the stale
       `feature_flag_catalog` row so no admin surface advertises a flag that
       gates nothing (`backend/tests/unit/api/test_pipeline_snapshot_gating.py`,
-      `backend/src/farna/db/migrations/versions/0317_drop_retired_pipeline_diff_rollback_flag.py`)
+      `backend/src/farna/db/migrations/versions/0001_baseline_schema.py`)
 - [x] Snapshots carry FAR-402 P6 live-edit history + release-channel tagging:
       `version_kind` (`edit` vs `run`), `created_kind` (`initial`/`edit`/
       `rollback`/`run`), `draft` auto-saves, and `channel` (`none`/`stable`/

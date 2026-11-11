@@ -3,7 +3,7 @@
 --
 -- Run these against the PRODUCTION (or staging) database BEFORE the drop
 -- migration 0215 (the runs blob columns must still exist for Gate 3). Every
--- result must be ZERO. Run it as an owner-context role (modulo_migrate or
+-- result must be ZERO. Run it as an owner-context role (farna_control_migrate or
 -- console): the queries scope the whole runs table deliberately — this is a
 -- one-shot ops gate, not an app-role query.
 --

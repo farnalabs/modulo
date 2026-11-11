@@ -22,9 +22,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _ENTRYPOINT = _REPO_ROOT / "deploy" / "fly" / "entrypoint.sh"
 
 _CREDENTIAL_ENV: dict[str, str] = {
-    "DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
-    "DATABASE_ADMIN_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
-    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/modulo",
+    "DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
+    "DATABASE_ADMIN_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
+    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
     "REDIS_URL": "redis://:redis-pass@127.0.0.1:16379/0",
     "SECRET_KEY": "a" * 64,
     "FERNET_KEY": "b" * 44,

@@ -65,7 +65,7 @@ class _FakeConn:
       * ``tables``          — set[str]: existing public tables (to_regclass)
       * ``columns``         — dict[str, set[str]]: table -> existing columns
       * ``table_update_grantees`` — list[str]: role_table_grants UPDATE grantees
-      * ``column_updatable``      — set[str]: accounts columns modulo_app may UPDATE
+      * ``column_updatable``      — set[str]: accounts columns farna_control_app may UPDATE
       * ``is_superuser``          — bool
       * ``privileged_memberships``— list[str] — privileged roles app belongs to
       * ``function_exists``       — bool: deactivate_break_glass present
@@ -146,13 +146,13 @@ def _clean_posture_conn() -> _FakeConn:
     """A connection that yields a perfectly clean allow-list posture."""
     return _FakeConn(
         roles={
-            "modulo_app": True,
+            "farna_control_app": True,
             _MIGRATE_ROLE: True,
-            "modulo_breakglass": True,
+            "farna_control_breakglass": True,
             _SYSTEM_ROLE: True,
         },
         role_bypassrls={
-            "modulo_app": False,
+            "farna_control_app": False,
             _SYSTEM_ROLE: True,
         },
         tables={"accounts"},
@@ -208,7 +208,7 @@ class TestAsyncpgAdminConnect:
         ("url", "expected"),
         [
             (
-                "postgresql+asyncpg://admin:pw@db:5432/modulo",
+                "postgresql+asyncpg://admin:pw@db:5432/farna_control",
                 ("postgres://admin:pw@db:5432/modulo", False),
             ),
             (
@@ -267,26 +267,26 @@ class TestAsyncpgAdminConnect:
 
 class TestCreateOrUpdateRole:
     async def test_creates_login_role_when_missing(self, conn: _FakeConn) -> None:
-        await _create_or_update_role(conn, "modulo_app", login=True, password="pw")
-        assert any('CREATE ROLE "modulo_app" LOGIN BYPASSRLS PASSWORD' in q for q in conn.executed)
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="pw")
+        assert any('CREATE ROLE "farna_control_app" LOGIN BYPASSRLS PASSWORD' in q for q in conn.executed)
 
     async def test_creates_nologin_role_when_missing(self, conn: _FakeConn) -> None:
         await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None)
-        assert any('CREATE ROLE "modulo_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in q for q in conn.executed)
+        assert any('CREATE ROLE "farna_control_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in q for q in conn.executed)
 
     async def test_updates_existing_login_role(self, conn: _FakeConn) -> None:
-        conn.roles["modulo_app"] = True
-        await _create_or_update_role(conn, "modulo_app", login=True, password="newpw")
-        assert any('ALTER ROLE "modulo_app" WITH LOGIN BYPASSRLS PASSWORD' in q for q in conn.executed)
+        conn.roles["farna_control_app"] = True
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="newpw")
+        assert any('ALTER ROLE "farna_control_app" WITH LOGIN BYPASSRLS PASSWORD' in q for q in conn.executed)
         assert not any(q.startswith("CREATE ROLE") for q in conn.executed)
 
     async def test_updates_existing_nologin_role(self, conn: _FakeConn) -> None:
         conn.roles[_MIGRATE_ROLE] = True
         await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None)
-        assert any('ALTER ROLE "modulo_migrate" WITH NOSUPERUSER NOLOGIN BYPASSRLS' in q for q in conn.executed)
+        assert any('ALTER ROLE "farna_control_migrate" WITH NOSUPERUSER NOLOGIN BYPASSRLS' in q for q in conn.executed)
 
     async def test_escapes_single_quotes_in_password(self, conn: _FakeConn) -> None:
-        await _create_or_update_role(conn, "modulo_app", login=True, password="p'word")
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="p'word")
         escaped = [q for q in conn.executed if "CREATE ROLE" in q]
         assert escaped
         assert "p''word" in escaped[0]
@@ -302,7 +302,7 @@ class TestCreateOrUpdateRole:
         """
         hostile = "';CREATE ROLE pwned SUPERUSER;--"
         conn = _FakeConn()
-        await _create_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        await _create_role(conn, "farna_control_app", login=True, password=hostile, bypassrls=False)
         assert len(conn.executed) == 1
         sql = conn.executed[0]
         assert "'';CREATE ROLE pwned SUPERUSER;--" in sql  # doubled quote — inert literal
@@ -315,7 +315,7 @@ class TestCreateOrUpdateRole:
         """FAR-918 Major: _alter_role must escape the PASSWORD literal too."""
         hostile = "';CREATE ROLE pwned SUPERUSER;--"
         conn = _FakeConn()
-        await _alter_role(conn, "modulo_app", login=True, password=hostile, bypassrls=False)
+        await _alter_role(conn, "farna_control_app", login=True, password=hostile, bypassrls=False)
         assert len(conn.executed) == 1
         sql = conn.executed[0]
         assert "'';CREATE ROLE pwned SUPERUSER;--" in sql
@@ -325,16 +325,16 @@ class TestCreateOrUpdateRole:
         """Escape exactly once: the caller no longer escapes, the DDL helpers
         do. A pre-escaped value passed straight through would become ''''.
         """
-        await _create_or_update_role(conn, "modulo_app", login=True, password="p'word")
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="p'word")
         create = next(q for q in conn.executed if "CREATE ROLE" in q)
         assert "PASSWORD 'p''word'" in create  # exactly one escape
         assert "PASSWORD 'p''''word'" not in create  # not double-escaped
 
-        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="p''''word")
         # The fake conn does not record created roles — mark it existing so the
         # second call exercises the ALTER path.
-        conn.roles["modulo_app"] = True
-        await _create_or_update_role(conn, "modulo_app", login=True, password="p''''word")
+        conn.roles["farna_control_app"] = True
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="p''''word")
         alter = next(q for q in conn.executed if "ALTER ROLE" in q)
         # 4 raw quotes -> 8 escaped quote chars, exactly once.
         assert "PASSWORD 'p''''''''word'" in alter
@@ -348,14 +348,14 @@ class TestCreateOrUpdateRole:
         asserted a posture it could never enforce (release-time
         "Break-glass role posture assertion FAILED" on every deploy).
         """
-        conn.roles["modulo_app"] = True
-        await _create_or_update_role(conn, "modulo_app", login=True, password="pw", bypassrls=False)
-        assert any('ALTER ROLE "modulo_app" WITH LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
-        assert not any('ALTER ROLE "modulo_app" WITH LOGIN PASSWORD' in q for q in conn.executed)
+        conn.roles["farna_control_app"] = True
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="pw", bypassrls=False)
+        assert any('ALTER ROLE "farna_control_app" WITH LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
+        assert not any('ALTER ROLE "farna_control_app" WITH LOGIN PASSWORD' in q for q in conn.executed)
 
     async def test_create_of_app_role_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
-        await _create_or_update_role(conn, "modulo_app", login=True, password="pw", bypassrls=False)
-        assert any('CREATE ROLE "modulo_app" LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="pw", bypassrls=False)
+        assert any('CREATE ROLE "farna_control_app" LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
 
     async def test_alter_of_nologin_role_without_bypassrls_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
         conn.roles[_NOLOGIN_ROLE] = True
@@ -388,10 +388,10 @@ class TestUnconfiguredPasswordPreserve:
 
     async def test_configured_password_still_sets_on_create_and_alter(self, conn: _FakeConn) -> None:
         await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password="syspw", bypassrls=True)
-        assert any('CREATE ROLE "modulo_system"' in q and "PASSWORD 'syspw'" in q for q in conn.executed)
+        assert any('CREATE ROLE "farna_control_system"' in q and "PASSWORD 'syspw'" in q for q in conn.executed)
         conn.roles[_SYSTEM_ROLE] = True
         await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password="syspw2", bypassrls=True)
-        assert any('ALTER ROLE "modulo_system"' in q and "PASSWORD 'syspw2'" in q for q in conn.executed)
+        assert any('ALTER ROLE "farna_control_system"' in q and "PASSWORD 'syspw2'" in q for q in conn.executed)
 
     async def test_bootstrap_preserves_system_password_when_url_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _clean_posture_conn()
@@ -400,22 +400,22 @@ class TestUnconfiguredPasswordPreserve:
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
-                "postgres://modulo_app:apppw@db:5432/modulo",
+                "postgres://farna_control_app:apppw@db:5432/modulo",
             )
-        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "modulo_system"')]
+        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "farna_control_system"')]
         assert sys_alters
         assert not any("PASSWORD" in q for q in sys_alters)
 
     async def test_bootstrap_sets_system_password_from_configured_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _clean_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgres://modulo_system:syspw@db:5432/modulo")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgres://farna_control_system:syspw@db:5432/modulo")
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
-                "postgres://modulo_app:apppw@db:5432/modulo",
+                "postgres://farna_control_app:apppw@db:5432/modulo",
             )
-        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "modulo_system"')]
+        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "farna_control_system"')]
         assert any("PASSWORD 'syspw'" in q for q in sys_alters)
 
 
@@ -435,7 +435,7 @@ class TestRoleNameValidation:
 
     async def test_rejects_sql_metacharacters_in_create_or_update(self, conn: _FakeConn) -> None:
         with pytest.raises(ValueError, match="Invalid role identifier"):
-            await _create_or_update_role(conn, 'modulo_app"; DROP TABLE accounts; --', login=True, password="pw")
+            await _create_or_update_role(conn, 'farna_control_app"; DROP TABLE accounts; --', login=True, password="pw")
         assert not conn.executed
 
     async def test_rejects_space_and_uppercase(self, conn: _FakeConn) -> None:
@@ -457,7 +457,7 @@ class TestRoleNameValidation:
 class TestValidateIdentifier:
     @pytest.mark.parametrize(
         "name",
-        ["modulo_app", "_leads", "a", "modulo_migrate9", "x_a"],
+        ["farna_control_app", "_leads", "a", "farna_control_migrate9", "x_a"],
     )
     def test_accepts_plain_identifiers(self, name: str) -> None:
         assert _validate_identifier(name) == name
@@ -492,14 +492,14 @@ class TestValidateIdentifier:
             await _alter_role(_FakeConn(), name, login=True, password="pw", bypassrls=False)
 
     async def test_metacharacter_role_name_never_reaches_ddl(self, conn: _FakeConn) -> None:
-        hostile = 'modulo_app"); DROP TABLE accounts;--'
+        hostile = 'farna_control_app"); DROP TABLE accounts;--'
         with pytest.raises(ValueError, match="Invalid role identifier"):
             await _create_or_update_role(conn, hostile, login=True, password="pw")
         assert not any("DROP TABLE" in q for q in conn.executed)
 
     async def test_valid_role_name_still_creates(self, conn: _FakeConn) -> None:
-        await _create_or_update_role(conn, "modulo_app", login=True, password="pw")
-        assert any('CREATE ROLE "modulo_app"' in q for q in conn.executed)
+        await _create_or_update_role(conn, "farna_control_app", login=True, password="pw")
+        assert any('CREATE ROLE "farna_control_app"' in q for q in conn.executed)
 
 
 # ---------------------------------------------------------------------------
@@ -530,16 +530,16 @@ class TestIntrospection:
 
 class TestApplyAccountsAllowList:
     async def test_skips_when_accounts_missing(self, conn: _FakeConn) -> None:
-        await _apply_accounts_allow_list(conn, "modulo_app")
+        await _apply_accounts_allow_list(conn, "farna_control_app")
         assert not any("GRANT UPDATE" in q for q in conn.executed)
         assert not any("REVOKE UPDATE" in q for q in conn.executed)
 
     async def test_revokes_and_grants_allow_listed_columns(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
         conn.columns = {"accounts": _full_accounts_columns()}
-        await _apply_accounts_allow_list(conn, "modulo_app")
+        await _apply_accounts_allow_list(conn, "farna_control_app")
 
-        assert any('REVOKE UPDATE ON public.accounts FROM "modulo_app"' in q for q in conn.executed)
+        assert any('REVOKE UPDATE ON public.accounts FROM "farna_control_app"' in q for q in conn.executed)
         assert any("REVOKE UPDATE ON public.accounts FROM PUBLIC" in q for q in conn.executed)
         grant = [q for q in conn.executed if "GRANT UPDATE" in q]
         assert grant
@@ -549,7 +549,7 @@ class TestApplyAccountsAllowList:
     async def test_grants_only_columns_that_exist(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
         conn.columns = {"accounts": {"email"}}
-        await _apply_accounts_allow_list(conn, "modulo_app")
+        await _apply_accounts_allow_list(conn, "farna_control_app")
         grant = [q for q in conn.executed if "GRANT UPDATE" in q]
         assert grant
         assert "email" in grant[0]
@@ -558,7 +558,7 @@ class TestApplyAccountsAllowList:
     async def test_no_grant_statement_when_no_allow_listed_column_exists(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
         conn.columns = {"accounts": {"id"}}
-        await _apply_accounts_allow_list(conn, "modulo_app")
+        await _apply_accounts_allow_list(conn, "farna_control_app")
         assert not any("GRANT UPDATE" in q for q in conn.executed)
 
     @pytest.mark.parametrize(
@@ -590,7 +590,7 @@ class TestGrantBreakGlass:
             "audit_events",
             "audit_chain_heads",
         }
-        await _grant_break_glass(conn, "modulo_breakglass")
+        await _grant_break_glass(conn, "farna_control_breakglass")
 
         assert any("GRANT SELECT, INSERT ON public.accounts" in q for q in conn.executed)
         assert any("GRANT SELECT, INSERT ON public.org_memberships" in q for q in conn.executed)
@@ -600,7 +600,7 @@ class TestGrantBreakGlass:
 
     async def test_grants_select_on_read_surfaces(self, conn: _FakeConn) -> None:
         conn.tables = {"org_memberships", "token_families", "org_api_keys", "organisations"}
-        await _grant_break_glass(conn, "modulo_breakglass")
+        await _grant_break_glass(conn, "farna_control_breakglass")
         joined = " ".join(conn.executed)
         assert "public.org_memberships" in joined
         assert "public.token_families" in joined
@@ -610,15 +610,15 @@ class TestGrantBreakGlass:
     async def test_grants_select_on_alembic_version_for_migration_triage(self, conn: _FakeConn) -> None:
         """Regression: prod 2026-09-03 — break-glass recovery could not read alembic_version."""
         conn.tables = {"alembic_version"}
-        await _grant_break_glass(conn, "modulo_breakglass")
+        await _grant_break_glass(conn, "farna_control_breakglass")
         assert any("GRANT SELECT ON public.alembic_version" in q for q in conn.executed)
 
     async def test_skips_alembic_version_when_missing(self, conn: _FakeConn) -> None:
-        await _grant_break_glass(conn, "modulo_breakglass")
+        await _grant_break_glass(conn, "farna_control_breakglass")
         assert not any("alembic_version" in q for q in conn.executed)
 
     async def test_skips_missing_tables(self, conn: _FakeConn) -> None:
-        await _grant_break_glass(conn, "modulo_breakglass")
+        await _grant_break_glass(conn, "farna_control_breakglass")
         assert not any("GRANT SELECT" in q and "public." in q for q in conn.executed)
         assert any("GRANT USAGE ON ALL SEQUENCES" in q for q in conn.executed)
 
@@ -643,19 +643,19 @@ class TestGrantBreakGlass:
 class TestGrantFunctionExecute:
     async def test_grants_execute_when_function_exists(self, conn: _FakeConn) -> None:
         conn.function_exists = True
-        await _grant_function_execute(conn, "modulo_app", "modulo_breakglass")
-        assert any("GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean)" in q and '"modulo_app", "modulo_breakglass"' in q for q in conn.executed)
+        await _grant_function_execute(conn, "farna_control_app", "farna_control_breakglass")
+        assert any("GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean)" in q and '"farna_control_app", "farna_control_breakglass"' in q for q in conn.executed)
 
     async def test_skips_when_function_missing(self, conn: _FakeConn) -> None:
         conn.function_exists = False
-        await _grant_function_execute(conn, "modulo_app", "modulo_breakglass")
+        await _grant_function_execute(conn, "farna_control_app", "farna_control_breakglass")
         assert not any("GRANT EXECUTE" in q for q in conn.executed)
 
     @pytest.mark.parametrize(
         ("bad_app", "bad_bg"),
         [
-            ("bad;role", "modulo_breakglass"),
-            ("modulo_app", "bad;role"),
+            ("bad;role", "farna_control_breakglass"),
+            ("farna_control_app", "bad;role"),
             ("bad role", "bad role"),
             ("Bad-Case", "Bad-Case"),
         ],
@@ -676,11 +676,11 @@ class TestGrantFunctionExecute:
 
 class TestFindAllowListViolations:
     async def test_skips_when_accounts_missing(self, conn: _FakeConn) -> None:
-        assert not await _find_allow_list_violations(conn, "modulo_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
         assert conn.executed == ["SELECT to_regclass(?) IS NOT NULL"]
 
     async def test_clean_posture_returns_no_violations(self, conn: _FakeConn) -> None:
-        assert not await _find_allow_list_violations(_clean_posture_conn(), "modulo_app")
+        assert not await _find_allow_list_violations(_clean_posture_conn(), "farna_control_app")
 
     async def test_detects_table_level_update_grant(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
@@ -688,7 +688,7 @@ class TestFindAllowListViolations:
         conn.table_update_grantees = ["PUBLIC"]
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
         assert any("table-level UPDATE grant" in v and "PUBLIC" in v for v in violations)
 
     async def test_detects_granted_column_drift(self, conn: _FakeConn) -> None:
@@ -696,7 +696,7 @@ class TestFindAllowListViolations:
         conn.columns = {"accounts": {"email", "id"}}
         conn.column_updatable = {"email", "id"}  # drift: id granted but not allow-listed
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
         assert any("grant drift" in v for v in violations)
 
     async def test_detects_break_glass_column_writable_by_app(self, conn: _FakeConn) -> None:
@@ -704,7 +704,7 @@ class TestFindAllowListViolations:
         conn.columns = {"accounts": _full_accounts_columns()}
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS) | {"is_break_glass"}
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
         assert any("break-glass column is_break_glass" in v for v in violations)
 
     async def test_detects_superuser_role(self, conn: _FakeConn) -> None:
@@ -713,35 +713,35 @@ class TestFindAllowListViolations:
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
         conn.is_superuser = True
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
         assert any("is a superuser" in v for v in violations)
 
     async def test_detects_membership_in_privileged_roles(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
         conn.columns = {"accounts": _full_accounts_columns()}
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
-        conn.privileged_memberships = [_MIGRATE_ROLE, "modulo_breakglass"]
+        conn.privileged_memberships = [_MIGRATE_ROLE, "farna_control_breakglass"]
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
         assert any(_MIGRATE_ROLE in v for v in violations)
-        assert any("modulo_breakglass" in v for v in violations)
+        assert any("farna_control_breakglass" in v for v in violations)
 
     async def test_detects_missing_system_role_bypassrls(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
         conn.columns = {"accounts": _full_accounts_columns()}
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
-        # modulo_system role exists but without BYPASSRLS
+        # farna_control_system role exists but without BYPASSRLS
         conn.roles[_SYSTEM_ROLE] = True
         conn.role_bypassrls = {_SYSTEM_ROLE: False}
 
-        violations = await _find_allow_list_violations(conn, "modulo_app")
-        assert any("modulo_system" in v and "BYPASSRLS" in v for v in violations)
+        violations = await _find_allow_list_violations(conn, "farna_control_app")
+        assert any("farna_control_system" in v and "BYPASSRLS" in v for v in violations)
 
     async def test_clean_posture_includes_system_role(self) -> None:
         clean = _clean_posture_conn()
-        violations = await _find_allow_list_violations(clean, "modulo_app")
-        # modulo_system has BYPASSRLS in the clean conn — no violation
-        assert not any("modulo_system" in v for v in violations)
+        violations = await _find_allow_list_violations(clean, "farna_control_app")
+        # farna_control_system has BYPASSRLS in the clean conn — no violation
+        assert not any("farna_control_system" in v for v in violations)
 
 
 # ---------------------------------------------------------------------------
@@ -752,8 +752,8 @@ class TestFindAllowListViolations:
 class TestAssertRolePosture:
     async def test_clean_posture_is_noop(self, conn: _FakeConn) -> None:
         clean = _clean_posture_conn()
-        assert not await _find_allow_list_violations(clean, "modulo_app")
-        await _assert_role_posture(clean, "modulo_app")
+        assert not await _find_allow_list_violations(clean, "farna_control_app")
+        await _assert_role_posture(clean, "farna_control_app")
 
     async def test_violation_raises_runtime_error(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
@@ -762,7 +762,7 @@ class TestAssertRolePosture:
         conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
 
         with pytest.raises(RuntimeError, match="role posture assertion FAILED"):
-            await _assert_role_posture(conn, "modulo_app")
+            await _assert_role_posture(conn, "farna_control_app")
 
 
 # ---------------------------------------------------------------------------
@@ -787,15 +787,15 @@ class TestBootstrap:
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
 
         joined = "\n".join(fake.executed)
-        assert "CREATE ROLE \"modulo_app\" LOGIN NOBYPASSRLS PASSWORD 'apppw'" in joined
-        assert "CREATE ROLE \"modulo_app\" LOGIN BYPASSRLS PASSWORD 'apppw'" not in joined
-        assert 'CREATE ROLE "modulo_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in joined
-        assert 'GRANT CREATE ON SCHEMA public TO "modulo_migrate"' in joined
+        assert "CREATE ROLE \"farna_control_app\" LOGIN NOBYPASSRLS PASSWORD 'apppw'" in joined
+        assert "CREATE ROLE \"farna_control_app\" LOGIN BYPASSRLS PASSWORD 'apppw'" not in joined
+        assert 'CREATE ROLE "farna_control_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in joined
+        assert 'GRANT CREATE ON SCHEMA public TO "farna_control_migrate"' in joined
         assert "GRANT REFERENCES ON TABLE public.organisations" in joined
         assert "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE" in joined
         assert "GRANT EXECUTE ON FUNCTION public.deactivate_break_glass" in joined
@@ -816,17 +816,17 @@ class TestBootstrap:
 
         monkeypatch.setenv(
             "FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL",
-            "postgresql://my_bg:bgpw@db:5432/modulo",
+            "postgresql://user:pass@host:5432/farna_control",
         )
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
-                "postgres://modulo_app:apppw@db:5432/modulo",
+                "postgres://farna_control_app:apppw@db:5432/modulo",
             )
 
         joined = "\n".join(fake.executed)
         assert "CREATE ROLE \"my_bg\" LOGIN BYPASSRLS PASSWORD 'bgpw'" in joined
-        assert 'CREATE ROLE "modulo_breakglass"' not in joined
+        assert 'CREATE ROLE "farna_control_breakglass"' not in joined
 
     async def test_bootstrap_closes_connection_even_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _clean_posture_conn()
@@ -845,7 +845,7 @@ class TestBootstrap:
         ):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
-                "postgres://modulo_app:apppw@db:5432/modulo",
+                "postgres://farna_control_app:apppw@db:5432/modulo",
             )
         assert fake.closed is True
 
@@ -869,8 +869,8 @@ class TestConcurrentBootstrap:
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
         # The lock is the FIRST statement and the unlock the LAST: every DDL
         # statement ran while the session-scoped lock was held.
@@ -894,7 +894,7 @@ class TestConcurrentBootstrap:
         """
         fake = _fresh_db_posture_conn()
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
-        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
 
         def _hook(q: str) -> None:
@@ -907,8 +907,8 @@ class TestConcurrentBootstrap:
         caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
 
         assert attempts["count"] == 2  # failed once, retried once, succeeded
@@ -931,7 +931,7 @@ class TestConcurrentBootstrap:
         fake = _fresh_db_posture_conn()
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_RETRY_BACKOFF_SECONDS", 0)
-        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
 
         def _hook(q: str) -> None:
@@ -946,8 +946,8 @@ class TestConcurrentBootstrap:
             pytest.raises(asyncpg.InternalServerError, match="tuple concurrently updated"),
         ):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
 
         # One initial attempt + (_BOOTSTRAP_MAX_ATTEMPTS - 1) retries.
@@ -961,7 +961,7 @@ class TestConcurrentBootstrap:
         """The retry is scoped to the FAR-1200 error — anything else raises at once."""
         fake = _fresh_db_posture_conn()
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
-        target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
+        target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
 
         def _hook(q: str) -> None:
@@ -975,8 +975,8 @@ class TestConcurrentBootstrap:
             pytest.raises(asyncpg.InternalServerError, match="some other internal failure"),
         ):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
         assert attempts["count"] == 1
         assert fake.closed is True
@@ -997,8 +997,8 @@ class TestConcurrentBootstrap:
         caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/modulo",
-                "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
+                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
             )
         assert not any("pg_advisory_unlock" in q for q in fake.executed)
         assert any("CREATE ROLE" in q for q in fake.executed)
@@ -1031,7 +1031,7 @@ class TestMain:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("DATABASE_ADMIN_URL", "postgres://admin:secret@db:5432/modulo")
-        monkeypatch.setenv("DATABASE_URL", "postgres://modulo_app:apppw@db:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgres://farna_control_app:apppw@db:5432/modulo")
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
 
         async def _fail(admin_url: str, app_url: str) -> None:
@@ -1049,7 +1049,7 @@ class TestMain:
     ) -> None:
         caplog.set_level("INFO", logger="farna.db.bootstrap_role")
         monkeypatch.setenv("DATABASE_ADMIN_URL", "postgres://admin:secret@db:5432/modulo")
-        monkeypatch.setenv("DATABASE_URL", "postgres://modulo_app:apppw@db:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgres://farna_control_app:apppw@db:5432/modulo")
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
 
         async def _ok(admin_url: str, app_url: str) -> None:

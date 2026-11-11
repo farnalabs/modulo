@@ -32,7 +32,7 @@ application-layer validation and audit logging**.
 | A pipeline run is stuck and `POST /api/v1/runs/{id}/cancel` cannot recover it | Follow `docs/operations/admin-bypass.md` |
 | An admin user forgot their password | **Reset via `modulo users reset-password`** (§2) |
 | `SECRET_KEY` was rotated and all sessions are invalid | Restart services – sessions re-negotiate (§3.1) |
-| `FERNET_KEY` was rotated and credentials fail to decrypt | Re-enter credentials under the new key; `modulo restore --previous-fernet-key` does not recover a lost key (§3.2) |
+| `FERNET_KEY` was rotated and credentials fail to decrypt | Re-enter credentials under the new key; `farna-control restore --previous-fernet-key` does not recover a lost key (§3.2) |
 | Both `SECRET_KEY` and `FERNET_KEY` are lost | **You cannot recover encrypted data** – restore from backup (§4) |
 | You cannot authenticate to the admin UI to debug a configuration issue | Local auth bypass (§5) |
 | You suspect a bug in the application | File a GitHub issue – do not modify the database |
@@ -218,7 +218,7 @@ transaction:
 
 ```bash
 # Restore from base backup, then replay WAL to target time
-pg_restore -d modulo /backups/base.dump
+pg_restore -d farna_control /backups/base.dump
 cp /var/lib/postgresql/wal_archive/* /var/lib/postgresql/16/main/pg_wal/
 pg_ctl promote
 ```

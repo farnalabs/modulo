@@ -1,14 +1,14 @@
-"""FAR-1519 item 2 — a warm boot must reconcile the ``modulo_system`` role.
+"""FAR-1519 item 2 — a warm boot must reconcile the ``farna_control_system`` role.
 
 Upgrade-in-place drift, reproduced against a real Postgres:
 
 1. A boot with no ``MODULO_SYSTEM_DATABASE_URL`` creates (or leaves) the
-   ``modulo_system`` role with a placeholder password nobody can use.
+   ``farna_control_system`` role with a placeholder password nobody can use.
 2. The operator later adds the URL and restarts. Before the fix,
    ``_run_migrations`` returned early on the ``migrations_already_at_head``
    fast-path BEFORE ``_run_bootstrap``, so the warm boot reconciled nothing —
    every system cron failed with ``password authentication failed for user
-   "modulo_system"`` until an operator ran ``python -m
+   "farna_control_system"`` until an operator ran ``python -m
    farna.db.bootstrap_role`` by hand.
 
 Each "boot" here is the real startup step under fix (``main._run_migrations``)
@@ -46,18 +46,18 @@ async def _connect(url: str) -> asyncpg.Connection:
 
 
 async def _system_role_hash(admin: asyncpg.Connection) -> str | None:
-    """Current scram hash of modulo_system — None only if the role is missing."""
-    return await admin.fetchval("SELECT rolpassword FROM pg_authid WHERE rolname = 'modulo_system'")
+    """Current scram hash of farna_control_system — None only if the role is missing."""
+    return await admin.fetchval("SELECT rolpassword FROM pg_authid WHERE rolname = 'farna_control_system'")
 
 
 async def _assert_authenticates_as_system(sys_url: str) -> None:
-    """Log in as modulo_system over the configured URL — the ticket's proof."""
+    """Log in as farna_control_system over the configured URL — the ticket's proof."""
     conn = await _connect(sys_url)
     try:
         role = await conn.fetchval("SELECT current_user")
-        assert role == "modulo_system", f"expected to authenticate as modulo_system, got {role!r}"
-        bypass = await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'modulo_system'")
-        assert bypass is True, "modulo_system must carry BYPASSRLS for the cross-org system crons"
+        assert role == "farna_control_system", f"expected to authenticate as farna_control_system, got {role!r}"
+        bypass = await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'farna_control_system'")
+        assert bypass is True, "farna_control_system must carry BYPASSRLS for the cross-org system crons"
     finally:
         await conn.close()
 
@@ -81,11 +81,11 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # admin = the testcontainer superuser; app = modulo_app (the URL the
+    # admin = the testcontainer superuser; app = farna_control_app (the URL the
     # bootstrap treats as the app role); system = the URL an operator supplies
     # at step 3.
-    app_url = _with_credentials(migrated_db_url, "modulo_app", "apppass")
-    sys_url = _with_credentials(migrated_db_url, "modulo_system", "syspass")
+    app_url = _with_credentials(migrated_db_url, "farna_control_app", "apppass")
+    sys_url = _with_credentials(migrated_db_url, "farna_control_system", "syspass")
 
     monkeypatch.setenv("DATABASE_ADMIN_URL", migrated_db_url)
     monkeypatch.delenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", raising=False)
@@ -100,9 +100,9 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
     try:
         # Seed the drift: the role exists but its password matches no
         # configured URL — what a URL-less boot leaves behind.
-        await admin.execute(f"ALTER ROLE modulo_system PASSWORD '{_PLACEHOLDER}'")
+        await admin.execute(f"ALTER ROLE farna_control_system PASSWORD '{_PLACEHOLDER}'")
         stale_hash = await _system_role_hash(admin)
-        assert stale_hash, "seed failed: modulo_system must exist with a password"
+        assert stale_hash, "seed failed: farna_control_system must exist with a password"
 
         # Boot 1 — warm boot (DB at head), system URL still absent: the
         # bootstrap now runs on warm boots, and with no URL it must leave the

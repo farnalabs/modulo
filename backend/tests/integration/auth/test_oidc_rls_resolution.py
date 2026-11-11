@@ -10,9 +10,9 @@ real-DB (RLS) integration regression not yet written") — this file closes it.
 The OIDC pre-auth resolver (``farna.auth.sso._resolve_oidc_provider``) reads
 provider config through the same two-leg resolution the SAML routes use:
 
-- the ``modulo_system`` role (BYPASSRLS) resolves the slug instance-globally —
+- the ``farna_control_system`` role (BYPASSRLS) resolves the slug instance-globally —
   a provider owned by ANY org, not just the first;
-- the app fallback (``modulo_app``, NOBYPASSRLS) scopes to the FIRST org —
+- the app fallback (``farna_control_app``, NOBYPASSRLS) scopes to the FIRST org —
   single-org self-hosted behaviour, deliberately fail-closed for sibling orgs.
 
 Why integration (mocked sessions CANNOT catch this defect class): the
@@ -21,8 +21,8 @@ with ``autobegin=False`` session factories it raised ``RuntimeError`` → HTTP
 500, an anti-enumeration oracle. The OIDC resolver had the same latent defect
 (opening the app fallback without a scoped transaction); a mocked session
 never raises from ``set_config`` and a mocked provider list ignores live RLS
-filtering. Only a real Postgres with the real ``modulo_app`` (NOBYPASSRLS) /
-``modulo_system`` (BYPASSRLS) roles exercises the contract.
+filtering. Only a real Postgres with the real ``farna_control_app`` (NOBYPASSRLS) /
+``farna_control_system`` (BYPASSRLS) roles exercises the contract.
 
 Proven here:
 1. The system leg resolves an OIDC provider owned by the SECOND org.
@@ -155,7 +155,7 @@ async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
 
 @pytest_asyncio.fixture
 async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
-    """Engine on the real ``modulo_system`` role (BYPASSRLS)."""
+    """Engine on the real ``farna_control_system`` role (BYPASSRLS)."""
     engine = create_async_engine(
         os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"],
         echo=False,
@@ -167,7 +167,7 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 @pytest_asyncio.fixture
 async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``.
+    """Session on the ``farna_control_system`` role — mirrors ``get_system_db_session``.
 
     Closed on teardown: a session that is merely returned leaks its checked-out
     asyncpg connection (``engine.dispose()`` cannot reap an in-use connection,
@@ -180,9 +180,9 @@ async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSess
 
 
 @pytest_asyncio.fixture
-async def app_session_factory(modulo_app_engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    """Session factory on the real ``modulo_app`` role (NOBYPASSRLS, RLS applies)."""
-    yield async_sessionmaker(modulo_app_engine, expire_on_commit=False, autobegin=False)
+async def app_session_factory(farna_control_app_engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """Session factory on the real ``farna_control_app`` role (NOBYPASSRLS, RLS applies)."""
+    yield async_sessionmaker(farna_control_app_engine, expire_on_commit=False, autobegin=False)
 
 
 def _settings() -> Settings:
@@ -208,7 +208,7 @@ def _settings() -> Settings:
 
 
 class TestSystemLegResolution:
-    """Per-provider OIDC resolution through the ``modulo_system`` role."""
+    """Per-provider OIDC resolution through the ``farna_control_system`` role."""
 
     @pytest.mark.asyncio
     async def test_resolves_provider_owned_by_non_first_org(
@@ -324,7 +324,7 @@ class _AllFeatures:
 async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session: AsyncSession) -> AsyncClient:
     """ASGI client (mirrors ``test_saml_rls_resolution.multi_org_client``):
     - ``modulo_multi_org_enabled=True`` (org-login routes otherwise 404 per ADR 005),
-    - a REAL system-session override (exercises the modulo_system leg),
+    - a REAL system-session override (exercises the farna_control_system leg),
     - an anonymous plan-context override (pre-auth feature gate)."""
     from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
     from farna.api.main import app

@@ -182,7 +182,7 @@ def test_postgres_fail_service_down_with_detail() -> None:
 
 
 def test_postgres_fail_role_posture_violations() -> None:
-    result = check_postgres(Path(), _state(), _probes(role_violations=lambda: ["app role modulo_app has BYPASSRLS"]))
+    result = check_postgres(Path(), _state(), _probes(role_violations=lambda: ["app role farna_control_app has BYPASSRLS"]))
     assert result.ok is False
     assert "posture" in result.detail
     assert "BYPASSRLS" in result.detail
@@ -318,7 +318,7 @@ def test_run_doctor_failing_check_exits_one(tmp_path: Path, capsys: pytest.Captu
     _write_state_secrets(tmp_path)
     code = run_doctor(
         tmp_path,
-        probes=_probes(role_violations=lambda: ["app role modulo_app has BYPASSRLS"]),
+        probes=_probes(role_violations=lambda: ["app role farna_control_app has BYPASSRLS"]),
     )
     assert code == 1
     out = capsys.readouterr().out

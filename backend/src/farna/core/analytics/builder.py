@@ -1,6 +1,6 @@
 """Analytics query builder — plain SQLAlchemy Core over ``run_daily_facts`` (ADR 020).
 
-Isolation invariant (CRITICAL): ``modulo_app`` is NOBYPASSRLS (tenant isolation
+Isolation invariant (CRITICAL): ``farna_control_app`` is NOBYPASSRLS (tenant isolation
 relies on RLS policies) and the ORM tenant
 filter is NOT registered on Postgres — the explicit ``organisation_id = :org``
 predicate injected here is the PRIMARY isolation control (RLS also enforces org

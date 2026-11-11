@@ -380,7 +380,7 @@ def check_postgres(_data_dir: Path, state: Any, probes: DoctorProbes) -> CheckRe
     return CheckResult(
         "postgres",
         True,
-        f"reachable on 127.0.0.1:{state.postgres_port}; role posture holds (modulo_app NOBYPASSRLS/superuser=false, modulo_system BYPASSRLS)",
+        f"reachable on 127.0.0.1:{state.postgres_port}; role posture holds (farna_control_app NOBYPASSRLS/superuser=false, farna_control_system BYPASSRLS)",
     )
 
 

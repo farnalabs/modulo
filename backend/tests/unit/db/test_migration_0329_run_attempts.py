@@ -12,7 +12,7 @@ needs to trust the migration without a live DB:
 * **Org-scoped RLS coverage** — ``_ORG_SCOPED_TABLES`` names the new table, so
   ``test_rls_coverage.py`` sees it without parsing the DDL.
 * **Upgrade (mocked ``op``)** — on Postgres it runs the new-table ceremony
-  (``SET ROLE modulo_migrate`` -> create -> ownership assertion -> ENABLE/FORCE
+  (``SET ROLE farna_control_migrate`` -> create -> ownership assertion -> ENABLE/FORCE
   ROW LEVEL SECURITY + the verbatim ``rls_org_isolation`` policy -> DML grants);
   on SQLite it creates the table and index with no ceremony. The column set,
   both CASCADE foreign keys, the ``(run_id, attempt_index)`` unique constraint
@@ -109,22 +109,9 @@ class _Recorder:
         sa.Table("runs", metadata, sa.Column("id", sa.Uuid(), primary_key=True))
         table = sa.Table(name, metadata, *args)  # type: ignore[arg-type]
         self.columns[name] = {column.name for column in table.columns}
-        self.checks[name] = {
-            constraint.name: str(constraint.sqltext)
-            for constraint in table.constraints
-            if isinstance(constraint, sa.CheckConstraint)
-        }
-        self.uniques[name] = {
-            constraint.name: tuple(column.name for column in constraint.columns)
-            for constraint in table.constraints
-            if isinstance(constraint, sa.UniqueConstraint)
-        }
-        self.foreign_keys[name] = {
-            (fk.parent.name, fk.target_fullname, fk.ondelete)
-            for constraint in table.constraints
-            if isinstance(constraint, sa.ForeignKeyConstraint)
-            for fk in constraint.elements
-        }
+        self.checks[name] = {constraint.name: str(constraint.sqltext) for constraint in table.constraints if isinstance(constraint, sa.CheckConstraint)}
+        self.uniques[name] = {constraint.name: tuple(column.name for column in constraint.columns) for constraint in table.constraints if isinstance(constraint, sa.UniqueConstraint)}
+        self.foreign_keys[name] = {(fk.parent.name, fk.target_fullname, fk.ondelete) for constraint in table.constraints if isinstance(constraint, sa.ForeignKeyConstraint) for fk in constraint.elements}
 
     def create_index(self, name: str, table_name: str, columns: list[str], *_args: object, **_kwargs: object) -> None:
         self.indexes.append((name, table_name, list(columns)))
@@ -228,21 +215,18 @@ class TestUpgradeSqlite:
 class TestUpgradePostgres:
     def test_full_ceremony_present(self) -> None:
         joined = _joined(_run("upgrade", "postgresql", roles_exist=True))
-        assert "SET ROLE modulo_migrate" in joined
+        assert "SET ROLE farna_control_migrate" in joined
         assert "RESET ROLE" in joined
         assert "ENABLE ROW LEVEL SECURITY" in joined
         assert "FORCE ROW LEVEL SECURITY" in joined
         assert "CREATE POLICY rls_org_isolation" in joined
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON run_attempts TO modulo_app" in joined
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON run_attempts TO modulo_system" in joined
-        assert "GRANT REFERENCES ON TABLE public.runs TO modulo_migrate" in joined
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON run_attempts TO farna_control_app" in joined
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON run_attempts TO farna_control_system" in joined
+        assert "GRANT REFERENCES ON TABLE public.runs TO farna_control_migrate" in joined
 
     def test_policy_is_the_canonical_org_isolation_predicate(self) -> None:
         migration = _load_migration()
-        assert (
-            "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
-            in migration._CREATE_POLICY_STATEMENT
-        )
+        assert "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid" in migration._CREATE_POLICY_STATEMENT
         recorder = _run("upgrade", "postgresql", roles_exist=True)
         assert recorder.sql.count(migration._CREATE_POLICY_STATEMENT) == 1
         for statement in migration._ENABLE_RLS_STATEMENTS:
@@ -299,26 +283,15 @@ class TestModelParity:
         assert set(RunAttempt.__table__.columns.keys()) == _COLUMNS
 
     def test_model_and_migration_checks_agree(self) -> None:
-        model_checks = {
-            c.name: str(c.sqltext) for c in RunAttempt.__table__.constraints if isinstance(c, sa.CheckConstraint)
-        }
+        model_checks = {c.name: str(c.sqltext) for c in RunAttempt.__table__.constraints if isinstance(c, sa.CheckConstraint)}
         assert model_checks == _run("upgrade", "sqlite", roles_exist=False).checks[_TABLE]
 
     def test_model_and_migration_unique_constraint_agree(self) -> None:
-        model_uniques = {
-            c.name: tuple(column.name for column in c.columns)
-            for c in RunAttempt.__table__.constraints
-            if isinstance(c, sa.UniqueConstraint)
-        }
+        model_uniques = {c.name: tuple(column.name for column in c.columns) for c in RunAttempt.__table__.constraints if isinstance(c, sa.UniqueConstraint)}
         assert model_uniques == _run("upgrade", "sqlite", roles_exist=False).uniques[_TABLE]
 
     def test_model_and_migration_foreign_keys_agree(self) -> None:
-        model_fks = {
-            (fk.parent.name, fk.target_fullname, fk.ondelete)
-            for constraint in RunAttempt.__table__.constraints
-            if isinstance(constraint, sa.ForeignKeyConstraint)
-            for fk in constraint.elements
-        }
+        model_fks = {(fk.parent.name, fk.target_fullname, fk.ondelete) for constraint in RunAttempt.__table__.constraints if isinstance(constraint, sa.ForeignKeyConstraint) for fk in constraint.elements}
         assert model_fks == _run("upgrade", "sqlite", roles_exist=False).foreign_keys[_TABLE]
 
     def test_model_declares_the_org_index_and_no_redundant_pair_index(self) -> None:

@@ -41,7 +41,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 def _make_settings() -> SimpleNamespace:
     return SimpleNamespace(
-        modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@localhost:5432/modulo",
+        modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@localhost:5432/farna_control",
         modulo_break_glass_secret="p" * 32,
         modulo_break_glass_standby_secret="s" * 32,
         modulo_break_glass_ttl_minutes=60,
@@ -601,7 +601,7 @@ class TestEngineSslPosture:
     @pytest.mark.parametrize(
         ("url", "expected_ssl"),
         [
-            pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo", False, id="no-sslmode-explicit-false"),
+            pytest.param("postgresql+asyncpg://bg:bg@h:5432/farna_control", False, id="no-sslmode-explicit-false"),
             pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo?sslmode=disable", False, id="disable-explicit-false"),
         ],
     )

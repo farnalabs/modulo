@@ -2,7 +2,7 @@
 
 The read paths ``crud.get_run`` / ``crud.list_runs`` / ``crud.get_pipeline``
 carry a defence-in-depth ``organisation_id`` predicate (FAR-328): production
-RLS is the active backstop (``modulo_app`` is NOBYPASSRLS), but API-facing and
+RLS is the active backstop (``farna_control_app`` is NOBYPASSRLS), but API-facing and
 MCP callers must pass the org they already know so a cross-tenant read is
 impossible even if RLS were misconfigured.
 
@@ -67,12 +67,7 @@ async def _seed_tenant(engine: AsyncEngine, user_id: uuid.UUID, label: str) -> _
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(tenant.pipeline_id),
                 "oid": str(tenant.org_id),
@@ -133,9 +128,7 @@ def superuser_session(db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession
 class TestByPassRlsCrossTenantReads:
     """Cross-tenant by-ID reads must yield nothing (routes render 404)."""
 
-    async def test_unpredicated_read_returns_foreign_row(
-        self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]
-    ) -> None:
+    async def test_unpredicated_read_returns_foreign_row(self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]) -> None:
         """CONTROL: without the org predicate the superuser read DOES leak.
 
         This pins the environment: RLS is provably not filtering (else the
@@ -147,26 +140,17 @@ class TestByPassRlsCrossTenantReads:
         _org_a, org_b = two_tenants
         async with superuser_session() as s, s.begin():
             leaked = await get_run(s, org_b.run_id)
-            assert leaked is not None, (
-                "Superuser read of a foreign org's run returned nothing — this "
-                "environment no longer simulates BYPASSRLS, so the barrier "
-                "tests in this module are no longer exercising the explicit "
-                "org predicate in isolation."
-            )
+            assert leaked is not None, "Superuser read of a foreign org's run returned nothing — this environment no longer simulates BYPASSRLS, so the barrier tests in this module are no longer exercising the explicit org predicate in isolation."
             assert leaked.organisation_id == org_b.org_id
 
-    async def test_get_run_with_org_predicate_hides_foreign_run(
-        self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]
-    ) -> None:
+    async def test_get_run_with_org_predicate_hides_foreign_run(self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]) -> None:
         """BARRIER: org A asking for org B's run by ID yields None (route → 404)."""
         org_a, org_b = two_tenants
         async with superuser_session() as s, s.begin():
             hidden = await get_run(s, org_b.run_id, organisation_id=org_a.org_id)
             assert hidden is None, "Cross-tenant get_run leaked a foreign run — defence-in-depth predicate is missing"
 
-    async def test_get_run_with_own_org_predicate_finds_run(
-        self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]
-    ) -> None:
+    async def test_get_run_with_own_org_predicate_finds_run(self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]) -> None:
         """POSITIVE: the predicate must not break the owning org's access."""
         org_a, _org_b = two_tenants
         async with superuser_session() as s, s.begin():
@@ -174,9 +158,7 @@ class TestByPassRlsCrossTenantReads:
             assert own is not None, "Org-scoped get_run failed to return the org's OWN run"
             assert own.id == org_a.run_id
 
-    async def test_list_runs_org_scoped_excludes_foreign_org(
-        self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]
-    ) -> None:
+    async def test_list_runs_org_scoped_excludes_foreign_org(self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]) -> None:
         """BARRIER: the org-scoped list never surfaces a foreign org's run.
 
         The list predicate filters on ``Run.organisation_id`` directly; the
@@ -189,9 +171,7 @@ class TestByPassRlsCrossTenantReads:
             assert org_b.run_id not in ids, "Cross-tenant list_runs leaked a foreign org's run"
             assert org_a.run_id in ids, "Org-scoped list_runs omitted the org's own run"
 
-    async def test_get_pipeline_with_org_predicate_hides_foreign_pipeline(
-        self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]
-    ) -> None:
+    async def test_get_pipeline_with_org_predicate_hides_foreign_pipeline(self, superuser_session: async_sessionmaker[AsyncSession], two_tenants: tuple[_Tenant, _Tenant]) -> None:
         """BARRIER: org A asking for org B's pipeline by ID yields None (route → 404)."""
         org_a, org_b = two_tenants
         async with superuser_session() as s, s.begin():

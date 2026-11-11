@@ -11,10 +11,10 @@ Structural contract (no Postgres needed):
 * **Upgrade (mocked ``op``)** — creates ``notification_preferences`` with the
   org/account/category unique constraint and a ``String(100)`` category (NO
   CHECK — the vocabulary is code-driven), then — on Postgres — runs the 0066
-  role ceremony (``SET ROLE modulo_migrate`` + owner assertion), ENABLE +
+  role ceremony (``SET ROLE farna_control_migrate`` + owner assertion), ENABLE +
   **FORCE** ROW LEVEL SECURITY, the org-scope SELECT policy, the per-user
   INSERT/UPDATE/DELETE policies (``app.user_id``, never ``app.account_id``),
-  and the DML GRANT to ``modulo_app``.
+  and the DML GRANT to ``farna_control_app``.
 * **Downgrade** — drops the four policies, disables RLS, drops the indexes
   and the table.
 * **Model parity** — the ORM model carries the same unique constraint and
@@ -56,12 +56,12 @@ def _load_migration() -> ModuleType:
 class _Bind:
     """Fake connection for ``op.get_bind()``.
 
-    ``role_exists=False`` models a fresh dev/BDD DB (no modulo_migrate /
-    modulo_app roles — the migration skips the ceremony); ``owner`` is what
+    ``role_exists=False`` models a fresh dev/BDD DB (no farna_control_migrate /
+    farna_control_app roles — the migration skips the ceremony); ``owner`` is what
     the post-create ownership assertion reads back.
     """
 
-    def __init__(self, *, dialect: str = "postgresql", role_exists: bool = True, owner: str = "modulo_migrate") -> None:
+    def __init__(self, *, dialect: str = "postgresql", role_exists: bool = True, owner: str = "farna_control_migrate") -> None:
         self.dialect = SimpleNamespace(name=dialect)
         self._role_exists = role_exists
         self._owner = owner
@@ -157,7 +157,7 @@ class TestUpgradeRolesPresent:
 
     def test_sets_and_resets_migrate_role_around_create(self) -> None:
         joined = _joined(_run("upgrade"))
-        assert "SET ROLE modulo_migrate" in joined
+        assert "SET ROLE farna_control_migrate" in joined
         assert "RESET ROLE" in joined
 
     def test_creates_table_with_unique_constraint_and_string100_category(self) -> None:
@@ -179,9 +179,7 @@ class TestUpgradeRolesPresent:
 
     def test_policies_split_org_select_and_per_user_writes(self) -> None:
         joined = _joined(_run("upgrade"))
-        assert "CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING" in joined, (
-            "org-scope SELECT policy missing"
-        )
+        assert "CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING" in joined, "org-scope SELECT policy missing"
         for verb in ("INSERT", "UPDATE", "DELETE"):
             assert f"rls_user_isolation_{verb.lower()} ON notification_preferences" in joined
         # app.user_id is the value set_rls_user_context writes; app.account_id
@@ -191,9 +189,7 @@ class TestUpgradeRolesPresent:
 
     def test_grants_dml_to_app_role(self) -> None:
         joined = _joined(_run("upgrade"))
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO modulo_app" in joined, (
-            "modulo_app DML grant missing"
-        )
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO farna_control_app" in joined, "farna_control_app DML grant missing"
 
     def test_creates_the_two_lookup_indexes(self) -> None:
         names = {name for name, _table, _cols in _run("upgrade").created_indexes}
@@ -202,7 +198,7 @@ class TestUpgradeRolesPresent:
 
     def test_owner_assertion_rejects_app_role_ownership(self) -> None:
         module = _load_migration()
-        rec = _Recorder(_Bind(owner="modulo_app"))
+        rec = _Recorder(_Bind(owner="farna_control_app"))
         with (
             patch.object(module, "op", rec),
             pytest.raises(RuntimeError, match="owner is"),
@@ -217,9 +213,9 @@ class TestUpgradeFreshDatabase:
     def test_skips_role_ceremony_but_still_forces_rls(self) -> None:
         rec = _run("upgrade", bind=_Bind(role_exists=False))
         joined = _joined(rec)
-        assert "SET ROLE modulo_migrate" not in joined
+        assert "SET ROLE farna_control_migrate" not in joined
         assert "RESET ROLE" not in joined
-        assert "TO modulo_app" not in joined
+        assert "TO farna_control_app" not in joined
         assert "FORCE ROW LEVEL SECURITY" in joined
         assert len(rec.created_tables) == 1
 

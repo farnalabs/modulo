@@ -85,7 +85,7 @@ class _FakeSettings:
     saq_worker_concurrency = 4
     secret_key = SETTINGS_SECRET
     modulo_users = SETTINGS_USERS
-    database_url = f"postgresql://modulo:{POSTGRES_PASSWORD}@db:5432/modulo"
+    database_url = "postgresql://user:pass@host:5432/farna_control"
 
 
 def _seed_data_dir(tmp_path: Path, log_lines: str) -> None:
@@ -217,9 +217,7 @@ def test_unclassified_secret_withholds_the_log_line_not_the_bundle(tmp_path: Pat
     assert any(entry["member"] == "logs/app.log.tail" for entry in result.withheld)
 
 
-def test_cli_withholds_the_bad_log_line_and_writes_the_bundle(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_withholds_the_bad_log_line_and_writes_the_bundle(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_data_dir(tmp_path, f"harmless line\nGREETING={UNCLASSIFIED_SECRET}\n")
     out = tmp_path / "withheld-cli.zip"
     monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
@@ -480,9 +478,7 @@ def test_doctor_report_delegates_to_v1_bundle(tmp_path: Path, monkeypatch: pytes
         assert "bundle_format_version: 1" in archive.read("MANIFEST.txt").decode()
 
 
-def test_cli_json_prints_one_object(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_json_prints_one_object(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_data_dir(tmp_path, "clean log")
     out = tmp_path / "json.zip"
     monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
@@ -501,9 +497,7 @@ def test_cli_json_prints_one_object(
     assert str(payload["ref"]) in str(payload["ref_line"])
 
 
-def test_ref_is_the_same_in_json_report_and_manifest(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ref_is_the_same_in_json_report_and_manifest(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """(b) one ref, stamped identically in the payload, report.json and MANIFEST."""
     _seed_data_dir(tmp_path, "clean log")
     out = tmp_path / "ref.zip"
@@ -529,9 +523,7 @@ def test_generate_ref_emits_the_shared_shape_and_is_unique() -> None:
     assert first != second
 
 
-def test_cli_prints_the_pasteable_ref_line_and_path(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_prints_the_pasteable_ref_line_and_path(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_data_dir(tmp_path, "clean log")
     out = tmp_path / "printed.zip"
     monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)
@@ -553,9 +545,7 @@ def _printed_ref(printed: str) -> str:
     return ""
 
 
-def test_show_accepts_the_bundle_own_ref(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_show_accepts_the_bundle_own_ref(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """`--show report.json` must not be refused by the gate on its own ref."""
     _seed_data_dir(tmp_path, "clean log")
     out = tmp_path / "show.zip"
@@ -575,18 +565,14 @@ def test_show_accepts_the_bundle_own_ref(
 # ---------------------------------------------------------------------------
 
 
-def _run_redact_stdin(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], payload: bytes
-) -> tuple[int, str, str]:
+def _run_redact_stdin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], payload: bytes) -> tuple[int, str, str]:
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8"))
     code = main(["--redact-stdin"])
     captured = capsys.readouterr()
     return code, captured.out, captured.err
 
 
-def test_redact_stdin_scrubs_token_and_url_credentials(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_redact_stdin_scrubs_token_and_url_credentials(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     text = (
         "\n".join(
             [
@@ -608,9 +594,7 @@ def test_redact_stdin_scrubs_token_and_url_credentials(
     assert out.endswith("\n")
 
 
-def test_redact_stdin_fails_closed_on_unclassified_token(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_redact_stdin_fails_closed_on_unclassified_token(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     code, out, err = _run_redact_stdin(monkeypatch, capsys, f"GREETING={UNCLASSIFIED_SECRET}\n".encode())
 
     assert code != 0

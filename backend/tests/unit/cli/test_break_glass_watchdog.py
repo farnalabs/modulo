@@ -16,12 +16,12 @@ from farna.settings import Settings, break_glass_boot_findings, validate_break_g
 
 _SECRET = "p" * 32
 _STANDBY = "s" * 32
-_BG_URL = "postgresql+asyncpg://modulo_breakglass:bgpass@localhost:5432/modulo"
+_BG_URL = "postgresql+asyncpg://farna_control_breakglass:bgpass@localhost:5432/farna_control"
 
 
 def _make_settings(**overrides: object) -> Settings:
     base: dict[str, object] = {
-        "database_url": "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo",
+        "database_url": "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control",
         "secret_key": "a" * 32,
         "fernet_key": "a" * 32,
         "modulo_admin_password": "test",

@@ -312,9 +312,9 @@ async def _list_enabled_oidc_for_org(
 ) -> list[Any]:
     """List ONE org's enabled OIDC providers — never a sibling org's.
 
-    The system session (``modulo_system`` role, BYPASSRLS) sees every org, so
+    The system session (``farna_control_system`` role, BYPASSRLS) sees every org, so
     the result is filtered by ``organisation_id`` before it is returned. When
-    the system role is unprovisioned the read runs as ``modulo_app`` and
+    the system role is unprovisioned the read runs as ``farna_control_app`` and
     returns zero RLS-scoped rows, so the app session is bound to the SAME org
     and read as a fallback; the explicit org filter stays as defense-in-depth.
     """
@@ -711,10 +711,10 @@ async def _resolve_saml_for_route(
     """Resolve a SAML provider by slug for per-provider routes.
 
     Two-leg resolution (FAR-1001 / FAR-1058), fail-closed:
-    1. System session (``modulo_system``, BYPASSRLS) — instance-global slug
+    1. System session (``farna_control_system``, BYPASSRLS) — instance-global slug
        read; resolves a provider owned by ANY org.
     2. Fallback (system role unprovisioned, or slug not visible there): the
-       app session (``modulo_app``, NOBYPASSRLS) scoped to the first org via
+       app session (``farna_control_app``, NOBYPASSRLS) scoped to the first org via
        ``_set_default_rls_org`` (single-org self-hosted behaviour).
 
     FAR-1058 fix: the app fallback previously called ``_set_default_rls_org``

@@ -3,7 +3,7 @@
 The backend is the SOLE bucketing authority: day/hour/ISO-week bucketing and
 zero-fill happen in the shared service (``modulo.core.analytics.service``),
 never on the client. Tenant isolation relies on the EXPLICIT
-``organisation_id = :org`` predicate injected by the SQL builder (modulo_app is
+``organisation_id = :org`` predicate injected by the SQL builder (farna_control_app is
 NOBYPASSRLS on Postgres and the ORM tenant filter is NOT registered there) — RLS
 via ``set_rls_org`` is a further defense-in-depth, and the explicit predicate is
 the control on the analytics writes. Every request sets a
