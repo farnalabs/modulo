@@ -26,7 +26,7 @@ from farna.api.main import app
 from farna.api.routes.system_maps import get_repo
 from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from farna.core.system_map_persistence import SystemMapDiscoveryRepository
+from farna.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
 from farna.db.repositories.system_map import SystemMapRepository
 from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
 
@@ -87,7 +87,7 @@ def _install_repo(system_map_repo: MagicMock, client: Any) -> Any:
     app.dependency_overrides.pop(get_repo, None)
 
 
-def _map_row() -> SimpleNamespace:
+def _map_row(*, published_revision_id: uuid.UUID | None = _REV_ID) -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=_MAP_ID,
@@ -97,7 +97,7 @@ def _map_row() -> SimpleNamespace:
         owner_team_id=None,
         visibility="org",
         default_map=False,
-        published_revision_id=_REV_ID,
+        published_revision_id=published_revision_id,
         account_id=USER_ID,
         updated_by=USER_ID,
         deleted_at=None,
@@ -254,6 +254,11 @@ def organisation_inventory(mock_session: Any) -> None:
     _serve_inventory(mock_session)
 
 
+@given("an existing draft map with the same name already exists")
+def existing_draft_map_already_exists(ctx: dict[str, Any]) -> None:
+    ctx["conflict_name"] = "Existing Map"
+
+
 @when(parsers.parse('I request System Maps discovery for a map named "{name}"'))
 def request_discovery(
     name: str,
@@ -268,10 +273,15 @@ def request_discovery(
         persisted.append(kwargs["content"])
         return draft_map, _REV_ID, 1
 
+    async def _get_or_create(*_args: object, **kwargs: Any) -> SimpleNamespace:
+        if ctx.get("conflict_name") == kwargs.get("name"):
+            raise SystemMapNameConflictError(f"A system map named '{kwargs.get('name')}' already exists")
+        return draft_map
+
     ctx["persisted_discovery"] = persisted
     client = request.node._client
     with (
-        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(side_effect=_get_or_create)),
         patch.object(SystemMapDiscoveryRepository, "save_discovery_revision", new=AsyncMock(side_effect=_save)),
     ):
         resp = client.post(f"{_BASE}/discover", json={"name": name})
@@ -343,6 +353,48 @@ def discovery_denial_feature(request: Any) -> None:
     body = request.node._resp.json()
     assert body["type"] == "urn:problem:modulo:feature_required"
     assert "system_maps" in body["detail"]
+
+
+@then("the discovery conflict reports the name collision")
+def discovery_conflict_reports_name(request: Any) -> None:
+    detail = request.node._resp.json()["detail"]
+    assert "already exists" in detail
+
+
+@given("a published system map exists in the organisation")
+def published_system_map_exists(system_map_repo: MagicMock, mock_session: Any) -> None:
+    pub_map = _map_row(published_revision_id=_REV_ID)
+    system_map_repo.list_maps_by_org = AsyncMock(return_value=[pub_map])
+    system_map_repo.get_map_by_id = AsyncMock(return_value=pub_map)
+    mock_session.execute.return_value.scalar = MagicMock(return_value=1)
+
+
+@when("I request the published system maps list")
+def request_published_system_maps_list(request: Any, ctx: dict[str, Any]) -> None:
+    client = request.node._client
+    resp = client.get(_BASE)
+    _store_response(request, ctx, resp)
+
+
+@then("the response includes the published system map")
+def response_includes_published_map(request: Any) -> None:
+    body = request.node._resp.json()
+    assert body["items"]
+    assert body["items"][0]["id"] == str(_MAP_ID)
+    assert body["items"][0]["published_revision_id"] == str(_REV_ID)
+
+
+@given("an unpublished draft system map exists in the organisation")
+def unpublished_draft_map_exists(system_map_repo: MagicMock) -> None:
+    draft_map = _map_row(published_revision_id=None)
+    system_map_repo.get_map_by_id = AsyncMock(return_value=draft_map)
+
+
+@when("I request the unpublished system map")
+def request_unpublished_system_map(request: Any, ctx: dict[str, Any]) -> None:
+    client = request.node._client
+    resp = client.get(f"{_BASE}/{_MAP_ID}")
+    _store_response(request, ctx, resp)
 
 
 # ---------------------------------------------------------------------------

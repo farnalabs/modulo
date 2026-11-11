@@ -43,3 +43,23 @@ Feature: System Maps internal access and discovery
     When I request System Maps discovery for a map named "No Flag"
     Then the response status is 402
     And the discovery denial names the system_maps feature
+
+  Scenario: System Maps discovery rejects duplicate map name with conflict
+    Given the organisation inventory has a pipeline, a trigger, a connector and a folder
+    And an existing draft map with the same name already exists
+    When I request System Maps discovery for a map named "Existing Map"
+    Then the response status is 409
+    And the discovery conflict reports the name collision
+
+  Scenario: An ordinary viewer can read published system maps
+    Given I am authenticated as a viewer in org "acme"
+    And a published system map exists in the organisation
+    When I request the published system maps list
+    Then the response status is 200
+    And the response includes the published system map
+
+  Scenario: An ordinary viewer cannot read an unpublished draft system map
+    Given I am authenticated as a viewer in org "acme"
+    And an unpublished draft system map exists in the organisation
+    When I request the unpublished system map
+    Then the response status is 404
