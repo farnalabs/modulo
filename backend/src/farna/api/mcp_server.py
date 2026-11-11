@@ -149,6 +149,7 @@ from farna.auth.permissions import (
     SYSTEM_MAPS_ACCESS_PERMISSION,
     _clamp_role,
     grants_permit,
+    resolve_required,
     set_authz_enforce,
 )
 from farna.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -6111,6 +6112,15 @@ def _assert_pass_threshold(pass_threshold: float | None) -> dict[str, Any] | Non
     return None
 
 
+def _assert_gate_write_scope(permission: str) -> None:
+    """Apply a PolicyGate permission to the combined MCP eval-write path."""
+    role = _ctx_role_val()
+    if ORG_ROLE_HIERARCHY.get(role or "", -1) < ORG_ROLE_HIERARCHY[resolve_required(permission)]:
+        raise MCPAuthorizationError(f"Permission '{permission}' is required for this policy-gate action")
+    if not grants_permit(_ctx_key_grants.get(None), permission):
+        raise MCPAuthorizationError(f"Permission '{permission}' is not granted to this credential")
+
+
 def _assert_eval_definition_write_scope(action: str, minimum_role: str) -> None:
     """Raise MCPAuthorizationError when the caller is below ``minimum_role``.
 
@@ -6215,6 +6225,8 @@ async def _create_eval_definition_impl(
         return err
 
     _assert_eval_definition_write_scope("create", "operator")
+    if node_id is not None:
+        _assert_gate_write_scope("gate.create")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -6422,6 +6434,11 @@ async def _update_eval_definition_impl(
             )
         )
         current_gate = gate_result.scalar_one_or_none()
+        effective_node_id = updates.get("node_id", eval_row.node_id)
+        if current_gate is not None:
+            _assert_gate_write_scope("gate.edit")
+        elif effective_node_id is not None:
+            _assert_gate_write_scope("gate.create")
         current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
         # FAR-939 chunk 12 §3.1: preserve the live gate's evaluation mode
         # across an MCP eval edit — mirrors the failure_behaviour
@@ -14795,10 +14812,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
         # Mirror ``_oauth_refresh``: the detail names the grant that failed.
-        if getattr(request.state, "oauth_grant_type", "") == "refresh_token":
-            detail = "Refresh token exchange failed"
-        else:
-            detail = "Authorization code exchange failed"
+        detail = "Refresh token exchange failed" if getattr(request.state, "oauth_grant_type", "") == "refresh_token" else "Authorization code exchange failed"
         return JSONResponse(
             {"error": "invalid_grant", "detail": detail},
             status_code=400,

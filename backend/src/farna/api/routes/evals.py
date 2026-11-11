@@ -56,6 +56,7 @@ from farna.api.team_scope import (
 )
 from farna.auth.dependencies import get_current_tenant_user
 from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import PermissionDenied, assert_grant, assert_org_role, resolve_required
 from farna.auth.team_rbac import org_role_level
 from farna.core.audit_coverage import audited
 from farna.core.audit_logger import append_audit_event
@@ -127,6 +128,10 @@ _CODE_EVALS_POLICY_GATE_CREATE = "evals.policy_gate.create"
 _CODE_EVALS_POLICY_GATE_UPDATE = "evals.policy_gate.update"
 _CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
 _CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
+_PERMISSION_GATE_CREATE = "gate.create"
+_PERMISSION_GATE_EDIT = "gate.edit"
+_PERMISSION_GATE_RAISE = "gate.enforcement.raise"
+_PERMISSION_GATE_WEAKEN = "gate.enforcement.weaken"
 _EVAL_TYPE_PATTERN = r"^(model_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
 # FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0316 CHECK).
@@ -273,6 +278,33 @@ def _eval_def_to_dict(
     return out
 
 
+def _assert_gate_reason(reason: str | None) -> str:
+    """Return a normalized audit reason, refusing blank weakening reasons."""
+    normalized = (reason or "").strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A non-blank reason is required when weakening a policy gate.",
+        )
+    return normalized
+
+
+def _require_gate_action_permission(
+    principal: TenantPrincipal,
+    *,
+    permission: str,
+) -> None:
+    """Enforce the gate-specific role/grant permission inside the handler."""
+    try:
+        assert_org_role(principal.org_role, resolve_required(permission), permission)
+        assert_grant(principal.key_grants, permission)
+    except (PermissionDenied, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' is required for this policy-gate action.",
+        ) from exc
+
+
 def _assert_eval_definition_write_role(principal: TenantPrincipal, action: str) -> None:
     """Operator-or-admin may create/update eval definitions (FAR-735).
 
@@ -360,6 +392,7 @@ class PolicyGateCreateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+    reason: str | None = Field(None, max_length=2000)
     # FAR-939 chunk 12: 'automatic' (default — current behaviour) or 'human'
     # (the HITL decision is the gate's evaluation result). OPTIONAL on the
     # wire (omitted → 'automatic'), so a caller that does not know about the
@@ -379,6 +412,7 @@ class PolicyGateUpdateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+    reason: str | None = Field(None, max_length=2000)
     # FAR-939 chunk 12 — PUT is a full replace of the mutable config (like
     # ``action``), so this field joins the mutable set and the
     # ``pre_version_raw`` snapshot key set. Optional on the wire: omitted
@@ -619,7 +653,7 @@ async def create_policy_gate(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> PolicyGateResponse:
-    """Create a PolicyGate for an eval (admin only).
+    """Create a PolicyGate for an eval (operator or admin).
 
     POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
     has a live gate is refused with a typed 409 — updating (including
@@ -641,11 +675,7 @@ async def create_policy_gate(
     409; a ``UniqueViolation`` (true race) → 409. A lock-acquisition timeout
     (SQLSTATE 57014) → 503.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create policy gates",
-        )
+    _require_gate_action_permission(principal, permission=_PERMISSION_GATE_CREATE)
 
     try:
         async with session.begin():
@@ -718,6 +748,7 @@ async def create_policy_gate(
                         # event records — an auditor must see whether the
                         # gate this event created is active.
                         "enabled": gate.enabled,
+                        "reason": req.reason,
                     },
                 )
             except Exception:
@@ -797,7 +828,7 @@ async def update_policy_gate(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> PolicyGateResponse:
-    """Update a PolicyGate's action (admin only).
+    """Update a PolicyGate's action (operator or admin).
 
     The gate inherits the eval's edit permission — no separate permission
     check is performed (criterion 14).
@@ -820,11 +851,7 @@ async def update_policy_gate(
     with this read-modify-write. A lock-acquisition timeout (SQLSTATE 57014)
     surfaces through the standard 503 DB-error mapping.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update policy gates",
-        )
+    _require_gate_action_permission(principal, permission=_PERMISSION_GATE_EDIT)
 
     try:
         async with session.begin():
@@ -874,6 +901,13 @@ async def update_policy_gate(
             # hardcoded list (criteria 17/18).
             mutable_fields = {"action", "evaluation_mode"}
             snapshot = {field: getattr(gate, field) for field in mutable_fields}
+            previous_action = gate.action
+            if previous_action != req.action:
+                permission = _PERMISSION_GATE_WEAKEN if previous_action == "block" else _PERMISSION_GATE_RAISE
+                _require_gate_action_permission(principal, permission=permission)
+                reason = _assert_gate_reason(req.reason) if previous_action == "block" and req.action == "warn" else (req.reason or "").strip() or None
+            else:
+                reason = (req.reason or "").strip() or None
             gate.pre_version_raw = snapshot
             gate.version = (gate.version or 1) + 1
             gate.action = req.action
@@ -898,6 +932,9 @@ async def update_policy_gate(
                         "evaluation_mode": gate.evaluation_mode,
                         "version": gate.version,
                         "pre_version_raw": snapshot,
+                        "previous_action": previous_action,
+                        "new_action": gate.action,
+                        "reason": reason,
                         # FAR-967 F6: record whether the gate this event
                         # updated is actively enforcing (see create event).
                         "enabled": gate.enabled,
@@ -1351,6 +1388,12 @@ async def create_eval_definition(
             ).scalar_one_or_none()
             if pipeline is None:
                 raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
+
+            # The shared eval writer also creates a PolicyGate for node-scoped
+            # evals; do not let the broader eval permission silently grant that
+            # second mutation.
+            if req.node_id is not None:
+                _require_gate_action_permission(principal, permission=_PERMISSION_GATE_CREATE)
 
             try:
                 eval_row = await create_or_update_eval(
@@ -2698,6 +2741,10 @@ async def update_eval_definition(
                 )
             )
             current_gate = current_gate_result.scalar_one_or_none()
+            if current_gate is not None:
+                _require_gate_action_permission(principal, permission=_PERMISSION_GATE_EDIT)
+            elif updates.get("node_id", eval_row.node_id) is not None:
+                _require_gate_action_permission(principal, permission=_PERMISSION_GATE_CREATE)
             current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
             # FAR-939 chunk 12: preserve the live gate's evaluation mode
             # across an eval update — mirrors the failure_behaviour

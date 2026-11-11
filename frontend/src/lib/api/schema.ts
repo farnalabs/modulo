@@ -19761,6 +19761,8 @@ export interface components {
         PolicyGateCreateRequest: {
             /** Action */
             action: string;
+            /** Reason */
+            reason?: string | null;
             /** Evaluation Mode */
             evaluation_mode?: string | null;
         };
@@ -19822,6 +19824,8 @@ export interface components {
         PolicyGateUpdateRequest: {
             /** Action */
             action: string;
+            /** Reason */
+            reason?: string | null;
             /** Evaluation Mode */
             evaluation_mode?: string | null;
         };
