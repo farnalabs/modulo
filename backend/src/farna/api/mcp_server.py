@@ -11251,8 +11251,21 @@ async def get_system_map_overview(
         if feature_error is not None:
             return feature_error
 
-        from farna.api.routes.system_maps import get_repo
+        from farna.api.routes.system_maps import (
+            OVERVIEW_WINDOW_MAX_DAYS,
+            OVERVIEW_WINDOW_MIN_DAYS,
+            get_repo,
+        )
         from farna.api.routes.system_maps import get_system_map_overview_endpoint as rest_overview
+
+        # Parity with the REST route's ``Query(ge=..., le=...)``: the handler is
+        # invoked directly, so FastAPI never validates this bound for us.
+        if not (OVERVIEW_WINDOW_MIN_DAYS <= window_days <= OVERVIEW_WINDOW_MAX_DAYS):
+            return {
+                "error": "validation_failed",
+                "field": "window_days",
+                "detail": (f"window_days must be between {OVERVIEW_WINDOW_MIN_DAYS} and {OVERVIEW_WINDOW_MAX_DAYS}, got {window_days}"),
+            }
 
         rest_overview = _unwrap_system_maps_route_handler(rest_overview)
         from farna.auth.jwt import TenantPrincipal
@@ -11266,7 +11279,7 @@ async def get_system_map_overview(
             key_scope=_ctx_key_scope.get(None),
             team_id=_ctx_team_id_val(),
         )
-        async with _session(org_id) as session:
+        async with _system_maps_discovery_session() as session:
             repository = await get_repo()
             result = await rest_overview(
                 map_id=map_id,
@@ -14872,6 +14885,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
         # Mirror ``_oauth_refresh``: the detail names the grant that failed.
+        # Written as a ternary because the enabled SIM108 rule requires it.
         detail = "Refresh token exchange failed" if getattr(request.state, "oauth_grant_type", "") == "refresh_token" else "Authorization code exchange failed"
         return JSONResponse(
             {"error": "invalid_grant", "detail": detail},

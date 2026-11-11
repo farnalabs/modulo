@@ -378,7 +378,6 @@ The map is stored in dedicated System Maps tables (migration
 - [ ] MCP authoring, publish, diff and restore remain REST-only: agents cannot
       create or update a map, author a revision, publish / archive / diff /
       restore a revision, or read a revision or its history through MCP
-
 - [x] The revision sidebar switches between the current and a historical
       revision through the version-aware read model: "View current" calls
       `GET /revisions/current`, and a `datetime-local` picker calls
