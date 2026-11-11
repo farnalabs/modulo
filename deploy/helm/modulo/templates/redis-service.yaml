@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "modulo.fullname" . }}-redis
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-redis
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   type: ClusterIP
@@ -15,6 +15,6 @@ spec:
       protocol: TCP
       name: http-redis
   selector:
-    {{- include "modulo.selectorLabels" . | nindent 4 }}
+    {{- include "farna-control.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 {{- end }}

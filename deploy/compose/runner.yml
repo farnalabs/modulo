@@ -114,7 +114,7 @@ services:
     build:
       context: ../docker
       dockerfile: runner-opencode.Dockerfile
-    image: modulo-runner:opencode
+    image: ghcr.io/farnalabs/farna-control/runner-opencode:opencode
     restart: "no"
     entrypoint: ["/usr/bin/tini", "--", "true"]
     networks:

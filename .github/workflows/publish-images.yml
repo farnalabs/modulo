@@ -1,17 +1,17 @@
-# Publish the container images that Modulo deployments consume to GHCR.
+# Publish the container images that Farna Control deployments consume to GHCR.
 #
 # Two deployment paths are served here:
 #   * The self-hosted compose stack (deploy/compose/docker-compose.prod.yml)
-#     pulls the all-in-one image `ghcr.io/farnalabs/modulo:${TAG:-latest}`,
+#     pulls the all-in-one image `ghcr.io/farnalabs/farna-control:${TAG:-latest}`,
 #     which bundles the backend + frontend + nginx + supervisor
 #     (deploy/docker/Dockerfile.all-in-one). This is the image the docs
 #     reference (docs/deployment-security.md, docs/upgrade-process.md,
 #     docs/public-launch-checklist.md).
 #   * The Helm chart (FAR-1052, landing in a stacked PR) consumes the split
-#     `ghcr.io/farnalabs/modulo/backend` and `/frontend` images.
+#     `ghcr.io/farnalabs/farna-control/backend` and `/frontend` images.
 #
 # Before this existed the :latest image on GHCR was stale (from 2026-07-06)
-# and did not contain the `modulo` Python package at all — `import modulo`
+# and did not contain the `farna` Python package at all — `import farna`
 # raised ModuleNotFoundError and the backend crash-looped on any cluster.
 # The smoke checks below exist to prevent that regression from shipping
 # again.
@@ -33,7 +33,7 @@ permissions:
 jobs:
   # ---------------------------------------------------------------------------
   # All-in-one image — the artifact the self-hosted compose stack pulls as
-  # `ghcr.io/farnalabs/modulo:${TAG:-latest}`.
+  # `ghcr.io/farnalabs/farna-control:${TAG:-latest}`.
   # ---------------------------------------------------------------------------
   all-in-one:
     name: Build & publish all-in-one
@@ -110,7 +110,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/farnalabs/farna-control
           tags: |
             # Always tag with the short git SHA for traceability.
             type=sha,prefix=
@@ -134,13 +134,13 @@ jobs:
           cache-to: type=gha,mode=max,scope=all-in-one
 
       # -----------------------------------------------------------------
-      # Smoke checks: the all-in-one image must (a) contain the `modulo`
+      # Smoke checks: the all-in-one image must (a) contain the `farna`
       # Python package and (b) have a valid nginx config. The 2026-07-06
       # :latest shipped without the package, causing crash-loops on every
       # cluster. These checks must never be removed — they are the
       # regression gate for that specific failure.
       # -----------------------------------------------------------------
-      - name: Smoke check — import modulo
+      - name: Smoke check — import farna
         shell: bash
         run: |
           IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"

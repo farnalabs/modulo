@@ -2,7 +2,7 @@
 """Package the self-hosted production compose stack into a release asset bundle (FAR-2345).
 
 Bundles:
-- docker-compose.prod.yml (with hard-pinned immutable tag ghcr.io/farnalabs/modulo:<TAG>)
+- docker-compose.prod.yml (with hard-pinned immutable tag ghcr.io/farnalabs/farna-control:<TAG>)
 - docker-compose.yml (identical copy for direct `docker compose up -d`)
 - .env.example (working evaluation environment configuration)
 - quickstart.md (getting started instructions)
@@ -47,7 +47,7 @@ def validate_release_tag(tag: str) -> str:
 def transform_compose_content(content: str, tag: str) -> str:
     """Transform docker-compose.prod.yml for a standalone evaluator release bundle.
 
-    1. Hard-pins `image: ghcr.io/farnalabs/modulo:<TAG>` on the modulo service.
+    1. Hard-pins `image: ghcr.io/farnalabs/farna-control:<TAG>` on the modulo service.
     2. Removes the repo-internal watchdog service (which requires local source build ../watchdog).
     3. Validates the resulting YAML structure.
     """
@@ -59,7 +59,7 @@ def transform_compose_content(content: str, tag: str) -> str:
         re.MULTILINE,
     )
     if not image_pattern.search(content):
-        raise ValueError("Could not find 'image: ghcr.io/farnalabs/modulo:...' in compose content")
+        raise ValueError("Could not find 'image: ghcr.io/farnalabs/farna-control:...' in compose content")
 
     transformed = image_pattern.sub(rf"\1{valid_tag}", content, count=1)
 
@@ -91,7 +91,7 @@ def transform_compose_content(content: str, tag: str) -> str:
         raise ValueError("Transformed compose is missing 'modulo' service")
 
     modulo_image = services["modulo"].get("image", "")
-    expected_image = f"ghcr.io/farnalabs/modulo:{valid_tag}"
+    expected_image = f"ghcr.io/farnalabs/farna-control:{valid_tag}"
     if modulo_image != expected_image:
         raise ValueError(f"Expected modulo image '{expected_image}', got '{modulo_image}'")
 
@@ -112,7 +112,7 @@ def generate_quickstart_md(version: str, tag: str) -> str:
 This package contains everything required to run the Modulo all-in-one
 production stack on your own infrastructure with Docker Compose.
 
-**Image pinned:** `ghcr.io/farnalabs/modulo:{tag}`
+**Image pinned:** `ghcr.io/farnalabs/farna-control:{tag}`
 
 ## Prerequisites
 
